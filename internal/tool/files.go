@@ -1,0 +1,277 @@
+package tool
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"sort"
+	"strings"
+	"unicode/utf8"
+
+	"scicode/internal/workspace"
+)
+
+type readArgs struct {
+	Path   string `json:"path"`
+	Offset *int   `json:"offset,omitempty"`
+	Limit  *int   `json:"limit,omitempty"`
+}
+type writeArgs struct {
+	Path    string  `json:"path"`
+	Content *string `json:"content"`
+}
+type editArgs struct {
+	Path string  `json:"path"`
+	Old  string  `json:"old_text"`
+	New  *string `json:"new_text"`
+	All  bool    `json:"replace_all,omitempty"`
+}
+type globArgs struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
+	Hidden  bool   `json:"hidden,omitempty"`
+	Limit   *int   `json:"limit,omitempty"`
+}
+type grepArgs struct {
+	Pattern       string `json:"pattern"`
+	Path          string `json:"path,omitempty"`
+	Include       string `json:"include,omitempty"`
+	Literal       bool   `json:"literal,omitempty"`
+	CaseSensitive *bool  `json:"case_sensitive,omitempty"`
+	Limit         *int   `json:"limit,omitempty"`
+}
+
+func intDefault(p *int, def int) int {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+func rangeInt(name string, p *int, min, max int) error {
+	if p != nil && (*p < min || *p > max) {
+		return fmt.Errorf("%s must be %d–%d", name, min, max)
+	}
+	return nil
+}
+func validText(s string) error {
+	if !utf8.ValidString(s) || strings.ContainsRune(s, 0) {
+		return Fail("unsupported_content", "expected UTF-8 text without NUL")
+	}
+	return nil
+}
+
+// AddFiles registers read/search tools and serialized file mutations.
+func AddFiles(r *Registry, w *workspace.Manager) {
+	Register(r, "read", "Read one UTF-8 file or list a directory. Offset is 1-based; continue with next_offset. Directories support at most 10000 entries; use glob to narrow larger directories.", map[string]any{"path": Property("string"), "offset": Property("integer"), "limit": Property("integer")}, []string{"path"}, func(a readArgs) error {
+		if e := Required("path", a.Path); e != nil {
+			return e
+		}
+		if a.Offset != nil && *a.Offset < 1 {
+			return errors.New("offset must be positive")
+		}
+		return rangeInt("limit", a.Limit, 1, 2000)
+	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
+		return readPage(ctx, w.Path(a.Path), intDefault(a.Offset, 1), intDefault(a.Limit, 200))
+	})
+	Register(r, "write", "Create or fully overwrite one text file. Missing parent directories are made. Read existing files first.", map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
+		if e := Required("path", a.Path); e != nil {
+			return e
+		}
+		if a.Content == nil {
+			return errors.New("content required")
+		}
+		return validText(*a.Content)
+	}, func(ctx context.Context, x Execution, a writeArgs) (any, error) {
+		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Path: a.Path, Data: []byte(*a.Content)}})
+		value := map[string]any{"path": w.Path(a.Path), "bytes": len(*a.Content)}
+		if len(res.Changes) != 0 {
+			value["created"] = !res.Changes[0].Before.Exists
+		}
+		return presentFiles(ctx, value, res.Changes), e
+	})
+	Register(r, "edit", "Replace exact text. Exactly one match is required unless replace_all is true.", map[string]any{"path": Property("string"), "old_text": Property("string"), "new_text": Property("string"), "replace_all": Property("boolean")}, []string{"path", "old_text", "new_text"}, func(a editArgs) error {
+		if e := Required("path", a.Path); e != nil {
+			return e
+		}
+		if a.Old == "" || a.New == nil || a.Old == *a.New {
+			return errors.New("old_text must be nonempty and new_text must be present and different; new_text may be empty to delete text")
+		}
+		if e := validText(a.Old); e != nil {
+			return e
+		}
+		return validText(*a.New)
+	}, func(ctx context.Context, x Execution, a editArgs) (any, error) {
+		count := 0
+		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Path: a.Path, MustExist: true, Transform: func(b []byte) ([]byte, error) {
+			if e := validText(string(b)); e != nil {
+				return nil, e
+			}
+			count = strings.Count(string(b), a.Old)
+			if count == 0 {
+				return nil, Fail("ambiguous_match", "old_text matched 0 times; read current contents and adjust old_text to match exactly")
+			}
+			if !a.All && count != 1 {
+				return nil, Fail("ambiguous_match", fmt.Sprintf("old_text matched %d times; include more surrounding context or set replace_all=true to replace every match", count))
+			}
+			return []byte(strings.ReplaceAll(string(b), a.Old, *a.New)), nil
+		}}})
+		return presentFiles(ctx, map[string]any{"path": w.Path(a.Path), "replacements": count}, res.Changes), e
+	})
+	addSearch(r, w)
+	addPatch(r, w)
+}
+func readPage(ctx context.Context, path string, offset, limit int) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	st, e := os.Stat(path)
+	if e != nil {
+		return nil, e
+	}
+	if st.IsDir() {
+		entries, e := readDirectoryEntries(ctx, path)
+		if e != nil {
+			return nil, e
+		}
+		out := []map[string]string{}
+		start := offset - 1
+		if start > len(entries) {
+			start = len(entries)
+		}
+		end := start + limit
+		if end > len(entries) {
+			end = len(entries)
+		}
+		for _, d := range entries[start:end] {
+			kind := "other"
+			if d.Type()&fs.ModeSymlink != 0 {
+				kind = "symlink"
+			} else if d.IsDir() {
+				kind = "directory"
+			} else if d.Type().IsRegular() {
+				kind = "file"
+			}
+			out = append(out, map[string]string{"name": d.Name(), "type": kind})
+		}
+		var next any
+		if end < len(entries) {
+			next = end + 1
+		}
+		return map[string]any{"kind": "directory", "path": path, "entries": out, "next_offset": next, "truncated": next != nil}, nil
+	}
+	if !st.Mode().IsRegular() {
+		return nil, Fail("unsupported_content", "not a regular file")
+	}
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	var content strings.Builder
+	line := 1
+	count := 0
+	var next any
+	for {
+		if e = ctx.Err(); e != nil {
+			return nil, e
+		}
+		if count >= limit {
+			if _, e := reader.Peek(1); e == io.EOF {
+				break
+			} else if e != nil {
+				return nil, e
+			}
+			next = line
+			break
+		}
+		part, e := boundedLine(reader)
+		if e != nil && e != io.EOF {
+			var failure *Error
+			if count > 0 && errors.As(e, &failure) && failure.Code == "line_too_long" {
+				next = line
+				break
+			}
+			return nil, e
+		}
+		if e != nil && len(part) == 0 {
+			break
+		}
+		if line >= offset {
+			if content.Len()+len(part) > 40000 {
+				next = line
+				break
+			}
+		}
+		if err := validText(part); err != nil {
+			return nil, err
+		}
+		if line >= offset {
+			content.WriteString(part)
+			count++
+		}
+		line++
+		if e != nil {
+			break
+		}
+	}
+	return map[string]any{"kind": "file", "path": path, "content": content.String(), "start_line": offset, "next_offset": next, "truncated": next != nil}, nil
+}
+
+const directoryEntryLimit = 10000
+
+// readDirectoryEntries preserves sorted pagination without unbounded directory
+// allocation. Larger directories should be narrowed with ripgrep-backed glob.
+func readDirectoryEntries(ctx context.Context, path string) ([]fs.DirEntry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var entries []fs.DirEntry
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		batch, err := f.ReadDir(256)
+		if len(entries)+len(batch) > directoryEntryLimit {
+			return nil, Fail("directory_too_large", "directory exceeds 10000 entries; use glob with a narrower pattern or read a subdirectory")
+		}
+		entries = append(entries, batch...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return entries, ctx.Err()
+}
+
+// DecodeResult is a convenience for callers that inspect common result envelopes.
+func DecodeResult(b []byte) (map[string]json.RawMessage, error) {
+	var r map[string]json.RawMessage
+	e := json.Unmarshal(b, &r)
+	return r, e
+}
+
+func boundedLine(reader *bufio.Reader) (string, error) {
+	var b strings.Builder
+	for {
+		chunk, e := reader.ReadSlice('\n')
+		if b.Len()+len(chunk) > 40000 {
+			return "", Fail("line_too_long", "line exceeds 40000-byte page cap; use shell to extract a bounded byte range instead")
+		}
+		b.Write(chunk)
+		if e == bufio.ErrBufferFull {
+			continue
+		}
+		return b.String(), e
+	}
+}

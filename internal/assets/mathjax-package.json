@@ -1,0 +1,8 @@
+{
+  "name": "ttc-mathjax",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@mathjax/src": "4.1.3"
+  }
+}

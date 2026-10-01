@@ -1,0 +1,26 @@
+package tui
+
+import "scicode/internal/session"
+
+// modalState owns one foreground view and its asynchronous image load.
+// Clearing it discards late source results without using window titles as state.
+type modalState struct {
+	window     *Window
+	menu       *modelMenu
+	sessions   *sessionMenu
+	question   *questionDialog
+	preview    *imagePreview
+	loading    *previewLoad
+	generation uint64
+}
+type previewLoad struct {
+	snapshot   session.ImageSnapshot
+	entryID    int64
+	generation uint64
+}
+
+func (m *modalState) clear() { *m = modalState{} }
+
+func (m *modalState) empty() bool {
+	return m.window == nil && m.menu == nil && m.sessions == nil && m.question == nil && m.preview == nil && m.loading == nil
+}

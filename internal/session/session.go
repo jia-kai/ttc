@@ -1,0 +1,615 @@
+// Package session owns one active conversation and its transient runtime work.
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	contextbuild "scicode/internal/context"
+	"scicode/internal/history"
+	"scicode/internal/jobs"
+	"scicode/internal/provider"
+	"scicode/internal/render"
+	"scicode/internal/skills"
+	"scicode/internal/tool"
+	"scicode/internal/workspace"
+)
+
+// Event contains a view update, never authentication state. EntryID makes every record inspectable.
+type Event struct {
+	Generation uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
+	Kind, Text string
+	SessionID  string // Runtime conversation at emission; the frontend discards stale-view events.
+	EntryID    int64
+	RequestID  int64          // Producing model request for streamed/completed assistant text.
+	Actor      string         // Assistant actor; empty means the main actor.
+	CallID     string         // Stable tool-card identity across transient updates and the final record.
+	PendingKey string         // Request-scoped streamed announcement to replace when intent is committed.
+	JobID      string         // Optional live job for bounded inspector polling; never revived from history.
+	Detail     string         // Bounded detail for a transient tool update; final detail is loaded from history.
+	Human      bool           // True only for a submitted human instruction.
+	Image      *ImageSnapshot // Immutable image_show snapshot, not a live interaction handle.
+	Question   *QuestionForm  // Snapshot for question/question_closed events; never persisted as a live handle.
+}
+
+// Runtime owns exactly one main session, and joins transient work before switching it.
+// Run and Command are called serially by the frontend; Interrupt and RequestModel are concurrent-safe.
+type Runtime struct {
+	Store           *history.Store
+	Workspace       *workspace.Manager
+	Provider        provider.Provider
+	selection       provider.Selection
+	pendingModel    *provider.Selection
+	Skills          *skills.Catalog
+	Tools           *tool.Registry
+	Jobs            *jobs.Manager
+	Emit            func(Event)
+	ctx             context.Context
+	cancel          context.CancelFunc
+	mu              sync.Mutex
+	childStartMu    sync.Mutex   // Serializes child capacity checks and admission, never child execution.
+	routeMu         sync.RWMutex // Keeps child commits/file mutations within the current continuation.
+	current         string
+	persisted       bool   // False until the first user turn/message is committed atomically.
+	generation      uint64 // Advances on explicit transient resets, never compaction.
+	activeCancel    context.CancelFunc
+	notifications   []provider.Message
+	AutoName        bool
+	timers          *wakeups
+	questions       questions
+	images          imageInteractions
+	usage           ContextUsage
+	reported        *ReportedUsage     // Protected by mu; cleared with the main session's transient state.
+	totals          UsageTotals        // All inference usage in this activation, protected by mu.
+	mainContext     contextCursor      // Owned by serial Run/Command; reset on explicit session changes.
+	mainPrefix      []provider.Message // Latest balanced main request input, immutable after publication under mu.
+	prefixSelection provider.Selection
+	prefixTurn      string
+	namingCtx       context.Context
+	namingCancel    context.CancelFunc
+	namingDone      chan struct{} // Serial main-loop ownership; closed after the one naming task finishes.
+}
+
+// New constructs an active runtime. An empty session ID starts an in-memory
+// blank conversation; a nonempty ID must refer to an already persisted session.
+func New(ctx context.Context, store *history.Store, w *workspace.Manager, p provider.Provider, selection provider.Selection, session string, catalog *skills.Catalog, emit func(Event)) *Runtime {
+	ctx, cancel := context.WithCancel(ctx)
+	persisted := session != ""
+	if !persisted {
+		session = history.NewID("session")
+	}
+	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, Emit: emit, ctx: ctx, cancel: cancel, current: session, persisted: persisted, AutoName: true}
+	r.resetTransient()
+	return r
+}
+func (r *Runtime) resetTransient() {
+	r.mu.Lock()
+	r.usage = ContextUsage{}
+	r.reported = nil
+	r.totals = UsageTotals{}
+	r.mainContext = contextCursor{}
+	r.mainPrefix = nil
+	r.prefixTurn = ""
+	r.generation++
+	r.mu.Unlock()
+	r.namingCtx, r.namingCancel = context.WithCancel(r.ctx)
+	r.namingDone = nil
+	r.Tools = tool.NewRegistry()
+	r.Tools.Detail = func(x tool.Execution, b []byte) (string, error) { return r.Store.Artifact(x.SessionID, "details", b) }
+	r.Jobs = jobs.New(r.ctx, func(v jobs.Snapshot) {
+		result, _ := json.Marshal(v)
+		args, _ := json.Marshal(map[string]string{"command": v.Label})
+		if v.Kind != "shell" {
+			args, _ = json.Marshal(map[string]string{"label": v.Label})
+		}
+		md := render.Tool(v.Kind, args, result)
+		if v.Kind == "btw" {
+			md.Detail = r.btwDetail(v)
+		} else {
+			md.Detail = r.JobDetail(v.ID, md.Detail)
+		}
+		r.mu.Lock()
+		sessionID := r.current
+		entry, e := r.Store.Append(sessionID, "", "main", "status", "", false, map[string]any{"type": "job_completion", "job": v, "markdown": md})
+		if e == nil && v.WakeOnExit && r.ctx.Err() == nil {
+			r.notifications = append(r.notifications, provider.Message{Role: "user", Content: fmt.Sprintf(`{"type":"job_exit","job_id":%q,"status":%q}`, v.ID, v.Status)})
+		}
+		r.mu.Unlock()
+		if e != nil {
+			r.emit(Event{Kind: "status", Text: "Job completion history failed: " + e.Error(), SessionID: sessionID})
+			return
+		}
+		r.emit(Event{Kind: "job", Text: md.Summary, EntryID: entry, SessionID: sessionID})
+		if v.Kind == "btw" && v.Status != "cancelled" {
+			r.emit(Event{Kind: "btw_result", Text: md.Detail, EntryID: entry, SessionID: sessionID})
+		}
+	})
+	tool.AddFiles(r.Tools, r.Workspace)
+	tool.AddShell(r.Tools, r.Jobs, r.Workspace)
+	tool.AddWeb(r.Tools, httpClient())
+	tool.AddSkills(r.Tools, r.Skills)
+	w := newWakeups(r.ctx, func(message string) {
+		r.mu.Lock()
+		r.notifications = append(r.notifications, provider.Message{Role: "user", Content: message})
+		r.mu.Unlock()
+		r.emit(Event{Kind: "wake", Text: "Timer fired"})
+	})
+	r.mu.Lock()
+	r.timers = w
+	r.mu.Unlock()
+	r.addWakeupTools()
+	r.addImageTool()
+	r.questions.mu.Lock()
+	r.questions.forms = map[string]questionForm{}
+	r.questions.mu.Unlock()
+	r.addQuestionTool()
+	r.addSubagentTool()
+}
+
+// Current returns the conversation pointer used by completion writers.
+func (r *Runtime) Current() string { r.mu.Lock(); defer r.mu.Unlock(); return r.current }
+
+// CurrentSession returns copied metadata, including a blank conversation that
+// has no database row yet. Blank identities are stable until an explicit switch.
+func (r *Runtime) CurrentSession() (history.Session, error) {
+	r.mu.Lock()
+	id, persisted, selection := r.current, r.persisted, r.selection
+	r.mu.Unlock()
+	if !persisted {
+		return history.Session{ID: id, LineageID: id, Name: "New session", Model: selection}, nil
+	}
+	return r.Store.Session(id)
+}
+
+// Entries returns current selected history; a blank conversation has no entries.
+func (r *Runtime) Entries() ([]history.Entry, error) {
+	r.mu.Lock()
+	id, persisted := r.current, r.persisted
+	r.mu.Unlock()
+	if !persisted {
+		return nil, nil
+	}
+	return r.Store.Branch(id, 0)
+}
+
+// Generation identifies live-state ownership across explicit session changes.
+// Compaction preserves it so pending interactions remain usable.
+func (r *Runtime) Generation() uint64 { r.mu.Lock(); defer r.mu.Unlock(); return r.generation }
+func (r *Runtime) emit(e Event) {
+	r.mu.Lock()
+	if e.SessionID == "" {
+		e.SessionID = r.current
+	}
+	e.Generation = r.generation
+	r.mu.Unlock()
+	if r.Emit != nil {
+		r.Emit(e)
+	}
+}
+
+// Interrupt cancels foreground request/tools, leaving independent jobs until runtime exit.
+func (r *Runtime) Interrupt() {
+	r.mu.Lock()
+	if r.activeCancel != nil {
+		r.activeCancel()
+	}
+	r.mu.Unlock()
+}
+
+// Close stops the runtime and joins background naming, process groups and timers.
+// Call it after Run and Command return; Interrupt cancels active foreground work.
+func (r *Runtime) Close() {
+	r.cancel()
+	r.Interrupt()
+	r.stopNaming()
+	r.Jobs.Close()
+	r.timers.close()
+	r.clearImages()
+}
+
+// HasNotifications reports queued runtime messages without treating history as live state.
+func (r *Runtime) HasNotifications() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.notifications) > 0
+}
+func (r *Runtime) deliver(turn string) error {
+	r.mu.Lock()
+	messages := r.notifications
+	r.notifications = nil
+	r.mu.Unlock()
+	for _, m := range messages {
+		m.Runtime = true
+		id, e := r.Store.Append(r.Current(), turn, "main", "message", "user", true, m)
+		if e != nil {
+			return e
+		}
+		var wake struct {
+			ID string `json:"wakeup_id"`
+		}
+		if json.Unmarshal([]byte(m.Content), &wake) == nil && wake.ID != "" {
+			r.timers.delivered(wake.ID)
+		}
+		r.emit(Event{Kind: "message", Text: m.Content, EntryID: id})
+	}
+	return nil
+}
+
+// Run executes one user or notification turn through complete tool/result cycles.
+func (r *Runtime) Run(message *provider.Message) (err error) {
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+	r.mu.Lock()
+	r.activeCancel = cancel
+	r.mu.Unlock()
+	defer func() { r.mu.Lock(); r.activeCancel = nil; r.mu.Unlock() }()
+	trigger := "async"
+	if message != nil {
+		trigger = "user"
+	}
+	if event, e := r.ApplyModel(""); e != nil {
+		return e
+	} else if event.Kind != "" {
+		r.emit(event)
+	}
+	selection := r.CurrentSelection()
+	if e := ctx.Err(); e != nil {
+		return e
+	}
+	r.mu.Lock()
+	id, persisted := r.current, r.persisted
+	r.mu.Unlock()
+	var turn string
+	var firstEntry int64
+	var e error
+	if persisted {
+		turn, e = r.Store.BeginTurn(id, trigger, selection)
+	} else {
+		if message == nil {
+			return errors.New("session is empty; send a user message before running background notifications")
+		}
+		turn, firstEntry, e = r.Store.StartSession(id, r.Workspace.Root, selection, *message)
+		if e != nil {
+			e = fmt.Errorf("save first message: %w", e)
+		}
+		if e == nil {
+			r.mu.Lock()
+			r.persisted = true
+			r.mu.Unlock()
+		}
+	}
+	if e != nil {
+		return e
+	}
+	status := "failed"
+	started := time.Now()
+	modelTime := time.Duration(0)
+	outputTokens := 0
+	haveUsage := true
+	namingChecked := false
+	defer func() {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			status = "interrupted"
+		}
+		if e := r.Store.FinishTurn(turn, status); err == nil && e != nil {
+			err = e
+		}
+		avg := "N/A"
+		if haveUsage && modelTime > 0 {
+			avg = fmt.Sprintf("%.1f tok/s", float64(outputTokens)/modelTime.Seconds())
+		}
+		text := fmt.Sprintf("Turn %s · avg %s", status, avg)
+		id, e := r.Store.Append(r.Current(), turn, "main", "status", "", false, map[string]any{"type": "turn_end", "status": status, "text": text, "wall_ms": time.Since(started).Milliseconds()})
+		if err == nil && e != nil {
+			err = e
+		}
+		r.emit(Event{Kind: "status", Text: text, EntryID: id})
+
+	}()
+	if message != nil {
+		entry := firstEntry
+		if entry == 0 {
+			entry, e = r.Store.Append(r.Current(), turn, "main", "message", "user", true, *message)
+			if e != nil {
+				return e
+			}
+		}
+		r.emit(Event{Kind: "message", Text: message.Content, EntryID: entry, Human: true})
+	}
+	if e = r.deliver(turn); e != nil {
+		return e
+	}
+	for {
+		if event, err := r.ApplyModel(turn); err != nil {
+			return err
+		} else if event.Kind != "" {
+			r.emit(event)
+		}
+		selection = r.CurrentSelection()
+		if e = ctx.Err(); e != nil {
+			return e
+		}
+		system := systemTemplate
+		messages, e := r.Store.Messages(r.Current())
+		if e != nil {
+			return e
+		}
+		contextMessage, nextContext, e := r.runtimeContext(ctx, "main", selection, r.mainContext)
+		if e != nil {
+			return e
+		}
+		messages = append(provider.ContextFor(selection, messages), contextMessage)
+		defs := r.Tools.Definitions()
+		r.mu.Lock()
+		r.usage = estimateUsage(selection, system, defs, messages)
+		r.mu.Unlock()
+		if !contextbuild.Fits(selection, system, defs, messages, false) {
+			r.emit(Event{Kind: "status", Text: "Compacting context…"})
+			result, err := r.compactContext(ctx, "", selection)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return tool.Fail("context_overflow", "automatic compaction failed: "+err.Error()+"; reduce the prompt or instructions, inspect the archive, or start a new session")
+			}
+			r.emit(Event{Kind: "continuation", Text: result})
+			continue
+		}
+		request, e := r.Store.StartRequest(r.Current(), turn, "main", "coding", selection)
+		if e != nil {
+			return e
+		}
+		r.mu.Lock()
+		r.usage.RequestID = request
+		r.mu.Unlock()
+		contextMessage.RequestID = request
+		contextEntry, e := r.Store.Append(r.Current(), turn, "main", "message", "developer", true, contextMessage)
+		if e != nil {
+			return e
+		}
+		r.mainContext = nextContext
+		r.emit(Event{Kind: "runtime_context", Text: contextLabel(contextMessage), EntryID: contextEntry})
+		promptEntry, e := r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
+		if e != nil {
+			return e
+		}
+		r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
+		reply := provider.Message{Role: "assistant"}
+		var usage *provider.Usage
+		responseID := ""
+		serviceTier := ""
+		requestStart := time.Now()
+		r.mu.Lock()
+		r.mainPrefix = append([]provider.Message(nil), messages...)
+		r.prefixSelection, r.prefixTurn = selection, turn
+		r.mu.Unlock()
+		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance}, func(event provider.StreamEvent) error {
+			if e := ctx.Err(); e != nil {
+				return e
+			}
+			switch event.Kind {
+			case "retry":
+				return r.retryNotice(turn, "main", request, event.Retry)
+			case "call_start":
+				return r.toolAnnouncement(turn, "main", request, event.CallStart)
+			case "text":
+				reply.Content += event.Text
+				r.emit(Event{Kind: "delta", Text: render.Clean(event.Text), RequestID: request})
+			case "call":
+				if event.Call == nil {
+					return errors.New("provider emitted nil call")
+				}
+				reply.Calls = append(reply.Calls, *event.Call)
+			case "phase":
+				reply.Phase = event.Phase
+			case "state":
+				return reply.AppendState(selection, event.StateVersion, event.StateItem)
+			case "completed":
+				usage = event.Usage
+				responseID = event.ResponseID
+				serviceTier = event.ServiceTier
+			}
+			return nil
+		})
+		r.recordUsage(usage)
+		if streamErr != nil {
+			// State/call callbacks can be interrupted halfway through completion.
+			// Canonical partial output remains inspectable, but cannot replay a
+			// native payload whose corresponding calls were never committed.
+			reply.State = nil
+		}
+		r.emit(Event{Kind: "tool_stream_end", PendingKey: pendingToolKey(request, ""), Text: streamState(streamErr)})
+		elapsed := time.Since(requestStart)
+		modelTime += elapsed
+		if usage == nil {
+			haveUsage = false
+		} else {
+			outputTokens += usage.OutputTokens
+		}
+		requestStatus := "completed"
+		if streamErr != nil {
+			requestStatus = "failed"
+		}
+		if e = r.Store.FinishRequest(request, requestStatus, []any{map[string]any{"duration_ms": elapsed.Milliseconds(), "response_id": responseID, "service_tier": serviceTier, "usage": usage, "status": requestStatus}}); e != nil {
+			return e
+		}
+		if streamErr == nil {
+			r.mu.Lock()
+			r.reported = nil
+			if usage != nil {
+				r.reported = copyReported(&ReportedUsage{Model: selection.Model.ID + " · " + selection.Variant, RequestID: request, Tokens: *usage})
+			}
+			r.mu.Unlock()
+		}
+		r.emit(Event{Kind: "usage"})
+		var callIDs []string
+		if reply.Content != "" || len(reply.Calls) > 0 || reply.State != nil {
+			id, ids, e := r.Store.Assistant(r.Current(), turn, "main", request, reply)
+			if e != nil {
+				return e
+			}
+			callIDs = ids
+			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: id, RequestID: request})
+		}
+		if _, e = r.runToolBatch(ctx, turn, "main", r.Tools, reply.Calls, callIDs, streamErr); e != nil {
+			return e
+		}
+		r.emit(Event{Kind: "usage"})
+		if streamErr != nil {
+			return streamErr
+		}
+		if !namingChecked && message != nil && r.AutoName {
+			namingChecked = true
+			r.startNaming(turn, selection, *message, reply)
+		}
+		pending := r.HasNotifications()
+		if e = r.deliver(turn); e != nil {
+			return e
+		}
+		if len(reply.Calls) == 0 && !pending {
+			status = "completed"
+			return nil
+		}
+	}
+}
+
+// Command executes idle-only history/lifecycle operations. Compaction requests a model summary.
+func (r *Runtime) Command(text string) (string, error) {
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	arg := ""
+	if len(parts) == 2 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	r.mu.Lock()
+	persisted := r.persisted
+	r.mu.Unlock()
+	if !persisted {
+		switch parts[0] {
+		case "/undo", "/redo", "/compact", "/export":
+			return "", errors.New("session is empty; send a message first")
+		}
+	}
+	switch parts[0] {
+	case "/new", "/clear":
+		r.stopNaming()
+		r.Jobs.Close()
+		r.timers.close()
+		r.clearImages()
+		r.mu.Lock()
+		r.notifications = nil
+		r.current = history.NewID("session")
+		r.persisted = false
+		r.mu.Unlock()
+		r.resetTransient()
+		return "New session · " + r.Current(), nil
+	case "/load":
+		v, e := r.Store.Load(arg)
+		if e != nil {
+			return "", e
+		}
+		if v.WorkspaceID != "" {
+			var path string
+			if e = r.Store.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", v.WorkspaceID).Scan(&path); e != nil {
+				return "", e
+			}
+			if path != r.Workspace.Root {
+				return "", errors.New("session belongs to another workspace")
+			}
+		}
+		selection := r.CurrentSelection()
+		promptEntry, e := RefreshInstructions(r.Store, v)
+		if e != nil {
+			return "", e
+		}
+		var switchEntry int64
+		switchText := ""
+		if v.ReadOnly {
+			selection = v.Model
+		} else if v.Model.Provider != selection.Provider || v.Model.Model.ID != selection.Model.ID || v.Model.Variant != selection.Variant {
+			switchText = fmt.Sprintf("Model switched · %s · %s", selection.Model.ID, selection.Variant)
+			switchEntry, e = r.Store.SwitchModel(v.ID, "", v.Model, selection, switchText)
+			if e != nil {
+				return "", e
+			}
+		}
+		r.stopNaming()
+		r.Jobs.Close()
+		r.timers.close()
+		r.clearImages()
+		r.mu.Lock()
+		r.current = v.ID
+		r.persisted = true
+		r.selection = selection
+		r.notifications = nil
+		r.mu.Unlock()
+		r.resetTransient()
+		if promptEntry != 0 {
+			r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
+		}
+
+		if switchEntry != 0 {
+			r.emit(Event{Kind: "status", Text: switchText, EntryID: switchEntry, SessionID: v.ID})
+		}
+		return "Loaded · " + v.Name, nil
+	case "/undo", "/redo":
+		r.stopNaming()
+		r.Jobs.Close()
+		r.timers.close()
+		r.clearImages()
+		r.mu.Lock()
+		r.notifications = nil
+		r.mu.Unlock()
+		r.resetTransient()
+		var target history.RestoreTarget
+		var e error
+		if parts[0] == "/undo" {
+			target, e = r.Store.UndoTarget(r.Current())
+		} else {
+			v, err := r.Store.Session(r.Current())
+			if err != nil {
+				return "", err
+			}
+			if v.RedoTip == 0 {
+				return "", errors.New("nothing to redo")
+			}
+			target, e = r.Store.BranchTarget(r.Current(), v.RedoTip)
+		}
+		if e != nil {
+			return "", e
+		}
+		e = r.Workspace.Restore(r.ctx, r.Current(), strings.TrimPrefix(parts[0], "/"), target)
+		return strings.TrimPrefix(parts[0], "/") + " completed", e
+	case "/export":
+		if arg == "" {
+			return "", errors.New("usage: /export <new-path>")
+		}
+		return "Exported · " + arg, r.Store.Export(r.Current(), arg)
+	case "/sessions":
+		list, e := r.Store.Sessions(r.Workspace.Root)
+		if e != nil {
+			return "", e
+		}
+		var b strings.Builder
+		for _, v := range list {
+			fmt.Fprintf(&b, "%s · %s · read_only=%t\n", v.ID, v.Name, v.ReadOnly)
+		}
+		return b.String(), nil
+	case "/jobs":
+		b, _ := json.MarshalIndent(r.Jobs.List("main", true), "", "  ")
+		return string(b), nil
+	case "/timers":
+		b, _ := json.MarshalIndent(r.timers.list(), "", "  ")
+		return string(b), nil
+	case "/compact":
+		return r.compact(arg)
+	case "/help":
+		return helpMarkdown, nil
+	default:
+		return "", fmt.Errorf("unknown command %s", parts[0])
+	}
+}

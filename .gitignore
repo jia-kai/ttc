@@ -1,0 +1,6 @@
+/ttc
+/.agents/
+*.test
+/coverage.out
+__pycache__/
+*.py[cod]
