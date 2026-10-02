@@ -23,7 +23,7 @@ type childProvider struct {
 func TestSubagentRequiresConciseTitle(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	for _, label := range []string{"", "   ", strings.Repeat("界", 65), "two\nlines", "two\u2028lines", "tab\ttitle", "bad\x1btitle", "one two three four five"} {
-		args, _ := json.Marshal(map[string]any{"prompt": "task", "label": label})
+		args, _ := json.Marshal(map[string]any{"persistent": true, "prompt": "task", "label": label})
 		record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main", CallID: "invalid"}, "subagent", args)
 		if !strings.Contains(string(record.Result), "invalid_arguments") {
 			t.Fatal(label, string(record.Result))
@@ -37,7 +37,7 @@ func (p *childProvider) Stream(ctx context.Context, request provider.Request, em
 
 func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 	r, events := runtimeFixture(t, []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"write the result","label":"writer"}`)}}},
+		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write the result","label":"writer"}`)}}},
 		{Calls: []provider.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"result\n"}`)}}},
 		{Text: "Child finished."}, {Text: "Parent finished."},
 	})
@@ -136,7 +136,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 		}
 		last := req.Messages[len(req.Messages)-2]
 		if last.Role == "user" && strings.HasPrefix(last.Content, "Private parent") {
-			call := provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"write after gate","label":"background writer","background":true}`)}
+			call := provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write after gate","label":"background writer","background":true}`)}
 			return emit(provider.StreamEvent{Kind: "call", Call: &call})
 		}
 		return emit(provider.StreamEvent{Kind: "text", Text: "Parent done."})

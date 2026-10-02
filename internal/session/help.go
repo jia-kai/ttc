@@ -16,8 +16,9 @@ const helpMarkdown = `# TTC help
 
 ## Conversation and views
 
-- **Up** — Recall the previous submitted prompt.
+- **Up** — Recall a previous prompt, including saved prompts from older sessions.
 - **Down** — Recall the next prompt or restore the draft.
+- **Ctrl+R** — Search recent prompts across sessions; Enter fills input, Esc cancels.
 - **Alt+Up / Alt+Down** — Focus a conversation message.
 - **Click a message** — Open its details.
 - **Tab with an empty input** — Inspect the focused message.
@@ -59,7 +60,7 @@ These commands require an idle turn.
 - **/rename TITLE** — Set a title of 1–60 characters; overrides automatic naming.
 - **/undo** — Undo file-tool edits; shell changes are excluded.
 - **/redo** — Restore undone file-tool edits.
-- **Ctrl+X G** or **/history** — Browse user inputs across history branches.
+- **Ctrl+X G** or **/history** — Browse user inputs; only alternate paths branch.
 - **Space in history** — Inspect the selected input.
 - **Enter in history** — Restore the checkpoint before the selected input.
 - **/branch ENTRY_ID** — Restore a checkpoint directly.

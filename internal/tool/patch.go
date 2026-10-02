@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"scicode/internal/prompts"
 	"scicode/internal/workspace"
 	"strings"
 )
@@ -22,7 +23,7 @@ func parsePatch(text string) ([]patchSection, error) {
 	}
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	if len(lines) < 3 || lines[0] != "*** Begin Patch" || lines[len(lines)-1] != "*** End Patch" {
-		return nil, errors.New("invalid patch envelope")
+		return nil, errors.New("patch_text must start with *** Begin Patch and end with *** End Patch on separate lines")
 	}
 	var sections []patchSection
 	var cur *patchSection
@@ -83,7 +84,7 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 		if anchor != "" {
 			pos := strings.Index(text[cursor:], anchor)
 			if pos < 0 {
-				return nil, errors.New("hunk anchor not found")
+				return nil, errors.New("hunk anchor not found; read current contents and correct or omit the text after @@")
 			}
 			cursor += pos + len(anchor)
 			if cursor < len(text) && text[cursor] == '\n' {
@@ -100,7 +101,7 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 				continue
 			}
 			if len(line) == 0 {
-				return nil, errors.New("empty hunk line requires prefix")
+				return nil, errors.New("empty hunk line requires a space, + or - prefix")
 			}
 			switch line[0] {
 			case ' ':
@@ -111,7 +112,7 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 			case '+':
 				new.WriteString(line[1:] + "\n")
 			default:
-				return nil, errors.New("invalid patch hunk line")
+				return nil, errors.New("prefix each hunk line with a space for context, - for deletion or + for addition")
 			}
 		}
 		before, after := old.String(), new.String()
@@ -160,7 +161,7 @@ func patchLineMatch(text, needle string, cursor int, eof bool) int {
 	return -1
 }
 func addPatch(r *Registry, w *workspace.Manager) {
-	Register(r, "patch", "Apply a Codex patch envelope with add/update/delete and optional move headers. Context must match exactly.", map[string]any{"patch_text": Property("string")}, []string{"patch_text"}, func(a patchArgs) error { _, e := parsePatch(a.Text); return e }, func(ctx context.Context, x Execution, a patchArgs) (any, error) {
+	Register(r, "patch", prompts.ToolDescription("patch"), map[string]any{"patch_text": Property("string")}, []string{"patch_text"}, func(a patchArgs) error { _, e := parsePatch(a.Text); return e }, func(ctx context.Context, x Execution, a patchArgs) (any, error) {
 		sections, _ := parsePatch(a.Text)
 		var ops []workspace.Mutation
 		files := []map[string]string{}
@@ -199,7 +200,7 @@ func addPatch(r *Registry, w *workspace.Manager) {
 					applied = append(applied, p.Path)
 				}
 			}
-			return presentFiles(ctx, nil, res.Changes), &Error{Code: "partial_patch", Message: fmt.Sprint(e), Details: map[string]any{"applied": applied}}
+			return presentFiles(ctx, nil, res.Changes), &Error{Code: "partial_patch", Message: fmt.Sprint(e) + "; some changes were applied: read the applied paths before retrying only the remaining changes", Details: map[string]any{"applied": applied}}
 		}
 		return presentFiles(ctx, map[string]any{"files": files}, res.Changes), e
 	})

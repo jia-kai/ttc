@@ -152,7 +152,7 @@ def main():
         send('Run demo\r')
         if args.offline:
             wait('Offline palette/image/math demo complete.')
-            wait('Turn completed')
+            wait('Turn complete')
             wait('\U0010eeee', timeout=20)
             capture('markdown-math')
             for _ in range(30):
@@ -241,7 +241,7 @@ def main():
         wait('Submit answers')
         capture('submit')
         key('enter')
-        wait('Turn completed')
+        wait('Turn complete')
         wait('\U0010eeee', timeout=20)  # Actual formula placeholders, after async rendering.
         deadline = time.monotonic() + 20
         while r'\frac' in last_text or r'\bar' in last_text:

@@ -152,13 +152,13 @@ def main():
                              call('edit', {'path': 'report.txt', 'old_text': 'draft', 'new_text': 'verified'}),
                              call('patch', {'patch_text': '*** Begin Patch\n*** Add File: note.txt\n+Mean is 4.0.\n*** End Patch'}),
                              call('shell', {'command': "python3 analysis.py && printf ''"}),
-                             call('subagent', {'prompt': 'Check fixture observations independently.', 'label': 'Independent fixture check'}),
+                             call('subagent', {'persistent': True, 'prompt': 'Check fixture observations independently.', 'label': 'Independent fixture check'}),
                              call('web_fetch', {'url': endpoint + '/notes'}),
                              call('web_search', {'query': 'local fixture observations'}),
                              call('wakeup_schedule', {'name': 'demo', 'message': 'Check observations', 'delay_seconds': 600})]
                 elif stage == 2:
                     calls = [call('wakeup_list', {}),
-                             call('subagent', {'child_id': results['subagent']['child_id'], 'prompt': 'Verify the final fixture report.'}),
+                             call('subagent', {'persistent': True, 'child_id': results['subagent']['child_id'], 'prompt': 'Verify the final fixture report.'}),
                              call('shell', {'command': 'python3 .lsp/server.fixture', 'background': True, 'protocol': 'lsp', 'wake_on_exit': False}),
                              call('shell', {'command': "printf 'background evidence\\n'; touch background.ready; sleep 30",
                                            'background': True, 'wake_on_exit': False})]
@@ -338,7 +338,7 @@ def main():
                        {'id': 'notes', 'values': ['Looks good.'], 'source': 'custom'},
                        {'id': 'checks', 'values': ['data'], 'source': 'option'}]
             send('/answer ' + form[0].decode() + ' ' + json.dumps(answers))
-        expect('Turn completed')
+        expect('Turn complete')
         if args.tui:
             os.write(master, b'\x04')  # Empty-composer Ctrl+D must not exit.
             send('/model')
@@ -385,7 +385,8 @@ def main():
         assert all(match['path'] == 'analysis.py' for match in results['grep'][0]['matches'])
         assert 'mean 4.0' in results['web_fetch'][0]['content']
         assert 'Highlights:' in results['web_search'][0]['content']
-        assert '4.0' in results['subagent'][0]['stdout']
+        assert '4.0' in results['subagent'][0]['answer']
+        assert not results['subagent'][0].get('answer_truncated', False)
         assert results['question'][0]['answers'][0]['values'] == ['yes']
         assert results['question'][0]['answers'][1]['values'] == ['Looks good.']
         assert results['question'][0]['answers'][1]['source'] == 'custom'

@@ -47,6 +47,11 @@ func run() error {
 	if e != nil {
 		return e
 	}
+	searchPath, e := webSearchConfigPath()
+	if e != nil {
+		return e
+	}
+	searchConfigFile := flag.String("web-search-config", searchPath, "operator web-search JSON configuration")
 	data := flag.String("data-dir", rootDefault, "private data root")
 	cwd := flag.String("workdir", ".", "workspace directory")
 	plain := flag.Bool("plain", false, "plain terminal output")
@@ -69,6 +74,16 @@ func run() error {
 		}
 		fmt.Fprintln(os.Stdout, "MathJax ready:", path)
 		return nil
+	}
+	searchConfig, e := loadWebSearchConfig(*searchConfigFile)
+	if e != nil {
+		return e
+	}
+	if endpoint := os.Getenv("TTC_EXA_URL"); endpoint != "" {
+		searchConfig.Endpoint = endpoint
+	}
+	if e = searchConfig.Validate(); e != nil {
+		return fmt.Errorf("web search config: %w", e)
 	}
 	if _, e := exec.LookPath("rg"); e != nil {
 		return fmt.Errorf("ripgrep (rg) is required for local search; install ripgrep and ensure rg is on PATH: %w", e)
@@ -183,7 +198,7 @@ func run() error {
 		return e
 	}
 	events := make(chan session.Event, 256)
-	runtime := session.New(ctx, store, w, p, selection, saved.ID, catalog, func(event session.Event) {
+	runtime := session.New(ctx, store, w, p, selection, saved.ID, catalog, searchConfig, func(event session.Event) {
 		select {
 		case events <- event:
 		case <-ctx.Done():

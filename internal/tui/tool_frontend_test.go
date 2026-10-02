@@ -68,7 +68,7 @@ func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
 		t.Fatal("updates created no final record", count)
 	}
 	u.key(tcell.KeyEscape)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	var final int64
 	if err := u.runtime.Store.DB.QueryRow("SELECT entry_id FROM tool_records").Scan(&final); err != nil {
 		t.Fatal(err)

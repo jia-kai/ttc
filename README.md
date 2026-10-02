@@ -11,8 +11,8 @@ be helpful to you:
 * Agents should not try to decide the "safety" of a tool call, impose
   permissions, or set up half-working sandboxes. The user is responsible for
   setting up a properly isolated environment.
-* Agents should provide a small set of useful tools to make effective use of
-  LLM capabilities.
+* Agents should provide a small set of useful LLM-facing tools to make effective
+  use of LLM capabilities.
 * Agents only need to run on Linux hosts.
 
 Besides conventional tools like file editing, web access, and shell execution,
@@ -23,9 +23,11 @@ TTC also supports the following:
 * Inline and block math using MathJax.
 * Image display and confirmed point coordinates delivered to the LLM as a later
   runtime message.
+* Transparency of all internal processes. Click a message or tool row to inspect
+  raw messages and saved tool details.
 
 TTC reads `AGENTS.md` and `.agents/skills`. TTC deliberately omits things like
-MCP and plugins.
+MCP, plugins, different modes like plan mode.
 
 The [requirements](docs/requirement.md), [implementation design](docs/design.md),
 [tool contracts](docs/tools.md), [compaction design](docs/compaction.md), and
@@ -36,7 +38,8 @@ architecture. TTC's design draws from [Codex](https://github.com/openai/codex),
 
 ## Installation
 
-Build on Linux with Go 1.26.5 or later. Install `rg` for recursive file search
+Build on Linux with Go 1.26.5 or later. `make` generates embedded
+[prompt assets](prompt/README.md) before compiling. Install `rg` for recursive file search
 and GNU `diff` (`diffutils` on Arch) for edit previews. If `diff` is unavailable,
 edits still work, but previews are unavailable.
 
@@ -57,24 +60,25 @@ credentials into TTC's private store:
 ./ttc --import-codex-auth "$HOME/.codex/auth.json"
 ```
 
-The core workflow works without graphics. Image display and rendered math
-require a terminal with Kitty graphics support. For a headless server, use
-Kitty locally and connect over SSH. When running through tmux, enable graphics
-passthrough in your tmux configuration:
+Web search uses Exa's public, rate-limited endpoint by default. To use your own
+key, create a private tool config (never included in LLM prompts):
+
+```sh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/ttc"
+install -m 600 /dev/null "${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json"
+```
+
+Edit that file to contain `{"api_key":"YOUR_EXA_KEY"}`. Optional `endpoint`
+selects an HTTP(S) backend URL. `--web-search-config PATH` selects another file;
+restart TTC after changes. Keep credential files private (use mode 0600). No key is
+supplied through the `web_search` tool arguments.
+
+Use Kitty as the terminal client for TTC's graphics features. When
+running through tmux, enable graphics passthrough in your tmux configuration:
 
 ```tmux
 set -g allow-passthrough on
 ```
-
-Inside tmux, TTC checks its detected client identity (`client_termtype`), the
-pane's effective passthrough setting, and the client's RGB feature. Kitty replies
-to graphics queries may not reach the pane, so TTC does not require them there.
-Direct connections use a graphics query. Detection failures show their cause.
-In sessions with multiple attached clients, tmux selects a recently active client;
-use Kitty for each client displaying TTC.
-
-TTC reads terminal cell sizes in pixels. If SSH or tmux omits them, TTC warns
-and uses an estimated 8×16 pixels per cell; graphics sizing may be inaccurate.
 
 For math rendering, install Node, npm, and `rsvg-convert` (run `sudo pacman -S
 nodejs npm librsvg` on Arch). Run `./ttc --install-math` to prepare MathJax
@@ -89,33 +93,13 @@ Start TTC in your project directory, or select the workspace explicitly:
 /path/to/ttc --workdir /path/to/project
 ```
 
-Use `/help` for the keyboard and command guide. Exit with `/quit` or Ctrl+C.
-Enter during work queues a new turn after the current turn finishes. Alt+Enter
-steers the current turn after its LLM response and foreground tool batch finish;
-running foreground shells delay delivery until they finish or move to background.
-Click a message or tool row to inspect it, or use Alt+Up/Down to focus a row
-and Tab on an empty composer. Use `/undo`
-and `/redo` for file-tool edits; shell changes are not part of undo/redo.
-Use `/rename NAME` to set a session title; automatic naming preserves it.
-
-Ctrl-X G lists human inputs across history branches. Enter restores the state
-before the selected input; Space inspects its message. Ctrl+D at the end of the
-conversation resumes following new output.
-
-Child activity uses colored `[Sub name]` badges. Models choose names of up to
-four words; names over 26 characters display 23 characters plus `...`. Shell and
-child inspectors show up to 8 KiB per stream; `job_read` can read earlier output.
-Completed tool/job states display as “done”; model JSON keeps `completed`.
+Use `/help` for the keyboard and command guide. Up/Down recall prompts across
+sessions and restarts. Ctrl-R searches the most recent 1000 prompts (at most
+8 MiB), newest matches first; Enter fills the input and Esc cancels.
 
 Background jobs, subagents, and timers belong to the active runtime. Compaction
 preserves them; switching sessions or exiting cancels them. Use tmux for work
-that needs to outlive TTC. Runtime snapshots are appended only when state changes;
-newly activated and compacted contexts receive a fresh snapshot.
-
-The sidebar separates current parent context from cumulative usage by all agents.
-Input includes cached tokens; “Uncached input” excludes cache reads. Output
-includes reasoning. Compaction inference adds to run totals, while its handoff
-refreshes the current context estimate.
+that needs to outlive TTC.
 
 ## Testing
 

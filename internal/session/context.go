@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	contextbuild "scicode/internal/context"
+	"scicode/internal/prompts"
 	"scicode/internal/provider"
 	"scicode/internal/render"
 	"strings"
@@ -53,7 +54,8 @@ func (r *Runtime) namingFailure(ctx context.Context, sessionID, turn, reason str
 
 func (r *Runtime) name(ctx context.Context, sessionID string, selection provider.Selection, turn string, user, assistant provider.Message) {
 	ownerCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	settings := prompts.Naming()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutSeconds)*time.Second)
 	defer cancel()
 	text := func(s string) string {
 		if len(s) > 4096 {
@@ -65,7 +67,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection provider
 		}
 		return s
 	}
-	system := "Name this coding session from the first user message, response and tool names. Return only a plain title of three to six words, at most 60 characters. No explanation."
+	system := settings.Text
 	request, e := r.Store.StartRequest(sessionID, turn, "main", "naming", selection)
 	if e != nil {
 		r.namingFailure(ownerCtx, sessionID, turn, "start request: "+e.Error())
@@ -101,7 +103,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection provider
 		return
 	}
 	var title strings.Builder
-	e = r.Provider.Stream(ctx, provider.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []provider.Message{message}, NoTools: true, OutputTokens: 32, MaxAttempts: 1}, func(ev provider.StreamEvent) error {
+	e = r.Provider.Stream(ctx, provider.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []provider.Message{message}, NoTools: true, OutputTokens: settings.OutputTokens, MaxAttempts: settings.MaxAttempts}, func(ev provider.StreamEvent) error {
 		if ev.Kind == "completed" {
 			usage = ev.Usage
 		}

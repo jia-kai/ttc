@@ -12,7 +12,7 @@ import (
 func TestRequestIdentityAcrossToolBoundariesChildrenTurnsAndSessionChanges(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	script := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"inspect","label":"inspect files"}`)}}},
+		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"inspect","label":"inspect files"}`)}}},
 		{Calls: []provider.ToolCall{{ID: "glob", Name: "glob", Arguments: []byte(`{"pattern":"*.txt"}`)}}},
 		{Text: "Child done"}, {Text: "Parent done"},
 		{Text: "Second turn"}, {Text: "New session"}, {Text: "Loaded session"},

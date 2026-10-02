@@ -66,6 +66,16 @@ type operationResult struct {
 func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	var recall promptHistory
+	if !f.Plain {
+		prompts, err := f.Runtime.Store.PromptHistory(ctx)
+		if err != nil {
+			return err
+		}
+		for _, prompt := range prompts {
+			recall.add(prompt)
+		}
+	}
 	var screen tcell.Screen
 	var tty *terminalTTY
 	var g *graphics.Kitty
@@ -259,7 +269,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	f.Runtime.EnableImageClicks(g != nil)
 	defer f.Runtime.EnableImageClicks(false)
 	questionDialogs := map[string]*questionDialog{}
-	var recall promptHistory
 	viewChord := false
 	draft := newComposer("")
 	var pasteQuestion *questionDialog
@@ -272,6 +281,14 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	completion := &completionMenu{}
 	var lastQuery completionQuery
 	hadQuery := false
+	recallInput := func(text string) {
+		draft.set(text)
+		// A recalled slash command or @ path must not capture the next history key.
+		if q, active := completionAt(draft, f.Runtime.Workspace.Root, f.Runtime.Generation()); active {
+			completion.dismissed, completion.hasDismissed = q, true
+		}
+		hadQuery = false
+	}
 	type attachmentResult struct {
 		attachment contextbuild.Attachment
 		generation uint64
@@ -730,6 +747,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				width, height := windowContentSize(w, h, modal.window)
 				modal.commands.reveal(width, height)
 			}
+			if modal.prompts != nil {
+				w, h := screen.Size()
+				width, height := windowContentSize(w, h, modal.window)
+				modal.prompts.reveal(width, height)
+			}
 			if modal.sessions != nil {
 				w, h := screen.Size()
 				width, height := windowContentSize(w, h, modal.window)
@@ -1089,6 +1111,10 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			dirty = true
 			switch ev := ev.(type) {
 			case *tcell.EventPaste:
+				if modal.prompts != nil {
+					modal.prompts.query.pasting = ev.Start()
+					continue
+				}
 				draft.pasting = ev.Start()
 				if ev.Start() {
 					esc, viewChord = false, false
@@ -1135,6 +1161,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					continue
 				}
 				if modal.window != nil {
+					if modal.prompts != nil {
+						w, h := screen.Size()
+						modal.prompts.mouse(ev, w, h)
+						continue
+					}
 					if modal.background != nil {
 						w, h := screen.Size()
 						modal.background.mouse(ev, w, h)
@@ -1194,6 +1225,19 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				if ev.Key() == tcell.KeyCtrlC {
 					submit, haveInput = "/quit", true
 					break
+				}
+				if modal.prompts != nil {
+					w, h := screen.Size()
+					_, height := windowContentSize(w, h, modal.window)
+					text, closed := modal.prompts.key(ev, height)
+					if closed {
+						modal.clear()
+						if text != "" {
+							recallInput(text)
+							recall.index, recall.draft = len(recall.entries), ""
+						}
+					}
+					continue
 				}
 				if draft.pasting && (pasteQuestion == nil || modal.question != pasteQuestion) {
 					if pasteIntoComposer {
@@ -1290,6 +1334,14 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					modal.generation = f.Runtime.Generation()
 					modal.commands = newCommandMenu()
 					modal.window = &modal.commands.Window
+					continue
+				}
+				if ev.Key() == tcell.KeyCtrlR {
+					modal.clear()
+					setFullscreen(false)
+					modal.generation = f.Runtime.Generation()
+					modal.prompts = newPromptSearch(recall.entries)
+					modal.window = &modal.prompts.Window
 					continue
 				}
 				if modal.commands != nil {
@@ -1459,7 +1511,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 							focused = max(0, focused-1)
 						}
 					} else {
-						draft.set(recall.move(draft.text, -1))
+						recallInput(recall.move(draft.text, -1))
 					}
 				case tcell.KeyDown:
 					if ev.Modifiers()&tcell.ModAlt != 0 {
@@ -1469,7 +1521,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 							focused = min(len(view.lines)-1, focused+1)
 						}
 					} else {
-						draft.set(recall.move(draft.text, 1))
+						recallInput(recall.move(draft.text, 1))
 					}
 				case tcell.KeyTab:
 					target := focused

@@ -26,7 +26,7 @@ func TestComposerFrontendEditingRecallAndModelWindow(t *testing.T) {
 	u.typeText("Hi ")
 	u.wait(t, "> Hi alpha βeta omega")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	assertComposerSubmission(t, u, "Hi alpha βeta omega")
 	u.typeText("unfinished")
 	u.key(tcell.KeyLeft)
@@ -59,7 +59,7 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 		t.Fatal("paste triggered a request", requests, err)
 	}
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	assertComposerSubmission(t, u, "prefix A\n\tBsuffix")
 }
 
@@ -74,7 +74,7 @@ func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
 		t.Fatal("newline submitted the draft", requests, err)
 	}
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	assertComposerSubmission(t, u, "first\nsecond")
 }
 
@@ -111,7 +111,7 @@ func TestComposerPasteResetsInterruptPrefix(t *testing.T) {
 	u.key(tcell.KeyEscape)
 	u.wait(t, "> draft")
 	close(p.release)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 }
 
 func TestComposerPasteDefersQuestionOpening(t *testing.T) {
@@ -167,7 +167,7 @@ func TestQuestionPasteRemainderDoesNotEnterComposerAfterClosure(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	u.typeText("discarded remainder")
 	u.screen.PostEventWait(tcell.NewEventPaste(false))
 	u.typeText("!")

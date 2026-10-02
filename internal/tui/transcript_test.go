@@ -299,3 +299,67 @@ func BenchmarkTranscriptViewportLongHistory(b *testing.B) {
 		v.viewport(80, 40)
 	}
 }
+
+func TestGrowingStreamKeepsSealedChunksAndCopySnapshot(t *testing.T) {
+	v := newTranscript()
+	piece := strings.Repeat("α", 128)
+	var source strings.Builder
+	for range 128 {
+		source.WriteString(piece)
+		v.assistant(1, "assistant", piece, 0, false)
+	}
+	frozen := v.snapshot()
+	original := v.blocks[0].text
+	frozenText := frozen.lines[0].text
+	// Other cards can arrive between deltas; both the stream and later anchors
+	// must remain addressable while adding chunks.
+	v.append(line{text: "interleaved tool status", callID: "status"})
+	v.anchor = len(v.blocks) - 1
+	indexNode := &v.tree[1]
+	v.assistant(1, "assistant", piece, 0, false)
+	source.WriteString(piece)
+	if &v.tree[1] != indexNode {
+		t.Fatal("interleaved card forced index rebuild without a new chunk")
+	}
+	for range 4096 {
+		source.WriteString(piece)
+		v.assistant(1, "assistant", piece, 0, false)
+		if v.blocks[0].text != original {
+			t.Fatal("sealed streaming chunk replaced")
+		}
+	}
+	if v.lines[0].text != source.String() || frozen.lines[0].text != frozenText || frozen.blocks[0].text != original {
+		t.Fatal("source or copy snapshot changed")
+	}
+	if v.blocks[v.anchor].owner != 1 {
+		t.Fatal("later reading anchor moved")
+	}
+	var joined strings.Builder
+	for _, block := range v.blocks {
+		if block.owner == 0 {
+			if len(block.text) > 16<<10 {
+				t.Fatal("unbounded streaming chunk")
+			}
+			joined.WriteString(block.text)
+		}
+	}
+	if joined.String() != source.String() {
+		t.Fatal("chunk boundary lost bytes")
+	}
+	v.assistant(1, "assistant", source.String(), 12, true)
+	if len(v.streams) != 0 || len(v.lines) != 2 || !v.lines[0].markdown {
+		t.Fatal("completion did not release streaming state")
+	}
+}
+
+func BenchmarkGrowingStream(b *testing.B) {
+	piece := strings.Repeat("x", 256)
+	b.SetBytes(1 << 20)
+	b.ReportAllocs()
+	for range b.N {
+		v := newTranscript()
+		for range (1 << 20) / len(piece) {
+			v.assistant(1, "assistant", piece, 0, false)
+		}
+	}
+}

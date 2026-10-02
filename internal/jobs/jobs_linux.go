@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"scicode/internal/capture"
+	"scicode/internal/prompts"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,10 @@ import (
 	"scicode/internal/history"
 	"scicode/internal/lsp"
 )
+
+// ErrNotFound identifies a stale or inaccessible job handle without exposing
+// another actor's jobs. Callers can map it to their own error protocol.
+var ErrNotFound = errors.New("unknown or inaccessible job_id; use job_list(state=all) to choose an accessible job")
 
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
@@ -170,7 +175,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 				j.view.Status = "failed"
 				fmt.Fprintf(j.stderr, "Shell supervision failed: %v\n", e)
 				if errors.Is(e, exec.ErrWaitDelay) {
-					io.WriteString(j.stderr, "Descendants kept output pipes open after the shell exited. Run the long command directly with background=true, or use tmux for work outside this runtime.\n")
+					io.WriteString(j.stderr, prompts.ToolNote("shell", "descendant_pipes"))
 				}
 			}
 		}
@@ -230,7 +235,7 @@ func (m *Manager) View(owner, id string) (Snapshot, error) {
 	defer m.mu.Unlock()
 	j, ok := m.jobs[id]
 	if !ok || !allowed(owner, j.view.Owner) {
-		return Snapshot{}, errors.New("not_found")
+		return Snapshot{}, ErrNotFound
 	}
 	return preview(j), nil
 }
@@ -241,7 +246,7 @@ func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapsh
 	j, ok := m.jobs[id]
 	if !ok || !allowed(owner, j.view.Owner) {
 		m.mu.Unlock()
-		return Snapshot{}, errors.New("not_found")
+		return Snapshot{}, ErrNotFound
 	}
 	done := j.done
 	var promoted <-chan struct{}
@@ -315,7 +320,7 @@ func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 	j, ok := m.jobs[id]
 	if !ok || !allowed(owner, j.view.Owner) {
 		m.mu.Unlock()
-		return Snapshot{}, errors.New("not_found")
+		return Snapshot{}, ErrNotFound
 	}
 	if j.view.Kind == "subagent" && j.view.Owner == owner {
 		m.mu.Unlock()
@@ -346,7 +351,7 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 	defer m.mu.Unlock()
 	j, ok := m.jobs[id]
 	if !ok || !allowed(owner, j.view.Owner) {
-		return nil, errors.New("not_found")
+		return nil, ErrNotFound
 	}
 	stream := options.Stream
 	if stream == "" {

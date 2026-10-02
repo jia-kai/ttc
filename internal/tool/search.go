@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"scicode/internal/prompts"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -21,7 +22,7 @@ import (
 const searchTextLimit = 40000
 
 func addSearch(r *Registry, w *workspace.Manager) {
-	Register(r, "glob", "Find paths using native ripgrep globs. Positive globs override ignore and hidden-file rules. Returns sorted bounded paths.", map[string]any{"pattern": Property("string"), "path": Property("string"), "hidden": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a globArgs) error {
+	Register(r, "glob", prompts.ToolDescription("glob"), map[string]any{"pattern": Property("string"), "path": Property("string"), "hidden": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a globArgs) error {
 		if err := Required("pattern", a.Pattern); err != nil {
 			return err
 		}
@@ -53,7 +54,7 @@ func addSearch(r *Registry, w *workspace.Manager) {
 		sort.Strings(paths)
 		return map[string]any{"root": root, "paths": paths, "truncated": truncated}, nil
 	})
-	Register(r, "grep", "Search with ripgrep regular expressions or literal text. Native glob and ignore rules apply. Returns sorted bounded matching lines.", map[string]any{"pattern": Property("string"), "path": Property("string"), "include": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a grepArgs) error {
+	Register(r, "grep", prompts.ToolDescription("grep"), map[string]any{"pattern": Property("string"), "path": Property("string"), "include": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a grepArgs) error {
 		if a.Pattern == "" {
 			return errors.New("pattern required")
 		}

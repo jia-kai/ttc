@@ -138,7 +138,7 @@ func safePath(path string) error {
 			return e
 		}
 		if st.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink mutation path: %s", p)
+			return fmt.Errorf("symlink mutation path: %s; resolve the real target and retry with its path", p)
 		}
 		if p == path {
 			if !st.Mode().IsRegular() {
@@ -303,7 +303,7 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 			return Result{}, fmt.Errorf("source not found: %s", path)
 		}
 		if op.MustAbsent && before.Exists {
-			return Result{}, fmt.Errorf("target exists: %s", path)
+			return Result{}, fmt.Errorf("target exists: %s; read it and use an update for intended changes, or choose a different add/move destination", path)
 		}
 		after := State{}
 		sourceMode := uint32(0)

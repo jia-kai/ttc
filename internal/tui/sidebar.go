@@ -57,7 +57,6 @@ func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []
 			if cached := v.Tokens.CachedInputTokens; cached != nil && *cached <= v.Tokens.InputTokens {
 				c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", v.Tokens.InputTokens-*cached))
 			}
-			c.rows = append(c.rows, "Cache writes "+optionalTokens(v.Tokens.CacheWriteTokens))
 		} else {
 			c.rows = append(c.rows, "Reported usage unavailable")
 		}
@@ -67,7 +66,7 @@ func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []
 		}
 	}
 	if totals := u.Totals; totals.Requests > 0 {
-		c.rows = append(c.rows, "Run totals · all agents", fmt.Sprintf("Reported %d/%d requests", totals.ReportedRequests, totals.Requests), fmt.Sprintf("Input %d · cached %s", totals.Tokens.InputTokens, optionalTokens(totals.Tokens.CachedInputTokens)), "Cache writes "+optionalTokens(totals.Tokens.CacheWriteTokens), fmt.Sprintf("Output %d · reasoning %s", totals.Tokens.OutputTokens, optionalTokens(totals.Tokens.ReasoningOutputTokens)))
+		c.rows = append(c.rows, "Run totals · all agents", fmt.Sprintf("Reported %d/%d requests", totals.ReportedRequests, totals.Requests), fmt.Sprintf("Input %d · cached %s", totals.Tokens.InputTokens, optionalTokens(totals.Tokens.CachedInputTokens)), fmt.Sprintf("Output %d · reasoning %s", totals.Tokens.OutputTokens, optionalTokens(totals.Tokens.ReasoningOutputTokens)))
 		if cached := totals.Tokens.CachedInputTokens; cached != nil && *cached <= totals.Tokens.InputTokens {
 			c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", totals.Tokens.InputTokens-*cached))
 		}

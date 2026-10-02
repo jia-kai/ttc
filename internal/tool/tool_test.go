@@ -152,7 +152,7 @@ func TestSearchAndFetch(t *testing.T) {
 	// of socket permissions. The separate mock demo covers actual HTTP fetching.
 	AddWeb(r, &http.Client{Transport: fetchTransport(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/html"}}, Body: io.NopCloser(strings.NewReader("<p>hello</p><script>bad</script><p>world</p>")), Request: req}, nil
-	})})
+	})}, WebSearchConfig{})
 	args, _ := json.Marshal(map[string]any{"url": "https://mock.test", "max_chars": 5})
 	rec = invoke(t, r, w, x, req, "web_fetch", string(args))
 	ok(t, rec)

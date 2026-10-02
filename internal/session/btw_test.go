@@ -74,7 +74,7 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 				{ID: "write", Name: "write", Arguments: []byte(`{"path":"forbidden.txt","content":"bad"}`)},
 				{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch forbidden-shell.txt"}`)},
 				{ID: "question", Name: "question", Arguments: []byte(`{"questions":[]}`)},
-				{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"bad","label":"bad"}`)},
+				{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"bad","label":"bad"}`)},
 				{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)},
 			} {
 				if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {

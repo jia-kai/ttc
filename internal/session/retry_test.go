@@ -28,7 +28,7 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.ToolCall{ID: "child_retry", Name: "subagent", Arguments: []byte(`{"prompt":"Run child","label":"retry test"}`)}
+	call := provider.ToolCall{ID: "child_retry", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"Run child","label":"retry test"}`)}
 	id, err := r.Store.CallIntent(r.Current(), "", "main", request, call)
 	if err != nil {
 		t.Fatal(err)

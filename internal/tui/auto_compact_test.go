@@ -36,7 +36,7 @@ func TestAutomaticCompactionRefreshesConversationWithoutPopupAndPreservesDraft(t
 	u := newQuestionTestUI(t, p)
 	u.typeText("initial task")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	before := u.runtime.Current()
 	for _, message := range []provider.Message{
 		{Role: "user", Content: "Older research task"},
@@ -63,7 +63,7 @@ func TestAutomaticCompactionRefreshesConversationWithoutPopupAndPreservesDraft(t
 	if strings.Count(frame, "Continued after automatic compaction.") != 1 {
 		t.Fatal("continuation assistant rendered twice", frame)
 	}
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	if u.runtime.Current() == before {
 		t.Fatal("UI did not use continuation")
 	}

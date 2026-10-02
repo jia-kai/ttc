@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -48,7 +49,7 @@ func TestWebFetchRetainedPagingAndSearch(t *testing.T) {
 	AddWeb(r, &http.Client{Transport: fetchTransport(func(req *http.Request) (*http.Response, error) {
 		downloads++
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("αβγ\nmatch first\nother\nmatch second\n")), Request: req}, nil
-	})})
+	})}, WebSearchConfig{})
 	call := func(args string) map[string]any {
 		t.Helper()
 		record := invoke(t, r, w, x, request, "web_fetch", args)
@@ -64,6 +65,13 @@ func TestWebFetchRetainedPagingAndSearch(t *testing.T) {
 		t.Fatal(first)
 	}
 	id := first["document_id"].(string)
+	// A rejected presentation change must leave the cached document available
+	// for the corrected call, without another download.
+	badArgs, _ := json.Marshal(map[string]any{"document_id": id, "format": "markdown"})
+	rejected := invoke(t, r, w, x, request, "web_fetch", string(badArgs))
+	if !strings.Contains(string(rejected.Result), "invalid_input") {
+		t.Fatal(string(rejected.Result))
+	}
 	args, _ := json.Marshal(map[string]any{"document_id": id, "offset": 2, "max_chars": 2})
 	second := call(string(args))
 	if second["content"] != "γ\n" || downloads != 1 {
@@ -87,6 +95,29 @@ func TestWebFetchRetainedPagingAndSearch(t *testing.T) {
 			t.Fatal("invalid input accepted", args)
 		}
 	}
+}
+
+func TestWebFetchTimeoutCanBeRecovered(t *testing.T) {
+	r, w, x, request := toolFixture(t)
+	AddWeb(r, &http.Client{Transport: fetchTransport(func(req *http.Request) (*http.Response, error) {
+		deadline, ok := req.Context().Deadline()
+		if !ok {
+			t.Fatal("fetch has no deadline")
+		}
+		if time.Until(deadline) < time.Second {
+			return nil, fmt.Errorf("mock transport: %w", context.DeadlineExceeded)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("Recovered page")), Request: req}, nil
+	})}, WebSearchConfig{})
+	failed := invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test","timeout_ms":1}`)
+	var failure struct {
+		OK    bool
+		Error *Error
+	}
+	if err := json.Unmarshal(failed.Result, &failure); err != nil || failure.OK || failure.Error == nil || failure.Error.Code != "timeout" {
+		t.Fatal(string(failed.Result), err)
+	}
+	ok(t, invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test","timeout_ms":30000}`))
 }
 
 func TestWebCacheBoundsExpiryAndImmutability(t *testing.T) {
@@ -133,8 +164,6 @@ func TestWebCacheBoundsExpiryAndImmutability(t *testing.T) {
 func TestWebSearchJSONAndSSE(t *testing.T) {
 	for _, sse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "json", true: "sse"}[sse], func(t *testing.T) {
-			t.Setenv("TTC_EXA_URL", "https://mock.test/mcp")
-			t.Setenv("EXA_API_KEY", "synthetic-key")
 			r, w, x, request := toolFixture(t)
 			AddWeb(r, &http.Client{Transport: fetchTransport(func(req *http.Request) (*http.Response, error) {
 				if req.Method != "POST" || req.Header.Get("x-api-key") != "synthetic-key" {
@@ -150,7 +179,7 @@ func TestWebSearchJSONAndSSE(t *testing.T) {
 				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 					t.Fatal(err)
 				}
-				if body.Method != "tools/call" || body.Params.Name != "web_search_exa" || body.Params.Arguments["query"] != "a question" || body.Params.Arguments["numResults"] != float64(5) {
+				if body.Method != "tools/call" || body.Params.Name != "web_search_exa" || body.Params.Arguments["query"] != "a question" || body.Params.Arguments["numResults"] != float64(5) || len(body.Params.Arguments) != 2 {
 					t.Fatal(body)
 				}
 				data := `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Title: Source\nURL: https://example.test/\nHighlights: useful"}]}}`
@@ -160,7 +189,7 @@ func TestWebSearchJSONAndSSE(t *testing.T) {
 					ct = "text/event-stream"
 				}
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{ct}}, Body: io.NopCloser(strings.NewReader(data)), Request: req}, nil
-			})})
+			})}, WebSearchConfig{Endpoint: "https://mock.test/mcp", APIKey: "synthetic-key"})
 			rec := invoke(t, r, w, x, request, "web_search", `{"query":"a question","max_chars":20}`)
 			ok(t, rec)
 			var out struct {
@@ -179,7 +208,7 @@ func TestWebSearchJSONAndSSE(t *testing.T) {
 		})
 	}
 	for _, raw := range []string{`{"jsonrpc":"2.0","id":1,"error":{"code":-1}}`, `{"jsonrpc":"2.0","id":1,"result":{"isError":true}}`, `{"jsonrpc":"2.0","id":2,"result":{}}`, `{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`, `not json`} {
-		if _, err := searchResult(strings.NewReader(raw), false); err == nil {
+		if _, err := searchResult(strings.NewReader(raw), false, ""); err == nil {
 			t.Fatal("accepted invalid response", raw)
 		}
 	}

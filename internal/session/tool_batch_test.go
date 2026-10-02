@@ -254,7 +254,7 @@ func TestTurnsContinueBeyond64Cycles(t *testing.T) {
 		t.Run(fmt.Sprintf("child=%t", child), func(t *testing.T) {
 			responses := []provider.ScriptResponse{}
 			if child {
-				responses = append(responses, provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"continue","label":"long child"}`)}}})
+				responses = append(responses, provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"continue","label":"long child"}`)}}})
 			}
 			for i := range 70 {
 				responses = append(responses, provider.ScriptResponse{Calls: []provider.ToolCall{{ID: fmt.Sprintf("cycle%d", i), Name: "wakeup_list", Arguments: []byte(`{}`)}}})
@@ -294,7 +294,7 @@ func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
 	}}
 	calls := []provider.ToolCall{}
 	for i := range 6 {
-		calls = append(calls, provider.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"prompt":"hold","label":"held child","background":true}`)})
+		calls = append(calls, provider.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"hold","label":"held child","background":true}`)})
 	}
 	turn, ids := batchIntents(t, r, "main", calls)
 	records, err := r.runToolBatch(context.Background(), turn, "main", r.Tools, calls, ids, nil)

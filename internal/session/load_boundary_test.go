@@ -47,7 +47,7 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 		}
 		mainStep++
 		if mainStep == 1 {
-			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "child", Name: "subagent", Arguments: json.RawMessage(`{"prompt":"Write later","label":"Late mutation","background":true}`)}})
+			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "child", Name: "subagent", Arguments: json.RawMessage(`{"persistent":true,"prompt":"Write later","label":"Late mutation","background":true}`)}})
 		}
 		select {
 		case <-started:

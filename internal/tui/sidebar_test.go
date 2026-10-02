@@ -2,12 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"strings"
+	"testing"
+
 	"github.com/gdamore/tcell/v2"
 	"scicode/internal/jobs"
 	"scicode/internal/provider"
 	"scicode/internal/session"
-	"strings"
-	"testing"
 )
 
 func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
@@ -18,6 +19,9 @@ func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 	text := strings.Join(b.sections[0].rows, "\n")
 	if strings.Count(text, "Uncached input 200") != 2 || !strings.Contains(text, "Input 1000") {
 		t.Fatal("cached/full input remain indistinguishable", text)
+	}
+	if strings.Contains(text, "Cache writes") {
+		t.Fatal("removed sidebar counter still visible", text)
 	}
 }
 
@@ -162,16 +166,19 @@ func TestSidebarReportedCountersRemainSeparateFromEstimates(t *testing.T) {
 	}
 }
 
-func TestSidebarRunTotalsIncludeCacheReadsAndWrites(t *testing.T) {
+func TestSidebarRunTotalsPreserveInputSubsets(t *testing.T) {
 	b := newSidebar()
 	cached, written, reasoning := 600, 100, 2
 	u := session.ContextUsage{Totals: session.UsageTotals{Requests: 3, ReportedRequests: 2, Tokens: provider.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
-	for _, want := range []string{"Run totals · all agents", "Reported 2/3 requests", "cached 600", "Cache writes 100", "Ordinary input 300", "Output 10 · reasoning 2"} {
+	for _, want := range []string{"Run totals · all agents", "Reported 2/3 requests", "cached 600", "Ordinary input 300", "Output 10 · reasoning 2"} {
 		if !strings.Contains(rows, want) {
 			t.Fatal(want, rows)
 		}
+	}
+	if strings.Contains(rows, "Cache writes") {
+		t.Fatal("removed sidebar counter still visible", rows)
 	}
 }
 

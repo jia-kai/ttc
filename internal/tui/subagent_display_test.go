@@ -35,7 +35,7 @@ func (p *namedPendingProvider) Stream(ctx context.Context, req provider.Request,
 
 func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	p := &namedPendingProvider{release: make(chan struct{}), Script: provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"read missing file","label":"one two three four"}`)}}},
+		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"read missing file","label":"one two three four"}`)}}},
 		{Calls: []provider.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"missing.txt"}`)}}},
 		{Text: "Child handled missing file"}, {Text: "Parent finished"},
 	}}}
@@ -87,7 +87,7 @@ func TestSubagentBadgeRowsPreserveGeometryAndIdentity(t *testing.T) {
 
 func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"write file","label":"  research  helper "}`)}}},
+		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write file","label":"  research  helper "}`)}}},
 		{Calls: []provider.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"child result"}`)}}},
 		{Text: "Named child answer"}, {Text: "Parent answer"},
 	}}
@@ -104,7 +104,7 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	if err != nil || len(names) != 1 {
 		t.Fatal(names, err)
 	}
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	var id int64
 	if err := u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='write'").Scan(&id); err != nil {
 		t.Fatal(err)

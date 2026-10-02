@@ -38,6 +38,10 @@ specifications for remaining features. Linux hosts are the only supported platfo
   Frontends render typed login steps; providers do not own terminal widgets.
   OpenAI subscription with device-code login is the initial provider; do not
   assume another is configured.
+- Author embedded LLM instructions, tool descriptions and reusable notes in
+  `prompt/`. Makefile targets generate git-ignored Go assets before building or
+  checking; do not duplicate their text in Go or documentation. Bundled skills
+  retain their canonical `default-skills/*/SKILL.md` sources.
 - Preserve root-to-cwd AGENTS.md instructions and ancestor skill discovery.
   Deeper AGENTS.md files remain scoped to their directories; the agent reads
   them before affected edits. Skills load on demand by exact catalog name.

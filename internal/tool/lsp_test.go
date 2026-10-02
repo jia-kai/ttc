@@ -12,6 +12,27 @@ import (
 	"scicode/internal/jobs"
 )
 
+func TestUnknownJobHandlesReturnNotFound(t *testing.T) {
+	r, w, x, request := toolFixture(t)
+	m := jobs.New(context.Background(), nil)
+	defer m.Close()
+	AddShell(r, m, w, nil)
+	for _, test := range []struct{ name, args string }{
+		{"job_read", `{"job_id":"missing"}`},
+		{"job_stop", `{"job_id":"missing"}`},
+		{"lsp_query", `{"job_id":"missing","operation":"workspace_symbols","query":""}`},
+	} {
+		record := invoke(t, r, w, x, request, test.name, test.args)
+		var result struct {
+			OK    bool
+			Error *Error
+		}
+		if err := json.Unmarshal(record.Result, &result); err != nil || result.OK || result.Error == nil || result.Error.Code != "not_found" {
+			t.Fatalf("%s: %s (%v)", test.name, record.Result, err)
+		}
+	}
+}
+
 func TestLSPStrictOperationParameters(t *testing.T) {
 	r, w, _, _ := toolFixture(t)
 	m := jobs.New(context.Background(), nil)

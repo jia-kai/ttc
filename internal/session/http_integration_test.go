@@ -169,7 +169,6 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TTC_EXA_URL", "http://mock.invalid/mcp")
 	t.Setenv("TTC_LSP_MODE", "normal")
 	t.Setenv("TTC_LSP_ENCODING", "utf-16")
 	var mu sync.Mutex
@@ -202,7 +201,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 			return
 		}
 		if request.URL.Path == "/models" {
-			_, _ = io.WriteString(w, `{"models":[{"slug":"mock","display_name":"Mock OpenAI","visibility":"list","context_window":272000,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"}],"input_modalities":["text","image"]}]}`)
+			_, _ = io.WriteString(w, `{"models":[{"slug":"mock","display_name":"Mock OpenAI","visibility":"list","context_window":272000,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"input_modalities":["text","image"]}]}`)
 			return
 		}
 		if request.URL.Path != "/responses" {
@@ -213,7 +212,10 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		var body struct {
 			Instructions string `json:"instructions"`
 			Store        *bool  `json:"store"`
-			Input        []struct {
+			Reasoning    struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+			Input []struct {
 				Type   string `json:"type"`
 				CallID string `json:"call_id"`
 				Output string `json:"output"`
@@ -232,6 +234,13 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 			identity = "c"
 		} else if body.Instructions != systemTemplate {
 			failure(errors.New("coding instructions changed"))
+		}
+		wantEffort := "high"
+		if identity == "c" {
+			wantEffort = "low"
+		}
+		if body.Reasoning.Effort != wantEffort {
+			failure(fmt.Errorf("%s reasoning effort: got %q, want %q", identity, body.Reasoning.Effort, wantEffort))
 		}
 		mu.Lock()
 		step := counts[identity]
@@ -285,15 +294,21 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 				}
 			case 1:
 				calls = []mockCall{
-					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true, "wake_on_exit": false}}, {"subagent", map[string]any{"prompt": "Write the isolated fixture result", "label": "fixture child"}},
+					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true, "wake_on_exit": false}}, {"subagent", map[string]any{"persistent": true, "variant": "low", "prompt": "Write the isolated fixture result", "label": "fixture child"}},
 				}
 			case 2:
+				if answer := get("m1_subagent", "answer"); answer != "First child assignment complete." {
+					failure(fmt.Errorf("unexpected direct child answer: %q", answer))
+				}
 				calls = []mockCall{
 					{"lsp_query", map[string]any{"job_id": get("m1_shell", "job_id"), "operation": "definition", "path": "sample.py", "line": 1, "column": 3, "limit": 1}}, {"edit", map[string]any{"path": "result.txt", "old_text": "alpha", "new_text": "beta"}}, {"patch", map[string]any{"patch_text": "*** Begin Patch\n*** Update File: result.txt\n@@\n-beta\n+gamma\n*** End Patch"}},
 					{"job_read", map[string]any{"job_id": get("m0_shell", "job_id"), "stream": "stderr", "cursor": "eof:-10:lines", "grep": "fixture"}}, {"job_list", map[string]any{"state": "all"}}, {"wakeup_list", map[string]any{}},
-					{"web_fetch", map[string]any{"document_id": get("m0_web_fetch", "document_id"), "pattern": "fixture", "context_lines": 1}}, {"subagent", map[string]any{"child_id": get("m1_subagent", "child_id"), "prompt": "Follow up by updating the retained result"}},
+					{"web_fetch", map[string]any{"document_id": get("m0_web_fetch", "document_id"), "pattern": "fixture", "context_lines": 1}}, {"subagent", map[string]any{"persistent": true, "child_id": get("m1_subagent", "child_id"), "prompt": "Follow up by updating the retained result"}},
 				}
 			case 3:
+				if answer := get("m2_subagent", "answer"); answer != "Follow-up complete." {
+					failure(fmt.Errorf("unexpected direct follow-up answer: %q", answer))
+				}
 				calls = []mockCall{
 					{"job_stop", map[string]any{"child_id": get("m2_subagent", "child_id")}}, {"wakeup_cancel", map[string]any{"wakeup_id": get("m0_wakeup_schedule", "wakeup_id")}},
 					{"job_stop", map[string]any{"job_id": get("m1_shell", "job_id")}},
@@ -319,14 +334,14 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection, err := provider.Resolve("openai", models, "mock", "low")
+	selection, err := provider.Resolve("openai", models, "mock", "high")
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.Provider = adapter
 	r.selection = selection
 	r.Tools = r.Tools.Filter(func(name string) bool { return name != "web_fetch" && name != "web_search" })
-	tool.AddWeb(r.Tools, client)
+	tool.AddWeb(r.Tools, client, tool.WebSearchConfig{Endpoint: "http://mock.invalid/mcp"})
 	events := make(chan Event, 1024)
 	r.Emit = func(event Event) { events <- event }
 	consumerDone := make(chan struct{})

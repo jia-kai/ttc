@@ -25,7 +25,7 @@ func TestSessionPickerReloadPreservesEditedDraft(t *testing.T) {
 	first := u.runtime.Current()
 	u.typeText("Start research")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name='Original research' WHERE id=?", first); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestSessionPickerLoadsSelectedSession(t *testing.T) {
 	u.typeText("hello")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "First session evidence")
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name='Original research' WHERE id=?", first); err != nil {
 		t.Fatal(err)
 	}

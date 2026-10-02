@@ -282,13 +282,13 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 		lost = true
 	}
 	if pos > b.total {
-		return Page{}, errors.New("cursor beyond output")
+		return Page{}, errors.New("cursor beyond output; use the returned next_cursor or eof:0:bytes for the current end")
 	}
 	start := int(pos - base)
 	start = b.boundary(start, true)
 	end := b.boundary(min(b.size, start+limit), false)
 	if start < b.size && end == start {
-		return Page{}, errors.New("read limit is too small for the next UTF-8 character")
+		return Page{}, errors.New("read limit is too small for the next UTF-8 character; increase limit_bytes to at least 4")
 	}
 	data := make([]byte, end-start)
 	for i := range data {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"scicode/internal/tool"
 	"strings"
 	"testing"
 	"time"
@@ -136,7 +137,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
 	p := &gatedModelProvider{requests: make(chan provider.Request, 4), release: make(chan struct{})}
-	r := session.New(ctx, store, w, p, selection, "", catalog, func(e session.Event) {
+	r := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
 		case <-ctx.Done():
@@ -221,7 +222,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 		t.Fatal("next tool boundary did not switch model", second.Selection)
 	}
 	p.release <- struct{}{}
-	waitFrame("Turn completed")
+	waitFrame("Turn complete")
 	key(tcell.KeyEnter)
 	third := request()
 	if third.Selection.Model.ID != "family-b" || third.Selection.Variant != "max" || third.Messages[len(third.Messages)-1].Content != "draft stays" {

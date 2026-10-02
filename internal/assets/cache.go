@@ -30,14 +30,14 @@ const MaxPixels = 16 << 20
 // Decode rejects oversized or malformed images before allocating their pixels.
 func Decode(data []byte) (image.Image, error) {
 	if len(data) > MaxBytes {
-		return nil, fmt.Errorf("image exceeds %d bytes", MaxBytes)
+		return nil, fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", MaxBytes)
 	}
 	c, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot decode image header; provide a valid PNG, JPEG or GIF: %w", err)
 	}
 	if c.Width <= 0 || c.Height <= 0 || c.Width > MaxPixels/c.Height {
-		return nil, fmt.Errorf("image exceeds %d pixels", MaxPixels)
+		return nil, fmt.Errorf("image dimensions are invalid or exceed %d pixels; provide a valid image with fewer pixels", MaxPixels)
 	}
 	m, _, err := image.Decode(bytes.NewReader(data))
 	return m, err
@@ -60,7 +60,7 @@ func Read(path string) ([]byte, image.Image, error) {
 		return nil, nil, fmt.Errorf("image is not a regular file; provide a regular PNG, JPEG or GIF")
 	}
 	if st.Size() > MaxBytes {
-		return nil, nil, fmt.Errorf("image exceeds %d bytes", MaxBytes)
+		return nil, nil, fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", MaxBytes)
 	}
 	b, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"scicode/internal/prompts"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -19,14 +21,22 @@ import (
 
 func (r *Runtime) addSubagentTool() {
 	type args struct {
-		Prompt     string `json:"prompt"`
-		ChildID    string `json:"child_id,omitempty"`
-		Label      string `json:"label,omitempty"`
-		Background bool   `json:"background,omitempty"`
+		Prompt     string  `json:"prompt"`
+		ChildID    string  `json:"child_id,omitempty"`
+		Label      string  `json:"label,omitempty"`
+		Background bool    `json:"background,omitempty"`
+		Persistent *bool   `json:"persistent"`
+		Variant    *string `json:"variant,omitempty"`
 	}
-	tool.Register(r.Tools, "subagent", "Start an isolated coding child or follow up on an idle child_id. Choose a concise display name in label for every new child: 1–4 words, at most 64 characters, single-line without controls. Running children reject follow-ups: wait for child_turn_finished. Successful children retain their context until job_stop(child_id=...). At most four retained contexts; children cannot spawn children. Every assignment gets fresh child-turn/job IDs and bounded output.", map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean")}, []string{"prompt"}, func(a args) error {
+	tool.Register(r.Tools, "subagent", prompts.ToolDescription("subagent"), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "variant": tool.Property("string")}, []string{"prompt", "persistent"}, func(a args) error {
 		if err := tool.Required("prompt", a.Prompt); err != nil {
 			return err
+		}
+		if a.Persistent == nil {
+			return tool.Fail("invalid_arguments", "persistent must be explicitly true or false on every assignment; use false for a disposable child")
+		}
+		if a.Variant != nil && strings.TrimSpace(*a.Variant) == "" {
+			return tool.Fail("invalid_arguments", "variant must be nonempty; omit it to inherit the current reasoning selection")
 		}
 		if a.ChildID != "" {
 			if a.Label != "" {
@@ -64,7 +74,16 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("child_busy", "child is still running; wait for child_turn_finished before assigning a follow-up")
 			}
-		} else {
+			selection = child.selection
+		}
+		if a.Variant != nil {
+			if !slices.Contains(selection.Model.Variants, *a.Variant) {
+				r.childStartMu.Unlock()
+				return nil, tool.Fail("invalid_arguments", fmt.Sprintf("unsupported variant %q for %s; supported variants: %s; choose one or omit variant to retain the current selection", *a.Variant, selection.Model.ID, strings.Join(selection.Model.Variants, ", ")))
+			}
+			selection.Variant = *a.Variant
+		}
+		if child == nil {
 			asideCount := 0
 			for _, job := range r.Jobs.Live() {
 				if job.Kind == "btw" {
@@ -75,12 +94,12 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("capacity", "four child contexts/tasks are retained; close an idle child with job_stop(child_id=...) or wait for an aside")
 			}
-			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), selection: selection, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" })}
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" })}
 			r.children[child.id] = child
 		}
+		child.selection = selection
 		child.state = "running"
 		child.job = ""
-		child.finish, child.result = 0, 0
 		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, child.selection)
 		if err != nil {
 			delete(r.children, child.id)
@@ -88,8 +107,8 @@ func (r *Runtime) addSubagentTool() {
 			return nil, err
 		}
 		child.turn = turn
-		assignment := &childAssignment{turn: turn}
-		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, background: a.Background}
+		assignment := &childAssignment{turn: turn, persistent: *a.Persistent, background: a.Background}
+		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
 		id, err := r.Jobs.StartTask(child.id, "subagent", child.label, a.Background, false, func(childCtx context.Context, stdout, stderr io.Writer) (runErr error) {
@@ -133,15 +152,15 @@ func (r *Runtime) addSubagentTool() {
 
 // childTask freezes one child request's context, capabilities and model selection.
 type childTask struct {
-	actor, turn, prompt   string
-	selection             provider.Selection
-	prefix                []provider.Message
-	tools                 *tool.Registry
-	aside                 bool
-	child                 *codingChild
-	assignment            *childAssignment
-	cursor                contextCursor
-	background, cancelled bool
+	actor, turn, prompt string
+	selection           provider.Selection
+	prefix              []provider.Message
+	tools               *tool.Registry
+	aside               bool
+	child               *codingChild
+	assignment          *childAssignment
+	cursor              contextCursor
+	cancelled           bool
 }
 
 func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr io.Writer) error {
@@ -204,6 +223,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		}
 		r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · inspect", EntryID: entry})
 		reply := provider.Message{Role: "assistant"}
+		var text strings.Builder
 		started := time.Now()
 		var usage *provider.Usage
 		var responseID, serviceTier string
@@ -223,10 +243,10 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				if task.aside {
 					limit = 64 << 10
 				}
-				if len(reply.Content)+len(ev.Text) > limit {
+				if text.Len()+len(ev.Text) > limit {
 					return fmt.Errorf("child response exceeds %d bytes", limit)
 				}
-				reply.Content += ev.Text
+				text.WriteString(ev.Text)
 				if task.aside {
 					return nil
 				}
@@ -244,6 +264,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			}
 			return nil
 		})
+		reply.Content = text.String()
 		r.recordUsage(usage)
 		if streamErr != nil {
 			reply.State = nil // Interrupted completion callbacks may leave an incomplete replay payload.
@@ -308,6 +329,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				r.childStartMu.Lock()
 				task.child.messages = messages
 				task.child.cursor = cursor
+				task.assignment.answer, task.assignment.truncated = childAnswer(reply.Content)
 				r.childStartMu.Unlock()
 			}
 			return nil

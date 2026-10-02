@@ -76,10 +76,10 @@ def main():
         for i in range(1, 4):
             os.write(fd, f'grow {i}\r'.encode())
             expect(f'Growth {i} complete.')
-            expect('Turn completed')
+            expect('Turn complete')
         os.write(fd, b'grow 4\r')
         expect('Automatic continuation verified.')
-        expect('Turn completed')
+        expect('Turn complete')
         with sqlite3.connect(data / 'history.sqlite') as db:
             sessions = db.execute('SELECT id,read_only,predecessor_id FROM sessions').fetchall()
             assert len(sessions) == 2 and sum(row[1] for row in sessions) == 1, sessions

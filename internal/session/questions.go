@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"scicode/internal/history"
+	"scicode/internal/prompts"
 	"scicode/internal/tool"
 	"sort"
 	"strings"
@@ -60,7 +61,7 @@ func (r *Runtime) addQuestionTool() {
 	type args struct {
 		Questions []Question `json:"questions"`
 	}
-	tool.Register(r.Tools, "question", "Ask 1–3 single-choice questions in a tabbed form. Each answer is exactly one option or free-text value. Optional recommended_option_id identifies one recommended choice; nothing submits automatically. Enter on an option advances to the next tab; only the final Submit tab sends the round. Plain mode accepts /answer FORM_ID JSON_ARRAY.", map[string]any{"questions": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": tool.Property("string"), "prompt": tool.Property("string"), "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": tool.Property("string"), "label": tool.Property("string"), "description": tool.Property("string")}, "required": []string{"id", "label"}, "additionalProperties": false}}, "recommended_option_id": tool.Property("string")}, "required": []string{"id", "prompt"}, "additionalProperties": false}}}, []string{"questions"}, func(a args) error {
+	tool.Register(r.Tools, "question", prompts.ToolDescription("question"), map[string]any{"questions": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": tool.Property("string"), "prompt": tool.Property("string"), "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": tool.Property("string"), "label": tool.Property("string"), "description": tool.Property("string")}, "required": []string{"id", "label"}, "additionalProperties": false}}, "recommended_option_id": tool.Property("string")}, "required": []string{"id", "prompt"}, "additionalProperties": false}}}, []string{"questions"}, func(a args) error {
 		if len(a.Questions) < 1 || len(a.Questions) > 3 {
 			return errors.New("require 1–3 questions")
 		}
@@ -76,7 +77,7 @@ func (r *Runtime) addQuestionTool() {
 			options := map[string]bool{}
 			for _, o := range q.Options {
 				if o.ID == "" || o.Label == "" || options[o.ID] {
-					return errors.New("invalid or duplicate option")
+					return errors.New("option IDs must be nonempty and unique within each question; labels must be nonempty")
 				}
 				options[o.ID] = true
 			}

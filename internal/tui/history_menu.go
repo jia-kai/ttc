@@ -11,13 +11,43 @@ import (
 
 const historyWindowRows = 128
 
+// historyIndent tracks actual branch lanes rather than serial input ancestry.
+// Continuing siblings use one bit per displayed lane; deeper forks are elided.
+type historyIndent struct {
+	depth      int
+	continuing uint8
+	branch     rune // Fork connector ('├' or '└'); zero for a serial row.
+}
+
+func (v historyIndent) prefix() string {
+	var b strings.Builder
+	for lane := 0; lane < min(v.depth, 8); lane++ {
+		if v.branch != 0 && lane == v.depth-1 {
+			b.WriteRune(v.branch)
+			b.WriteString("─ ")
+		} else if v.continuing&(1<<lane) != 0 {
+			b.WriteString("│  ")
+		} else {
+			b.WriteString("   ")
+		}
+	}
+	if v.depth > 8 {
+		b.WriteString("… ")
+		if v.branch != 0 {
+			b.WriteRune(v.branch)
+			b.WriteString("─ ")
+		}
+	}
+	return b.String()
+}
+
 // historyMenu keeps a metadata snapshot and publishes only a small nearby slice
 // to the shared window. Selection therefore does not rewrap the whole history.
 type historyMenu struct {
 	Window   Window
-	tree     history.BranchTree
+	current  int64
 	nodes    []history.BranchNode
-	depths   []int
+	indents  []historyIndent
 	indices  map[int64]int
 	children map[int64][]int64
 	targets  map[int64]int64 // Human input ID to its pre-input restoration checkpoint.
@@ -27,7 +57,7 @@ type historyMenu struct {
 }
 
 func newHistoryMenu(tree history.BranchTree) *historyMenu {
-	m := &historyMenu{tree: tree, indices: map[int64]int{}, children: map[int64][]int64{}, targets: map[int64]int64{}}
+	m := &historyMenu{indices: map[int64]int{}, children: map[int64][]int64{}, targets: map[int64]int64{}}
 	byID := map[int64]history.BranchNode{}
 	original := map[int64]history.BranchNode{}
 	nearest := map[int64]int64{}
@@ -45,13 +75,32 @@ func newHistoryMenu(tree history.BranchTree) *historyMenu {
 		}
 	}
 	type visit struct {
-		id    int64
-		depth int
+		id     int64
+		indent historyIndent
 	}
 	var stack []visit
-	for i := len(m.children[0]) - 1; i >= 0; i-- {
-		stack = append(stack, visit{id: m.children[0][i]})
+	push := func(children []int64, parent historyIndent) {
+		fork := len(children) > 1
+		for i := len(children) - 1; i >= 0; i-- {
+			indent := historyIndent{depth: parent.depth, continuing: parent.continuing}
+			if fork {
+				indent.depth++
+				indent.branch = '└'
+				if i < len(children)-1 {
+					indent.branch = '├'
+				}
+				if indent.depth <= 8 {
+					bit := uint8(1 << (indent.depth - 1))
+					indent.continuing &^= bit
+					if indent.branch == '├' {
+						indent.continuing |= bit
+					}
+				}
+			}
+			stack = append(stack, visit{children[i], indent})
+		}
 	}
+	push(m.children[0], historyIndent{})
 	for len(stack) > 0 {
 		v := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -61,14 +110,11 @@ func newHistoryMenu(tree history.BranchTree) *historyMenu {
 		}
 		m.indices[v.id] = len(m.nodes)
 		m.nodes = append(m.nodes, node)
-		m.depths = append(m.depths, v.depth)
-		children := m.children[v.id]
-		for i := len(children) - 1; i >= 0; i-- {
-			stack = append(stack, visit{children[i], v.depth + 1})
-		}
+		m.indents = append(m.indents, v.indent)
+		push(m.children[v.id], v.indent)
 	}
-	m.tree.Current = nearest[tree.Current]
-	m.selected = m.indices[m.tree.Current]
+	m.current = nearest[tree.Current]
+	m.selected = m.indices[m.current]
 	m.start = max(0, min(m.selected-historyWindowRows/2, len(m.nodes)-historyWindowRows))
 	m.Window.Title = "User inputs · " + strings.Join(strings.Fields(render.Clean(tree.Name)), " ")
 	m.Window.Hint = "↑↓ ←→ navigate · Enter undo to input · Space inspect · Esc closes"
@@ -90,12 +136,9 @@ func (m *historyMenu) update() {
 	m.rows = m.rows[:0]
 	for i := m.start; i < end; i++ {
 		node := m.nodes[i]
-		indent := strings.Repeat("  ", min(m.depths[i], 8))
-		if m.depths[i] > 8 {
-			indent += "… "
-		}
+		indent := m.indents[i].prefix()
 		state := ""
-		if node.ID == m.tree.Current {
+		if node.ID == m.current {
 			state = " · current"
 		} else if !node.Restorable {
 			state = " · inspect"
@@ -104,7 +147,7 @@ func (m *historyMenu) update() {
 		if label == "" {
 			label = "(attachment)"
 		}
-		m.rows = append(m.rows, menuRow(fmt.Sprintf("%s↳ #%d · %s%s", indent, node.ID, label, state), i == m.selected))
+		m.rows = append(m.rows, menuRow(fmt.Sprintf("%s#%d · %s%s", indent, node.ID, label, state), i == m.selected))
 	}
 	node := m.nodes[m.selected]
 	m.Window.Header = fmt.Sprintf("Inputs %d–%d of %d", m.start+1, end, len(m.nodes))

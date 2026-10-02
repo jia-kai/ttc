@@ -1,6 +1,12 @@
 package tui
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"scicode/internal/history"
+)
 
 func TestPromptRecallRestoresDraftWithoutSubmitting(t *testing.T) {
 	var h promptHistory
@@ -25,5 +31,31 @@ func TestPromptRecallRestoresDraftWithoutSubmitting(t *testing.T) {
 	h.add("next")
 	if got := h.move("new draft", -1); got != "next" {
 		t.Fatal(got)
+	}
+}
+
+func TestPromptRecallBoundsCurrentRunHistory(t *testing.T) {
+	var h promptHistory
+	for i := 0; i < history.MaxPromptHistoryEntries+5; i++ {
+		h.add(fmt.Sprintf("prompt %d", i))
+	}
+	if len(h.entries) != history.MaxPromptHistoryEntries || h.entries[0] != "prompt 5" {
+		t.Fatal("prompt count was not bounded")
+	}
+	first, second := strings.Repeat("a", 5<<20), strings.Repeat("b", 5<<20)
+	h.add(first)
+	h.add(second)
+	if len(h.entries) != 1 || h.entries[0] != second || h.bytes != len(second) {
+		t.Fatal("text budget did not evict older prompts")
+	}
+	h.add(strings.Repeat("x", history.MaxPromptHistoryBytes+1))
+	if len(h.entries) != 1 || h.entries[0] != second {
+		t.Fatal("oversized prompt entered recall")
+	}
+	if got := h.move("draft", -1); got != second {
+		t.Fatal("eviction broke recall")
+	}
+	if got := h.move(second, 1); got != "draft" {
+		t.Fatal("eviction broke draft restoration")
 	}
 }

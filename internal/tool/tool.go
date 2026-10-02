@@ -251,9 +251,9 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 			path, e = r.Detail(x, b)
 		}
 		if path == "" || e != nil {
-			b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("result_too_large", "result exceeds 64 KiB")})
+			b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("result_too_large", "result exceeds 64 KiB; narrow the call or reduce its page limit")})
 		} else {
-			b, _ = json.Marshal(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", "read retained detail_path for complete result")})
+			b, _ = json.Marshal(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", "complete JSON retained at detail_path; narrow the original call, or use shell if available for bounded JSON/byte extraction")})
 		}
 		md.Summary = render.Inline(name + " · result too large")
 	}

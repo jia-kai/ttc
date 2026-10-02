@@ -1,16 +1,111 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 	"scicode/internal/history"
 	"scicode/internal/provider"
 )
+
+func TestHistoryMenuSerialInputsStayFlatAndKeepCheckpoints(t *testing.T) {
+	m := newHistoryMenu(history.BranchTree{Current: 5, Nodes: []history.BranchNode{
+		{ID: 0, Restorable: true},
+		{ID: 1, Label: "First", UserInput: true, Restorable: true},
+		{ID: 2, Parent: 1, Label: "Reply", Restorable: true},
+		{ID: 3, Parent: 2, Label: "Second", UserInput: true, Restorable: true},
+		{ID: 4, Parent: 3, Label: "Tool", Restorable: true},
+		{ID: 5, Parent: 4, Label: "Third", UserInput: true, Restorable: true},
+	}})
+	if want := []string{"  #1 · First", "  #3 · Second", "> #5 · Third · current"}; !reflect.DeepEqual(m.rows, want) {
+		t.Fatalf("serial input labels are not flat: %q", m.rows)
+	}
+	m.key(tcell.NewEventKey(tcell.KeyLeft, 0, 0), 10)
+	if m.nodes[m.selected].ID != 3 {
+		t.Fatal("flattening changed parent navigation")
+	}
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); action != "restore" || id != 2 {
+		t.Fatal("flattening changed pre-input checkpoint", action, id)
+	}
+	m.key(tcell.NewEventKey(tcell.KeyRight, 0, 0), 10)
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 10); action != "inspect" || id != 5 {
+		t.Fatal("flattening changed inspection", action, id)
+	}
+}
+
+func TestHistoryMenuNestedForksKeepSerialLanes(t *testing.T) {
+	tree := history.BranchTree{Current: 8, Nodes: []history.BranchNode{{ID: 0, Restorable: true}}}
+	for id, parent := range []int64{0, 1, 2, 3, 4, 3, 1, 7} {
+		tree.Nodes = append(tree.Nodes, history.BranchNode{ID: int64(id + 1), Parent: parent, Label: "Input", UserInput: true, Restorable: true})
+	}
+	m := newHistoryMenu(tree)
+	want := []string{
+		"  #1 · Input",
+		"  ├─ #2 · Input",
+		"  │  #3 · Input",
+		"  │  ├─ #4 · Input",
+		"  │  │  #5 · Input",
+		"  │  └─ #6 · Input",
+		"  └─ #7 · Input",
+		">    #8 · Input · current",
+	}
+	if !reflect.DeepEqual(m.rows, want) {
+		t.Fatalf("fork connectors or serial lanes changed:\ngot %q\nwant %q", m.rows, want)
+	}
+	// Mouse selection follows wrapped rows, including the continuation columns.
+	const width, height = 24, 22
+	left, top, outerWidth, outerHeight := windowBounds(width, height)
+	inner := outerWidth - 2
+	headers := len(m.Window.HeaderLines(inner, outerHeight-3))
+	row := 0
+	for _, text := range m.rows[:4] {
+		row += len(wrap(text, inner))
+	}
+	m.mouse(tcell.NewEventMouse(left+1, top+headers+row+1, tcell.Button1, 0), width, height)
+	if m.nodes[m.selected].ID != 5 {
+		t.Fatal("fork wrapping broke mouse selection", m.nodes[m.selected].ID)
+	}
+}
+
+func TestHistoryMenuBaselineForkAndDeepForks(t *testing.T) {
+	m := newHistoryMenu(history.BranchTree{Nodes: []history.BranchNode{
+		{ID: 0, Restorable: true},
+		{ID: 1, Label: "First branch", UserInput: true, Restorable: true},
+		{ID: 2, Parent: 1, Label: "Serial", UserInput: true, Restorable: true},
+		{ID: 3, Label: "Other branch", UserInput: true, Restorable: true},
+	}})
+	if !strings.Contains(m.rows[0], "├─ #1") || !strings.Contains(m.rows[1], "│  #2") || !strings.Contains(m.rows[2], "└─ #3") {
+		t.Fatal("baseline alternatives were flattened", m.rows)
+	}
+	tree := history.BranchTree{Nodes: []history.BranchNode{{ID: 0, Restorable: true}}}
+	parent := int64(0)
+	for depth := 0; depth < 100; depth++ {
+		first := int64(len(tree.Nodes))
+		for _, id := range []int64{first, first + 1} {
+			tree.Nodes = append(tree.Nodes, history.BranchNode{ID: id, Parent: parent, Label: "Input", UserInput: true, Restorable: true})
+		}
+		parent = first
+	}
+	tree.Current = parent
+	m = newHistoryMenu(tree)
+	for i, node := range m.nodes {
+		// Box drawing may be wide under an East Asian terminal setting. Bound
+		// the prefix independently of that process-wide display preference.
+		if utf8.RuneCountInString(m.indents[i].prefix()) > 29 {
+			t.Fatalf("unbounded fork indentation at #%d", node.ID)
+		}
+	}
+	if !strings.Contains(m.Window.Text, "… ├─ #") {
+		t.Fatal("deep forks do not disclose clipped lanes")
+	}
+}
 
 func TestHistoryMenuBranchNavigationAndInspectOnly(t *testing.T) {
 	tree := history.BranchTree{Name: "Research", Current: 3, Nodes: []history.BranchNode{
@@ -39,6 +134,20 @@ func TestHistoryMenuBranchNavigationAndInspectOnly(t *testing.T) {
 	}
 }
 
+func BenchmarkHistoryMenuSerialNavigation(b *testing.B) {
+	tree := history.BranchTree{Current: 100000, Nodes: []history.BranchNode{{ID: 0, Restorable: true}}}
+	for id := int64(1); id <= tree.Current; id++ {
+		tree.Nodes = append(tree.Nodes, history.BranchNode{ID: id, Parent: id - 1, UserInput: true, Restorable: true, Label: fmt.Sprintf("Input %d", id)})
+	}
+	m := newHistoryMenu(tree)
+	ev := tcell.NewEventKey(tcell.KeyUp, 0, 0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.key(ev, 30)
+	}
+}
+
 func TestHistoryMenuLongHistoryHasBoundedWindow(t *testing.T) {
 	tree := history.BranchTree{Name: "Long history", Current: 100000}
 	tree.Nodes = append(tree.Nodes, history.BranchNode{Label: "Start"})
@@ -46,6 +155,11 @@ func TestHistoryMenuLongHistoryHasBoundedWindow(t *testing.T) {
 		tree.Nodes = append(tree.Nodes, history.BranchNode{ID: id, Parent: id - 1, Restorable: true, UserInput: true, Label: strings.Repeat("message ", 24)})
 	}
 	m := newHistoryMenu(tree)
+	for i, node := range m.nodes {
+		if m.indents[i].depth != 0 {
+			t.Fatalf("serial history acquired branch depth at #%d", node.ID)
+		}
+	}
 	for i := 0; i < 100; i++ {
 		m.key(tcell.NewEventKey(tcell.KeyPgUp, 0, 0), 30)
 		m.reveal(40, 15)
@@ -62,7 +176,7 @@ func TestHistoryPickerInspectionPreservesDraft(t *testing.T) {
 	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Original branch reply"}}})
 	u.typeText("Start research")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	u.typeText("Retained draft")
 	u.key(tcell.KeyCtrlX)
 	u.typeText("g")
@@ -131,7 +245,7 @@ func TestHistoryPickerRestoresUserCheckpointAndRedoFiles(t *testing.T) {
 		for {
 			select {
 			case frame := <-u.screen.frames:
-				if strings.Count(frame, "Turn completed") == i+1 {
+				if strings.Count(frame, "Turn complete") == i+1 {
 					break completion
 				}
 			case <-deadline:

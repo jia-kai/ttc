@@ -121,7 +121,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         assert observed['draft'] == 'draft α' and observed['argv'][0] == '--visual', observed
         send(b'\r')
         expect('Editor round completed.')
-        expect('Turn completed')
+        expect('Turn complete')
         send(b'fail draft\x18e')
         expect('Editor failed:')
         send(b'\x01\x0b')  # Failed editing preserves the input; remove it explicitly.
@@ -132,14 +132,14 @@ path.write_text('Edited in external editor.\\nsecond line')
         attachment.write_text('changed after snapshot')
         send(b'\r')
         expect('Attachment round completed.')
-        expect('Turn completed')
+        expect('Turn complete')
         send(b'first line\x0asecond line')  # Ctrl+J inserts LF without submitting.
         read_for(0.2)
         with sqlite3.connect(data / 'history.sqlite') as db:
             assert db.execute("SELECT count(*) FROM turns WHERE trigger='user'").fetchone()[0] == 2
         send(b'\r')
         expect('Ctrl+J round completed.')
-        expect('Turn completed')
+        expect('Turn complete')
         send(b'/rename Fixture inspection\r')
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -178,7 +178,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         read_for(0.2)
         (project / 'release-main').write_text('release')
         expect('Main fixture completed.')
-        expect('Turn completed')
+        expect('Turn complete')
         with sqlite3.connect(data / 'history.sqlite') as db:
             results = [json.loads(row[0]) for row in db.execute("SELECT result_json FROM tool_calls WHERE name='shell'")]
             assert any(r.get('stdout') == 'ready\ndone\n' and r['truncated'] for r in results), results
@@ -236,7 +236,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         expect('Steer')
         send(b'\x02')  # Ctrl+B releases the foreground tool without canceling its process.
         expect('Steering and promotion verified.')
-        expect('Turn completed')
+        expect('Turn complete')
         with sqlite3.connect(data / 'history.sqlite') as db:
             promoted = json.loads(db.execute("SELECT result_json FROM tool_calls WHERE provider_call_id='promoted-shell'").fetchone()[0])
             assert promoted['status'] == 'running', promoted

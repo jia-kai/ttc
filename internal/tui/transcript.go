@@ -28,7 +28,8 @@ type transcript struct {
 	recent            []int
 	renders           int // Number of blocks laid out, useful for pressure tests.
 	calls             map[string]int
-	requests          map[int64]int // Assistant blocks, indexed by producing request across replay/stream updates.
+	streams           map[int64]*strings.Builder // Owned by the live view, released at completion.
+	requests          map[int64]int              // Assistant blocks, indexed by producing request across replay/stream updates.
 }
 type textBlock struct {
 	owner  int
@@ -40,7 +41,7 @@ type textBlock struct {
 }
 
 func newTranscript() *transcript {
-	return &transcript{followTail: true, calls: map[string]int{}, requests: map[int64]int{}, width: 80, layout: func(v line, w int) []displayRow { return rowsOf(layoutText(v, w)) }}
+	return &transcript{followTail: true, streams: map[int64]*strings.Builder{}, calls: map[string]int{}, requests: map[int64]int{}, width: 80, layout: func(v line, w int) []displayRow { return rowsOf(layoutText(v, w)) }}
 }
 func layoutText(v line, width int) []string {
 	if !v.markdown {
@@ -137,6 +138,7 @@ func (t *transcript) appendBlocks(owner int, v line) {
 }
 func (t *transcript) reset() {
 	t.lines = nil
+	t.streams = map[int64]*strings.Builder{}
 	t.calls = map[string]int{}
 	t.requests = map[int64]int{}
 	t.blocks = nil
@@ -237,6 +239,54 @@ func (t *transcript) replace(i int, v line) {
 	}
 }
 
+// growPlain appends only to the last bounded chunk of a streaming message.
+// Earlier chunks and their layout/index entries remain unchanged. Completed
+// Markdown uses replace once, when the full source is available.
+func (t *transcript) growPlain(owner int, item line, delta string) {
+	end := sort.Search(len(t.blocks), func(n int) bool { return t.blocks[n].owner > owner })
+	last := end - 1
+	if last < 0 || t.blocks[last].owner != owner {
+		panic("streaming message has no text block")
+	}
+	oldHeight := t.blocks[last].height
+	text := t.blocks[last].text + delta
+	tail := append([]textBlock(nil), t.blocks[end:]...)
+	t.blocks = t.blocks[:last]
+	t.appendBlocks(owner, line{text: text})
+	newEnd := len(t.blocks)
+	shift := newEnd - end
+	t.blocks = append(t.blocks, tail...)
+	recent := t.recent[:0]
+	for _, n := range t.recent {
+		if n == last {
+			continue
+		}
+		if n >= end {
+			n += shift
+		}
+		recent = append(recent, n)
+	}
+	t.recent = recent
+	if t.anchor == last {
+		for t.anchor+1 < newEnd && t.anchorSource >= len(t.blocks[t.anchor].text) {
+			t.anchorSource -= len(t.blocks[t.anchor].text)
+			t.anchor++
+		}
+		t.resolveAnchor = true
+	} else if t.anchor >= end {
+		t.anchor += shift
+	}
+	t.lines[owner] = item
+	if len(tail) == 0 {
+		t.tree = t.tree[:last+1]
+		t.extendIndex(last)
+	} else if shift == 0 {
+		t.addHeight(last, t.blocks[last].height-oldHeight)
+	} else {
+		t.reindex()
+	}
+}
+
 // publish applies a current presentation to one stable block. Pending streamed
 // tool identities may become committed call IDs; completed blocks reject late
 // updates. Both tools and assistant replies use this UI-owned snapshot path.
@@ -256,15 +306,30 @@ func (t *transcript) publish(item line, pending string, delta bool) bool {
 		if old.complete {
 			return false
 		}
+		deltaText := item.text
 		if delta {
-			item.text = old.text + item.text
+			builder := t.streams[item.requestID]
+			if builder == nil {
+				builder = &strings.Builder{}
+				builder.WriteString(old.text)
+				t.streams[item.requestID] = builder
+			}
+			builder.WriteString(deltaText)
+			item.text = builder.String()
 		}
 		if item.image == nil {
 			item.image = old.image
 		}
-		t.replace(index, item)
+		if delta && !old.markdown && !item.markdown {
+			t.growPlain(index, item, deltaText)
+		} else {
+			t.replace(index, item)
+		}
 	} else {
 		t.append(item)
+	}
+	if item.complete {
+		delete(t.streams, item.requestID)
 	}
 	return true
 }
@@ -279,6 +344,7 @@ func (t *transcript) assistant(request int64, speaker, text string, entry int64,
 // Background publications continue in the live transcript; this view stays fixed.
 func (t *transcript) snapshot() *transcript {
 	v := *t
+	v.streams = nil
 	v.lines = append([]line(nil), t.lines...)
 	v.blocks = append([]textBlock(nil), t.blocks...)
 	v.tree = append([]int(nil), t.tree...)

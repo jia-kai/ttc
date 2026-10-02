@@ -69,7 +69,10 @@ make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
 python3 tests/pty_input.py          # offline editor/completion/export, Ctrl+J and /rename
+python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery
+python3 tests/pty_subagent.py       # mock HTTP: disposable child, low variant, direct answer
+python3 tests/pty_subagent.py --offline # socket-free foreground disposal and UTF-8 answer limit
 python3 -m unittest discover -s tests -p test_scratch.py # scratch permissions
 make check                        # race tests and vet
 ```

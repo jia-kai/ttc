@@ -10,6 +10,7 @@ type modalState struct {
 	commands   *commandMenu
 	sessions   *sessionMenu
 	history    *historyMenu
+	prompts    *promptSearch
 	background *backgroundMenu
 	question   *questionDialog
 	preview    *imagePreview
@@ -25,5 +26,5 @@ type previewLoad struct {
 func (m *modalState) clear() { *m = modalState{} }
 
 func (m *modalState) empty() bool {
-	return m.window == nil && m.menu == nil && m.commands == nil && m.sessions == nil && m.history == nil && m.background == nil && m.question == nil && m.preview == nil && m.loading == nil
+	return m.window == nil && m.menu == nil && m.commands == nil && m.sessions == nil && m.history == nil && m.prompts == nil && m.background == nil && m.question == nil && m.preview == nil && m.loading == nil
 }

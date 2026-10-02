@@ -6,7 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
+
+// MaxChildAnswerBytes bounds the final answer delivered to the parent, in UTF-8
+// bytes. The referenced assistant entry preserves the complete original text.
+const MaxChildAnswerBytes = 8 << 10
 
 // ChildFinish is one immutable child-turn completion. ResultEntry references the
 // complete assistant message even when the live output capture was truncated.
@@ -16,7 +21,10 @@ type ChildFinish struct {
 	TurnID      string `json:"child_turn_id"`
 	JobID       string `json:"job_id"`
 	Status      string `json:"status"`
+	Persistent  bool   `json:"persistent"` // Retain the child context after a successful assignment.
 	ResultEntry int64  `json:"result_entry_id,omitempty"`
+	Answer      string `json:"answer,omitempty"`           // Bounded final text, never the full child transcript.
+	Truncated   bool   `json:"answer_truncated,omitempty"` // Answer is a prefix; inspect ResultEntry for the complete text.
 	Error       string `json:"error,omitempty"`
 }
 
@@ -28,6 +36,9 @@ func (s *Store) FinishChildTurn(session string, finish ChildFinish) (int64, erro
 	}
 	if finish.Status != "completed" && finish.Status != "failed" && finish.Status != "cancelled" {
 		return 0, errors.New("invalid child completion status")
+	}
+	if len(finish.Answer) > MaxChildAnswerBytes || !utf8.ValidString(finish.Answer) || (finish.Status != "completed" && (finish.Answer != "" || finish.Truncated)) {
+		return 0, errors.New("child answer must be valid UTF-8, at most 8 KiB, and belong to a successful completion")
 	}
 	finish.Type = "child_turn_finished"
 	b, err := json.Marshal(finish)

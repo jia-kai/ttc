@@ -18,9 +18,6 @@ func TestQuestionRecommendationValidation(t *testing.T) {
 			t.Fatal("model contract does not enforce single-choice", definition)
 		}
 	}
-	if !strings.Contains(systemTemplate, "Questions are single-choice") {
-		t.Fatal("system prompt missing single-choice instructions")
-	}
 	for _, argument := range []string{
 		`{"questions":[{"id":"q","prompt":"Q?","multiple":true}]}`,
 		`{"questions":[{"id":"q","prompt":"Q?","multiple":false}]}`,

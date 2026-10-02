@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"unicode/utf8"
 
 	contextbuild "scicode/internal/context"
 	"scicode/internal/history"
@@ -23,13 +25,29 @@ type codingChild struct {
 	tools                       *tool.Registry
 	messages                    []provider.Message
 	cursor                      contextCursor
-	finish, result              int64
 	closing                     bool
 }
 
 type childAssignment struct {
 	turn, job      string
 	finish, result int64 // childStartMu guards updates; each assignment retains distinct output refs.
+	answer         string
+	status         string // Terminal assignment status may precede the job supervisor's final snapshot.
+	truncated      bool
+	persistent     bool // Retain context after this assignment, independent of foreground/background execution.
+	background     bool // Deliver the answer only through its completion notification.
+}
+
+// childAnswer returns a bounded final-answer prefix without retaining the backing
+// storage of a large response. Full text stays in the immutable assistant entry.
+func childAnswer(text string) (string, bool) {
+	n := min(len(text), history.MaxChildAnswerBytes)
+	if n < len(text) {
+		for n > 0 && !utf8.RuneStart(text[n]) {
+			n--
+		}
+	}
+	return strings.Clone(text[:n]), n < len(text)
 }
 
 func (r *Runtime) resetChildren() {
@@ -105,8 +123,21 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 	var result map[string]any
 	_ = json.Unmarshal(data, &result)
 	result["child_id"], result["child_turn_id"] = child.id, assignment.turn
+	result["persistent"] = assignment.persistent
+	if assignment.background {
+		delete(result, "stdout") // Completion notification owns the answer, even for a fast launch.
+		return result
+	}
 	if assignment.finish != 0 {
 		result["finish_event_seq"], result["result_entry_id"] = assignment.finish, assignment.result
+		result["status"] = assignment.status
+		if assignment.status == "completed" {
+			result["answer"] = assignment.answer
+			if assignment.truncated {
+				result["answer_truncated"] = true
+			}
+			delete(result, "stdout") // Final answer replaces commentary and duplicate output previews.
+		}
 	}
 	return result
 }
@@ -122,29 +153,31 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	r.childStartMu.Lock()
 	closing := child.closing
 	r.childStartMu.Unlock()
-	if status != "completed" || closing {
+	if status != "completed" || closing || !task.assignment.persistent {
 		r.Jobs.StopOwned(child.id, task.assignment.job)
 	}
 	r.childStartMu.Lock()
 	r.routeMu.RLock()
 	r.orderMu.Lock()
-	finish := history.ChildFinish{Type: "child_turn_finished", ChildID: child.id, TurnID: task.assignment.turn, JobID: task.assignment.job, Status: status, ResultEntry: task.assignment.result}
+	finish := history.ChildFinish{Type: "child_turn_finished", ChildID: child.id, TurnID: task.assignment.turn, JobID: task.assignment.job, Status: status, Persistent: task.assignment.persistent, ResultEntry: task.assignment.result}
+	if status == "completed" {
+		finish.Answer, finish.Truncated = task.assignment.answer, task.assignment.truncated
+	}
 	if err != nil {
 		finish.Error = err.Error()
 	}
 	id, commitErr := r.Store.FinishChildTurn(r.Current(), finish)
 	if commitErr == nil {
-		child.finish = id
 		task.assignment.finish = id
-		child.result = task.assignment.result
-		if status == "completed" && !child.closing {
+		task.assignment.status = status
+		if status == "completed" && !child.closing && task.assignment.persistent {
 			child.state = "idle"
 		} else {
 			child.state = "closed"
 			delete(r.children, child.id)
 		}
 		commitErr = r.publishChildLocked(tool.ChildView{ID: child.id, Label: child.label, State: child.state, TurnID: child.turn, JobID: child.job})
-		if commitErr == nil && task.background {
+		if commitErr == nil && task.assignment.background {
 			body, _ := json.Marshal(finish)
 			commitErr = r.queueCommittedNotificationLocked(string(body), id)
 		}
@@ -158,10 +191,11 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	r.routeMu.RUnlock()
 	r.childStartMu.Unlock()
 	if commitErr != nil {
+		r.Jobs.StopOwned(child.id, task.assignment.job)
 		return fmt.Errorf("commit child completion: %w", commitErr)
 	}
 	r.emit(Event{Kind: "status", Actor: child.id, EntryID: id, Text: "Assignment · " + render.Status(status)})
-	if task.background {
+	if task.assignment.background {
 		r.emit(Event{Kind: "wake", Actor: child.id, Text: "Child turn finished"})
 	}
 	return nil

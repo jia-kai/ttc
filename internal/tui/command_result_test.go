@@ -22,7 +22,7 @@ func TestUndoRedoConfirmInConversationAndLoadErrorsRemainVisible(t *testing.T) {
 	}})
 	u.typeText("write a result")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	for _, command := range []string{"undo", "redo"} {
 		u.typeText("/" + command)
 		u.key(tcell.KeyEnter)

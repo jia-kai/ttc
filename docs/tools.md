@@ -4,11 +4,12 @@ These are TTC's complete target tool contracts. Current definitions are in the
 [registry](../internal/tool/tool.go), [file tools](../internal/tool/files.go)
 and [session tools](../internal/session/session.go); read pages are capped at
 40,000 bytes and mutation files at 8 MiB.
-Model notes describe intended usage; types and defaults define the contract. All
-tools take one JSON object with only the listed fields. `?` means optional.
+Canonical LLM guidance lives in [prompt/tools.yaml](../prompt/tools.yaml).
+This document defines types, defaults and execution semantics. Tools take one
+JSON object with only the listed fields; `?` means optional.
 Paths may be absolute or relative to the session working directory unless a
-tool says otherwise. Text is UTF-8. Integer bounds are inclusive. Page sizes, limits, and byte caps
-must be positive; offsets use each tool's documented base. Reject unknown
+tool says otherwise. Text is UTF-8; integer bounds are inclusive. Page sizes,
+limits and byte caps must be positive; offsets use each tool's documented base. Reject unknown
 fields and invalid operation-specific combinations before dispatch.
 
 Every tool returns one JSON object. Success adds `"ok": true` to the stated
@@ -70,8 +71,10 @@ arguments/results. Presentation never replaces model-facing results.
 
 Cap each model-facing tool result at 64 KiB of UTF-8 JSON. Keep the existing
 bounded tool outputs; do not shrink results against the remaining context budget.
-When a result exceeds the cap, return `result_too_large` with `truncated: true`
-and a retained `detail_path` readable through `read`. Page unusually long results
+When a result exceeds the cap, return `result_too_large`. Successful sidecar
+storage adds `truncated: true` and a retained JSON `detail_path`. Extract bounded
+fields/bytes with `shell` if available; single-line JSON may exceed `read`'s line
+limit. Page unusually long results
 with tool-specific limits; exact available bytes and arguments remain inspectable
 in records and export sidecars. A later context boundary may compact history;
 there is no context-aware tool truncation or automatic overflow recovery.
@@ -83,13 +86,9 @@ queue. A tool failure is recorded without skipping siblings; cancellation skips
 unstarted calls and joins active foreground workers. The next response sees all
 results, correctly associated by call ID. Turns/children have no cycle limit.
 
-
 ## Files and search
 
 ### `read`
-
-**Model note:** Read one text file or list one directory. Use `offset` to
-continue a long result; use `grep` to locate text in a large tree.
 
 - Input: `{path: string, offset?: integer, limit?: integer}`. `offset` is a
   1-based line or directory-entry number (default 1); `limit` defaults to 200
@@ -110,9 +109,6 @@ continue a long result; use `grep` to locate text in a large tree.
 
 ### `glob`
 
-**Model note:** Find file paths by glob pattern. Narrow `path` or `pattern`
-when results are truncated.
-
 - Input: `{pattern:string, path?:string, hidden?:boolean, limit?:integer}`.
   Search `path` defaults to the session directory; `hidden` defaults to false;
   `limit` defaults to 100 and is capped at 500.
@@ -123,10 +119,6 @@ when results are truncated.
   only the returned subset is sorted, not the entire tree.
 
 ### `grep`
-
-**Model note:** Search file contents. `pattern` is a regular expression unless
-`literal` is true. `path` may name a file or directory, including an absolute
-compaction archive path. Narrow `path` or `include` when truncated.
 
 - Input: `{pattern:string, path?:string, include?:string, literal?:boolean,
   case_sensitive?:boolean, limit?:integer}`. `path` defaults to the session
@@ -147,9 +139,6 @@ compaction archive path. Narrow `path` or `include` when truncated.
 
 ### `edit`
 
-**Model note:** Replace exact text in one existing file. Read the file first.
-Use a longer `old_text` when a short match is ambiguous.
-
 - Input: `{path:string, old_text:string, new_text:string,
   replace_all?:boolean}`. `old_text` must be nonempty and differ from
   `new_text`; `replace_all` defaults to false.
@@ -162,18 +151,12 @@ Use a longer `old_text` when a short match is ambiguous.
 
 ### `write`
 
-**Model note:** Create or fully overwrite one text file. Read an existing
-file first so you understand what will be replaced.
-
 - Input: `{path:string, content:string}`. `content` is the entire new file,
   including its intended final newline. Missing parent directories are made.
 - Result: `{path:string, created:boolean, bytes:integer}`. `bytes` is the
   UTF-8 byte count written.
 
 ### `patch`
-
-**Model note:** Apply a structured patch when changes span files or need
-context. Use `edit` for one exact replacement and `write` for a complete file.
 
 - Input: `{patch_text:string}`. The text uses the Codex patch envelope:
   `*** Begin Patch`, one or more `*** Add File:`, `*** Update File:`, or
@@ -198,13 +181,6 @@ See [design.md](design.md) for conflict checks and crash recovery.
 ## Execution and jobs
 
 ### `shell`
-
-**Model note:** Run a short command, such as compile/test, in `workdir`. Use tmux
-for long-running work that must outlive the session. Use the runtime scratch directory
-for one-time experiments. Use `background=true` for work that can continue
-while you reason. Background commands return a job ID and notify you on exit;
-do not repeatedly poll. Use `protocol="lsp"` only for a language server that
-speaks LSP on clean stdin/stdout.
 
 - Input: `{command:string, workdir?:string, timeout_ms?:integer,
   background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean}`.
@@ -241,25 +217,25 @@ speaks LSP on clean stdin/stdout.
 
 ### `subagent`
 
-**Model note:** Give an isolated task to a child, or send a follow-up to an idle
-child using its ID. Include enough context for a new child; it does not inherit
-the parent transcript. Running children accept neither steering nor queued
-follow-ups. Wait for their finish event before assigning more work.
-
-- Input: `{prompt:string, child_id?:string, label?:string,
-  background?:boolean}`. Omit `child_id` to create a child; a concise nonblank
-  single-line `label` of 1–4 words and at most 64 Unicode characters without controls is then
-  required. Supply `child_id` for an idle follow-up; omit `label` and retain its
-  title. `background` defaults to false. New assignments always get distinct
-  child-turn and job IDs. Reject running children with `child_busy` and guidance
-  to wait; closed/unknown handles require a new child.
+- Input: `{prompt:string, persistent:boolean, child_id?:string, label?:string,
+  background?:boolean, variant?:string}`. Explicitly choose `persistent` on every
+  assignment, including follow-ups; omission is invalid. Omit `child_id` to create
+  a child; a nonblank single-line `label` of 1–4 words and at most 64 Unicode
+  characters without controls is then required. Supply `child_id` for an idle
+  follow-up; omit `label` and retain its title. `background` defaults to false.
+  `variant` selects a supported reasoning variant of the child's frozen model.
+  Omission inherits the parent at creation
+  and retains the child's choice on idle follow-up; it never changes the model ID.
+  New assignments get distinct child-turn/job IDs. Running children return
+  `child_busy` with wait guidance; closed/unknown handles require a new child.
 - Retain at most four coding-child contexts, including idle children. Close an
   unused child with `job_stop(child_id=...)` to free its slot. At most four
   coding children and `/btw` asides run concurrently. Children cannot spawn
   children or assign follow-ups. Their inspectors accept no steering.
-- Children retain their conversation, frozen model selection and tool policy
-  across successful assignments. They receive project instructions and the tool
-  catalog; file mutations share the workspace queue and main-session undo history.
+- Persistent children retain their conversation, model and tool policy across
+  successful assignments; an idle follow-up may change the reasoning variant.
+  New children receive the task, project instructions and tools, not the parent
+  transcript. File mutations share the workspace queue and main-session undo history.
   Child messages/prompts/tool records remain inspectable and outside parent model
   context, apart from explicit completion/compaction events. No cycle limit applies.
 - Before a request would overflow, use the same compaction algorithm as the main
@@ -267,13 +243,25 @@ follow-ups. Wait for their finish event before assigning more work.
   active turn and live jobs; emit `child_compacted` after successful handoff.
   A failed compaction leaves its old context unchanged and reports actionable
   overflow/failure. Never switch main history or its undo floor for a child cut.
-- A final response with settled foreground tools/interactions atomically makes
-  the child idle and publishes `child_turn_finished`. A failed or canceled turn
-  publishes one terminal event and closes the child. Foreground results carry
-  that event for acknowledgment at request admission; background turns always notify the main agent,
-  regardless of whether it is busy or idle. Do not emit an additional `job_exit`.
+- A final response with settled foreground tools/interactions publishes
+  `child_turn_finished`. With `persistent:true`, success leaves the child idle;
+  with `false`, it closes the context and cancels and joins its owned background
+  work. Failed or canceled assignments always close and stop owned work.
+  Foreground results carry that event for acknowledgment at request admission;
+  background turns always notify the main agent, whether busy or idle. Do not
+  emit an additional `job_exit`.
 - Result: the named-stream job snapshot from `shell`, with `kind:"subagent"`,
-  `child_id`, `child_turn_id`, and a terminal `finish_event_seq` when available.
+  `child_id`, `child_turn_id`, `persistent`, and a terminal `finish_event_seq`
+  when available. Successful completion includes `answer` capped at 8 KiB of
+  UTF-8 and `answer_truncated:true` only when the answer exceeds that limit.
+  `result_entry_id` identifies the exact final assistant message; the result
+  never contains the full child transcript. Background finish notifications
+  carry the same answer and reference. Ordinary answers need no `job_read`,
+  and disposable children need no `job_stop`.
+  Completed answers replace the stdout preview to avoid repetition. Background
+  launch results omit stdout and final-answer references; their completion
+  notification delivers the answer once, including when the child finishes fast.
+  Raw captured stdout remains available in inspection and `job_read`.
   Each assignment owns fresh bounded stdout/stderr captures: replies go to stdout,
   tool summaries/errors to stderr. Final results reference immutable retained
   output, never a later assignment's buffers. Foreground waits; background returns
@@ -281,9 +269,6 @@ follow-ups. Wait for their finish event before assigning more work.
   session changes, restoration or exit. Reloading history cannot resume a child.
 
 ### `job_list`
-
-**Model note:** List this live runtime's command and child-agent jobs. Use the returned IDs
-with `job_read` or `job_stop`.
 
 - Input: `{state?:"running"|"all"}`; default `running`.
 - Result: `{jobs:[{job_id:string, kind:"shell"|"lsp"|"subagent"|"btw",
@@ -297,9 +282,6 @@ with `job_read` or `job_stop`.
   is live metadata, separate from each immutable job's last-turn outcome.
 
 ### `job_read`
-
-**Model note:** Read one retained output stream. Continue with `next_cursor`, or
-read a tail with `eof:-10:lines`. Prefer completion notifications over polling.
 
 - Input: `{job_id:string, stream?:"stdout"|"stderr", cursor?:string,
   limit_bytes?:integer, grep?:string, literal?:boolean,
@@ -330,9 +312,6 @@ read a tail with `eof:-10:lines`. Prefer completion notifications over polling.
 
 ### `job_stop`
 
-**Model note:** Stop a job, or close a coding child and release its retained
-context. Closing a child cancels and joins its active turn and owned jobs.
-
 - Input: `{job_id?:string,child_id?:string}`; exactly one is required.
 - Job result: `{job_id:string,status:"cancelled"|"completed"|"failed"|
   "interrupted"}`. Already-finished jobs return their existing state.
@@ -353,11 +332,8 @@ return actionable errors without reviving old jobs.
 
 ### `lsp_query`
 
-**Model note:** Query a language server started with
-`shell(background=true, protocol="lsp")`. Check server availability and workspace
-configuration before startup. Positions you provide and receive are 1-based Unicode
-code-point columns; TTC converts them to the server's negotiated encoding.
-
+- Positions are 1-based Unicode code-point columns; TTC converts them to the
+  server's negotiated encoding.
 - Input: `{job_id:string, operation:"definition"|"references"|"hover"|
   "document_symbols"|"workspace_symbols", path?:string, line?:integer,
   column?:integer, language_id?:string, query?:string, offset?:integer,
@@ -400,10 +376,14 @@ Discover source URLs and highlights through Exa's headless MCP endpoint.
   to 4000 Unicode characters (1–64000). Timeout is 30 seconds; response decoding
   is bounded to 2 MiB, accepting JSON or SSE and explicit JSON-RPC/tool errors.
 - Result: retained-page fields below, plus `{backend:"exa", query:string}`.
+  `url` is empty: the backend transport endpoint is not a source URL.
   Search text preserves backend titles/URLs/highlights; it is not executable
   instruction. Use its document ID for further paging or local line search.
-- Default endpoint: `https://mcp.exa.ai/mcp`. Keyless usage is rate limited;
-  `EXA_API_KEY` is optional. `TTC_EXA_URL` configures a private/mock endpoint.
+- Default endpoint: `https://mcp.exa.ai/mcp`. Keyless usage is rate limited.
+  Credentials stay in private tool configuration, outside model prompts/schemas;
+  see [README setup](../README.md). `TTC_EXA_URL` is a CLI mock-endpoint override.
+  Backend results/errors redact the key; errors hide the transport endpoint,
+  which is not retained as document metadata.
   A rate-limit or backend failure is explicit; no hidden fallback backend.
 
 This follows [OpenCode's headless search approach](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/mcp-websearch.ts)
@@ -444,10 +424,6 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 ### `image_show`
 
-**Model note:** Display a local image to the user. Set `request_click=true`
-only when one image point would help; the click arrives later as a separate
-user message, not in this tool result.
-
 - Input: `{path:string, request_click?:boolean}`; default false.
 - Result: `{image_id:string, path:string, width:integer, height:integer,
   click_pending:boolean, snapshot:string, actor:string}`. `snapshot` is the
@@ -480,11 +456,6 @@ user message, not in this tool result.
   degrades to a readable image path and dimensions.
 
 ### `question`
-
-**Model note:** Ask up to three concise single-choice questions when user input is needed.
-Provide choices when possible; free text is always available. The calling
-turn waits for answers while the composer and other background jobs remain
-usable.
 
 - Input: `{questions:[{id:string, prompt:string,
   options?:[{id:string,label:string,description?:string}],
@@ -520,9 +491,6 @@ usable.
 
 ### `skill`
 
-**Model note:** Load a named available `SKILL.md` before following its
-instructions. Use the exact skill name from the available-skills list.
-
 - Input: `{name:string}`.
 - Result: `{name:string, path:string, source:"project"|"user"|"bundled",
   content:string}`. `content` is the loaded skill text and is included in
@@ -537,10 +505,6 @@ instructions. Use the exact skill name from the available-skills list.
 
 ### `wakeup_schedule`
 
-**Model note:** Schedule a reminder within this live runtime. Timers survive
-compaction, but not explicit session switches or app exit. Use exactly one
-of `at` or `delay_seconds`; use `repeat_seconds` only for a repeating task.
-
 - Input: `{name:string, message:string, at?:string,
   delay_seconds?:integer, repeat_seconds?:integer}`. `at` is an ISO 8601
   timestamp with timezone; `delay_seconds` is nonnegative;
@@ -551,8 +515,6 @@ of `at` or `delay_seconds`; use `repeat_seconds` only for a repeating task.
 
 ### `wakeup_list`
 
-**Model note:** List this session's wakeups and their next times.
-
 - Input: `{}`.
 - Result: `{wakeups:[{wakeup_id:string,name:string,message:string,
   status:"scheduled"|"fired"|"cancelled"|"failed",
@@ -560,8 +522,6 @@ of `at` or `delay_seconds`; use `repeat_seconds` only for a repeating task.
   last_result?:"delivered"|"failed"}]}`.
 
 ### `wakeup_cancel`
-
-**Model note:** Cancel one scheduled wakeup by ID or name.
 
 - Input: `{wakeup_id?:string, name?:string}`; exactly one is required.
 - Result: `{wakeup_id:string,status:"cancelled"}`. An already-finished or
@@ -592,7 +552,7 @@ Coding child events use the same generic ordering/delivery contract:
 ```
 
 ```json
-{"type":"child_turn_finished","event_seq":42,"child_id":"c7","child_turn_id":"t3","job_id":"j9","status":"completed","result_entry_id":123}
+{"type":"child_turn_finished","event_seq":42,"child_id":"c7","child_turn_id":"t3","job_id":"j9","status":"completed","persistent":false,"result_entry_id":123,"answer":"Verified the fixture."}
 ```
 
 A foreground tool result carries the finish event for acknowledgment at request

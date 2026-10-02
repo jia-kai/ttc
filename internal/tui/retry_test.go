@@ -23,7 +23,7 @@ func TestRetrySystemMessageOpensInspector(t *testing.T) {
 	u.typeText("retry")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Retrying · attempt 5 in 1.5s · HTTP 429")
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	var id int64
 	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='model_retry'").Scan(&id); err != nil {
 		t.Fatal(err)

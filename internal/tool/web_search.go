@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"scicode/internal/prompts"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,20 +23,45 @@ type webSearchArgs struct {
 	Max        *int   `json:"max_chars,omitempty"`
 }
 
-// addWebSearch calls Exa's documented headless, keyless MCP endpoint directly.
+// WebSearchConfig holds operator-managed Exa transport settings. It is never
+// included in the model's tool schema or runtime context. Empty fields select
+// the public keyless endpoint.
+type WebSearchConfig struct {
+	Endpoint string `json:"endpoint,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+}
+
+// Validate rejects invalid URLs and header credentials without printing secrets.
+func (c WebSearchConfig) Validate() error {
+	if c.Endpoint != "" {
+		if _, err := webURL(c.Endpoint); err != nil {
+			return fmt.Errorf("endpoint: %w", err)
+		}
+	}
+	if len(c.APIKey) > 4096 {
+		return errors.New("api_key exceeds 4096 bytes")
+	}
+	for _, r := range c.APIKey {
+		if r < '!' || r > '~' {
+			return errors.New("api_key must contain only non-space ASCII header characters")
+		}
+	}
+	return nil
+}
+
+// addWebSearch calls Exa's headless MCP endpoint with operator-owned settings.
 // No general MCP connection/session layer or implicit backend fallback is needed.
-// TTC_EXA_URL supports private/mock endpoints; EXA_API_KEY is optional.
-func addWebSearch(r *Registry, client *http.Client, cache *webCache) {
-	endpoint := os.Getenv("TTC_EXA_URL")
+func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebSearchConfig) {
+	endpoint := config.Endpoint
 	if endpoint == "" {
 		endpoint = "https://mcp.exa.ai/mcp"
 	}
-	key := os.Getenv("EXA_API_KEY")
+	key := config.APIKey
 	searchClient := *client
 	searchClient.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("search endpoint redirects are unsupported")
 	}
-	Register(r, "web_search", "Search the web through Exa and return source URLs/highlights as untrusted text. No key is required (rate limited); EXA_API_KEY is optional. Defaults to 5 results and 4000 Unicode characters. Use returned document_id with web_fetch for retained paging/search.", map[string]any{"query": Property("string"), "num_results": Property("integer"), "max_chars": Property("integer")}, []string{"query"}, func(a webSearchArgs) error {
+	Register(r, "web_search", prompts.ToolDescription("web_search"), map[string]any{"query": Property("string"), "num_results": Property("integer"), "max_chars": Property("integer")}, []string{"query"}, func(a webSearchArgs) error {
 		if strings.TrimSpace(a.Query) == "" || len(a.Query) > 4096 {
 			return errors.New("query must contain 1–4096 bytes")
 		}
@@ -44,7 +69,31 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache) {
 			return err
 		}
 		return rangeInt("max_chars", a.Max, 1, 64000)
-	}, func(ctx context.Context, x Execution, a webSearchArgs) (any, error) {
+	}, func(ctx context.Context, x Execution, a webSearchArgs) (out any, callErr error) {
+		errorEndpoint := endpoint
+		defer func() {
+			if callErr == nil {
+				return
+			}
+			redact := func(text string) string {
+				text = strings.ReplaceAll(text, errorEndpoint, "[search endpoint]")
+				if key != "" {
+					text = strings.ReplaceAll(text, key, "[redacted]")
+				}
+				return text
+			}
+			if redact(callErr.Error()) == callErr.Error() {
+				return
+			}
+			if structured, ok := callErr.(*Error); ok {
+				copy := *structured
+				copy.Message = redact(copy.Message)
+				callErr = &copy
+			} else {
+				callErr = errors.New(redact(callErr.Error()))
+			}
+		}()
+
 		if _, err := webURL(endpoint); err != nil {
 			return nil, fmt.Errorf("search endpoint: %w", err)
 		}
@@ -59,6 +108,7 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache) {
 		if err != nil {
 			return nil, err
 		}
+		errorEndpoint = req.URL.String()
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
 		if key != "" {
@@ -70,16 +120,20 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == 429 {
-			return nil, Fail("rate_limited", "Exa search rate limit reached; retry later or configure EXA_API_KEY")
+			return nil, Fail("rate_limited", "Exa search rate limit reached; retry later or reduce search frequency")
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("search HTTP %d", resp.StatusCode)
+			hint := "ask the user to check TTC web-search configuration"
+			if resp.StatusCode >= 500 {
+				hint = "retry later or use web_fetch with a known source URL"
+			}
+			return nil, fmt.Errorf("search HTTP %d; %s", resp.StatusCode, hint)
 		}
-		result, err := searchResult(resp.Body, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"))
+		result, err := searchResult(resp.Body, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"), key)
 		if err != nil {
 			return nil, err
 		}
-		doc, err := cache.add(webDocument{url: endpoint, contentType: "text/markdown", format: "markdown", text: result})
+		doc, err := cache.add(webDocument{contentType: "text/markdown", format: "markdown", text: result})
 		if err != nil {
 			return nil, err
 		}
@@ -87,13 +141,18 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache) {
 		if err != nil {
 			return nil, err
 		}
-		out := page
-		out["backend"], out["query"] = "exa", a.Query
-		return out, nil
+		page["backend"], page["query"] = "exa", a.Query
+		return page, nil
 	})
 }
 
-func searchResult(reader io.Reader, sse bool) (string, error) {
+func searchResult(reader io.Reader, sse bool, key string) (string, error) {
+	redact := func(text string) string {
+		if key != "" {
+			return strings.ReplaceAll(text, key, "[redacted]")
+		}
+		return text
+	}
 	type envelope struct {
 		Version string `json:"jsonrpc"`
 		ID      int    `json:"id"`
@@ -118,7 +177,7 @@ func searchResult(reader io.Reader, sse bool) (string, error) {
 			return "", false, errors.New("invalid search JSON-RPC version")
 		}
 		if e.Error != nil {
-			detail := searchDiagnostic(e.Error.Message)
+			detail := searchDiagnostic(redact(e.Error.Message))
 			if detail == "" {
 				return "", false, fmt.Errorf("search RPC error %d", e.Error.Code)
 			}
@@ -130,7 +189,7 @@ func searchResult(reader io.Reader, sse bool) (string, error) {
 		var text []string
 		for _, c := range e.Result.Content {
 			if c.Type == "text" {
-				text = append(text, c.Text)
+				text = append(text, redact(c.Text))
 			}
 		}
 		if e.Result.IsError {

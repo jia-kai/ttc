@@ -198,7 +198,7 @@ def main():
         send('Create a result file')
         expect('Retrying · attempt 2')
         expect('Created scripted result.')
-        expect('Turn completed')
+        expect('Turn complete')
         assert (workspace / 'result.txt').read_text() == 'verified\n'
         send('/undo')
         expect('undo completed')
@@ -235,7 +235,7 @@ def main():
         (workspace / 'batch.release').touch()
         expect('Model switched')
         expect('Parallel batch verified.')
-        expect('Turn completed')
+        expect('Turn complete')
         assert (workspace / 'ordered.txt').read_text() == 'second\n'
         send('/undo')
         expect('undo completed')
@@ -245,9 +245,9 @@ def main():
         assert (workspace / 'ordered.txt').read_text() == 'second\n'
         send('Background a short command')
         expect('Background job launched.')
-        expect('Turn completed')
+        expect('Turn complete')
         expect('Background completion observed.')
-        expect('Turn completed')
+        expect('Turn complete')
         send('/jobs')
         expect('background-complete')  # Label includes the exact command; durable output checked below.
         job_records = db.execute("SELECT content_json FROM entries WHERE json_extract(content_json,'$.type')='job_completion'").fetchall()
@@ -257,7 +257,7 @@ def main():
         assert len(switches) == 1 and json.loads(switches[0][0])['selection']['model']['service_tier'] == 'priority'
         send('Long job to cancel on switch')
         expect('Long job started.')
-        expect('Turn completed')
+        expect('Turn complete')
         send('/new')
         expect('New session')
         send('/jobs')

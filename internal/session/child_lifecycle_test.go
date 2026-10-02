@@ -39,13 +39,13 @@ func TestChildIdleFollowupRetainsContextAndDistinctAssignments(t *testing.T) {
 		}
 		return emit(provider.StreamEvent{Kind: "text", Text: "First complete answer"})
 	}}
-	turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"first","label":"research"}`)}})
-	first := childInvocation(t, r, ids[0], `{"prompt":"first","label":"research"}`)
+	turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"first","label":"research"}`)}})
+	first := childInvocation(t, r, ids[0], `{"persistent":true,"prompt":"first","label":"research"}`)
 	if first["ok"] != true || first["finish_event_seq"] == nil {
 		t.Fatal(first)
 	}
 	childID := first["child_id"].(string)
-	args, _ := json.Marshal(map[string]any{"prompt": "follow up", "child_id": childID})
+	args, _ := json.Marshal(map[string]any{"persistent": true, "prompt": "follow up", "child_id": childID})
 	second := childInvocation(t, r, ids[0], string(args))
 	if second["ok"] != true || second["child_id"] != childID || second["job_id"] == first["job_id"] || second["child_turn_id"] == first["child_turn_id"] || second["finish_event_seq"] == first["finish_event_seq"] {
 		t.Fatal(first, second)
@@ -87,14 +87,14 @@ func TestChildBusyFollowupAndBackgroundCancellationNotifyOnce(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
-	turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"first","label":"research","background":true}`)}})
-	first := childInvocation(t, r, ids[0], `{"prompt":"first","label":"research","background":true}`)
+	turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"first","label":"research","background":true}`)}})
+	first := childInvocation(t, r, ids[0], `{"persistent":true,"prompt":"first","label":"research","background":true}`)
 	if first["ok"] != true {
 		t.Fatal(first)
 	}
 	receive(t, started)
 	childID := first["child_id"].(string)
-	args, _ := json.Marshal(map[string]any{"prompt": "follow up", "child_id": childID})
+	args, _ := json.Marshal(map[string]any{"persistent": true, "prompt": "follow up", "child_id": childID})
 	result := childInvocation(t, r, ids[0], string(args))
 	encoded, _ := json.Marshal(result)
 	if result["ok"] == true || !strings.Contains(string(encoded), "child_busy") {
@@ -131,8 +131,8 @@ func TestChildFailureClosesContextAndKeepsImmutableReply(t *testing.T) {
 		}
 		return errors.New("synthetic failure")
 	}}
-	_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"first","label":"research"}`)}})
-	result := childInvocation(t, r, ids[0], `{"prompt":"first","label":"research"}`)
+	_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"first","label":"research"}`)}})
+	result := childInvocation(t, r, ids[0], `{"persistent":true,"prompt":"first","label":"research"}`)
 	if result["status"] != "failed" || result["result_entry_id"] == nil || len(r.ChildViews("main")) != 0 {
 		t.Fatal(result)
 	}

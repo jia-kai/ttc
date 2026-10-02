@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"scicode/internal/history"
+	"scicode/internal/prompts"
 	"scicode/internal/tool"
 	"sort"
 	"sync"
@@ -44,7 +45,7 @@ func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wake
 	for _, v := range w.items {
 		if v.Name == name && v.Status == "scheduled" {
 			w.mu.Unlock()
-			return wakeup{}, errors.New("wakeup name already active")
+			return wakeup{}, errors.New("wakeup name already active; choose another name or cancel the existing reminder with wakeup_cancel first")
 		}
 	}
 	ctx, cancel := context.WithCancel(w.ctx)
@@ -149,7 +150,7 @@ func (r *Runtime) addWakeupTools() {
 		Delay   *int    `json:"delay_seconds,omitempty"`
 		Repeat  *int    `json:"repeat_seconds,omitempty"`
 	}
-	tool.Register(r.Tools, "wakeup_schedule", "Schedule a session-local reminder. Exactly one of at or delay_seconds. Compaction preserves timers; exit/switch cancels them.", map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer")}, []string{"name", "message"}, func(a schedule) error {
+	tool.Register(r.Tools, "wakeup_schedule", prompts.ToolDescription("wakeup_schedule"), map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer")}, []string{"name", "message"}, func(a schedule) error {
 		if e := tool.Required("name", a.Name); e != nil {
 			return e
 		}
@@ -166,8 +167,9 @@ func (r *Runtime) addWakeupTools() {
 			return errors.New("repeat_seconds must be 1–31536000 (omit for a one-shot timer)")
 		}
 		if a.At != nil {
-			_, e := time.Parse(time.RFC3339, *a.At)
-			return e
+			if _, e := time.Parse(time.RFC3339, *a.At); e != nil {
+				return fmt.Errorf("at must be RFC3339 with a timezone, such as 2026-10-02T15:04:05Z; use delay_seconds instead for a relative time: %w", e)
+			}
 		}
 		return nil
 	}, func(ctx context.Context, x tool.Execution, a schedule) (any, error) {
@@ -188,14 +190,14 @@ func (r *Runtime) addWakeupTools() {
 		return map[string]any{"wakeup_id": v.ID, "name": v.Name, "next_at": v.NextAt, "repeat_seconds": v.Repeat, "status": v.Status}, nil
 	})
 	type empty struct{}
-	tool.Register(r.Tools, "wakeup_list", "List this runtime's wakeups.", nil, nil, func(empty) error { return nil }, func(ctx context.Context, x tool.Execution, a empty) (any, error) {
+	tool.Register(r.Tools, "wakeup_list", prompts.ToolDescription("wakeup_list"), nil, nil, func(empty) error { return nil }, func(ctx context.Context, x tool.Execution, a empty) (any, error) {
 		return map[string]any{"wakeups": r.timers.list()}, nil
 	})
 	type stop struct {
 		ID   *string `json:"wakeup_id,omitempty"`
 		Name *string `json:"name,omitempty"`
 	}
-	tool.Register(r.Tools, "wakeup_cancel", "Cancel a timer by exactly one ID or name.", map[string]any{"wakeup_id": tool.Property("string"), "name": tool.Property("string")}, nil, func(a stop) error {
+	tool.Register(r.Tools, "wakeup_cancel", prompts.ToolDescription("wakeup_cancel"), map[string]any{"wakeup_id": tool.Property("string"), "name": tool.Property("string")}, nil, func(a stop) error {
 		if (a.ID == nil) == (a.Name == nil) {
 			return errors.New("exactly one of wakeup_id or name required")
 		}
@@ -210,7 +212,7 @@ func (r *Runtime) addWakeupTools() {
 		}
 		v, e := r.timers.stop(id, name)
 		if e != nil {
-			return nil, tool.Fail("not_found", fmt.Sprint(e))
+			return nil, tool.Fail("not_found", "no scheduled reminder matches; use wakeup_list and choose an active wakeup_id or name")
 		}
 		return map[string]any{"wakeup_id": v.ID, "status": v.Status}, nil
 	})

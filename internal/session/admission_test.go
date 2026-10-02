@@ -315,8 +315,8 @@ func TestClosingChildJoinsItsBackgroundCommands(t *testing.T) {
 				}
 				return emit(provider.StreamEvent{Kind: "text", Text: "Background task started"})
 			}}
-			_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"prompt":"start a background task","label":"fixture"}`)}})
-			record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main", CallID: ids[0]}, "subagent", []byte(`{"prompt":"start a background task","label":"fixture"}`))
+			_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start a background task","label":"fixture"}`)}})
+			record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main", CallID: ids[0]}, "subagent", []byte(`{"persistent":true,"prompt":"start a background task","label":"fixture"}`))
 			var result map[string]any
 			if err := json.Unmarshal(record.Result, &result); err != nil {
 				t.Fatal(err)

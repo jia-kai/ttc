@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"scicode/internal/jobs"
+	"scicode/internal/prompts"
 	"scicode/internal/workspace"
 	"time"
 )
@@ -36,7 +37,7 @@ type ChildController interface {
 // AddShell exposes managed commands and owner-scoped live handles. A nil child
 // controller leaves standalone shell registries without reusable child contexts.
 func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
-	Register(r, "shell", "Run /bin/sh with set -eu and closed stdin. Set strict=false to disable errexit/nounset; pipefail is not enabled. Use tmux for work that must outlive this runtime.", map[string]any{"command": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
+	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
 		}
@@ -44,10 +45,10 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 			return errors.New("timeout_ms must be 0–86400000")
 		}
 		if a.Protocol != "" && a.Protocol != "lsp" {
-			return errors.New("unknown protocol")
+			return errors.New("protocol must be lsp for a language server; omit it for an ordinary command")
 		}
 		if a.Protocol == "lsp" && !a.Background {
-			return errors.New("lsp requires background")
+			return errors.New("protocol=lsp requires background=true")
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a shellArgs) (any, error) {
@@ -72,21 +73,23 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 			id, e = m.Start(x.Actor, a.Command, dir, time.Duration(ms)*time.Millisecond, a.Strict == nil || *a.Strict, a.Background, wake)
 		}
 		if e != nil {
-			return nil, lspToolError(e)
+			return nil, jobToolError(e)
 		}
 		if a.Background {
-			return m.View(x.Actor, id)
+			v, err := m.View(x.Actor, id)
+			return v, jobToolError(err)
 		}
-		return m.Wait(ctx, x.Actor, id, func(v jobs.Snapshot) {
+		v, err := m.Wait(ctx, x.Actor, id, func(v jobs.Snapshot) {
 			if x.Update != nil {
 				x.Update(v)
 			}
 		})
+		return v, jobToolError(err)
 	})
 	type list struct {
 		State string `json:"state,omitempty"`
 	}
-	Register(r, "job_list", "List this live runtime's jobs; old historical IDs cannot be revived.", map[string]any{"state": Property("string", "running", "all")}, nil, func(a list) error {
+	Register(r, "job_list", prompts.ToolDescription("job_list"), map[string]any{"state": Property("string", "running", "all")}, nil, func(a list) error {
 		if a.State != "" && a.State != "running" && a.State != "all" {
 			return errors.New("state must be running or all; omit it to list running jobs")
 		}
@@ -113,7 +116,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
 		Limit         *int   `json:"limit_bytes,omitempty"`
 	}
-	Register(r, "job_read", "Read stdout or stderr; cursor is an absolute byte offset or eof:-N:bytes / eof:-N:lines. Optional grep filters lines within the page; next_cursor advances over the full page.", map[string]any{"job_id": Property("string"), "cursor": Property("string"), "stream": Property("string", "stdout", "stderr"), "grep": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit_bytes": Property("integer")}, []string{"job_id"}, func(a read) error {
+	Register(r, "job_read", prompts.ToolDescription("job_read"), map[string]any{"job_id": Property("string"), "cursor": Property("string"), "stream": Property("string", "stdout", "stderr"), "grep": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit_bytes": Property("integer")}, []string{"job_id"}, func(a read) error {
 		if e := Required("job_id", a.ID); e != nil {
 			return e
 		}
@@ -121,7 +124,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 	}, func(ctx context.Context, x Execution, a read) (any, error) {
 		v, e := m.Read(ctx, x.Actor, a.ID, jobs.ReadOptions{Stream: a.Stream, Cursor: a.Cursor, Limit: intDefault(a.Limit, 16384), Grep: a.Grep, Literal: a.Literal, IgnoreCase: a.CaseSensitive != nil && !*a.CaseSensitive})
 		if e != nil {
-			return nil, lspToolError(e)
+			return nil, jobToolError(e)
 		}
 		return v, nil
 	})
@@ -129,7 +132,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		ID    string `json:"job_id,omitempty"`
 		Child string `json:"child_id,omitempty"`
 	}
-	Register(r, "job_stop", "Stop a live command process group or close a reusable coding child. Supply exactly one of job_id or child_id. Main alone can close children.", map[string]any{"job_id": Property("string"), "child_id": Property("string")}, nil, func(a stop) error {
+	Register(r, "job_stop", prompts.ToolDescription("job_stop"), map[string]any{"job_id": Property("string"), "child_id": Property("string")}, nil, func(a stop) error {
 		if (a.ID == "") == (a.Child == "") {
 			return Fail("invalid_arguments", "supply exactly one of job_id or child_id")
 		}

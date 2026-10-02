@@ -4,3 +4,5 @@
 /coverage.out
 __pycache__/
 *.py[cod]
+
+/internal/prompts/assets_generated.go

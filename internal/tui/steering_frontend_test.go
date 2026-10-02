@@ -33,7 +33,7 @@ func testAltEnterSteering(t *testing.T, legacy bool) {
 	u.wait(t, "Steer · change direction")
 	close(p.release)
 	u.wait(t, "Steering accepted")
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	var codingTurns int
 	if err := u.runtime.Store.DB.QueryRow("SELECT count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&codingTurns); err != nil || codingTurns != 1 {
 		t.Fatal("steer became a separate coding turn", codingTurns, err)

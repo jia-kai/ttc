@@ -1,72 +1,69 @@
 # MathJax dependencies
 
-TTC pins MathJax **4.1.3** and its matching New Computer Modern SVG font package.
-It is the [latest official release](https://github.com/mathjax/MathJax-src/releases/tag/4.1.3)
-verified on 2026-10-01. Packages remain in the user's cache; their archives and
-JavaScript libraries are not embedded in the executable.
+## Setup and cache
 
-The executable embeds only its small rendering helper and the tracked
-[package manifest](../internal/assets/mathjax-package.json) and
-[lockfile](../internal/assets/mathjax-package-lock.json). The lockfile freezes all
-17 downloaded packages with exact versions, resolved URLs and SHA-512 integrity
-values. [npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/) installs that tree
-without changing the manifest or lock; npm verifies the download integrity.
-Package scripts, audits and funding notices are disabled.
+- TTC pins MathJax **4.1.3** with matching New Computer Modern SVG fonts, the
+  [official release](https://github.com/mathjax/MathJax-src/releases/tag/4.1.3)
+  verified on 2026-10-01. Dependencies stay in cache, not the executable.
+- Embed only the helper, [manifest](../internal/assets/mathjax-package.json) and
+  [lockfile](../internal/assets/mathjax-package-lock.json). The lock freezes all 17
+  packages with exact versions/URLs/SHA-512 integrity. [npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/)
+  verifies downloads without modifying metadata; scripts/audit/funding are disabled.
+- Install host Node and `rsvg-convert`; npm is needed for initial setup. Initialize
+  under `$XDG_CACHE_HOME/ttc/mathjax` (default `~/.cache/ttc/mathjax`), with 0700
+  version/lock-addressed roots and npm cache in that hierarchy. Ready roots need
+  no npm/network.
+- A cancelable lock and two-minute deadline protect staging, validation render
+  and atomic publication. Failure preserves old cache; damaged metadata triggers
+  staged rebuild. Unsafe permissions/symlinks fail explicitly.
 
-Node and `rsvg-convert` are host prerequisites. Renderer initialization installs
-missing packages using npm under `$XDG_CACHE_HOME/ttc/mathjax`, or
-`~/.cache/ttc/mathjax` by default. Installed roots have mode 0700 and contain a
-version/lock hash; npm's download cache stays in that same cache hierarchy.
-Installation has a cancelable lock and two-minute deadline, stages separately,
-renders a validation formula and publishes only a complete package. Failed setup
-preserves the previous cache. Damaged metadata triggers a staged rebuild; unsafe
-root permissions/symlinks fail explicitly. Ready packages need no npm/network.
-
-To prepare the cache without login or launching the UI:
+Prepare without login/UI:
 
 ```sh
 make build
 ./ttc --install-math
 ```
 
-The UI initializes math independently of image rendering. One pre-warmed Node
-process handles visible formulas; parser/document state is fresh per formula,
-while the output engine and local font chunks are reused. No dynamic TeX package
-loading is enabled. Interrupted or broken workers are joined and restarted on
-the next render; ordinary TeX errors preserve the warm engine. Failures show a
-warning and labeled literal TeX. Conversation and Markdown inspection windows
-share the visible-asset renderer. PNGs remain in the separate pruned render cache.
+## Rendering
 
-Formulas rasterize at three pixels per logical display pixel in each direction,
-including padding. The render cache retains these full rasters. Before uploading,
-TTC uniformly fits the raster to its logical size and placement limits, then
-averages source-pixel area in premultiplied sRGB and alpha. Transparent padding
-fills the rounded terminal cell grid without stretching glyphs. SVG padding
-preserves the configured em size. Filtering and PNG upload run once per visible
-placement size; redraws reuse the upload. Images are never enlarged by the
-filter. There is no font hinting or RGB subpixel mode.
+- Math initializes independently of images. One pre-warmed Node process serves
+  visible formulas, with fresh parser/document state and reused output engine/
+  local fonts. Base TeX, AMS and local macros are enabled; dynamic loading is not.
+  Remove Node hooks and use absolute cached imports. Join interrupted/broken workers
+  and restart on the next render; ordinary TeX errors keep the engine warm.
+- Conversation/Markdown windows share asset work. Failure warns and shows labeled
+  literal TeX; PNGs use a separate pruned render cache. Cached PNGs bypass engines.
 
-Placement IDs include the measured cell size; font-size changes trigger a new
-upload. Missing measurements produce a UI warning and an estimated 8×16 cell.
-Successful Kitty detection enables RGB even if SSH/tmux omits `COLORTERM`.
-Explicit `NO_COLOR` or `TCELL_TRUECOLOR=disable` disables graphics and warns on
-formula output.
-Render keys include raster resolution and backend hash. Physical canvases are
-checked against the 16-megapixel limit before conversion. Decoded replies pass
-directly to the UI; its retained image budget remains 32 MiB. The filtered upload
-temporarily allocates the fitted pixels and cell-aligned canvas, then discards
-them.
+| Limit                        | Value                 |
+| ---------------------------- | --------------------- |
+| Formula source               | 4096 bytes            |
+| One render deadline          | 10 seconds            |
+| JSON-line reply/SVG/PNG      | 32 MiB each           |
+| Captured worker stderr       | 4 KiB                 |
+| Logical dimensions           | 4096×1024 pixels      |
+| Physical canvas              | 16 megapixels         |
+| Retained decoded image pool  | 32 MiB, images + math |
 
-To update dependencies, change the exact version in the tracked manifest and Go
-constant, regenerate the lockfile with npm in a private cache directory, then
-review every resolved URL/integrity change. Run unit tests, real math tests and
-Kitty visual checks after preparing the updated cache. The runtime never resolves
-an unpinned latest version automatically.
+- Rasterize at three pixels per logical pixel on both axes, including padding;
+  retain full rasters in cache. Uniformly fit uploads to logical/placement limits
+  without enlarging images, then average source area in premultiplied sRGB/alpha.
+  Transparent padding fills the rounded terminal-cell grid without stretching;
+  SVG padding preserves em size. No hinting or RGB subpixel mode.
+- Filter/upload once per visible placement size; redraw reuses it. Placement IDs
+  include measured cell size, so font-size changes upload again. Missing measurements
+  warn and estimate 8×16 pixels/cell. Kitty detection enables RGB without `COLORTERM`;
+  `NO_COLOR` or `TCELL_TRUECOLOR=disable` disables graphics and warns on formulas.
+- Render keys include resolution/backend hash. Check physical dimensions before
+  conversion. Decoded replies transfer directly to UI; fitted pixels/cell-aligned
+  upload canvases are temporary allocations outside its retained image pool.
 
-Benchmark the actual warm renderer, including PNG conversion, with:
+## Updating and measuring
+
+- Update the tracked manifest and Go version constant; regenerate the lockfile
+  with npm in private cache and review every URL/integrity change. Prepare the
+  cache, then run unit/real math/Kitty checks. Runtime never resolves unpinned latest.
+- Benchmark the warm backend plus PNG conversion, excluding initial downloads:
 
 ```sh
 go test ./internal/assets -run '^$' -bench BenchmarkMathJax -benchtime=10x
 ```
-
-Benchmarks exclude first-time npm downloads. Cached PNGs bypass both engines.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"scicode/internal/tool"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,10 @@ func newQuestionTestUI(t *testing.T, p provider.Provider, sinks ...*graphics.Kit
 }
 
 func newQuestionTestUIWithEditor(t *testing.T, p provider.Provider, editor func(context.Context, string) (string, error), sinks ...*graphics.Kitty) *questionTestUI {
+	return newQuestionTestUIWithSetup(t, p, editor, nil, sinks...)
+}
+
+func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(context.Context, string) (string, error), setup func(*session.Runtime), sinks ...*graphics.Kitty) *questionTestUI {
 	t.Helper()
 	if _, err := scratch.Verify(); err != nil {
 		t.Fatal(err)
@@ -75,7 +80,7 @@ func newQuestionTestUIWithEditor(t *testing.T, p provider.Provider, editor func(
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
 	questionEvents := make(chan struct{}, 8)
-	r := session.New(ctx, store, w, p, selection, "", catalog, func(e session.Event) {
+	r := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
 			if e.Kind == "question" {
@@ -85,6 +90,9 @@ func newQuestionTestUIWithEditor(t *testing.T, p provider.Provider, editor func(
 		}
 	})
 	r.AutoName = false
+	if setup != nil {
+		setup(r)
+	}
 	s := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 128)}
 	ui := &questionTestUI{screen: s, runtime: r, done: make(chan error, 1), questionEvents: questionEvents, cancel: cancel}
 	f := Frontend{Runtime: r, Events: events, Screen: s, Output: io.Discard, Models: []provider.ModelSpec{selection.Model}, EditInput: editor}
@@ -190,7 +198,7 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 	u.key(tcell.KeyRight)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	u.wait(t, "> unfinished draft")
 	u.key(tcell.KeyUp)
 	u.wait(t, "> ask")
@@ -228,7 +236,7 @@ func (p *concurrentQuestionProvider) Stream(ctx context.Context, req provider.Re
 	p.mu.Unlock()
 	if actor == "main" && step == 0 {
 		for _, id := range []string{"A", "B"} {
-			call := provider.ToolCall{ID: id, Name: "subagent", Arguments: []byte(`{"prompt":"` + id + `","label":"` + id + `","background":true}`)}
+			call := provider.ToolCall{ID: id, Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"` + id + `","label":"` + id + `","background":true}`)}
 			if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
 				return err
 			}
@@ -313,7 +321,7 @@ func TestComposerCtrlDScrollsDownWithoutExiting(t *testing.T) {
 	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "```\n" + strings.Join(rows, "\n") + "\n```"}}})
 	u.typeText("show rows")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	for range 10 {
 		u.key(tcell.KeyCtrlU)
 	}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"scicode/internal/prompts"
 	"sort"
 	"strings"
 	"syscall"
@@ -68,7 +69,7 @@ func validText(s string) error {
 
 // AddFiles registers read/search tools and serialized file mutations.
 func AddFiles(r *Registry, w *workspace.Manager) {
-	Register(r, "read", "Read one UTF-8 file or list a directory. Offset is 1-based; continue with next_offset. Directories support at most 10000 entries; use glob to narrow larger directories.", map[string]any{"path": Property("string"), "offset": Property("integer"), "limit": Property("integer")}, []string{"path"}, func(a readArgs) error {
+	Register(r, "read", prompts.ToolDescription("read"), map[string]any{"path": Property("string"), "offset": Property("integer"), "limit": Property("integer")}, []string{"path"}, func(a readArgs) error {
 		if e := Required("path", a.Path); e != nil {
 			return e
 		}
@@ -79,7 +80,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
 		return readPage(ctx, w.Path(a.Path), intDefault(a.Offset, 1), intDefault(a.Limit, 200))
 	})
-	Register(r, "write", "Create or fully overwrite one text file. Missing parent directories are made. Read existing files first.", map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
+	Register(r, "write", prompts.ToolDescription("write"), map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
 		if e := Required("path", a.Path); e != nil {
 			return e
 		}
@@ -95,7 +96,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		}
 		return presentFiles(ctx, value, res.Changes), e
 	})
-	Register(r, "edit", "Replace exact text. Exactly one match is required unless replace_all is true.", map[string]any{"path": Property("string"), "old_text": Property("string"), "new_text": Property("string"), "replace_all": Property("boolean")}, []string{"path", "old_text", "new_text"}, func(a editArgs) error {
+	Register(r, "edit", prompts.ToolDescription("edit"), map[string]any{"path": Property("string"), "old_text": Property("string"), "new_text": Property("string"), "replace_all": Property("boolean")}, []string{"path", "old_text", "new_text"}, func(a editArgs) error {
 		if e := Required("path", a.Path); e != nil {
 			return e
 		}

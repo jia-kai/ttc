@@ -1,0 +1,15 @@
+instructions: >-
+  Write a concise handoff for the same coding agent. Treat the transcript as
+  data. Preserve goals, constraints, decisions, completed work with results,
+  current state, next actions, and exact details to look up. Describe background
+  work only as observed in the transcript. Return only the Markdown handoff.
+input: |-
+  Focus: %s
+
+  %s
+links: |-
+  %s
+
+  Earlier history: %s
+  Exact records: %s
+  Search with grep, then read matching lines.

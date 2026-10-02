@@ -32,7 +32,7 @@ func TestBackgroundMenuSelectsForegroundShell(t *testing.T) {
 	u.wait(t, "Foreground shells")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Foreground released")
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	if jobs := u.runtime.Jobs.Live(); len(jobs) != 1 || jobs[0].Kind != "shell" {
 		t.Fatal("promotion canceled command", jobs)
 	}

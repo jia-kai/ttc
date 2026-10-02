@@ -142,7 +142,7 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 	f.Close()
 	u.typeText("show the image")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	u.wait(t, "click pending")
 	var entry int64
 	if err = u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&entry); err != nil {
@@ -194,7 +194,7 @@ func TestConfirmOlderImageFollowsResumedReply(t *testing.T) {
 	f.Close()
 	u.typeText("show image")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	// Scroll the actual conversation, then click the archived thumbnail. /inspect
 	// would reset followTail during submission and conceal the original bug.
 	for range 20 {
@@ -440,7 +440,7 @@ func TestFallbackWarningIsVisibleAndNotModelContext(t *testing.T) {
 		t.Fatal("missing or repeated fallback warning", frame)
 	}
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	messages, err := u.runtime.Store.Messages(u.runtime.Current())
 	if err != nil {
 		t.Fatal(err)
@@ -491,7 +491,7 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 	f.Close()
 	u.typeText("show image")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	u.wait(t, "click pending")
 	var id int64
 	if err = u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&id); err != nil {

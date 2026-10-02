@@ -74,7 +74,7 @@ func TestRetryActivityFrontendReturnsToWorkingOnOutput(t *testing.T) {
 	u.wait(t, "Recovered")
 	u.wait(t, "Working · ")
 	close(p.finish)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 }
 
 func TestQuestionActivityFrontendSurvivesDismissal(t *testing.T) {
@@ -91,14 +91,14 @@ func TestQuestionActivityFrontendSurvivesDismissal(t *testing.T) {
 	if err := u.runtime.AnswerQuestion(forms[0].ID, []session.Answer{{ID: "choice", Source: "option", Values: []string{"a"}}, {ID: "notes", Source: "custom", Values: []string{"notes"}}}); err != nil {
 		t.Fatal(err)
 	}
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 }
 
 func TestSessionNameEventReadsPersistedManualTitle(t *testing.T) {
 	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Done."}}})
 	u.typeText("name this")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Turn completed")
+	u.wait(t, "Turn complete")
 	if err := u.runtime.Store.RenameSession(u.runtime.Current(), "My manual title"); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"scicode/internal/prompts"
 	"sort"
 	"sync"
 
@@ -63,16 +64,16 @@ func (r *Runtime) addImageTool() {
 		Path  string `json:"path"`
 		Click bool   `json:"request_click,omitempty"`
 	}
-	tool.Register(r.Tools, "image_show", "Show an immutable local PNG/JPEG/GIF thumbnail (GIF first frame). request_click asks the user to select a source pixel and explicitly confirm OK in the preview; the click/cancellation arrives later as a user message, separate from this result. Only one pending image per actor; graphics unavailable returns unsupported_interaction.", map[string]any{"path": tool.Property("string"), "request_click": tool.Property("boolean")}, []string{"path"}, func(a args) error { return tool.Required("path", a.Path) }, func(ctx context.Context, x tool.Execution, a args) (any, error) {
+	tool.Register(r.Tools, "image_show", prompts.ToolDescription("image_show"), map[string]any{"path": tool.Property("string"), "request_click": tool.Property("boolean")}, []string{"path"}, func(a args) error { return tool.Required("path", a.Path) }, func(ctx context.Context, x tool.Execution, a args) (any, error) {
 		r.images.mu.Lock()
 		if a.Click {
 			if !r.images.enabled {
 				r.images.mu.Unlock()
-				return nil, tool.Fail("unsupported_interaction", "Kitty graphics/mouse TUI required")
+				return nil, tool.Fail("unsupported_interaction", "image clicks require the Kitty graphics/mouse TUI; omit request_click to display without requesting a point")
 			}
 			if r.images.actors[x.Actor] != "" {
 				r.images.mu.Unlock()
-				return nil, tool.Fail("click_already_pending", "actor has a pending image or unconsumed reply")
+				return nil, tool.Fail("click_already_pending", "an image selection is pending or its reply is unconsumed; wait for and process that reply before requesting another click")
 			}
 			r.images.actors[x.Actor] = x.CallID
 		}

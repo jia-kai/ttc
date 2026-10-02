@@ -31,7 +31,7 @@ func TestAttachmentPayloadIsInspectableWithoutConversationExpansion(t *testing.T
 	p.Responses[0].Prefix = "user: " + authored + "\n\nAttachment (text): " + path + "\n" + snapshot
 	u.typeText(authored)
 	u.key(tcell.KeyEnter)
-	frame := u.wait(t, "Turn completed")
+	frame := u.wait(t, "Turn complete")
 	if strings.Contains(frame, snapshot) || strings.Contains(frame, "Attachment (text):") {
 		t.Fatal("attachment expanded in the conversation", frame)
 	}

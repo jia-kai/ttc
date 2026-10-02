@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"scicode/internal/prompts"
 	"strings"
 	"time"
 
@@ -69,7 +70,10 @@ func validateLSP(a lspArgs) error {
 	return rangeInt("timeout_ms", a.Timeout, 1, 120000)
 }
 
-func lspToolError(err error) error {
+func jobToolError(err error) error {
+	if errors.Is(err, jobs.ErrNotFound) {
+		return Fail("not_found", err.Error())
+	}
 	var failure *lsp.Error
 	if errors.As(err, &failure) {
 		return Fail(failure.Code, failure.Message)
@@ -78,7 +82,7 @@ func lspToolError(err error) error {
 }
 
 func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
-	Register(r, "lsp_query", "Read code navigation from a live shell(protocol=lsp, background=true) language server: definition, references, hover, document_symbols or workspace_symbols. Positions are 1-based Unicode code points, not bytes. Path is relative to cwd or absolute. workspace_symbols requires query, even when empty. Location/symbol results page with offset=0 and limit=100 (max 500); hover has no pagination. timeout_ms defaults to 30000 (max 120000). Inspect server diagnostics using job_read(stream=stderr).", map[string]any{
+	Register(r, "lsp_query", prompts.ToolDescription("lsp_query"), map[string]any{
 		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": Property("integer"), "limit": Property("integer"), "timeout_ms": Property("integer"),
 	}, []string{"job_id", "operation"}, validateLSP, func(ctx context.Context, x Execution, a lspArgs) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30000))*time.Millisecond)
@@ -103,6 +107,6 @@ func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 			return nil, Fail("timeout", fmt.Sprintf("LSP query exceeded %d ms; increase timeout_ms (max 120000), narrow query, or inspect server stderr", intDefault(a.Timeout, 30000)))
 		}
-		return result, lspToolError(err)
+		return result, jobToolError(err)
 	})
 }

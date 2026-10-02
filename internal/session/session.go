@@ -48,6 +48,7 @@ type Runtime struct {
 	pendingModel      *provider.Selection
 	Skills            *skills.Catalog
 	Tools             *tool.Registry
+	searchConfig      tool.WebSearchConfig // Operator settings, excluded from model context/history.
 	Jobs              *jobs.Manager
 	Emit              func(Event)
 	ctx               context.Context
@@ -89,13 +90,13 @@ type Runtime struct {
 
 // New constructs an active runtime. An empty session ID starts an in-memory
 // blank conversation; a nonempty ID must refer to an already persisted session.
-func New(ctx context.Context, store *history.Store, w *workspace.Manager, p provider.Provider, selection provider.Selection, session string, catalog *skills.Catalog, emit func(Event)) *Runtime {
+func New(ctx context.Context, store *history.Store, w *workspace.Manager, p provider.Provider, selection provider.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) *Runtime {
 	ctx, cancel := context.WithCancel(ctx)
 	persisted := session != ""
 	if !persisted {
 		session = history.NewID("session")
 	}
-	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, Emit: emit, ctx: ctx, cancel: cancel, current: session, persisted: persisted, AutoName: true}
+	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: session, persisted: persisted, AutoName: true}
 	r.resetTransient()
 	r.retentionStop = r.startRetention()
 	return r
@@ -155,7 +156,7 @@ func (r *Runtime) resetTransient() {
 	r.Jobs.OnState = r.publishJob
 	tool.AddFiles(r.Tools, r.Workspace)
 	tool.AddShell(r.Tools, r.Jobs, r.Workspace, r)
-	tool.AddWeb(r.Tools, httpClient())
+	tool.AddWeb(r.Tools, httpClient(), r.searchConfig)
 	tool.AddSkills(r.Tools, r.Skills)
 	w := newWakeups(r.ctx, r.publishTimer)
 	r.mu.Lock()
@@ -316,8 +317,13 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 		if haveUsage && modelTime > 0 {
 			avg = fmt.Sprintf("%.1f tok/s", float64(outputTokens)/modelTime.Seconds())
 		}
-		text := fmt.Sprintf("Turn %s · avg %s", status, avg)
-		id, e := r.Store.Append(r.Current(), turn, "main", "status", "", false, map[string]any{"type": "turn_end", "status": status, "text": text, "wall_ms": time.Since(started).Milliseconds()})
+		elapsed := time.Since(started)
+		displayStatus := status
+		if status == "completed" {
+			displayStatus = "complete"
+		}
+		text := fmt.Sprintf("Turn %s · %s · avg %s", displayStatus, turnDuration(elapsed), avg)
+		id, e := r.Store.Append(r.Current(), turn, "main", "status", "", false, map[string]any{"type": "turn_end", "status": status, "text": text, "wall_ms": elapsed.Milliseconds()})
 		if err == nil && e != nil {
 			err = e
 		}
@@ -398,6 +404,7 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 		}
 		r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
 		reply := provider.Message{Role: "assistant"}
+		var text strings.Builder
 		var usage *provider.Usage
 		responseID := ""
 		serviceTier := ""
@@ -416,7 +423,7 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 			case "call_start":
 				return r.toolAnnouncement(turn, "main", request, event.CallStart)
 			case "text":
-				reply.Content += event.Text
+				text.WriteString(event.Text)
 				r.emit(Event{Kind: "delta", Text: render.Clean(event.Text), RequestID: request})
 			case "call":
 				if event.Call == nil {
@@ -434,6 +441,7 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 			}
 			return nil
 		})
+		reply.Content = text.String()
 		r.recordUsage(usage)
 		if streamErr != nil {
 			// State/call callbacks can be interrupted halfway through completion.
@@ -491,6 +499,26 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 			return nil
 		}
 	}
+}
+
+// turnDuration formats elapsed time in whole seconds, omitting zero units.
+func turnDuration(elapsed time.Duration) string {
+	seconds := max(int64(0), int64(elapsed/time.Second))
+	var text strings.Builder
+	for _, unit := range []struct {
+		seconds int64
+		suffix  string
+	}{{86400, "d"}, {3600, "h"}, {60, "min"}, {1, "s"}} {
+		if count := seconds / unit.seconds; count > 0 {
+			text.WriteString(strconv.FormatInt(count, 10))
+			text.WriteString(unit.suffix)
+			seconds %= unit.seconds
+		}
+	}
+	if text.Len() == 0 {
+		return "0s"
+	}
+	return text.String()
 }
 
 // Command executes idle-only history/lifecycle operations. Compaction requests a model summary.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"scicode/internal/prompts"
 	"strings"
 	"unicode/utf8"
 
@@ -13,14 +14,7 @@ import (
 	"scicode/internal/render"
 )
 
-const btwInstruction = `Answer the user's separate /btw question with read-only analysis. The preceding
-conversation is context only: another agent continues the main task. Do not
-continue that task, change files, run shell commands, spawn agents, or ask
-interactive questions. Only the advertised read-only tools are available.
-Job handles are scoped to this child; inherited parent job IDs do not grant access.
-Answer promptly and concisely, usually under 200 words. Use tools only when
-needed to verify the answer. Your answer is shown in a separate Markdown popup
-and does not enter the main agent's context.`
+const btwInstruction = prompts.Btw
 
 // StartBTW launches a read-only aside without interrupting the main turn. The
 // frontend calls it serially with lifecycle commands, but it may overlap Run.
