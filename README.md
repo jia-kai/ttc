@@ -20,9 +20,9 @@ TTC also supports the following:
 
 * Background jobs, subagents, and wakeup timers.
 * Built-in file-based-plan and tmux skills.
-* Inline and block math using MathJax.
 * Image display and confirmed point coordinates delivered to the LLM as a later
   runtime message.
+* Inline and block math using MathJax.
 * Transparency of all internal processes. Click a message or tool row to inspect
   raw messages and saved tool details.
 
@@ -35,6 +35,30 @@ The [requirements](docs/requirement.md), [implementation design](docs/design.md)
 architecture. TTC's design draws from [Codex](https://github.com/openai/codex),
 [pi](https://github.com/earendil-works/pi), and
 [OpenCode](https://github.com/anomalyco/opencode).
+
+## Screenshots
+
+A few examples of TTC's terminal-native workflow:
+
+**Images in the conversation.** Generate an image and view it alongside the
+commands and edits that produced it—here, a pelican riding a bicycle.
+
+![TTC conversation showing a generated illustration of a pelican riding a bicycle](docs/screenshots/pelican.png)
+
+**Interactive plots.** Open a plot, pan or zoom, and confirm a point to send its
+pixel coordinates back to the agent.
+
+![TTC image viewer displaying a plot with point selection and pan and zoom controls](docs/screenshots/plot.png)
+
+**Rendered math.** Inline and block formulas make explanations easier to follow,
+including converting a selected point from image pixels to plot coordinates.
+
+![TTC rendering mathematical formulas and reporting the coordinates of a selected plot point](docs/screenshots/math.png)
+
+**Inspectable tool calls.** Open a tool row to see its parameters, command,
+status, and captured output.
+
+![TTC tool inspector showing a shell command, its parameters, and its output](docs/screenshots/inspect.png)
 
 ## Installation
 
