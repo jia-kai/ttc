@@ -33,7 +33,7 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer w.Close()
+
 	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
 	catalog, _ := skills.Discover(context.Background(), w.Root, "")
 	events := make(chan session.Event, 64)
@@ -103,7 +103,7 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+
 	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
 	catalog, err := skills.Discover(context.Background(), w.Root, "")
 	if err != nil {

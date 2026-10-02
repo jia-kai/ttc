@@ -249,47 +249,6 @@ func TestHistoryImmutableResultsBranchAndSystemInspection(t *testing.T) {
 		t.Fatal(e)
 	}
 }
-func TestRestartInterruptsWithoutReplayAndResetsSchema(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "data")
-	s, e := Open(root)
-	if e != nil {
-		t.Fatal(e)
-	}
-	v, turn := startHistorySession(t, s, t.TempDir(), provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}, "run shell")
-	request, _ := s.StartRequest(v.ID, turn, "main", "coding", v.Model)
-	id, e := s.CallIntent(v.ID, turn, "main", request, provider.ToolCall{ID: "p", Name: "shell", Arguments: []byte(`{"command":"never"}`)})
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = Open(root); e == nil {
-		t.Fatal("missing process lock")
-	}
-	s.Close()
-	s, e = Open(root)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = s.RecoverCalls(); e != nil {
-		t.Fatal(e)
-	}
-	var result string
-	if e = s.DB.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", id).Scan(&result); e != nil || !strings.Contains(result, "interrupted") {
-		t.Fatal(result, e)
-	}
-	if _, e = s.DB.Exec("PRAGMA user_version=99"); e != nil {
-		t.Fatal(e)
-	}
-	s.Close()
-	s, e = Open(root)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.Close()
-	if !s.Reset {
-		t.Fatal("incompatible schema not reset")
-	}
-}
-
 func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	s, v, first, req := historyFixture(t)
 	s.FinishRequest(req, "completed", nil)

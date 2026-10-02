@@ -193,13 +193,6 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 	if step != 5 || summaries != 1 {
 		t.Fatal(step, summaries)
 	}
-	continuation := r.Current()
-	if _, err := r.Command("/new"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Command("/load " + continuation); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := r.Command("/undo"); err != nil {
 		t.Fatal(err)
 	}

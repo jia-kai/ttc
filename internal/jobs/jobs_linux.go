@@ -25,6 +25,10 @@ import (
 // another actor's jobs. Callers can map it to their own error protocol.
 var ErrNotFound = errors.New("unknown or inaccessible job_id; use job_list(state=all) to choose an accessible job")
 
+// ForegroundTimeout is the default deadline for foreground shells, in duration units.
+// Foreground commands cannot run without a deadline; background shells default to none.
+const ForegroundTimeout = 20 * time.Second
+
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
 	WakeOnExit bool   `json:"-"` // Whether the background completion should notify the model.
@@ -76,6 +80,8 @@ func New(ctx context.Context, notify func(Snapshot)) *Manager {
 
 // Start launches a closed-stdin shell in a dedicated process group.
 // strict enables POSIX errexit and nounset; it does not enable pipefail.
+// Zero timeout selects ForegroundTimeout for foreground work and no deadline
+// for background work. A positive timeout is an explicit deadline in either mode.
 func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool) (string, error) {
 	return m.start(owner, command, workdir, timeout, strict, background, wake, false)
 }
@@ -87,6 +93,12 @@ func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration
 }
 
 func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool) (string, error) {
+	if timeout < 0 {
+		return "", errors.New("shell timeout must be nonnegative")
+	}
+	if !background && timeout == 0 {
+		timeout = ForegroundTimeout
+	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()

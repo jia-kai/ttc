@@ -119,6 +119,9 @@ Markdown/math; input remains anchored while responses stream.
 - **Shell completion:** persist bounded output and update UI. Default
   `wake_on_exit=true` notifies at a boundary or starts idle work; false is UI-only.
   Foreground results never duplicate completion notices.
+- Foreground shells default to a 20000 ms deadline; explicit `timeout_ms` must
+  be 1–86400000 and cannot disable it. Background shells have no default deadline;
+  `0` means none, and a positive timeout is an optional explicit deadline.
 - **Question:** suspend only caller, keep composer/jobs usable. Tabs use Left/Right,
   final Submit sends all answers. Choose exactly one option or Other/free text;
   Up/Down focuses, Enter selects/advances, Space selects without advancing.
@@ -137,7 +140,7 @@ Markdown/math; input remains anchored while responses stream.
   Compaction preserves runtime/IDs; explicit new/clear/load/exit cancels and joins
   work, drops queues/interactions, and records interrupted output. Child inspection
   is not switching. tmux detach keeps TTC alive; long work belongs in tmux.
-  Crash recovery never relaunches calls; old handles return `not_found`.
+  Session loading never relaunches calls; old handles return `not_found`.
 - Append inspectable developer runtime context only on committed changes, with
   jobs/timers/transitions. Activation/compaction force it. Stable instructions are
   separate; snapshots cannot revive work or establish future outcomes. Delivered
@@ -184,13 +187,12 @@ Markdown/math; input remains anchored while responses stream.
 
 ## Data retention
 
-- Clean at startup/every 24 hours. Expire entire lineages after 30 days without
-  history/user activity, preserving current lineage and pending filesystem work.
-  Unloaded lineages have no live jobs/timers to prolong them.
+- Clean at startup/every hour and refresh the loaded session's activity for other
+  instances. Expire entire lineages after 30 inactive days; copies share retention.
 - Delete history, tools, requests, snapshots, attachments and archives together;
   keep predecessor data required by retained continuations. Private managed files
-  belong to one lineage, without cross-lineage blobs. Retry interrupted cleanup
-  through a deletion marker; credentials/workspace generations are not conversation data.
+  belong to one lineage, without cross-lineage blobs. Asset deletion is best
+  effort without restart repair; credentials/preferences are not conversation data.
 - Use absolute `$XDG_DATA_HOME/ttc`, falling back to `~/.local/share/ttc` when unset
   or relative. Deletion stays inside managed root and never follows symlinks.
 
@@ -208,9 +210,11 @@ Markdown/math; input remains anchored while responses stream.
   including child/trailing async writes and failed/interrupted turns. The gate
   orders checkpoint versus complete commits, not launch attribution. Redo restores
   saved bytes without tool execution/live handles. New input branches/clears redo.
-- Reject restoration conflicts. Journal partial writes/restores before advancing
-  cursors. Loading another session never restores files; changed workspace generation
-  establishes a tip boundary so only new work is undoable, older history inspectable.
+- Reject restoration conflicts. Filesystem changes and SQL commits are independent;
+  there is no crash repair. Loading writable history copies its last balanced
+  tool exchange into an independent session, never restoring files or live work.
+  Only new work is undoable; imported history remains inspectable. Instances can
+  share data/workspaces; conflicts between independent writers are the user's responsibility.
 - Compaction keeps retained complete turns undoable; active-turn cuts establish
   earlier edits as baseline. See [design](design.md#serialized-edits-and-shared-undo).
 
@@ -253,7 +257,9 @@ Markdown/math; input remains anchored while responses stream.
   left-clip paths with full inspection, refreshing Git outside draw loop. Live tools/
   agents have states/titles; new child labels are 1–4 words, ≤64 single-line characters.
 - Up/Down recalls human input across sessions/restarts and restores draft past
-  newest. Ctrl-R searches newest-first bounded prompt history; Enter fills input,
+  newest. Ctrl-R matches every whitespace-separated case-insensitive substring
+  in any order against bounded prompt history, newest first, highlighting matches.
+  Enter fills input,
   Esc cancels. Alt+Up/Down focuses conversation; dialogs own their arrows.
 - Ctrl+U/D scroll half viewport. Ctrl+D never exits; at bottom it resumes follow.
   Scrolling anchors message/source offset through streams/resize. Reaching bottom
@@ -265,8 +271,8 @@ Markdown/math; input remains anchored while responses stream.
   Keyboard scroll/resize works; exit restores live view/mouse; sending leaves fullscreen.
 - Ctrl+X L lists dated/selectable sessions; Enter loads. Predecessors are read-only;
   compaction selects its continuation. New/clear preserve old history and edits but
-  cancel work/transients. Refresh writable instructions at least one hour old for
-  both loaded views and new requests; no load acknowledgment popup.
+  cancel work/transients. Every coding request uses current instructions and
+  initial cwd/repository/branch metadata; no load acknowledgment popup.
 - Ctrl+X E runs `$VISUAL`/`$EDITOR` on draft, returning without sending. Slash
   completion and Ctrl+P expose actions; palette inserts a command, Enter submits,
   cancellation preserves draft. `@` path completion must stay responsive.

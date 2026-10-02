@@ -245,3 +245,63 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
+	s, source, turn, request := historyFixture(t)
+	finish, err := s.Append(source.ID, turn, "main/child", "status", "", false, map[string]string{"type": "child_turn_finished"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, calls, err := s.Assistant(source.ID, turn, "main", request, provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(map[string]any{"ok": true, "finish_event_seq": finish})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CallResult(source.ID, turn, "main", calls[0], result, map[string]string{}, render.Markdown{}, true); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Load(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTurn, err := s.BeginTurn(loaded.ID, "user", loaded.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notice := provider.Message{Role: "user", Runtime: true, Content: "finished", EventSeq: finish}
+	if _, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, []provider.Message{notice}, nil); err == nil {
+		t.Fatal("loaded runtime accepted its source's live notification")
+	}
+	admitted, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered sql.NullInt64
+	if err := s.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&delivered); err != nil || delivered.Valid {
+		t.Fatal("loaded history acknowledged source runtime", delivered, err)
+	}
+	var acknowledgments string
+	if err := s.DB.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&acknowledgments); err != nil || acknowledgments != "[]" {
+		t.Fatal(acknowledgments, err)
+	}
+	// Compaction continues the original runtime and must still acknowledge its
+	// retained finish event, even though the physical tool-result row is copied.
+	archive, err := s.ArchiveTranscript(source.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.Continue(source.ID, "handoff", archive, finish, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := s.AdmitRequest(next.ID, turn, "main", next.Model, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&delivered); err != nil || !delivered.Valid || delivered.Int64 != original.RequestID {
+		t.Fatal("compaction lost live event ownership", delivered, err)
+	}
+}

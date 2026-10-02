@@ -98,14 +98,10 @@ func run() error {
 		return e
 	}
 	defer store.Close()
-	if store.Reset {
-		fmt.Fprintln(os.Stderr, "ttc: discarded incompatible data; history and login credentials were reset")
-	}
 	w, e := workspace.Open(*cwd, store)
 	if e != nil {
 		return e
 	}
-	defer w.Close()
 	var p provider.Provider
 	adapter := openai.New(filepath.Join(store.Root, "openai-auth.json"))
 	if *endpoint != "" {
@@ -161,13 +157,16 @@ func run() error {
 	}
 	var saved history.Session
 	if *load != "" {
-		saved, e = store.Load(*load)
+		saved, e = store.Session(*load)
 		if e == nil {
 			var path string
 			e = store.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", saved.WorkspaceID).Scan(&path)
 			if e == nil && path != w.Root {
 				return fmt.Errorf("session belongs to another workspace")
 			}
+		}
+		if e == nil {
+			saved, e = store.Load(*load)
 		}
 	}
 	if e != nil {
@@ -177,11 +176,6 @@ func run() error {
 		selection = saved.Model
 	} else if e = store.SaveSelection(selection); e != nil {
 		return e
-	}
-	if *load != "" {
-		if _, e = session.RefreshInstructions(store, saved); e != nil {
-			return e
-		}
 	}
 	if !saved.ReadOnly && *load != "" && (saved.Model.Provider != selection.Provider || saved.Model.Model.ID != selection.Model.ID || saved.Model.Variant != selection.Variant) {
 		text := fmt.Sprintf("Model switched · %s · %s", selection.Model.ID, selection.Variant)

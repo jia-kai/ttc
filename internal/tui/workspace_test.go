@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"scicode/internal/workspace"
 	"strings"
 	"testing"
 	"time"
@@ -32,26 +33,26 @@ func TestWorkspaceGitParentsNestedWorktreeAndHead(t *testing.T) {
 	if err := os.MkdirAll(nested, 0700); err != nil {
 		t.Fatal(err)
 	}
-	info := inspectWorkspace(context.Background(), nested)
-	if info.cwd != nested || info.repo != root || info.branch != "main" {
+	info := workspace.InspectGit(context.Background(), nested)
+	if info.Cwd != nested || info.Repo != root || info.Branch != "main" {
 		t.Fatal(info)
 	}
 	git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture")
 	git(root, "checkout", "--detach")
-	if v := inspectWorkspace(context.Background(), nested); v.branch != "detached" {
+	if v := workspace.InspectGit(context.Background(), nested); v.Branch != "detached" {
 		t.Fatal(v)
 	}
 	git(root, "checkout", "main")
 	worktree := filepath.Join(t.TempDir(), "worktree")
 	git(root, "worktree", "add", "-b", "research", worktree)
-	if v := inspectWorkspace(context.Background(), worktree); v.repo != worktree || v.branch != "research" {
+	if v := workspace.InspectGit(context.Background(), worktree); v.Repo != worktree || v.Branch != "research" {
 		t.Fatal(v)
 	}
 	git(nested, "init", "-b", "inner")
-	if v := inspectWorkspace(context.Background(), nested); v.repo != nested || v.branch != "inner" {
+	if v := workspace.InspectGit(context.Background(), nested); v.Repo != nested || v.Branch != "inner" {
 		t.Fatal(v)
 	}
-	if v := inspectWorkspace(context.Background(), t.TempDir()); v.repo != "" || v.branch != "" {
+	if v := workspace.InspectGit(context.Background(), t.TempDir()); v.Repo != "" || v.Branch != "" {
 		t.Fatal(v)
 	}
 }
@@ -59,7 +60,7 @@ func TestWorkspaceGitParentsNestedWorktreeAndHead(t *testing.T) {
 func TestWorkspaceMissingGitTimeoutAndWorkerClose(t *testing.T) {
 	bin := t.TempDir()
 	t.Setenv("PATH", bin)
-	if v := inspectWorkspace(context.Background(), bin); v.repo != "" || v.gitError == "" {
+	if v := workspace.InspectGit(context.Background(), bin); v.Repo != "" || v.Error == "" {
 		t.Fatal(v)
 	}
 	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\n/bin/sleep 10\n"), 0700); err != nil {
@@ -68,7 +69,7 @@ func TestWorkspaceMissingGitTimeoutAndWorkerClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if v := inspectWorkspace(ctx, bin); v.repo != "" || v.gitError == "" {
+	if v := workspace.InspectGit(ctx, bin); v.Repo != "" || v.Error == "" {
 		t.Fatal(v)
 	}
 	if time.Since(start) > time.Second {
@@ -85,7 +86,7 @@ func TestWorkspaceMissingGitTimeoutAndWorkerClose(t *testing.T) {
 func TestSidebarWorkspaceLongUnicodePathsAndClick(t *testing.T) {
 	b := newSidebar()
 	path := "/long/" + strings.Repeat("研究/", 30) + "project"
-	b.workspace = workspaceInfo{cwd: path, repo: "/long/repository", branch: "research"}
+	b.workspace = workspace.GitInfo{Cwd: path, Repo: "/long/repository", Branch: "research"}
 	s := tcell.NewSimulationScreen("UTF-8")
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestSidebarWorkspaceLongUnicodePathsAndClick(t *testing.T) {
 		t.Fatal(clipped)
 	}
 	consumed, action := b.mouse(tcell.NewEventMouse(b.left+3, 1, tcell.Button1, 0))
-	if !consumed || !action.workspace || !strings.Contains(b.workspace.detail(), path) {
+	if !consumed || !action.workspace || !strings.Contains(b.workspace.Detail(), path) {
 		t.Fatal("full workspace detail unavailable")
 	}
 	b.mouse(tcell.NewEventMouse(b.left+3, b.sections[1].top, tcell.Button1, 0))

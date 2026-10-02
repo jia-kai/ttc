@@ -46,7 +46,10 @@ specifications for remaining features. Linux hosts are the only supported platfo
   Deeper AGENTS.md files remain scoped to their directories; the agent reads
   them before affected edits. Skills load on demand by exact catalog name.
 - Serialize parent and child file-tool mutations through one queue and shared
-  main-session undo history. Reject conflicting restoration. Shell changes are
+  main-session undo history within each runtime. Separate instances can share
+  workspaces/data without lifetime locks; workspace conflicts are the user's
+  responsibility. Reject conflicting restoration. Do not repair interrupted work.
+  Shell changes are
   outside undo/redo; do not add shell checkpoints. Tool records use versioned
   codecs and portable Markdown presentation, without persisting live handles.
 - Give one-time experiments a private per-user scratch directory under

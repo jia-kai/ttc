@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"scicode/internal/workspace"
 	"strings"
 	"testing"
 
@@ -101,7 +102,7 @@ func TestSidebarTinyPanes(t *testing.T) {
 		for _, height := range []int{1, 2, 3, 8, 20} {
 			s.SetSize(width, height)
 			b := newSidebar()
-			b.workspace = workspaceInfo{cwd: "/research/project", repo: "/research", branch: "main"}
+			b.workspace = workspace.GitInfo{Cwd: "/research/project", Repo: "/research", Branch: "main"}
 			b.overlay = true
 			b.bounds(width, height, false)
 			b.draw(s)

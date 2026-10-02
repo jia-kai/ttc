@@ -91,7 +91,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var users int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND kind='message' AND role='user'", id).Scan(&users); err != nil || users != 2 {
+	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND kind='message' AND role='user'", r.Current()).Scan(&users); err != nil || users != 2 {
 		t.Fatal("first message duplicated", users, err)
 	}
 }

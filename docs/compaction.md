@@ -77,5 +77,6 @@ input and interactions. Explicit session changes/exit cancel them.
   Start or load another usable session; reloading never clears failure. Close a
   failed child without invalidating main context.
 - Failed handoff never switches/freezes main history. Unused archives are disposable
-  with their lineage. Restart interrupts unfinished work and never revives jobs,
-  timers or pending clicks.
+  with their lineage. Startup leaves saved execution records untouched. Manual
+  loading copies balanced context without repairing work or restoring jobs, timers
+  or pending clicks.

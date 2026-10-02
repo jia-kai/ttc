@@ -3,10 +3,11 @@ package tool
 import (
 	"context"
 	"errors"
+	"time"
+
 	"scicode/internal/jobs"
 	"scicode/internal/prompts"
 	"scicode/internal/workspace"
-	"time"
 )
 
 type shellArgs struct {
@@ -44,6 +45,9 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		if a.Timeout != nil && (*a.Timeout < 0 || *a.Timeout > 86400000) {
 			return errors.New("timeout_ms must be 0–86400000")
 		}
+		if !a.Background && a.Timeout != nil && *a.Timeout == 0 {
+			return errors.New("foreground timeout_ms must be 1–86400000; use background=true for commands without a timeout")
+		}
 		if a.Protocol != "" && a.Protocol != "lsp" {
 			return errors.New("protocol must be lsp for a language server; omit it for an ordinary command")
 		}
@@ -56,21 +60,21 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		if a.Workdir != "" {
 			dir = w.Path(a.Workdir)
 		}
-		ms := 120000
+		timeout := jobs.ForegroundTimeout
 		if a.Background {
-			ms = 0
+			timeout = 0
 		}
 		if a.Timeout != nil {
-			ms = *a.Timeout
+			timeout = time.Duration(*a.Timeout) * time.Millisecond
 		}
 		// Retain the preference for a foreground command promoted by the user.
 		wake := a.Wake == nil || *a.Wake
 		var id string
 		var e error
 		if a.Protocol == "lsp" {
-			id, e = m.StartLSP(x.Actor, a.Command, dir, time.Duration(ms)*time.Millisecond, a.Strict == nil || *a.Strict, wake)
+			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake)
 		} else {
-			id, e = m.Start(x.Actor, a.Command, dir, time.Duration(ms)*time.Millisecond, a.Strict == nil || *a.Strict, a.Background, wake)
+			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, wake)
 		}
 		if e != nil {
 			return nil, jobToolError(e)

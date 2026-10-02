@@ -150,7 +150,7 @@ func BenchmarkPromptSearch(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.query.set([]string{"research", "experiment", "no-matching-token", "α"}[i%4])
+		m.query.set([]string{"research", "experiment α", "α research measurement", "research no-matching-token", "α beta"}[i%5])
 		m.filter()
 	}
 	b.ReportMetric(float64(len(h.entries)), "prompts")

@@ -29,7 +29,6 @@ func toolFixture(t *testing.T) (*Registry, *workspace.Manager, Execution, int64)
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { w.Close() })
 	selection := provider.Selection{Model: provider.ScriptModel()}
 	id := history.NewID("session")
 	turn, _, e := s.StartSession(id, w.Root, selection, provider.Message{Role: "user", Content: "Exercise file tools"})

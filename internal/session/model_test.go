@@ -260,11 +260,11 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 	if _, err := r.Command("/load " + savedID); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := r.Store.Session(savedID)
+	loaded, err := r.Store.Session(r.Current())
 	if err != nil || loaded.Model.Model.ID != normal.Model.ID || r.CurrentSelection().Model.ID != normal.Model.ID {
 		t.Fatal(loaded, r.CurrentSelection(), err)
 	}
-	entries, err := r.Store.Branch(savedID, 0)
+	entries, err := r.Store.Branch(r.Current(), 0)
 	if err != nil || len(entries) < 2 || !strings.Contains(r.Store.Label(entries[len(entries)-1]), "Model switched") {
 		t.Fatal(entries, err)
 	}

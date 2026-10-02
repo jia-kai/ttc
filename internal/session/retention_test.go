@@ -74,7 +74,7 @@ func TestRetentionStartupProtectsLoadedLineageAndStops(t *testing.T) {
 func TestRetentionCleanupErrorsAreVisibleAndShutdownJoins(t *testing.T) {
 	r, events, _ := retentionFixture(t)
 	out := t.TempDir()
-	if err := os.Symlink(out, filepath.Join(r.Store.Root, ".retention")); err != nil {
+	if err := os.Symlink(out, filepath.Join(r.Store.Root, "lineages")); err != nil {
 		t.Fatal(err)
 	}
 	stop := r.startRetention()

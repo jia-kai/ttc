@@ -54,6 +54,12 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 		return v, err
 	}
 	err = s.transact(func(tx *sql.Tx) error {
+		// Only compaction continues live event ownership. Manual loads have no
+		// predecessor and must never acknowledge their source runtime's events.
+		const ancestors = `WITH RECURSIVE ancestors(id,predecessor_id) AS (
+			SELECT id,predecessor_id FROM sessions WHERE id=? UNION ALL
+			SELECT s.id,s.predecessor_id FROM sessions s JOIN ancestors a ON s.id=a.predecessor_id
+		) `
 		var invalid string
 		if err := tx.QueryRow("SELECT coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?", session).Scan(&invalid); err != nil {
 			return err
@@ -70,7 +76,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 				return errors.New("notification is not a committed event at request cutoff")
 			}
 			var source, deliveredRequest sql.NullInt64
-			if err := tx.QueryRow("SELECT e.source_id,e.delivered_request_id FROM entries e JOIN sessions original ON original.id=e.session_id JOIN sessions active ON active.id=? WHERE e.id=? AND original.lineage_id=active.lineage_id", session, m.EventSeq).Scan(&source, &deliveredRequest); err != nil {
+			if err := tx.QueryRow(ancestors+"SELECT source_id,delivered_request_id FROM entries WHERE id=? AND session_id IN (SELECT id FROM ancestors)", session, m.EventSeq).Scan(&source, &deliveredRequest); err != nil {
 				return fmt.Errorf("notification source: %w", err)
 			}
 			if source.Valid || deliveredRequest.Valid {
@@ -173,8 +179,8 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 			}
 			delivered = append(delivered, result.Finish)
 		}
-		// A source event is delivered once per lineage, including foreground
-		// results still present in later request history. Copies retain source ID.
+		// A source event is delivered once within its runtime's compaction chain,
+		// including foreground results still present in later request history.
 		first := make([]int64, 0, len(delivered))
 		seen := map[int64]bool{}
 		for _, event := range delivered {
@@ -182,7 +188,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 				continue
 			}
 			seen[event] = true
-			result, err := tx.Exec("UPDATE entries SET delivered_request_id=? WHERE id=? AND source_id IS NULL AND delivered_request_id IS NULL AND session_id IN (SELECT id FROM sessions WHERE lineage_id=(SELECT lineage_id FROM sessions WHERE id=?))", v.RequestID, event, session)
+			result, err := tx.Exec(ancestors+"UPDATE entries SET delivered_request_id=? WHERE id=? AND source_id IS NULL AND delivered_request_id IS NULL AND session_id IN (SELECT id FROM ancestors)", session, v.RequestID, event)
 			if err != nil {
 				return err
 			}

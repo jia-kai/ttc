@@ -101,13 +101,13 @@ def main():
                 raise RuntimeError('Kitty did not create its control socket')
             time.sleep(0.05)
 
-        def wait(needle, timeout=15):
+        def wait(needle, timeout=15, present=True):
             nonlocal last_text
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 last_text = remote('get-text', '--extent', 'screen')
                 (root / 'latest-screen.txt').write_text(last_text)
-                if needle in last_text:
+                if (needle in last_text) == present:
                     return last_text
                 if terminal.poll() is not None:
                     raise RuntimeError('Kitty closed while waiting for ' + needle)
@@ -155,6 +155,17 @@ def main():
             wait('Turn complete')
             wait('\U0010eeee', timeout=20)
             capture('markdown-math')
+            key('ctrl+r')
+            wait('Prompt history search')
+            send('demo run')
+            wait('Matches 1')
+            capture('prompt-search-highlight')
+            styled = remote('get-text', '--extent', 'screen', '--ansi')
+            (root / 'prompt-search-highlight.ansi').write_text(styled)
+            assert '\x1b[4' in styled or ';4' in styled, 'search matches are not underlined'
+            key('esc')
+            wait('Prompt history search', present=False)
+            wait('Turn complete')
             for _ in range(30):
                 key('ctrl+u')
                 last_text = remote('get-text', '--extent', 'screen')
@@ -176,10 +187,11 @@ def main():
             wait('h/j/k/l pan')
             capture('image-preview')
             key('esc')
+            wait('h/j/k/l pan', present=False)
             key('ctrl+c')
             terminal.wait(timeout=10)
             assert terminal.returncode == 0
-            print(f'PASS: offline Kitty palette/image/math; tmux={args.tmux}: {root}')
+            print(f'PASS: offline Kitty palette/image/math and highlighted multi-term search; tmux={args.tmux}: {root}')
             return
         pending_text = wait('awaiting read ...')
         capture('awaiting-tool')

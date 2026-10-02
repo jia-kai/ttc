@@ -20,6 +20,7 @@ type Window struct {
 	Scroll              int
 	System              bool   // Distinct color for inspected system prompts/runtime messages.
 	Markdown            bool   // Render portable Markdown for messages, tool details and command results.
+	Styled              bool   // Trusted frontend SGR; source text must be sanitized before styling.
 	CallID              string // Transient tool-card identity; cleared when its final record arrives.
 	JobID               string // Live inspector capture; never set when replaying stored history.
 	Detail              string // Base transient detail, without the expanded capture tail.
@@ -69,6 +70,8 @@ func (w *Window) Lines(width, height int) []string {
 			} else {
 				w.cachedLines = styledRows(strings.Trim(text, "\n"))
 			}
+		} else if w.Styled {
+			w.cachedLines = wrapStyled(w.Text, width)
 		} else {
 			w.cachedLines = wrap(render.Clean(w.Text), width)
 		}

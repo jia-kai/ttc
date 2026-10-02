@@ -14,14 +14,16 @@ import (
 	"scicode/internal/scratch"
 	"scicode/internal/skills"
 	"scicode/internal/tool"
+	"scicode/internal/workspace"
 )
 
 // contextCursor belongs to one actor, advances after successful request admission,
 // and survives compaction. Explicit session changes discard it with live state.
 type contextCursor struct {
 	jobs, timers map[string]string
-	project      string // Exact JSON of the last supplied project context.
-	snapshot     string // Stable runtime state, excluding one-shot changes and project updates.
+	project      string            // Exact JSON of the last supplied project context.
+	snapshot     string            // Stable runtime state, excluding one-shot changes and project updates.
+	git          workspace.GitInfo // Git metadata sampled on this actor's first request.
 }
 type projectInstruction struct {
 	Path    string `json:"path"`
@@ -46,7 +48,9 @@ type runtimeContext struct {
 	Type       string           `json:"type"`
 	Actor      string           `json:"actor"`
 	Changes    []stateChange    `json:"changes_since_previous_request"`
-	Cwd        string           `json:"working_directory"`
+	Cwd        string           `json:"cwd"`
+	IsRepo     bool             `json:"is_repo"`
+	Branch     string           `json:"branch,omitempty"` // "detached" when HEAD has no branch.
 	Scratch    string           `json:"scratch_directory"`
 	Date       string           `json:"date_utc"`
 	Model      string           `json:"model"`
@@ -92,10 +96,18 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 		return nil, previous, err
 	}
 	next := contextCursor{jobs: map[string]string{}, timers: map[string]string{}, project: string(projectJSON)}
+	next.git = previous.git
+	if previous.snapshot == "" {
+		next.git = workspace.InspectGit(ctx, r.Workspace.Root)
+		if err := ctx.Err(); err != nil {
+			return nil, previous, err
+		}
+	}
 	r.images.mu.Lock()
 	clicks := r.images.enabled
 	r.images.mu.Unlock()
 	v := runtimeContext{Type: "runtime_context", Actor: actor, Changes: []stateChange{}, Cwd: r.Workspace.Root, Scratch: path, Date: time.Now().UTC().Format("2006-01-02"), Model: selection.Provider + "/" + selection.Model.ID + "/" + selection.Variant, ImageInput: selection.Model.Images, ImageClick: clicks, Children: r.committedChildren(actor), Jobs: []jobs.Snapshot{}, Timers: []TimerView{}}
+	v.IsRepo, v.Branch = next.git.Repo != "", next.git.Branch
 	if next.project != previous.project {
 		v.Project = &project
 	}

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"scicode/internal/filelock"
 	"scicode/internal/history"
 	"scicode/internal/provider"
 )
@@ -110,9 +111,6 @@ func (a *Adapter) lockAuth(ctx context.Context) error {
 
 func (a *Adapter) unlockAuth() { <-a.authGate }
 func (a *Adapter) load() error {
-	if a.credentials != nil {
-		return nil
-	}
 	b, e := readCredentials(a.CredentialPath, true)
 	if e != nil {
 		if errors.Is(e, os.ErrNotExist) {
@@ -180,7 +178,21 @@ func (a *Adapter) ImportCodex(path string) error {
 	if source.APIKey != nil && *source.APIKey != "" {
 		return errors.New("API-key import is unsupported")
 	}
-	return a.save(Credentials{source.AuthMode, source.Tokens, source.LastRefresh})
+	return a.saveLocked(context.Background(), Credentials{source.AuthMode, source.Tokens, source.LastRefresh})
+}
+
+// saveLocked coordinates only the credential replacement, never device authorization.
+// The caller owns authGate.
+func (a *Adapter) saveLocked(ctx context.Context, c Credentials) error {
+	if err := history.PrivateDir(filepath.Dir(a.CredentialPath)); err != nil {
+		return err
+	}
+	lock, err := filelock.Acquire(ctx, a.CredentialPath+".lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return a.save(c)
 }
 func expiry(token string) time.Time {
 	parts := strings.Split(token, ".")
@@ -209,6 +221,20 @@ func (a *Adapter) auth(ctx context.Context) (Tokens, error) {
 	}
 	c := *a.credentials
 	exp := expiry(c.Tokens.Access)
+	if exp.IsZero() || time.Now().Add(time.Minute).Before(exp) {
+		return c.Tokens, nil
+	}
+	lock, err := filelock.Acquire(ctx, a.CredentialPath+".lock")
+	if err != nil {
+		return Tokens{}, err
+	}
+	defer lock.Close()
+	// Another instance may already have refreshed or replaced the login.
+	if err := a.load(); err != nil {
+		return Tokens{}, err
+	}
+	c = *a.credentials
+	exp = expiry(c.Tokens.Access)
 	if exp.IsZero() || time.Now().Add(time.Minute).Before(exp) {
 		return c.Tokens, nil
 	}
@@ -377,7 +403,7 @@ func (a *Adapter) Login(ctx context.Context, ui provider.LoginUI) error {
 		if account == "" {
 			account = accountID(tokens.Access)
 		}
-		if e = a.save(Credentials{AuthMode: "chatgpt", Tokens: Tokens{tokens.ID, tokens.Access, tokens.Refresh, account}, LastRefresh: time.Now().UTC()}); e != nil {
+		if e = a.saveLocked(ctx, Credentials{AuthMode: "chatgpt", Tokens: Tokens{tokens.ID, tokens.Access, tokens.Refresh, account}, LastRefresh: time.Now().UTC()}); e != nil {
 			return e
 		}
 		_, e = ui.Present(ctx, provider.LoginStep{Kind: "complete", Message: "Subscription login complete"})

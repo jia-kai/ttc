@@ -176,7 +176,8 @@ not new LLM arguments. Session undo/redo calls the same service directly.
 Persist every applied path, even when a patch fails partway. Redo restores
 recorded bytes and metadata without reapplying a potentially changed patch.
 Outside-workspace edits remain allowed and are explicitly non-undoable.
-See [design.md](design.md) for conflict checks and crash recovery.
+See [design.md](design.md) for local edit ordering and restoration conflict checks.
+Filesystem effects and history commits are independent; TTC does not repair crashes.
 
 ## Execution and jobs
 
@@ -189,7 +190,9 @@ See [design.md](design.md) for conflict checks and crash recovery.
   handle expected failures with conditionals or `||` when appropriate. The
   original supplied command remains the job label.
   `workdir` defaults to the session directory. Foreground `timeout_ms`
-  defaults to 120000; background has no timeout by default; `0` disables it.
+  defaults to 20000 and cannot be disabled; explicit values are 1–86400000 ms.
+  Background has no timeout by default; `0` also means no timeout in background.
+  A positive background timeout is an optional explicit deadline.
   `background` defaults to false and `wake_on_exit` to true. Commands are
   noninteractive with no PTY; ordinary shell stdin is closed. LSP jobs reserve
   writable stdin for the protocol manager. This tool does not support

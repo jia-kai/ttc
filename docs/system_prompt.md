@@ -28,7 +28,9 @@ Old snapshots stay immutable; the latest snapshot owns current live state.
 | Field                            | Meaning                                                       |
 | -------------------------------- | ------------------------------------------------------------- |
 | `actor`                          | Main or isolated child actor ID                               |
-| `working_directory`              | Workspace path                                                |
+| `cwd`                            | Workspace path                                                |
+| `is_repo`                        | Whether optional Git inspection found a repository            |
+| `branch`                         | Current branch, or `detached`; absent without Git metadata     |
 | `scratch_directory`              | Verified private scratch path                                 |
 | `date_utc`                       | Current UTC date                                              |
 | `model`                          | Frozen provider/model/variant for this request                 |
@@ -41,6 +43,9 @@ Old snapshots stay immutable; the latest snapshot owns current live state.
 
 - Each actor advances its cursor only after successful admission. Initial,
   reloaded and compacted contexts receive a fresh snapshot.
+- Git metadata is sampled with a two-second deadline on the actor's first
+  request. Git is optional; later boundaries reuse that sample until activation
+  or compaction forces a fresh snapshot.
 - An unchanged boundary adds no snapshot or UI row; request recording and
   pending message delivery still proceed.
 - Empty live arrays mean no current work. A completed job reports its outcome,

@@ -70,6 +70,7 @@ python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
 python3 tests/pty_input.py          # offline editor/completion/export, Ctrl+J and /rename
 python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
+python3 tests/pty_parallel.py       # shared data/workspace, independent loads, no recovery
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery
 python3 tests/pty_subagent.py       # mock HTTP: disposable child, low variant, direct answer
 python3 tests/pty_subagent.py --offline # socket-free foreground disposal and UTF-8 answer limit
@@ -99,7 +100,7 @@ sudo pacman -S --needed kitty xorg-server-xvfb xorg-xauth mesa noto-fonts noto-f
 make kitty-test                    # builds and captures real Kitty under Xvfb
 python3 tests/kitty_visual.py      # reuse the current ./ttc binary
 python3 tests/kitty_visual.py --tmux # private tmux; Kitty identity cleared
-python3 tests/kitty_visual.py --offline --tmux # short palette/image/math fixture
+python3 tests/kitty_visual.py --offline --tmux # palette/image/math and highlighted search
 python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
 python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
@@ -117,6 +118,7 @@ the bordered colored system prompt viewer at both ends. It prints its artifact
 directory under `/tmp/ttc/<uid>/kitty-visual-*`; logs and exception context
 are saved there on failure. The copied demo project/history has its own private
 `demo-*` directory recorded in `demo.json`.
+The offline fixture also captures multi-term Ctrl-R matching and underlined matches.
 
 Pressure tests cover 100,000 conversation messages, huge chunked messages and
 more than 128 formulas without idle rerendering. Regression tests cover a pending
@@ -147,10 +149,16 @@ counters from zero, preserve model provenance, and avoid double-counting native
 replay in estimates.
 
 Regression tests round-trip native tool arguments through SQLite, including
-formatted JSON, HTML text and large integers. Schema reset tests verify removal
-of old history/auth/assets, unchanged process-lock inode, lock exclusion and
+formatted JSON, HTML text and large integers. Schema tests reject incompatible
+databases without deleting history or credentials, and check
 external symlink target preservation. Fullscreen tests verify mouse disable and
 restoration for every exit path, full-column rendering, and keyboard questions.
+
+`python3 tests/pty_parallel.py` runs simultaneous instances against one data root
+and workspace, checks independent manual loads, and verifies that restart leaves
+unfinished source records unchanged. `pty_history.py` checks multi-term Ctrl-R
+recall. Search benchmarks use bounded synthetic prompts by default; set
+`TTC_PROMPT_BENCH_DATA` to a private JSON string array to use local prompts.
 
 The offline `python3 tests/pty_input.py` regression also runs a reproducible
 file/shell fixture, launches `/btw explain result.py` while its foreground shell
