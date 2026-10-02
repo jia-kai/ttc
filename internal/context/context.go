@@ -12,20 +12,20 @@ import (
 	"scicode/internal/provider"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
 // Estimate conservatively approximates text/wire tokens from UTF-8 bytes, not reported usage.
 func Estimate(text string) int { return (len(text) + 2) / 3 }
 
-// Tokens includes messages, calls, and provider-native replay payloads; image estimates reserve 4096 tokens each.
+// Tokens includes messages, calls and adapter-estimated native replay occupancy.
+// Unannotated replay uses a conservative transport estimate; images reserve 4096 tokens each.
 func Tokens(messages []provider.Message) int {
 	n := 0
 	for _, m := range messages {
 		if m.State != nil {
-			for _, item := range m.State.Items {
-				n += Estimate(string(item))
-			}
+			n += provider.ReplayTokens(m.State)
 			continue
 		}
 		n += 16 + Estimate(m.Content)
@@ -161,7 +161,24 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 	if e != nil {
 		return Attachment{}, e
 	}
-	st, e := os.Stat(path)
+	// Open first: a concurrent replacement with a FIFO must not block before
+	// cancellation is installed. Explicit file symlinks remain supported.
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if e != nil {
+		return Attachment{}, e
+	}
+	defer f.Close()
+	return snapshotOpened(ctx, path, f, images)
+}
+
+// snapshotOpened reads only the caller-owned descriptor, never reopening path.
+func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, images bool) (Attachment, error) {
+	stop := stdcontext.AfterFunc(ctx, func() { _ = f.Close() })
+	defer stop()
+	st, e := f.Stat()
+	if err := ctx.Err(); err != nil {
+		return Attachment{}, err
+	}
 	if e != nil {
 		return Attachment{}, e
 	}
@@ -169,21 +186,19 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 	if st.IsDir() {
 		a.Kind = "directory"
 		paths := []string{}
-		var walk func(string) error
-		walk = func(dir string) error {
+		var walk func(string, *os.File) error
+		walk = func(dir string, opened *os.File) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			f, err := os.Open(dir)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
 			for len(paths) < 500 {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				entries, err := f.ReadDir(min(128, 500-len(paths)))
+				entries, err := opened.ReadDir(min(128, 500-len(paths)))
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				for _, d := range entries {
 					p := filepath.Join(dir, d.Name())
 					rel, err := filepath.Rel(path, p)
@@ -192,7 +207,18 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 					}
 					paths = append(paths, rel)
 					if d.IsDir() && len(paths) < 500 {
-						if err := walk(p); err != nil {
+						// Resolve relative to the already-open directory so renamed
+						// ancestors cannot redirect traversal through a symlink.
+						fd, err := syscall.Openat(int(opened.Fd()), d.Name(), os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+						if err != nil {
+							return err
+						}
+						child := os.NewFile(uintptr(fd), p)
+						stop := stdcontext.AfterFunc(ctx, func() { _ = child.Close() })
+						err = walk(p, child)
+						stop()
+						_ = child.Close()
+						if err != nil {
 							return err
 						}
 					}
@@ -211,7 +237,7 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 			a.Truncated = true
 			return nil
 		}
-		e = walk(path)
+		e = walk(path, f)
 		if e != nil {
 			return a, e
 		}
@@ -225,13 +251,6 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 	if st.Size() > 8<<20 {
 		return a, errors.New("attachment exceeds 8 MiB")
 	}
-	f, e := os.Open(path)
-	if e != nil {
-		return a, e
-	}
-	defer f.Close()
-	stop := stdcontext.AfterFunc(ctx, func() { _ = f.Close() })
-	defer stop()
 	b, e := io.ReadAll(io.LimitReader(f, 8<<20+1))
 	if err := ctx.Err(); err != nil {
 		return a, err
@@ -277,6 +296,9 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 // Message combines submitted text and immutable attachments without silently dropping any.
 func Message(text string, attachments []Attachment) provider.Message {
 	m := provider.Message{Role: "user", Content: text}
+	if len(attachments) > 0 {
+		m.UserText = &text
+	}
 	for _, a := range attachments {
 		if a.Image != nil {
 			m.Images = append(m.Images, *a.Image)

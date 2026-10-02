@@ -144,7 +144,7 @@ func TestReloadRefreshesAgedInstructionsForNextRequest(t *testing.T) {
 }
 
 func TestTimerCancelNameSkipsRetiredSameName(t *testing.T) {
-	w := newWakeups(context.Background(), func(string) {})
+	w := newWakeups(context.Background(), func(wakeup) {})
 	defer w.close()
 	first, err := w.schedule("check", "old", time.Now().Add(time.Hour), 0)
 	if err != nil {

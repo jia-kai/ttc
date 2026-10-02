@@ -34,10 +34,11 @@ func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {
 
 func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	decode := func(m provider.Message) runtimeContext {
+	seedRuntime(t, r, "Inspect runtime state")
+	decode := func(m *provider.Message) runtimeContext {
 		t.Helper()
 		var v runtimeContext
-		if m.Role != "developer" || !m.Runtime {
+		if m == nil || m.Role != "developer" || !m.Runtime {
 			t.Fatal(m)
 		}
 		if err := json.Unmarshal([]byte(m.Content), &v); err != nil {
@@ -53,7 +54,7 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 		t.Fatal("missing initial project context")
 	}
 	m, cursor, err = r.runtimeContext(context.Background(), "main", r.selection, cursor)
-	if err != nil || decode(m).Project != nil || len(decode(m).Changes) != 0 {
+	if err != nil || m != nil {
 		t.Fatal(m, err)
 	}
 	if err = os.WriteFile(filepath.Join(r.Workspace.Root, "AGENTS.md"), []byte("Use precise units."), 0600); err != nil {
@@ -72,15 +73,15 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 		t.Fatal(v, err)
 	}
 	change := v.Changes[0]
-	if change.ID != id || change.To != "failed" || change.ExitCode == nil || *change.ExitCode != 7 || !strings.Contains(contextLabel(m), "1 failed") {
-		t.Fatal(change, contextLabel(m))
+	if change.ID != id || change.To != "failed" || change.ExitCode == nil || *change.ExitCode != 7 || !strings.Contains(contextLabel(*m), "1 failed") {
+		t.Fatal(change, contextLabel(*m))
 	}
 	child, _, err := r.runtimeContext(context.Background(), "child", r.selection, contextCursor{})
 	if err != nil || len(decode(child).Changes) != 0 {
 		t.Fatal(child, err)
 	}
 	m, _, err = r.runtimeContext(context.Background(), "main", r.selection, next)
-	if err != nil || len(decode(m).Changes) != 0 || decode(m).Project != nil {
+	if err != nil || m != nil {
 		t.Fatal(m, err)
 	}
 }
@@ -218,11 +219,14 @@ func TestInterruptedNativeCompletionResumesCanonicalHistory(t *testing.T) {
 
 func TestRepeatingTimerContextHighlightsFiring(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Observe timer")
 	// Model the supervisor's already-observed transition without a timing race.
 	r.timers.mu.Lock()
 	_, cancel := context.WithCancel(r.ctx)
 	r.timers.items["timer"] = &wakeup{ID: "timer", Name: "Repeated check", Status: "scheduled", Repeat: 60, Fired: 2, cancel: cancel}
+	vtimer := *r.timers.items["timer"]
 	r.timers.mu.Unlock()
+	r.publishTimer(vtimer)
 	m, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{timers: map[string]string{"timer": "scheduled/1"}})
 	var v runtimeContext
 	if err != nil || json.Unmarshal([]byte(m.Content), &v) != nil {
@@ -231,8 +235,8 @@ func TestRepeatingTimerContextHighlightsFiring(t *testing.T) {
 	if len(v.Changes) != 1 || v.Changes[0].To != "fired" || v.Changes[0].From != "scheduled" || v.Changes[0].FiredCount != 2 || len(v.Timers) != 1 {
 		t.Fatal(v)
 	}
-	if !strings.Contains(contextLabel(m), "1 fired") {
-		t.Fatal(contextLabel(m))
+	if !strings.Contains(contextLabel(*m), "1 fired") {
+		t.Fatal(contextLabel(*m))
 	}
 }
 
@@ -261,7 +265,7 @@ func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
 }
 
 func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
+	r, events := runtimeFixture(t, nil)
 	var requests []provider.Request
 	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
 		requests = append(requests, req)
@@ -282,9 +286,27 @@ func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 			t.Fatal("rewrote previous request context", old, next)
 		}
 	}
-	last := requests[1].Messages[len(requests[1].Messages)-1]
-	if last.Role != "developer" || !last.Runtime {
-		t.Fatal("missing current context", last)
+	contexts := 0
+	for _, message := range requests[1].Messages {
+		if message.Role == "developer" && message.Runtime {
+			contexts++
+		}
+	}
+	if contexts != 1 {
+		t.Fatal("unchanged tool boundary appended runtime context", contexts)
+	}
+	updates := 0
+	for len(events) > 0 {
+		event := <-events
+		if event.Kind == "runtime_context" {
+			updates++
+			if event.EntryID == 0 {
+				t.Fatal("empty context UI row", event)
+			}
+		}
+	}
+	if updates != 1 {
+		t.Fatal("unchanged snapshot generated UI update", updates)
 	}
 }
 

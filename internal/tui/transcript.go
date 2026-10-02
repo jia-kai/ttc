@@ -98,6 +98,11 @@ func (t *transcript) appendBlocks(owner int, v line) {
 			if k := strings.LastIndexByte(text[:n], '\n'); k > n/2 {
 				n = k + 1
 			}
+			if v.markdown && !v.brief {
+				if cut := render.MathChunkCut(text, n); cut > 0 {
+					n = cut
+				}
+			}
 		}
 		part := text[:n]
 		height := max(1, (len(part)+t.width-1)/t.width)
@@ -375,10 +380,23 @@ func (t *transcript) measure(i int) {
 		v.text = b.fence + "\n" + v.text
 	}
 	indent := 0
+	first := i == 0 || t.blocks[i-1].owner != b.owner
+	badge := ""
+	if first && v.subagentName != "" {
+		badge = render.SubagentBadge(v.actor, v.subagentName, max(1, t.width/2), true)
+	}
+	badgeWidth := 0
+	if badge != "" {
+		badgeWidth = ansi.StringWidth(badge) + 1
+	}
 	if v.speaker != "" {
 		indent = min(2, max(0, t.width-1))
 	}
-	b.rows = t.layout(v, t.width-indent)
+	bodyWidth := t.width - indent
+	if v.speaker == "" {
+		bodyWidth -= badgeWidth
+	}
+	b.rows = t.layout(v, max(1, bodyWidth))
 	if len(b.rows) == 0 {
 		b.rows = []displayRow{{text: ""}}
 	}
@@ -387,13 +405,19 @@ func (t *transcript) measure(i int) {
 		for row := range b.rows {
 			b.rows[row].text = strings.Repeat(" ", indent) + b.rows[row].text
 		}
-		if i == 0 || t.blocks[i-1].owner != b.owner {
-			label, err := render.TerminalBriefing("**"+render.Inline(v.speaker)+"**", t.width, true)
+		if first {
+			label, err := render.TerminalBriefing("**"+render.Inline(v.speaker)+"**", max(1, t.width-badgeWidth), true)
 			if err != nil {
 				label = render.Clean(v.speaker)
 			}
+			if badge != "" {
+				label = ansi.Truncate(badge+" "+label, max(1, t.width), "…")
+			}
 			b.rows = append([]displayRow{{text: label, styled: true}}, b.rows...)
 		}
+	} else if badge != "" {
+		b.rows[0].text = ansi.Truncate(badge+" "+b.rows[0].text, max(1, t.width), "…")
+		b.rows[0].styled = true
 	}
 	t.renders++
 	t.recent = append(t.recent, i)
@@ -409,6 +433,17 @@ func (t *transcript) measure(i int) {
 	b.height = len(b.rows)
 	t.addHeight(i, delta)
 }
+
+// pageDown resumes following when invoked at the bottom; ordinary wheel
+// scrolling still preserves a fixed reading position.
+func (t *transcript) pageDown(height int) {
+	if t.firstLine >= max(0, t.total-height) {
+		t.followTail = true
+		return
+	}
+	t.scroll(max(1, height/2), height)
+}
+
 func (t *transcript) scroll(delta, height int) {
 	t.firstLine = min(max(0, t.firstLine+delta), max(0, t.total-height))
 	t.followTail = false

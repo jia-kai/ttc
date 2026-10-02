@@ -76,3 +76,28 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 		}
 	}
 }
+
+func TestRetryActivityExcludesBackgroundNaming(t *testing.T) {
+	r, events := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Name this session")
+	for _, purpose := range []string{"coding", "compaction", "naming"} {
+		request, err := r.Store.StartRequest(r.Current(), "", "main", purpose, r.CurrentSelection())
+		if err != nil {
+			t.Fatal(err)
+		}
+		retry := provider.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}
+		if err := r.retryNotice("", "main", request, purpose, &retry); err != nil {
+			t.Fatal(err)
+		}
+		event := <-events
+		if event.Kind != "status" || (event.Retry != nil) != (purpose != "naming") {
+			t.Fatalf("purpose %s: %#v", purpose, event)
+		}
+		if event.Retry != nil {
+			retry.DelayMilliseconds = 7
+			if event.Retry.DelayMilliseconds != 1000 {
+				t.Fatal("retry UI metadata aliases provider-owned memory")
+			}
+		}
+	}
+}

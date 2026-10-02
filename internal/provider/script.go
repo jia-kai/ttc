@@ -21,6 +21,9 @@ type Script struct {
 	next      int
 }
 
+// EstimateReplay uses a conservative transport estimate for synthetic codecs.
+func (s *Script) EstimateReplay(m Message) int { return ReplayTokens(m.State) }
+
 // ScriptModel supplies a synthetic budget, never a claim about a real model.
 func ScriptModel() ModelSpec {
 	return ModelSpec{ID: "scripted", Name: "Offline scripted provider", Variants: []string{"none"}, DefaultVariant: "none", Budget: Budget{ContextLimit: 32768, MaxOutputTokens: 4096, OutputAllowance: 1024, EstimationMargin: 512, RecentTokensTarget: 4096, NextTurnInputReserve: 1024, SummaryOutputAllowance: 1024}, Revision: "test-v1"}

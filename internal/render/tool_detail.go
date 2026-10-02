@@ -30,6 +30,12 @@ func toolValues(raw json.RawMessage, name string) string {
 	path := ""
 	if object, ok := value.(map[string]any); ok {
 		path, _ = object["path"].(string)
+		if id, _ := object["job_id"].(string); id != "" && name == "" {
+			// The runtime expands named captures once, within its inspector cap.
+			// Omit the model's shorter duplicate excerpts from the base detail.
+			delete(object, "stdout")
+			delete(object, "stderr")
+		}
 		if name == "shell" {
 			if _, supplied := object["strict"]; !supplied {
 				object["strict"] = true
@@ -77,6 +83,9 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 			writeToolValue(out, fmt.Sprint(i+1), item, indent+"  ", path)
 		}
 	case string:
+		if key == "status" {
+			value = Status(value)
+		}
 		lang := ""
 		switch key {
 		case "command":

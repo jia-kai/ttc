@@ -134,6 +134,36 @@ func questionScript() []provider.ScriptResponse {
 	return []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"choice","prompt":"Choose a method?","recommended_option_id":"b","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]},{"id":"notes","prompt":"Add notes?"}]}`)}}}, {Text: "Done answering."}}
 }
 
+func TestQuestionArrivingDuringModelPickerOpensAfterPickerCloses(t *testing.T) {
+	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
+	u := newQuestionTestUI(t, p)
+	u.typeText("ask")
+	u.key(tcell.KeyEnter)
+	select {
+	case <-p.ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider did not start")
+	}
+	u.key(tcell.KeyCtrlX)
+	u.typeText("m")
+	u.wait(t, "Model family")
+	close(p.release)
+	select {
+	case <-u.questionEvents:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider did not ask its question")
+	}
+	// The event channel is ordered. A later status line visible to the left of
+	// the picker proves the question was handled while that picker was open.
+	u.runtime.Emit(session.Event{Kind: "status", Text: "REVIEW_BARRIER", SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.wait(t, "RE│")
+	u.key(tcell.KeyEscape)
+	u.wait(t, "Second (Recommended)")
+	if len(u.runtime.PendingQuestions()) != 1 {
+		t.Fatal("opening the deferred dialog changed pending state")
+	}
+}
+
 func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) {
 	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
@@ -176,7 +206,7 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 		t.Fatal("Ctrl+C did not exit")
 	}
 	messages, err := u.runtime.Store.Messages(u.runtime.Current())
-	if err != nil || len(messages) != 6 || !strings.Contains(messages[3].Content, "custom notes") {
+	if err != nil || len(messages) != 5 || !strings.Contains(messages[3].Content, "custom notes") {
 		t.Fatal(messages, err)
 	}
 }
@@ -198,7 +228,7 @@ func (p *concurrentQuestionProvider) Stream(ctx context.Context, req provider.Re
 	p.mu.Unlock()
 	if actor == "main" && step == 0 {
 		for _, id := range []string{"A", "B"} {
-			call := provider.ToolCall{ID: id, Name: "subagent", Arguments: []byte(`{"prompt":"` + id + `","label":"` + id + `","background":true,"wake_on_exit":false}`)}
+			call := provider.ToolCall{ID: id, Name: "subagent", Arguments: []byte(`{"prompt":"` + id + `","label":"` + id + `","background":true}`)}
 			if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
 				return err
 			}

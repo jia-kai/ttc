@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"scicode/internal/history"
@@ -13,37 +12,38 @@ import (
 )
 
 type wakeup struct {
-	ID      string `json:"wakeup_id"`
-	Name    string `json:"name"`
-	Message string `json:"message"`
-	Status  string `json:"status"`
-	NextAt  string `json:"next_at,omitempty"`
-	Repeat  int    `json:"repeat_seconds,omitempty"`
-	Fired   int    `json:"fired_count"`
-	Last    string `json:"last_result,omitempty"`
-	cancel  context.CancelFunc
-	queued  bool
+	ID             string `json:"wakeup_id"`
+	Name           string `json:"name"`
+	Message        string `json:"message"`
+	Status         string `json:"status"`
+	NextAt         string `json:"next_at,omitempty"`
+	Repeat         int    `json:"repeat_seconds,omitempty"`
+	Fired          int    `json:"fired_count"`
+	Last           string `json:"last_result,omitempty"`
+	cancel         context.CancelFunc
+	deliveredCount int // Last admitted firing; later firings remain pending.
 }
 type wakeups struct {
 	ctx    context.Context
 	mu     sync.Mutex
 	items  map[string]*wakeup
-	notify func(string)
+	notify func(wakeup)
 	wg     sync.WaitGroup
 	closed bool
 }
 
-func newWakeups(ctx context.Context, notify func(string)) *wakeups {
+func newWakeups(ctx context.Context, notify func(wakeup)) *wakeups {
 	return &wakeups{ctx: ctx, items: map[string]*wakeup{}, notify: notify}
 }
 func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wakeup, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return wakeup{}, errors.New("runtime ended")
 	}
 	for _, v := range w.items {
 		if v.Name == name && v.Status == "scheduled" {
+			w.mu.Unlock()
 			return wakeup{}, errors.New("wakeup name already active")
 		}
 	}
@@ -51,6 +51,9 @@ func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wake
 	v := &wakeup{ID: history.NewID("wake"), Name: name, Message: message, Status: "scheduled", NextAt: at.UTC().Format(time.RFC3339), Repeat: repeat, cancel: cancel}
 	w.items[v.ID] = v
 	w.wg.Add(1)
+	initial := *v
+	w.notify(initial)
+	w.mu.Unlock()
 	go func() {
 		defer w.wg.Done()
 		next := at
@@ -68,10 +71,6 @@ func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wake
 				return
 			}
 			v.Fired++
-			notify := !v.queued
-			if notify {
-				v.queued = true
-			}
 			if repeat == 0 {
 				v.Status = "fired"
 				v.NextAt = ""
@@ -79,17 +78,15 @@ func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wake
 				next = time.Now().Add(time.Duration(repeat) * time.Second)
 				v.NextAt = next.UTC().Format(time.RFC3339)
 			}
+			snapshot := *v
+			w.notify(snapshot)
 			w.mu.Unlock()
-			if notify {
-				b, _ := json.Marshal(map[string]any{"type": "wakeup", "wakeup_id": v.ID, "message": message})
-				w.notify(string(b))
-			}
 			if repeat == 0 {
 				return
 			}
 		}
 	}()
-	return *v, nil
+	return initial, nil
 }
 func (w *wakeups) list() []wakeup {
 	w.mu.Lock()
@@ -101,17 +98,20 @@ func (w *wakeups) list() []wakeup {
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
-func (w *wakeups) delivered(id string) {
+func (w *wakeups) deliveredThrough(id string, fired int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if v := w.items[id]; v != nil {
-		v.queued = false
-		v.Last = "delivered"
+		if fired > v.deliveredCount {
+			v.deliveredCount = fired
+		}
+		if v.deliveredCount >= v.Fired {
+			v.Last = "delivered"
+		}
 	}
 }
 func (w *wakeups) stop(id, name string) (wakeup, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	for _, v := range w.items {
 		if (id != "" && v.ID == id) || (name != "" && v.Name == name) {
 			if v.Status != "scheduled" {
@@ -120,9 +120,13 @@ func (w *wakeups) stop(id, name string) (wakeup, error) {
 			v.Status = "cancelled"
 			v.NextAt = ""
 			v.cancel()
-			return *v, nil
+			snapshot := *v
+			w.notify(snapshot)
+			w.mu.Unlock()
+			return snapshot, nil
 		}
 	}
+	w.mu.Unlock()
 	return wakeup{}, errors.New("not_found")
 }
 func (w *wakeups) close() {

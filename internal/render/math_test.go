@@ -39,3 +39,28 @@ func TestPlainMathKeepsTeX(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestMathChunkCutKeepsCodeAndUnsupportedFormulas(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		cut    int
+	}{
+		{"prefix `$x^2$` suffix", 10},
+		{"```tex\n$x^2$\n```\n", 10},
+		{`prefix \$x^2 suffix`, 11},
+		{"prefix $unclosed", 12},
+		{"prefix $" + strings.Repeat("x", 4097) + "$ suffix", 2000},
+	} {
+		if got := MathChunkCut(test.source, test.cut); got != test.cut {
+			t.Fatal("code or unsupported formula moved the cut", test.source[:min(40, len(test.source))], got, test.cut)
+		}
+	}
+	for _, expression := range []string{"$x^2$", "$$\nx^2\n$$", `\(x^2\)`, `\[x^2\]`} {
+		source := "prefix " + expression + " suffix"
+		for cut := len("prefix ") + 1; cut < len("prefix ")+len(expression); cut++ {
+			if got := MathChunkCut(source, cut); got != len("prefix ") {
+				t.Fatal("formula delimiter or body was split", expression, got, cut)
+			}
+		}
+	}
+}

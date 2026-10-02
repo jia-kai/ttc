@@ -63,6 +63,21 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 	assertComposerSubmission(t, u, "prefix A\n\tBsuffix")
 }
 
+func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
+	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Multiline accepted."}}})
+	u.typeText("first")
+	u.key(tcell.KeyCtrlJ)
+	u.typeText("second")
+	u.wait(t, "> first↵second")
+	var requests int
+	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
+		t.Fatal("newline submitted the draft", requests, err)
+	}
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn completed")
+	assertComposerSubmission(t, u, "first\nsecond")
+}
+
 func TestComposerPasteResetsModelChord(t *testing.T) {
 	u := newQuestionTestUI(t, &provider.Script{})
 	u.key(tcell.KeyCtrlX)
@@ -189,7 +204,7 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	s.SetSize(20, 10)
 	c := newComposer("é界x")
 	c.cursor = 2
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, false, time.Time{}, nil, provider.Selection{}); err != nil {
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, provider.Selection{}); err != nil {
 		t.Fatal(err)
 	}
 	x, y, visible := s.GetCursor()
@@ -199,7 +214,7 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	}
 	s.SetSize(6, 10)
 	c.set("abcdef")
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, false, time.Time{}, nil, provider.Selection{}); err != nil {
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, provider.Selection{}); err != nil {
 		t.Fatal(err)
 	}
 	x, y, visible = s.GetCursor()

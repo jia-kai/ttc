@@ -43,8 +43,12 @@ type completionMenu struct {
 
 var slashCommands = []completionItem{
 	{value: "/btw", description: "Parallel read-only side question"},
+	{value: "/background", description: "Move foreground shells to background"},
+	{value: "/editor", description: "Edit input in an external editor"},
+	{value: "/history", description: "Browse history branches"}, {value: "/branch", description: "Restore an explicit history entry"},
 	{value: "/help", description: "Keyboard and command guide"}, {value: "/new", description: "Start a session"}, {value: "/clear", description: "Start a session"},
 	{value: "/sessions", description: "List sessions"}, {value: "/load", description: "Open a session"}, {value: "/undo", description: "Undo file edits"}, {value: "/redo", description: "Redo file edits"},
+	{value: "/rename", description: "Rename the current session"},
 	{value: "/export", description: "Export Markdown and exact JSONL"}, {value: "/compact", description: "Summarize earlier context"}, {value: "/jobs", description: "Inspect jobs"}, {value: "/timers", description: "Inspect timers"},
 	{value: "/inspect", description: "Inspect an entry"}, {value: "/attach", description: "Snapshot an attachment"}, {value: "/model", description: "Choose model"}, {value: "/models", description: "Choose model"},
 	{value: "/questions", description: "Open pending questions"}, {value: "/answer", description: "Answer in plain mode"}, {value: "/login", description: "Device login"}, {value: "/quit", description: "Exit"},

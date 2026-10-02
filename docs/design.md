@@ -1,8 +1,7 @@
 # TTC v1 design
 
 TTC is a Go application for Linux hosts. This design defines the complete
-first-version target; README.md distinguishes the current implementation from
-remaining work. The target uses
+first-version target; README.md describes setup and current behavior. TTC uses
 one process, one active main session, and SQLite for history and reversible
 file edits. [Requirements](requirement.md), [tool contracts](tools.md),
 [compaction](compaction.md), and the [system prompt](system_prompt.md) define
@@ -84,9 +83,8 @@ running until the session ends. A pending question yields control to the loop.
 At most four child/asides tasks run concurrently; retain at most four coding
 child contexts, including idle ones. Children cannot spawn children.
 Parent and child requests can overlap; there is no fixed request-cycle limit. A child
-uses the same actor-scoped compaction algorithm as the parent in the target
-design. The current runtime only starts one-shot children; idle follow-ups and
-child compaction remain unimplemented.
+uses the same actor-scoped compaction algorithm as the parent. Idle follow-ups
+reuse isolated context with a new turn, job and immutable result.
 
 ## Event ordering and main timeline
 
@@ -97,7 +95,9 @@ admitted human user turn, not a notification-only inference turn. This is a
 small serialized writer/admission gate, not a
 plugin event bus. SQLite row IDs identify storage rows; event identity survives
 continuation copies. An event copied into another context keeps its source
-sequence and does not produce another notification. Timestamps never break ties.
+sequence and does not produce another notification. `Entry.EventSeq()` is the
+original `source_id`, or its SQLite `AUTOINCREMENT` ID for an original entry.
+Physical copy IDs identify the context projection; timestamps never break ties.
 Allocate sequences durably in the commit transaction; restart, branch selection
 and retention cleanup never reset the allocator. Sequence gaps are harmless.
 The lineage timeline uses event chronology. Actor context instead has an explicit
@@ -124,11 +124,17 @@ wait for a worker holding the workspace gate.
 The gate orders recorded file effects, not shell/external writes.
 
 Request admission freezes an event cutoff, selects eligible notifications in
-sequence order, and commits their delivered IDs with the request/input snapshot.
+sequence order, and commits their delivered IDs with bounded request metadata.
 Runtime-context job/timer state and usage counters are projections of the same
-committed cutoff; unpublished worker updates cannot alter the admitted snapshot.
+committed cutoff; unpublished worker updates cannot alter the frozen input.
+Each actor appends runtime context only when its state, project instructions or
+observed transitions change. Unchanged requests still record message count, cutoff and
+notification acknowledgments. Activation and compaction force fresh context;
+failed admission never advances the actor's cursor.
 Later events stay queued. Failure leaves delivery pending; retries of an admitted
-request reuse its snapshot. Delivery means inclusion in that persisted request,
+request reuse its immutable in-memory input. Exact messages stay in canonical
+history and archives; request rows store only versioned input counts, never a
+second full transcript. Delivery means recorded admission into a request,
 through a tool result or notification message, not successful inference or merely
 committing a tool record. A foreground finish is associated with its result
 and acknowledged at request admission; it cannot schedule a redundant wake.
@@ -154,9 +160,6 @@ main conversation and retains committed tails; child handoff changes only that
 actor's context cursor. Neither loses queued events nor replays delivered ones.
 Child-only cuts never make main history read-only or move its file undo floor.
 Never hold SQL transactions or mutation locks while waiting on UI/model consumers.
-The target sequencing/admission rules above are not yet fully implemented;
-the current writer, routing lock and mutation queue serialize narrower operations.
-
 ## Parallel tool execution
 
 Within each completed model response, read-only tools (`read`, `glob`, `grep`,
@@ -190,6 +193,7 @@ type Provider interface {
     Models(ctx context.Context) ([]ModelSpec, error)
     Login(ctx context.Context, ui LoginUI) error
     Stream(ctx context.Context, req Request, emit func(StreamEvent) error) error
+    EstimateReplay(message Message) int
 }
 
 // LoginUI renders a provider step and waits only when an answer is required.
@@ -254,19 +258,24 @@ settle. `/compact` shares the same archive and handoff path. A partial-turn cut
 retains its initiating user instruction and last two assistant messages with
 complete tool results. This mandatory suffix may exceed the desired recent
 target; capacity/headroom checks still apply. Pre-cut edits become the undo
-baseline. Cancellation or failed summary/fit/commit leaves the predecessor
-writable. Recheck committed tails under the routing lock before handoff. The
-frontend reloads without a popup and preserves input/live interactions.
-Children still fail on overflow in the current runtime; shared child compaction
-and a provider context-rejection retry remain unimplemented. Summaries use one
-request; oversized summary input fails explicitly, with no chunked algorithm.
+baseline. Recheck committed tails under the routing and workspace admission
+locks before handoff. The frontend reloads without a popup and preserves
+input/live interactions. Main and child compaction share retention, immutable
+Markdown/JSONL archives, summarization and fit checks; child cuts never change
+main history or undo ownership. Summaries use one request. Non-recoverable
+compaction errors disable the affected context; transient network/service errors
+and interruption leave it usable. There is no context-rejection retry, summary
+regeneration or context-aware tool truncation.
 
 Reserve and retention are different quantities. Estimate images/tool schemas
 and label estimates in the UI. `ReplayState` identifies its provider, underlying
 model ID and codec version. Its native items replace the canonical assistant
 message on the wire and are counted once. Adapters validate their codec against
 canonical text/calls, including assistant phase, original item IDs and encrypted
-reasoning. Stored JSON arguments are compared after marshaler normalization,
+reasoning. Adapters estimate native replay occupancy from model-visible content,
+excluding transport metadata. OpenAI encrypted reasoning uses a coarse decoded-size
+estimate. These transient estimates never alter replay bytes or reported usage.
+Stored JSON arguments are compared after marshaler normalization,
 which accounts for RawMessage whitespace/HTML escaping without converting
 numbers through floating point. Streamed argument completion snapshots remain
 exact string comparisons. `ContextFor` omits foreign provider/model state without changing saved
@@ -292,7 +301,8 @@ persistent retry queue. Output counts may include reasoning; do not double-count
 
 Endpoint-reported `Usage` is independent of context estimates. Optional cache-read, cache-write
 input and reasoning output counters preserve unavailable versus zero. Cached
-input is a subset of input; reasoning is a subset of output. The sidebar displays
+input is a subset of input; reasoning is a subset of output. Uncached input is
+total input minus cache reads. The sidebar displays
 the latest successful parent response with its frozen model; children, naming
 and compaction retain their usage in request records without replacing that
 view. Separate run totals sum every finished parent/child/aside/naming/compaction
@@ -305,8 +315,10 @@ activation clears them. Rates vary by producing model/tier; no dollar bill is
 computed from mixed-model token totals. Context estimates and reported counters carry producing request IDs.
 The sidebar uses reported input only for the matching request, with reserves
 and component estimates labeled separately; percent and numerical usage include
-reserves. A new request may estimate another model while the last reported counters
-remain visible. Explicit session changes clear both. No subscription allowance
+reserves. A compaction handoff immediately estimates the replacement context;
+the last reported response remains visible separately. A new request may estimate
+another model while the last reported counters remain visible. Explicit session
+changes clear both. No subscription allowance
 or cost is inferred from these counts.
 
 ## Inspectable request messages
@@ -332,29 +344,10 @@ Every tool implements serialization/deserialization for its validated call and
 historical execution record. SQLite stores a tool name, version, and encoded
 payload. Decoding never starts execution or restores a live handle.
 
-```go
-// Tool decodes the versioned call and historical record formats it owns.
-// Unknown versions and invalid fields fail explicitly.
-type Tool interface {
-    Definition() Definition
-    DecodeCall(version int, data []byte) (Call, error)
-    DecodeRecord(version int, data []byte) (Record, error)
-}
-
-// Call is validated input; Encode round-trips through DecodeCall.
-type Call interface {
-    Encode() (version int, data []byte, err error)
-    Run(ctx context.Context, exec Execution) (Record, error)
-}
-
-// Record is serializable history, including failures or a returned job ID.
-// Encode round-trips through DecodeRecord; it contains no live Go resources.
-type Record interface {
-    Encode() (version int, data []byte, err error)
-    ModelResult() (json.RawMessage, error)
-    Markdown() ToolMarkdown
-}
-```
+The [tool package](../internal/tool/tool.go) defines the codecs: `Tool` decodes
+validated `Call` inputs and concrete `Record` values. A call executes to a result
+or error; the dispatcher records exact arguments, model JSON and Markdown
+together. Unknown versions fail explicitly; records contain no live resources.
 
 The dispatcher supplies `Execution`: stable IDs, cancellation, and narrow tool
 services. A call intent commits before execution, followed by its exact result
@@ -366,7 +359,7 @@ gets one interrupted result, allowing well-formed canonical history without
 rerunning the call. A returned background job ID remains historical and cannot
 be used as a new live handle.
 
-`ToolMarkdown` supplies a bounded portable Markdown briefing, normally rendered as one
+`render.Markdown` supplies a bounded portable Markdown briefing, normally rendered as one
 clipped terminal row with highlighted commands/arguments and short labeled
 output excerpts. File mutations add up to six short applied diff lines; inspectors use paths,
 highlighted snapshot diffs, and labeled parameters/results. Exact JSON stays in
@@ -391,10 +384,9 @@ Live shell and child output uses 64 MiB per-call bounded rings, split into
 Pool pressure evicts the least recently written other ring. Default previews
 show at most 10 lines or 1 KiB combined; job_read pages a named stream and
 accepts EOF-relative byte/line cursors and bounded page grep.
- Persist the bounded final output or
-captured partial output in a tool-history artifact on normal completion/stop;
-a crash may lose output not yet recorded. Large persistent details and submitted
-attachments use private managed files. `/export <path>` freezes a committed
+Persist inspection tails of up to 8 KiB per stream on completion/stop; earlier
+output stays in live rings and is lost when the runtime ends. Large persistent
+details and submitted attachments use private managed files. `/export <path>` freezes a committed
 history cut and emits dense Markdown, an exact `.jsonl` sidecar, and a
 sibling assets directory with relative links; reject existing targets. User exports are outside retention cleanup.
 
@@ -430,6 +422,13 @@ while retaining later dependent edits. Redo restores recorded bytes, not tool
 execution, jobs, or child contexts. An interrupted/failed main turn is also an
 undo boundary once its work is stopped; its applied edits must remain undoable.
 
+Ctrl-X G projects the immutable tree onto admitted human inputs, excluding
+runtime notices and child/tool entries. Enter restores the checkpoint immediately
+before that input, matching `/undo`; Space inspects the input. Navigation follows
+the nearest human ancestor across hidden entries. Archived and blocked inputs
+remain inspectable. `/branch ID` still supports explicit balanced history cuts.
+After a branch selection, `/redo` restores the previously selected branch.
+
 All three file tools use the same mutation service for apply/undo/redo. Record
 before/after bytes, mode bits, absence, and newly created parent directories.
 Represent a move as delete plus create. Reject symlinks in mutation paths,
@@ -464,8 +463,7 @@ no generic workflow recovery engine is needed.
 ## Minimal SQLite schema
 
 Use a local SQLite database, foreign keys on every connection, WAL, full sync,
-and a bounded busy timeout. The current schema is version 2. A different version, or a nonempty
-unversioned schema, resets all data-root contents except the held process lock.
+and a bounded busy timeout. An incompatible or nonempty unversioned schema resets all data-root contents except the held process lock.
 Close SQLite first, retain the lock inode through initialization/recovery, and
 propagate deletion errors. This discards history, assets, caches and credentials;
 no migrations or preserved-data compatibility paths exist. Empty new databases
@@ -582,8 +580,8 @@ and a block/source-byte anchor distinguish scrolling from follow-tail. Only inte
 layout while retaining the anchor. Cached layout is bounded to a working set,
 and drawing and hit-testing use the same visible rows. Code fences continue over
 chunk boundaries. Source mapping is exact for plain wrapping and best effort for
-Markdown decorations; estimated totals are labeled. Scrolling to the bottom does
-not resume follow-tail until Esc or a new submission.
+Markdown decorations; estimated totals are labeled. Ctrl+D at the bottom resumes
+follow-tail, as do Esc or a new submission.
 
 The sidebar consumes a copied latest-parent-request token estimate and current
 job/timer metadata. It does not scan saved conversations on redraw or turn stored
@@ -610,11 +608,14 @@ Derived thumbnails and MathJax PNGs live in a separate render-cache directory,
 with a 256 MiB limit and 30-day idle pruning. Source snapshots are never cache
 entries. Keys include source identity, rendering parameters and math backend
 version/revision. One bounded, cancelable frontend worker owns image decoding and
-optional MathJax Node worker and librsvg subprocesses; unsupported formulas retain literal TeX.
+optional MathJax Node worker and librsvg subprocesses. Conversation and Markdown
+inspection windows share it; failures show warnings and labeled literal TeX.
 Only assets referenced by visible rows are queued or transmitted. Offscreen tasks
-are canceled and decoded images discarded; the viewport working set has a 32 MiB
-pixel-memory budget. Math initialization runs independently, then transfers one
-pre-warmed process to that worker; exit cancels/joins initialization and Node.
+are canceled and decoded thumbnails discarded. A memory LRU retains up to 128
+formula rasters, serving layout hits immediately; formulas and visible thumbnails
+share a 32 MiB pixel-memory budget. Math initialization runs independently, then
+transfers one pre-warmed process to that worker; exit cancels/joins initialization
+and Node.
 Each formula gets fresh parser/document state while the output engine/fonts stay
 warm. Base TeX, AMS and local macros are enabled; dynamic TeX loading is disabled.
 First initialization installs MathJax 4.1.3 via npm ci using an embedded exact
@@ -625,14 +626,24 @@ Ready packages need no npm/network. The executable contains no dependency archiv
 Cache keys include lock and backend hashes. Node hooks are removed and imports
 use absolute cached paths. Formula input is limited to 4096 bytes and each render
 to ten seconds. JSON-line replies/SVG/PNG captures are bounded to 32 MiB, stderr
-to 4 KiB and formula dimensions to 4096×1024 pixels. Interrupted or broken workers
-are joined; the next visible formula restarts one. Ordinary TeX errors keep it warm.
+to 4 KiB and logical formula dimensions to 4096×1024 pixels. Physical rasters use
+three pixels per logical pixel on each axis, capped at 16 megapixels. Interrupted
+or broken workers are joined; the next visible formula restarts one. Ordinary TeX
+errors keep it warm.
 
 The graphics module reuses x/ansi's chunked PNG encoder and explicit Unicode
-row/column/image-ID placeholders. Probe before tcell owns input, then serialize
-all graphics writes with tcell through one TTY wrapper. Virtual placements stay
-aligned with cell redraw/scroll. Only viewport assets remain in terminal storage;
+row/column/image-ID placeholders. Detect before tcell owns input, then serialize
+all graphics writes with tcell through one TTY wrapper. Placeholders keep exact
+RGB IDs even when SSH/tmux omits COLORTERM: positive detection
+adds RGB to a private terminfo copy. Explicit color disable suppresses graphics.
+Virtual placements follow cell redraw/scroll. Only viewport assets remain in terminal storage;
 shutdown deletes only TTC-owned image IDs. tmux transfers use DCS passthrough.
+Direct detection queries the terminal. In tmux, a bounded metadata command reads
+the protocol-reported client identity, effective pane passthrough and RGB feature.
+A Kitty client with passthrough on/all and RGB enabled needs no graphics reply.
+Missing identity, disabled passthrough, missing RGB and command failures produce
+specific warnings. tmux selects its current/recent client; heterogeneous attached
+clients are outside this detection guarantee.
 
 Image previews share the bordered window frame and map cell centers through
 fit, letterboxing, pan and zoom to source pixels. Selection and OK confirmation
@@ -671,7 +682,8 @@ selects a row. Both /load and CLI --session preflight a writable session's activ
 branch: a main coding instruction snapshot at least one hour old is reassembled
 from current instructions and recorded without inference or clearing redo.
 Refresh failure leaves the previous live runtime usable. New requests send the
-same current instructions; dynamic project and
+same current instructions; target archives are validated before canceling live
+work or changing target metadata. Dynamic project and
 live context is reread per request. Read-only history remains immutable.
 Presentation events carry the runtime generation, rejecting delayed events after
 same-session undo/redo as well as session changes. Metering refresh notices are

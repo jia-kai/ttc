@@ -239,9 +239,10 @@ turn, jobs and interactions; it never switches the main session or changes the
 shared undo baseline. Main compaction preserves all live children. See
 [compaction.md](compaction.md); chunked summaries are outside the requirements.
 
-Before each model request, append an inspectable developer runtime-context
-message containing live jobs/timers and changes, sampled at its committed event
-cutoff. Stable coding instructions stay separate. This snapshot cannot revive
+Before each model request, sample runtime state at its committed event cutoff.
+Append an inspectable developer runtime-context message only when state changes,
+including live jobs/timers and transitions. Activation and compaction force fresh
+context. Stable coding instructions stay separate. This snapshot cannot revive
 live work or establish a later job outcome. Delivered
 notifications are ordinary historical messages; undelivered ones are transient.
 
@@ -302,8 +303,8 @@ attachments, and archives together. Keep all predecessor data referenced by a
 retained continuation. Managed files are private and owned by one lineage;
 avoid sharing blobs across lineages in v1. Use a deletion marker for retrying
 interrupted cleanup. Credentials and workspace generation counters are not
-conversation data. Resolve an absolute data root: `$XDG_DATA_HOME/scicode`, or
-`~/.local/share/scicode` when `XDG_DATA_HOME` is unset or relative. Stay inside
+conversation data. Resolve an absolute data root: `$XDG_DATA_HOME/ttc`, or
+`~/.local/share/ttc` when `XDG_DATA_HOME` is unset or relative. Stay inside
 that root and never follow symlinks when deleting managed files.
 
 ## Session history and undo
@@ -312,8 +313,9 @@ SQLite stores an immutable history tree with a selected cursor. Entries include
 model-visible messages and UI/tool records; context projection includes only
 messages for the main agent. Child records identify their actor and are visible
 in the same chronological history, without entering the parent's model context.
-Ctrl+X G opens the tree; arrows navigate, Enter selects a restorable branch, and
-Esc closes it. Compaction predecessors are read-only.
+Ctrl+X G lists human inputs across branches; arrows navigate, Enter restores the
+checkpoint before the selected input, Space inspects it, and Esc closes the
+window. Compaction predecessors are read-only.
 
 Serialize all parent/child `edit`, `write`, and `patch` calls through one
 workspace mutation queue. Each change captures before/after bytes and modes,
@@ -409,7 +411,7 @@ A concise workspace header shows cwd (the configured workspace), the nearest
 containing Git root and current branch when available. Clip paths from the left,
 with full metadata on click. Refresh optional Git metadata outside the UI loop.
 Running calls show their current state, and live jobs/agents show concise titles;
-subagent labels are required nonblank single lines, capped at 64 characters.
+subagent labels are required single lines of 1–4 words, capped at 64 characters.
 An image-click request uses the mouse and explicit confirmation. The composer shows selected `@` attachments before
 submission.
 
@@ -422,7 +424,7 @@ use their own arrow navigation. Esc twice interrupts only with the composer
 focused; Esc in a dialog first returns or dismisses that dialog.
 Scrolling enters scroll mode and anchors the top visible message ID and text
 offset while new text streams in or the layout changes. Reaching the bottom
-with Ctrl+D does not resume auto-follow. The composer still accepts typing
+does not itself resume auto-follow; pressing Ctrl+D at the bottom does. The composer still accepts typing
 and commands. Sending with Enter or Alt+Enter exits scroll mode and resumes
 auto-follow. A slash command that submits a prompt does the same.
 Ctrl+X F toggles a full-screen conversation view and preserves the scroll
@@ -438,15 +440,17 @@ children, and timers. Clearing does not delete history or undo workspace edits.
 
 Ctrl+X is the leader. Ctrl+X E opens `$VISUAL` or `$EDITOR` for the current
 draft; saving returns text to the composer without sending it. Slash commands
-and Ctrl+P expose actions when a terminal does not pass a shortcut. The first
+and Ctrl+P expose actions when a terminal does not pass a shortcut. The command
+palette places the selected command in the composer; Enter then submits it.
+Canceling the palette preserves the draft. The first
 Esc closes the focused modal first. In an image preview, it cancels only that
 preview's live pending click; ordinary image dismissal emits no model message.
 In the composer, Esc closes the sidebar overlay, otherwise leaves fullscreen,
 otherwise returns a scrolled conversation to follow-tail. With no transient
 state it arms interruption; a second consecutive Esc interrupts foreground work.
 Any other key resets the Esc sequence.
-Alt+Enter targets the displayed session, including a child session
-when that child's view is open.
+Alt+Enter steers only the active main turn from the composer. Child inspectors
+remain read-only.
 
 | Action                   | Key / command            |
 | ------------------------ | ------------------------ |
@@ -468,6 +472,7 @@ when that child's view is open.
 | Clear to new session     | `/clear`                 |
 | Session history tree     | Ctrl+X G                 |
 | Full-screen history      | Ctrl+X F                 |
+| Sidebar overlay          | Ctrl+X S                 |
 | Undo / redo              | `/undo` / `/redo`        |
 | Session list and load    | Ctrl+X L or `/sessions`  |
 | Model picker             | Ctrl+X M or `/models`    |

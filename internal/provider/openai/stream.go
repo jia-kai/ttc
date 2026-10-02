@@ -278,7 +278,14 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 	for attempt := 0; maxAttempts == 0 || attempt < maxAttempts; attempt++ {
 		tokens, e := a.auth(ctx)
 		if e != nil {
-			return e
+			var transient *provider.TransientError
+			if !errors.As(e, &transient) || maxAttempts > 0 && attempt == maxAttempts-1 {
+				return e
+			}
+			if e = retryWait(ctx, emit, attempt, maxAttempts, transient.Error(), ""); e != nil {
+				return e
+			}
+			continue
 		}
 		h, e := http.NewRequestWithContext(ctx, "POST", a.BaseURL+"/responses", strings.NewReader(string(body)))
 		if e != nil {
@@ -306,7 +313,7 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 				return errors.New("subscription TLS certificate verification failed")
 			}
 			if maxAttempts > 0 && attempt == maxAttempts-1 {
-				return errors.New("subscription transport failed before response")
+				return &provider.TransientError{Err: errors.New("subscription transport failed before response")}
 			}
 			if e = retryWait(ctx, emit, attempt, maxAttempts, "transport failed before response", ""); e != nil {
 				return e
@@ -322,13 +329,20 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 				}
 				continue
 			}
-			return fmt.Errorf("subscription response HTTP %d", status)
+			err := fmt.Errorf("subscription response HTTP %d", status)
+			if status == 429 || status >= 500 && status <= 599 {
+				return &provider.TransientError{Err: err}
+			}
+			return err
 		}
+		callbackFailed := false
 		committed, err := parseStream(resp.Body, func(event provider.StreamEvent) error {
 			if req.NoTools && (event.Kind == "call" || event.Kind == "call_start") {
 				return errors.New("OpenAI returned a tool to a no-tools request")
 			}
-			return emit(event)
+			err := emit(event)
+			callbackFailed = callbackFailed || err != nil
+			return err
 		})
 		resp.Body.Close()
 		if err == nil {
@@ -337,10 +351,16 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if committed || maxAttempts > 0 && attempt == maxAttempts-1 || !errors.Is(err, errStreamLost) {
+		reason := "temporary stream failure before output"
+		if errors.Is(err, errStreamLost) && !callbackFailed {
+			err = &provider.TransientError{Err: err}
+			reason = "stream interrupted before output"
+		}
+		var transient *provider.TransientError
+		if callbackFailed || committed || maxAttempts > 0 && attempt == maxAttempts-1 || !errors.As(err, &transient) {
 			return err
 		}
-		if e = retryWait(ctx, emit, attempt, maxAttempts, "stream interrupted before output", ""); e != nil {
+		if e = retryWait(ctx, emit, attempt, maxAttempts, reason, ""); e != nil {
 			return e
 		}
 	}
@@ -567,7 +587,16 @@ func streamFailure(event wireEvent) error {
 		}
 		text += "…"
 	}
-	return fmt.Errorf("subscription stream terminated: %s", text)
+	err := fmt.Errorf("subscription stream terminated: %s", text)
+	code := event.Code
+	if event.Response.Error != nil {
+		code = event.Response.Error.Code
+	}
+	switch code {
+	case "server_error", "rate_limit_exceeded", "temporarily_unavailable":
+		return &provider.TransientError{Err: err}
+	}
+	return err
 }
 
 type functionItem struct {

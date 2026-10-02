@@ -12,6 +12,35 @@ import (
 // Math replaces inline/block formulas while preserving code, escaped delimiters,
 // and unmatched delimiters. The caller owns typesetting and fallback behavior.
 func Math(input string, replace func(string, bool) string) string {
+	return replaceMath(input, func(formula string, block bool, _, _ int) string {
+		return replace(formula, block)
+	})
+}
+
+// MathChunkCut moves a proposed source-byte cut before a formula crossing it.
+// It scans only the proposed prefix plus 4100 bytes, enough for the renderer's
+// 4096-byte formula limit and delimiters. Oversized/unmatched formulas keep the
+// original cut; source remains unchanged. The result never exceeds cut.
+func MathChunkCut(input string, cut int) int {
+	cut = min(max(0, cut), len(input))
+	if cut == 0 || cut == len(input) {
+		return cut
+	}
+	prefix := input[:min(len(input), cut+4100)]
+	if !strings.ContainsAny(prefix, "$\\") {
+		return cut
+	}
+	result := cut
+	replaceMath(prefix, func(formula string, _ bool, start, end int) string {
+		if len(formula) <= 4096 && start < cut && cut < end {
+			result = start
+		}
+		return ""
+	})
+	return result
+}
+
+func replaceMath(input string, replace func(string, bool, int, int) string) string {
 	var out strings.Builder
 	protected := mathCodeBlocks(input)
 	blockIndex := 0
@@ -63,7 +92,7 @@ func Math(input string, replace func(string, bool) string) string {
 				end += start
 				formula := input[start:end]
 				if block || (!strings.Contains(formula, "\n") && formula != "" && !unicode.IsSpace(rune(formula[len(formula)-1]))) {
-					out.WriteString(replace(formula, block))
+					out.WriteString(replace(formula, block, i, end+len(close)))
 					i = end + len(close)
 					continue
 				}

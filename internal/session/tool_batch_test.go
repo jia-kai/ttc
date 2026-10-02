@@ -294,7 +294,7 @@ func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
 	}}
 	calls := []provider.ToolCall{}
 	for i := range 6 {
-		calls = append(calls, provider.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"prompt":"hold","label":"held child","background":true,"wake_on_exit":false}`)})
+		calls = append(calls, provider.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"prompt":"hold","label":"held child","background":true}`)})
 	}
 	turn, ids := batchIntents(t, r, "main", calls)
 	records, err := r.runToolBatch(context.Background(), turn, "main", r.Tools, calls, ids, nil)
@@ -389,7 +389,14 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		})
+	contextUpdates := 0
 	r.Emit = func(e Event) {
+		if e.Kind == "runtime_context" {
+			contextUpdates++
+			if e.EntryID == 0 {
+				t.Error("empty child context UI row")
+			}
+		}
 		if e.Kind != "tool" {
 			return
 		}
@@ -413,7 +420,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 			}
 			return nil
 		}
-		if len(req.Messages) != 6 || req.Messages[3].CallID != "slow" || req.Messages[4].CallID != "fast" {
+		if len(req.Messages) != 5 || req.Messages[3].CallID != "slow" || req.Messages[4].CallID != "fast" {
 			return fmt.Errorf("child context lost call order: %+v", req.Messages)
 		}
 		return emit(provider.StreamEvent{Kind: "text", Text: "done"})
@@ -426,6 +433,9 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	defer cancel()
 	if err := r.runChild(ctx, childTask{actor: "main/child-test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
+	}
+	if contextUpdates != 1 {
+		t.Fatal("unchanged child snapshot generated UI updates", contextUpdates)
 	}
 	rows, err := r.Store.DB.Query("SELECT c.provider_call_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id ORDER BY r.entry_id")
 	if err != nil {

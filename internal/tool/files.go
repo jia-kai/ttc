@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"scicode/internal/workspace"
@@ -118,6 +119,13 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			if !a.All && count != 1 {
 				return nil, Fail("ambiguous_match", fmt.Sprintf("old_text matched %d times; include more surrounding context or set replace_all=true to replace every match", count))
 			}
+			// Matched old text cannot exceed the original file. Divide the
+			// remaining allowance so repeated replacements cannot overflow an
+			// integer or allocate an oversized result before Apply rejects it.
+			remaining := len(b) - count*len(a.Old)
+			if remaining > workspace.MaxFileBytes || len(*a.New) > (workspace.MaxFileBytes-remaining)/count {
+				return nil, Fail("file_too_large", "replacement exceeds the 8 MiB file limit; reduce new_text or replace fewer occurrences")
+			}
 			return []byte(strings.ReplaceAll(string(b), a.Old, *a.New)), nil
 		}}})
 		return presentFiles(ctx, map[string]any{"path": w.Path(a.Path), "replacements": count}, res.Changes), e
@@ -129,12 +137,30 @@ func readPage(ctx context.Context, path string, offset, limit int) (any, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	st, e := os.Stat(path)
+	// Decide the file kind from the opened descriptor: a build or shell can
+	// replace the path between stat and open, including with a blocking FIFO.
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
+	defer stop()
+	page, err := readOpenedPage(ctx, f, path, offset, limit)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return page, err
+}
+
+// readOpenedPage consumes the caller-owned descriptor, never reopening path.
+func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit int) (any, error) {
+	st, e := f.Stat()
 	if e != nil {
 		return nil, e
 	}
 	if st.IsDir() {
-		entries, e := readDirectoryEntries(ctx, path)
+		entries, e := readDirectoryEntries(ctx, f)
 		if e != nil {
 			return nil, e
 		}
@@ -167,11 +193,6 @@ func readPage(ctx context.Context, path string, offset, limit int) (any, error) 
 	if !st.Mode().IsRegular() {
 		return nil, Fail("unsupported_content", "not a regular file")
 	}
-	f, e := os.Open(path)
-	if e != nil {
-		return nil, e
-	}
-	defer f.Close()
 	reader := bufio.NewReader(f)
 	var content strings.Builder
 	line := 1
@@ -227,12 +248,7 @@ const directoryEntryLimit = 10000
 
 // readDirectoryEntries preserves sorted pagination without unbounded directory
 // allocation. Larger directories should be narrowed with ripgrep-backed glob.
-func readDirectoryEntries(ctx context.Context, path string) ([]fs.DirEntry, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+func readDirectoryEntries(ctx context.Context, f *os.File) ([]fs.DirEntry, error) {
 	var entries []fs.DirEntry
 	for {
 		if err := ctx.Err(); err != nil {

@@ -99,7 +99,7 @@ func TestExportPreservesImageMetadataBytes(t *testing.T) {
 	}
 }
 
-func TestChildToolLabelPreservesOpaqueActorInMarkdown(t *testing.T) {
+func TestChildToolLabelKeepsActorSeparateFromMarkdown(t *testing.T) {
 	s, v, turn, request := historyFixture(t)
 	actor := "main/child_a-_x_-bcdefghijk"
 	call := provider.ToolCall{ID: "provider_child", Name: "read", Arguments: []byte(`{"path":"x"}`)}
@@ -118,7 +118,7 @@ func TestChildToolLabelPreservesOpaqueActorInMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	label, err := render.TerminalBriefing(s.Label(entry), 120, false)
-	if err != nil || !strings.Contains(label, actor) {
+	if err != nil || strings.Contains(label, actor) || entry.Actor != actor || !strings.Contains(label, "read") {
 		t.Fatal(label, err)
 	}
 }
@@ -305,11 +305,7 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	}
 	s.Append(v.ID, second, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "reply", State: &provider.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"old"}`)}}})
 	s.FinishTurn(second, "completed")
-	data, e := s.Transcript(v.ID, 0)
-	if e != nil {
-		t.Fatal(e)
-	}
-	archive, e := s.Artifact(v.ID, "compactions", data)
+	archive, e := s.ArchiveTranscript(v.ID, 0)
 	if e != nil {
 		t.Fatal(e)
 	}

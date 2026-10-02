@@ -46,7 +46,7 @@ $$
 
 Math uses headless formula images placed with Kitty Unicode placeholders.
 Unsupported TeX stays readable; large inline equations can become blocks.
-Inspect this message to see its exact source. Plain terminals retain the original TeX.
+Inspection renders this Markdown; export preserves its source. Plain terminals retain the original TeX.
 
 ---
 
@@ -59,4 +59,4 @@ Unicode: α, β, Δ, μm, 界. Escaped punctuation: \*literal asterisks\*.
 Term
 : A small definition list entry.
 
-The demo is complete. All 18 tool types have been exercised locally.
+The demo is complete. All 20 tool types have been exercised locally.

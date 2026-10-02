@@ -11,7 +11,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	contextbuild "scicode/internal/context"
 	"scicode/internal/history"
 	"scicode/internal/jobs"
 	"scicode/internal/provider"
@@ -21,68 +20,128 @@ import (
 func (r *Runtime) addSubagentTool() {
 	type args struct {
 		Prompt     string `json:"prompt"`
-		Label      string `json:"label"`
+		ChildID    string `json:"child_id,omitempty"`
+		Label      string `json:"label,omitempty"`
 		Background bool   `json:"background,omitempty"`
-		Wake       *bool  `json:"wake_on_exit,omitempty"`
 	}
-	tool.Register(r.Tools, "subagent", "Run an isolated child coding task with shared file tools and bounded output. label is a concise single-line UI title, 1–64 characters, without control characters. At most four live children; children cannot spawn children. Use job_read to inspect its stdout reply or stderr tool feedback.", map[string]any{"prompt": tool.Property("string"), "label": map[string]any{"type": "string", "minLength": 1, "maxLength": 64, "description": "Concise single-line task title, no control characters"}, "background": tool.Property("boolean"), "wake_on_exit": tool.Property("boolean")}, []string{"prompt", "label"}, func(a args) error {
+	tool.Register(r.Tools, "subagent", "Start an isolated coding child or follow up on an idle child_id. Choose a concise display name in label for every new child: 1–4 words, at most 64 characters, single-line without controls. Running children reject follow-ups: wait for child_turn_finished. Successful children retain their context until job_stop(child_id=...). At most four retained contexts; children cannot spawn children. Every assignment gets fresh child-turn/job IDs and bounded output.", map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean")}, []string{"prompt"}, func(a args) error {
 		if err := tool.Required("prompt", a.Prompt); err != nil {
 			return err
 		}
-		if strings.TrimSpace(a.Label) == "" || utf8.RuneCountInString(a.Label) > 64 || strings.IndexFunc(a.Label, unicode.IsControl) >= 0 {
-			return tool.Fail("invalid_arguments", "label must be a nonblank single-line title of at most 64 characters without controls")
+		if a.ChildID != "" {
+			if a.Label != "" {
+				return tool.Fail("invalid_arguments", "omit label for a follow-up; the existing child retains its title")
+			}
+			return nil
+		}
+		if words := len(strings.Fields(a.Label)); words < 1 || words > 4 || utf8.RuneCountInString(a.Label) > 64 || strings.IndexFunc(a.Label, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }) >= 0 {
+			return tool.Fail("invalid_arguments", "choose a label of 1–4 words and at most 64 characters, on one line without controls; shorten the name and retry")
 		}
 		return nil
 	}, func(ctx context.Context, x tool.Execution, a args) (any, error) {
 		if x.Actor != "main" {
-			return nil, tool.Fail("capacity", "children cannot spawn children")
+			return nil, tool.Fail("ownership", "children cannot spawn children or assign follow-ups")
 		}
-		var turn, modelJSON string
-		if err := r.Store.DB.QueryRow("SELECT coalesce(q.turn_id,''),q.model_json FROM tool_calls c JOIN model_requests q ON q.id=c.request_id WHERE c.id=?", x.CallID).Scan(&turn, &modelJSON); err != nil {
+		if err := r.checkContext(); err != nil {
+			return nil, err
+		}
+		var modelJSON string
+		if err := r.Store.DB.QueryRow("SELECT q.model_json FROM tool_calls c JOIN model_requests q ON q.id=c.request_id WHERE c.id=?", x.CallID).Scan(&modelJSON); err != nil {
 			return nil, err
 		}
 		var selection provider.Selection
 		if err := json.Unmarshal([]byte(modelJSON), &selection); err != nil {
 			return nil, err
 		}
-		actor := "main/" + history.NewID("child")
-		id, err := func() (string, error) {
-			r.childStartMu.Lock()
-			defer r.childStartMu.Unlock()
-			count := 0
-			for _, j := range r.Jobs.List("main", false) {
-				if j.Kind == "subagent" || j.Kind == "btw" {
-					count++
+		r.childStartMu.Lock()
+		child := r.children[a.ChildID]
+		if a.ChildID != "" {
+			if child == nil {
+				r.childStartMu.Unlock()
+				return nil, tool.Fail("not_found", "unknown or closed child_id; create a fresh child")
+			}
+			if child.state != "idle" || child.closing {
+				r.childStartMu.Unlock()
+				return nil, tool.Fail("child_busy", "child is still running; wait for child_turn_finished before assigning a follow-up")
+			}
+		} else {
+			asideCount := 0
+			for _, job := range r.Jobs.Live() {
+				if job.Kind == "btw" {
+					asideCount++
 				}
 			}
-			if count >= 4 {
-				return "", tool.Fail("capacity", "four child tasks are already running")
+			if len(r.children) >= 4 || len(r.children)+asideCount >= 4 {
+				r.childStartMu.Unlock()
+				return nil, tool.Fail("capacity", "four child contexts/tasks are retained; close an idle child with job_stop(child_id=...) or wait for an aside")
 			}
-			return r.Jobs.StartTask(actor, "subagent", a.Label, a.Background, a.Background && (a.Wake == nil || *a.Wake), func(child context.Context, stdout, stderr io.Writer) error {
-				return r.runChild(child, childTask{actor: actor, turn: turn, prompt: a.Prompt, selection: selection, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" })}, stdout, stderr)
-			})
-		}()
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), selection: selection, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" })}
+			r.children[child.id] = child
+		}
+		child.state = "running"
+		child.job = ""
+		child.finish, child.result = 0, 0
+		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, child.selection)
 		if err != nil {
+			delete(r.children, child.id)
+			r.childStartMu.Unlock()
+			return nil, err
+		}
+		child.turn = turn
+		assignment := &childAssignment{turn: turn}
+		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, background: a.Background}
+		ready := make(chan struct{})
+		r.childStartMu.Unlock()
+		id, err := r.Jobs.StartTask(child.id, "subagent", child.label, a.Background, false, func(childCtx context.Context, stdout, stderr io.Writer) (runErr error) {
+			<-ready
+			defer func() {
+				task.cancelled = childCtx.Err() != nil
+				if finishErr := r.finishChild(child, task, runErr); finishErr != nil {
+					runErr = errors.Join(runErr, finishErr)
+				}
+			}()
+			return r.runChild(childCtx, task, stdout, stderr)
+		})
+		r.childStartMu.Lock()
+		child.job = id
+		assignment.job = id
+		if err == nil {
+			err = r.publishChild(tool.ChildView{ID: child.id, Label: child.label, State: child.state, TurnID: turn, JobID: id})
+		}
+		r.childStartMu.Unlock()
+		close(ready)
+		if err != nil {
+			if id != "" {
+				_, _ = r.Jobs.Stop("main", id)
+			} else {
+				err = errors.Join(err, r.finishChild(child, task, err))
+			}
 			return nil, err
 		}
 		if a.Background {
-			return r.Jobs.View("main", id)
+			v, e := r.Jobs.View("main", id)
+			return r.childResult(child, assignment, v), e
 		}
-		return r.Jobs.Wait(ctx, "main", id, func(v jobs.Snapshot) {
+		v, err := r.Jobs.Wait(ctx, "main", id, func(v jobs.Snapshot) {
 			if x.Update != nil {
-				x.Update(v)
+				x.Update(r.childResult(child, assignment, v))
 			}
 		})
+		return r.childResult(child, assignment, v), err
 	})
 }
 
 // childTask freezes one child request's context, capabilities and model selection.
 type childTask struct {
-	actor, turn, prompt string
-	selection           provider.Selection
-	prefix              []provider.Message
-	tools               *tool.Registry
-	aside               bool
+	actor, turn, prompt   string
+	selection             provider.Selection
+	prefix                []provider.Message
+	tools                 *tool.Registry
+	aside                 bool
+	child                 *codingChild
+	assignment            *childAssignment
+	cursor                contextCursor
+	background, cancelled bool
 }
 
 func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr io.Writer) error {
@@ -97,7 +156,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			r.routeMu.RUnlock()
 			return err
 		}
-		r.emit(Event{Kind: "message_placeholder", Text: actor + " · aside instructions · inspect", EntryID: id})
+		r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Aside instructions · inspect", EntryID: id})
 		messages = append(messages, instruction)
 	}
 	question := provider.Message{Role: "user", Content: prompt}
@@ -107,9 +166,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	if err != nil {
 		return err
 	}
-	r.emit(Event{Kind: "message", Text: actor + " · " + prompt, EntryID: entry})
+	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry})
 	defs := task.tools.Definitions()
-	var cursor contextCursor
+	cursor := task.cursor
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -118,35 +177,32 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		if task.aside {
 			system = systemTemplate
 		}
-		contextMessage, nextContext, err := r.runtimeContext(ctx, actor, selection, cursor)
-		if err != nil {
-			return err
-		}
-		requestMessages := append(append([]provider.Message(nil), messages...), contextMessage)
-		if !contextbuild.Fits(selection, system, defs, requestMessages, false) {
-			return tool.Fail("context_overflow", "child task exceeds its model context")
-		}
 		r.routeMu.RLock()
-		request, err := r.Store.StartRequest(r.Current(), turn, actor, "coding", selection)
+		admitted, nextContext, err := r.admitChild(ctx, task, messages, cursor)
+		if errors.Is(err, errNeedsCompaction) {
+			r.routeMu.RUnlock()
+			messages, cursor, err = r.compactChild(ctx, task, messages, cursor)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if err != nil {
 			r.routeMu.RUnlock()
 			return err
 		}
-		contextMessage.RequestID = request
-		entry, err := r.Store.Append(r.Current(), turn, actor, "message", "developer", false, contextMessage)
-		if err != nil {
-			r.routeMu.RUnlock()
-			return err
-		}
+		request := admitted.RequestID
 		cursor = nextContext
-		messages = append(messages, contextMessage)
-		r.emit(Event{Kind: "runtime_context", Text: actor + " · " + contextLabel(contextMessage), EntryID: entry, SessionID: r.Current()})
+		messages = admitted.Messages
+		if admitted.ContextEntry != 0 {
+			r.emit(Event{Kind: "runtime_context", Actor: actor, Text: "Runtime context · inspect", EntryID: admitted.ContextEntry, SessionID: r.Current()})
+		}
 		entry, err = r.Store.RecordSystemPrompt(r.Current(), turn, actor, request, system)
 		r.routeMu.RUnlock()
 		if err != nil {
 			return err
 		}
-		r.emit(Event{Kind: "system_prompt", Text: actor + " · System prompt · inspect", EntryID: entry})
+		r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · inspect", EntryID: entry})
 		reply := provider.Message{Role: "assistant"}
 		started := time.Now()
 		var usage *provider.Usage
@@ -157,7 +213,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			}
 			switch ev.Kind {
 			case "retry":
-				return r.retryNotice(turn, actor, request, ev.Retry)
+				return r.retryNotice(turn, actor, request, "coding", ev.Retry)
 			case "call_start":
 				return r.toolAnnouncement(turn, actor, request, ev.CallStart)
 			case "completed":
@@ -207,11 +263,16 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return err
 		}
 		if task.aside {
-			r.emit(Event{Kind: "message_placeholder", Text: actor + " · reply · inspect", EntryID: entry})
+			r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Reply · inspect", EntryID: entry})
 		} else {
 			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: entry, RequestID: request, Actor: actor})
 		}
 		messages = append(messages, reply)
+		if task.child != nil {
+			r.childStartMu.Lock()
+			task.assignment.result = entry
+			r.childStartMu.Unlock()
+		}
 		records, err := r.runToolBatch(ctx, turn, actor, task.tools, reply.Calls, ids, streamErr)
 		if err != nil {
 			return err
@@ -241,8 +302,14 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				return err
 			}
 			messages = append(messages, *notification)
-			r.emit(Event{Kind: "message", Text: actor + " · " + notification.Content, EntryID: id})
+			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id})
 		} else if len(reply.Calls) == 0 {
+			if task.child != nil {
+				r.childStartMu.Lock()
+				task.child.messages = messages
+				task.child.cursor = cursor
+				r.childStartMu.Unlock()
+			}
 			return nil
 		}
 	}

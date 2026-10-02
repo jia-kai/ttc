@@ -1,4 +1,4 @@
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -29,7 +29,8 @@ CREATE INDEX session_lineage ON sessions(lineage_id);
 CREATE TABLE turns (
     id TEXT PRIMARY KEY NOT NULL,
     session_id TEXT NOT NULL REFERENCES sessions(id),
-    trigger TEXT NOT NULL CHECK (trigger IN ('user','async')),
+    actor_id TEXT NOT NULL DEFAULT 'main',
+    trigger TEXT NOT NULL CHECK (trigger IN ('user','async','child','steer')),
     start_entry_id INTEGER REFERENCES entries(id),
     start_file_tip_id INTEGER REFERENCES file_changes(id),
     status TEXT NOT NULL CHECK (status IN ('running','completed','interrupted','failed')),
@@ -37,7 +38,7 @@ CREATE TABLE turns (
     started_ms INTEGER NOT NULL,
     finished_ms INTEGER
 );
-CREATE UNIQUE INDEX active_turn ON turns(session_id) WHERE status = 'running';
+CREATE UNIQUE INDEX active_turn ON turns(session_id, actor_id) WHERE status = 'running';
 CREATE INDEX turn_history ON turns(session_id, started_ms, id);
 CREATE TABLE entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +46,9 @@ CREATE TABLE entries (
     parent_id INTEGER REFERENCES entries(id),
     source_id INTEGER REFERENCES entries(id),
     turn_id TEXT REFERENCES turns(id),
+    delivered_request_id INTEGER REFERENCES model_requests(id),
+    main_turn_id TEXT REFERENCES turns(id),
+    undo_owner_turn_id TEXT REFERENCES turns(id),
     actor_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('message','tool_call','tool_result','status','summary')),
     role TEXT CHECK (role IN ('user','assistant','tool','developer')),
@@ -62,6 +66,9 @@ CREATE TABLE model_requests (
     session_id TEXT NOT NULL REFERENCES sessions(id),
     turn_id TEXT REFERENCES turns(id),
     actor_id TEXT NOT NULL,
+    event_cutoff INTEGER NOT NULL DEFAULT 0,
+    input_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(input_json)),
+    delivered_events_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(delivered_events_json)),
     purpose TEXT NOT NULL CHECK (purpose IN ('coding','naming','compaction')),
     model_json TEXT NOT NULL CHECK (json_valid(model_json)),
     status TEXT NOT NULL CHECK (status IN ('running','completed','failed','interrupted')),
@@ -119,5 +126,6 @@ CREATE TABLE compactions (
     ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
     archive_path TEXT NOT NULL,
     archive_sha256 TEXT NOT NULL,
+    archive_exact_sha256 TEXT NOT NULL,
     summary_entry_id INTEGER NOT NULL REFERENCES entries(id)
 );

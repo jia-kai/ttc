@@ -1,17 +1,20 @@
 package history
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"scicode/internal/provider"
 	"scicode/internal/render"
 	"strings"
+	"syscall"
 )
 
 // Transcript freezes the selected branch as dense, user-readable Markdown.
@@ -72,6 +75,9 @@ func (s *Store) Transcript(session string, tip int64) ([]byte, error) {
 // System instructions have no export presentation. Tool records may override
 // their inspector presentation with a compact export body.
 func (s *Store) ExportText(entry Entry) (string, error) {
+	if entry.InternalEvent() {
+		return "", nil
+	}
 	var status struct {
 		Type    string
 		Message provider.Message
@@ -93,9 +99,28 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 			return "", err
 		}
 		if json.Valid([]byte(message.Content)) {
-			return render.Fence(message.Content, "json"), nil
+			message.Content = render.Fence(message.Content, "json")
 		}
-		return render.Clean(message.Content), nil
+		text := render.Clean(message.Content)
+		for _, snapshot := range message.Images {
+			path := strings.ReplaceAll(render.Clean(snapshot.Path), ">", "\\>")
+			link := "Image: [snapshot](<" + path + ">)"
+			// Dimensions are optional presentation metadata; the durable path and
+			// exact image payload remain available even if decoding is unavailable.
+			if f, err := os.OpenFile(snapshot.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+				if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
+					if config, _, err := image.DecodeConfig(io.LimitReader(f, 1<<20)); err == nil {
+						link += fmt.Sprintf(" · %d×%d", config.Width, config.Height)
+					}
+				}
+				f.Close()
+			}
+			if text != "" {
+				text += "\n\n"
+			}
+			text += link
+		}
+		return text, nil
 	}
 	if entry.Kind == "tool_call" {
 		var ref struct {
@@ -136,10 +161,10 @@ func (s *Store) TranscriptJSONL(session string, tip int64) ([]byte, error) {
 	enc := json.NewEncoder(&out)
 	enc.SetEscapeHTML(false)
 	for _, entry := range entries {
-		record := map[string]any{"entry": entry}
+		record := map[string]any{"entry": entry, "event_seq": entry.EventSeq()}
 		var status struct{ Type, Path string }
 		if entry.Kind == "status" && json.Unmarshal(entry.Content, &status) == nil && status.Type == "system_prompt" {
-			prompt, err := os.ReadFile(status.Path)
+			prompt, err := readArtifact(status.Path, instructionSnapshotBytes)
 			if err != nil {
 				return nil, err
 			}
@@ -189,34 +214,7 @@ func (s *Store) ArchiveTranscript(session string, tip int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	v, err := s.Session(session)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(append(append([]byte(nil), text...), exact...))
-	dir := filepath.Join(s.Root, "lineages", v.LineageID, "compactions")
-	if err := PrivateDir(dir); err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, fmt.Sprintf("%x.md", sum))
-	for _, file := range []struct {
-		path string
-		data []byte
-	}{{path, text}, {path + ".jsonl", exact}} {
-		if old, err := os.ReadFile(file.path); err == nil {
-			if !bytes.Equal(old, file.data) {
-				return "", errors.New("archive content conflict")
-			}
-			continue
-		} else if !os.IsNotExist(err) {
-			return "", err
-		}
-		if err := AtomicFile(file.path, file.data, 0600); err != nil {
-			return "", err
-		}
-	}
-
-	return path, nil
+	return s.writeArchive(session, text, exact)
 }
 
 // Export rejects existing targets and copies referenced snapshots into a sibling assets directory.
@@ -289,7 +287,11 @@ func (s *Store) Export(session, path string) error {
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("unsupported managed export asset: %s", source)
 		}
-		raw, err := os.ReadFile(source)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		raw, err := readArtifact(source, info.Size())
 		if err != nil {
 			return err
 		}

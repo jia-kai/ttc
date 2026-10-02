@@ -3,50 +3,90 @@ package session
 // helpMarkdown is shared by plain output and the terminal's Markdown inspector.
 const helpMarkdown = `# TTC help
 
-## Conversation
+## Send and stop
 
-- **Enter** sends or queues input; **Shift+Enter** inserts a newline.
-- **Up / Down** recalls submitted prompts; **Alt+Up / Down** focuses messages.
-- Click a message, or focus it and press **Tab**, to inspect it.
-- **Ctrl+U / Ctrl+D** scrolls; **Ctrl+C** exits and cancels work.
-- **Esc Esc** interrupts the foreground turn.
+- **Enter while idle** — Start a new turn.
+- **Enter while busy** — Queue a new turn until the current turn finishes.
+- **Alt+Enter while busy** — Send an instruction to the current turn after the LLM response and foreground tool batch finish.
+- **Foreground shells** — Delay Alt+Enter delivery until they finish or move to the background.
+- **Ctrl+J / Shift+Enter** — Insert a newline.
+- **Paste** — Insert text without sending it.
+- **Esc, Esc in the composer** — Interrupt the current turn after closing any open view.
+- **Ctrl+C (any view), Ctrl+X Q, /quit** — Exit TTC and cancel live work.
 
-## Views and input
+## Conversation and views
 
-- **Ctrl+X F** opens fullscreen copy mode; **Esc** returns.
-- **Ctrl+X S** toggles the sidebar overlay; **Ctrl+X M** selects a model.
-- Type **/** for commands or **@** for attachments; **Tab** accepts a suggestion.
-- **Ctrl+X E** edits the draft in VISUAL, EDITOR, or vi.
-- **Left / Right**, **Ctrl+B / F**: move by character.
-- **Alt+B / F**: move by word; **Ctrl+W**: delete the previous word.
-- **Ctrl+A / E**: line start / end; **Ctrl+K / Y**: kill / restore text.
-- Paste inserts text literally without submitting it.
+- **Up** — Recall the previous submitted prompt.
+- **Down** — Recall the next prompt or restore the draft.
+- **Alt+Up / Alt+Down** — Focus a conversation message.
+- **Click a message** — Open its details.
+- **Tab with an empty input** — Inspect the focused message.
+- **Ctrl+U** — Scroll up.
+- **Ctrl+D** — Scroll down; at the bottom, follow new output.
+- **Ctrl+X F** — Toggle fullscreen copy mode; live redraws and mouse tracking pause.
+- **Ctrl+X S** — Toggle the sidebar overlay.
+- **Esc in a view** — Close that view.
+- **Esc while scrolled** — Return to live output.
+- **/inspect ENTRY_ID** — Open a saved message's details.
+
+## Edit input
+
+- **Left** or **Ctrl+B without foreground shells** — Move the cursor left.
+- **Right / Ctrl+F** — Move the cursor right.
+- **Alt+B** — Move back one word.
+- **Alt+F** — Move forward one word.
+- **Ctrl+A / Home** — Move to the start of the line.
+- **Ctrl+E / End** — Move to the end of the line.
+- **Ctrl+W / Alt+Backspace** — Delete the previous word.
+- **Alt+D** — Delete the next word.
+- **Ctrl+K** — Cut text through the end of the line.
+- **Ctrl+Y** — Paste the last cut text.
+- **Ctrl+X E** or **/editor** — Edit the draft using VISUAL, EDITOR, or vi.
+- **Ctrl+P** — Open the command menu.
+- **Enter in the command menu** — Put the selected command in the input.
+- **/** — Show command suggestions at the start of input.
+- **@** — Show file attachment suggestions.
+- **Tab in suggestions** — Accept the selected suggestion.
+- **/attach PATH** — Attach a snapshot of a file, directory, or image.
 
 ## Sessions and history
 
-- **/new** or **/clear** — start a session.
-- **Ctrl+X L** or **/sessions** — select sessions by date; **/load ID** — open one.
-- **/undo**, **/redo** — restore journaled file edits.
-- **/export PATH** — export to a new Markdown file.
-- **/compact [FOCUS]** — summarize earlier context.
+These commands require an idle turn.
 
-Main context also compacts automatically before a request exceeds its budget.
-Tool-boundary cuts keep the user instruction and last two model messages/results.
+- **Ctrl+X N**, **/new**, **/clear** — Start a new session.
+- **Ctrl+X L** or **/sessions** — Open the session picker, grouped by date.
+- **/load ID** — Load a saved session.
+- **/rename TITLE** — Set a title of 1–60 characters; overrides automatic naming.
+- **/undo** — Undo file-tool edits; shell changes are excluded.
+- **/redo** — Restore undone file-tool edits.
+- **Ctrl+X G** or **/history** — Browse user inputs across history branches.
+- **Space in history** — Inspect the selected input.
+- **Enter in history** — Restore the checkpoint before the selected input.
+- **/branch ENTRY_ID** — Restore a checkpoint directly.
+- **/export PATH** — Write Markdown and an exact JSONL sidecar to new files.
 
-## Tools and settings
+## Context
 
-- **/btw QUESTION** — ask a parallel read-only question; answer opens a popup.
-- **/model** — select model and reasoning; **/model ID [VARIANT]** — select directly.
-- **/attach PATH** — snapshot a file, directory, or image.
-- **/jobs**, **/timers** — inspect background work.
-- **/inspect ENTRY_ID** — inspect a saved message.
-- **/questions [FORM_ID]** — reopen a pending question.
-- **/answer FORM_ID JSON_ARRAY** — answer in plain mode.
-- **/login** — device authorization in plain mode; use ttc --login for the TUI.
-- **/quit** — exit.
+- **/compact [FOCUS]** — Summarize earlier context while idle, optionally focusing on a topic.
+- **Automatic compaction** — Summarize older context before a request exceeds its budget.
+- **Compaction during tools** — Keep the current instruction and last two model messages with their tool results.
 
-History-changing commands require an idle turn. Model changes during work apply
-at the next tool batch boundary. Shell changes are outside undo/redo.
-Session loads return directly to the conversation; other action confirmations
-stay in the conversation without a popup. Command errors remain visible.
+## Jobs and questions
+
+- **Ctrl+B with foreground shells** — Move all running foreground shells to the background.
+- **/background** — Select a foreground shell to move to the background; plain mode moves all.
+- **tmux with its default prefix** — Press Ctrl+B twice to send Ctrl+B to TTC.
+- **Ctrl+X J** or **/jobs** — Inspect jobs.
+- **Ctrl+X T** or **/timers** — Inspect timers.
+- **/btw QUESTION** — Ask a parallel read-only agent; its answer opens in a popup.
+- **Ctrl+X ?** or **/questions [FORM_ID]** — Reopen a pending question form.
+- **/answer FORM_ID JSON_ARRAY** — Submit question answers in plain mode.
+
+## Model and login
+
+- **Ctrl+X M** or **/model** — Pick a model and reasoning variant.
+- **/model ID [VARIANT]** — Select a model directly.
+- **Model changes during work** — Apply at the next LLM request after the current response and foreground tool batch finish.
+- **/login in plain mode** — Start device authorization while idle.
+- **ttc --login** — Log in before starting the TUI.
 `

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"unicode/utf8"
 
+	"golang.org/x/sys/unix"
 	"scicode/internal/scratch"
 )
 
@@ -53,7 +54,9 @@ func editDraft(ctx context.Context, text string) (string, error) {
 }
 
 func readEditedDraft(path, original string) (string, error) {
-	f, err := os.Open(path)
+	// Editors may replace the file. Validate the opened descriptor without
+	// waiting for a FIFO writer or following a substituted symlink.
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return original, err
 	}
@@ -64,6 +67,9 @@ func readEditedDraft(path, original string) (string, error) {
 	}
 	if !st.Mode().IsRegular() {
 		return original, errors.New("edited input must be a regular file")
+	}
+	if st.Size() > maxDraftBytes {
+		return original, errors.New("edited input exceeds 8 MiB")
 	}
 	b, err := io.ReadAll(io.LimitReader(f, maxDraftBytes+1))
 	if err != nil {

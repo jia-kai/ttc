@@ -30,7 +30,6 @@ def main():
     sock = root / 'control.sock'
     env = dict(os.environ, LIBGL_ALWAYS_SOFTWARE='1')
     env.pop('TMUX', None)  # This is a new Kitty PTY, outside the caller's tmux.
-    env.pop('SCICODE_KITTY', None)
     env.pop('NO_COLOR', None)  # Capture the normal colored UI, independent of CI preferences.
     read_fd, write_fd = os.pipe()
     xvfb_log = (root / 'xvfb.log').open('wb')
@@ -64,7 +63,7 @@ def main():
                     {'id': 'image', 'name': 'image_show', 'arguments': {'path': 'field.png'}},
                     {'id': 'shell', 'name': 'shell', 'arguments': {'command': "printf 'Palette fixture verified\\n'"}},
                 ]}, {'text': (fixture / 'markdown.md').read_text().replace(
-                    'The demo is complete. All 18 tool types have been exercised locally.',
+                    'The demo is complete. All 20 tool types have been exercised locally.',
                     'Offline palette/image/math demo complete.')},
             ]))
             # ToolCall.arguments is JSON bytes in the Go fixture, rather than a
@@ -76,7 +75,7 @@ def main():
                        '--visual-hold', '--binary', binary, '--artifacts-file', str(root / 'demo.json')]
         if args.tmux:
             command = ['tmux', '-S', str(tmux_sock), '-f', str(tmux_config), 'new-session',
-                       'env', '-u', 'KITTY_WINDOW_ID', '-u', 'SCICODE_KITTY',
+                       'env', '-u', 'KITTY_WINDOW_ID',
                        'COLORTERM=truecolor', *command]
         terminal = subprocess.Popen([
             'kitty', '--config', 'NONE', '-o', 'linux_display_server=x11',
@@ -249,7 +248,7 @@ def main():
             assert time.monotonic() < deadline, 'formulas did not finish rendering'
             time.sleep(0.1)
             last_text = remote('get-text', '--extent', 'screen')
-        wait('18 tool types')
+        wait('20 tool types')
         capture('markdown-math')
         key('ctrl+x'); key('f')
         text = wait_fullscreen()

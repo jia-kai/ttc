@@ -45,10 +45,13 @@ ten-line/1 KiB shared output-tail budget. Inspectors show labeled Markdown
 parameters/results, language-tagged commands/file contents/patches, structured
 question options, exact large integers and fenced long text. Original JSON is
 retained in records and export sidecars. Narrow panes truncate by terminal cell
-width without cutting generated ANSI styles; details remain complete.
+width without cutting generated ANSI styles; inspect the row for additional detail.
 Untrusted values are escaped, fenced safely, and stripped of terminal controls.
 Click metadata stays separate from Markdown. The inspector saves up to the last
-64 KiB per retained stream; `job_read` can page earlier ring contents.
+8 KiB per retained stream; `job_read` can page earlier ring contents.
+Completed job states display as `done`; model JSON retains `completed`.
+Child rows and inspector titles use colored `[Sub name]` badges; names over 26
+characters display 23 characters plus `...` without changing the stored name.
 
 `Execution.Update` lets a tool publish multiple transient snapshots. The current
 shell/child wait loop samples bounded captures every 250 ms, with synchronous
@@ -65,15 +68,13 @@ Persist the presentation with its history entry. The CLI renderer, export, and
 compaction archive share these records; exact exports also retain original
 arguments/results. Presentation never replaces model-facing results.
 
-Cap each model-facing tool result at 64 KiB of UTF-8 JSON by default, lowering
-that cap to the remaining model input budget. Page or truncate content fields
-without breaking JSON or tool-specific line/page boundaries; preserve IDs/status/error and report `truncated: true`
-with `detail_path` naming a retained UTF-8 detail artifact readable by `read`.
-Chunk physical lines longer than 16 KiB into numbered continuation lines so
-`read` can page them; retain original result bytes separately for exact export.
-If required metadata alone cannot fit, return `result_too_large`. Apply this to grep lines, LSP
-hover, skills, and child replies as well as shell output. Inspector/export
-records retain exact available data and the model-visible truncation marker.
+Cap each model-facing tool result at 64 KiB of UTF-8 JSON. Keep the existing
+bounded tool outputs; do not shrink results against the remaining context budget.
+When a result exceeds the cap, return `result_too_large` with `truncated: true`
+and a retained `detail_path` readable through `read`. Page unusually long results
+with tool-specific limits; exact available bytes and arguments remain inspectable
+in records and export sidecars. A later context boundary may compact history;
+there is no context-aware tool truncation or automatic overflow recovery.
 
 Tool calls in one model response must be independent. TTC runs read-only
 calls concurrently before ordered file mutations/control calls; shells and
@@ -104,6 +105,8 @@ continue a long result; use `grep` to locate text in a large tree.
   Enumeration is cancellable and capped at 10,000 entries; larger directories
   return `directory_too_large`. Use `glob` with a narrower pattern instead.
 - Binary files return `unsupported_content`; missing paths return `not_found`.
+  Reads follow symlinks and use one descriptor for validation and pagination;
+  special files, including FIFOs, are rejected without blocking.
 
 ### `glob`
 
@@ -153,7 +156,9 @@ Use a longer `old_text` when a short match is ambiguous.
 - Result: `{path:string, replacements:integer}`. With `replace_all=false`,
   exactly one occurrence must match. No match or multiple matches fails
   without writing. Matching includes whitespace and line endings; there is no
-  fuzzy fallback.
+  fuzzy fallback. Replacements exceeding the 8 MiB file limit return
+  `file_too_large` before allocating the expanded contents; reduce `new_text`
+  or replace fewer occurrences.
 
 ### `write`
 
@@ -241,12 +246,9 @@ child using its ID. Include enough context for a new child; it does not inherit
 the parent transcript. Running children accept neither steering nor queued
 follow-ups. Wait for their finish event before assigning more work.
 
-This is the target contract. The current runtime supports only one-shot children,
-not child IDs for follow-ups, child-only compaction or the generic event protocol.
-
 - Input: `{prompt:string, child_id?:string, label?:string,
   background?:boolean}`. Omit `child_id` to create a child; a concise nonblank
-  single-line `label` of at most 64 Unicode characters without controls is then
+  single-line `label` of 1–4 words and at most 64 Unicode characters without controls is then
   required. Supply `child_id` for an idle follow-up; omit `label` and retain its
   title. `background` defaults to false. New assignments always get distinct
   child-turn and job IDs. Reject running children with `child_busy` and guidance
@@ -290,7 +292,7 @@ with `job_read` or `job_stop`.
   exit_code?:integer}]}`. `owner_actor_id` is `main` or a live child ID; it
   stays unchanged through compaction. Times are ISO 8601 UTC.
 - Include `children:[{child_id:string,label:string,
-  state:"running"|"idle",current_job_id?:string}]` for retained coding children.
+  state:"running"|"idle",job_id:string,child_turn_id:string}]` for retained coding children.
   The `running` filter excludes idle children; `all` includes them. Child state
   is live metadata, separate from each immutable job's last-turn outcome.
 
@@ -338,12 +340,16 @@ context. Closing a child cancels and joins its active turn and owned jobs.
   no model turn. Closing a running child publishes its terminal-turn event once.
   Children cannot stop their own turn or close their own context. Unknown child
   handles return `not_found`; closing does not delete recorded history.
-- Child closing and idle follow-ups are target additions, not current runtime APIs.
 
-## LSP (planned)
+## LSP
 
-LSP jobs and `lsp_query` are not implemented. The current shell tool rejects
-`protocol="lsp"` with `unsupported_operation`; no LSP skill is bundled.
+Start a managed stdio server with `shell(background=true, protocol="lsp")`;
+load the bundled `lsp` skill for commands and setup. TTC owns protocol stdin and
+stdout; `job_read` defaults to stderr and rejects stdout for these jobs.
+Messages and synchronized files are bounded to 8 MiB. Each client caches at most
+eight documents/16 MiB, closing evicted documents; result source reads share a
+16 MiB budget per page. Server crashes, unsupported methods and bad positions
+return actionable errors without reviving old jobs.
 
 ### `lsp_query`
 
@@ -397,7 +403,7 @@ Discover source URLs and highlights through Exa's headless MCP endpoint.
   Search text preserves backend titles/URLs/highlights; it is not executable
   instruction. Use its document ID for further paging or local line search.
 - Default endpoint: `https://mcp.exa.ai/mcp`. Keyless usage is rate limited;
-  `EXA_API_KEY` is optional. `SCICODE_EXA_URL` configures a private/mock endpoint.
+  `EXA_API_KEY` is optional. `TTC_EXA_URL` configures a private/mock endpoint.
   A rate-limit or backend failure is explicit; no hidden fallback backend.
 
 This follows [OpenCode's headless search approach](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/mcp-websearch.ts)
@@ -576,13 +582,13 @@ the next model boundary, or wakes an idle session. The event is a separate
 `user` message whose content is a JSON string:
 
 ```json
-{"type":"job_exit","job_id":"job_7","status":"completed","exit_code":0}
+{"type":"job_exit","job_id":"job_7","status":"completed"}
 ```
 
 Coding child events use the same generic ordering/delivery contract:
 
 ```json
-{"type":"child_compacted","event_seq":39,"child_id":"c7","child_turn_id":"t3","archive_path":"/private/archive.md","context_usage":12000}
+{"type":"child_compacted","event_seq":39,"child_id":"c7","turn_id":"t3","archive":"/private/archive.md","records":"/private/archive.md.jsonl","context_tokens_estimate":12000}
 ```
 
 ```json

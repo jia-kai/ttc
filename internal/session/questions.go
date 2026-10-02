@@ -106,7 +106,7 @@ func (r *Runtime) addQuestionTool() {
 		}()
 		b, _ := json.MarshalIndent(a.Questions, "", "  ")
 		eventView := cloneQuestionForm(view)
-		r.emit(Event{Kind: "question", Question: &eventView, EntryID: entry, Text: fmt.Sprintf("Waiting for answer · %s\n%s\n/answer %s [{\"id\":\"QUESTION_ID\",\"values\":[\"text\"],\"source\":\"custom\"}]", id, b, id)})
+		r.emit(Event{Kind: "question", Actor: x.Actor, Question: &eventView, EntryID: entry, Text: fmt.Sprintf("Waiting for answer · %s\n%s\n/answer %s [{\"id\":\"QUESTION_ID\",\"values\":[\"text\"],\"source\":\"custom\"}]", id, b, id)})
 		select {
 		case answers := <-form.reply:
 			return map[string]any{"answers": answers}, nil

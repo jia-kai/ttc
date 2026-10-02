@@ -33,8 +33,29 @@ The UI initializes math independently of image rendering. One pre-warmed Node
 process handles visible formulas; parser/document state is fresh per formula,
 while the output engine and local font chunks are reused. No dynamic TeX package
 loading is enabled. Interrupted or broken workers are joined and restarted on
-the next render; ordinary TeX errors preserve the warm engine. Unsupported input
-retains literal TeX. PNGs remain in the separate pruned render cache.
+the next render; ordinary TeX errors preserve the warm engine. Failures show a
+warning and labeled literal TeX. Conversation and Markdown inspection windows
+share the visible-asset renderer. PNGs remain in the separate pruned render cache.
+
+Formulas rasterize at three pixels per logical display pixel in each direction,
+including padding. The render cache retains these full rasters. Before uploading,
+TTC uniformly fits the raster to its logical size and placement limits, then
+averages source-pixel area in premultiplied sRGB and alpha. Transparent padding
+fills the rounded terminal cell grid without stretching glyphs. SVG padding
+preserves the configured em size. Filtering and PNG upload run once per visible
+placement size; redraws reuse the upload. Images are never enlarged by the
+filter. There is no font hinting or RGB subpixel mode.
+
+Placement IDs include the measured cell size; font-size changes trigger a new
+upload. Missing measurements produce a UI warning and an estimated 8×16 cell.
+Successful Kitty detection enables RGB even if SSH/tmux omits `COLORTERM`.
+Explicit `NO_COLOR` or `TCELL_TRUECOLOR=disable` disables graphics and warns on
+formula output.
+Render keys include raster resolution and backend hash. Physical canvases are
+checked against the 16-megapixel limit before conversion. Decoded replies pass
+directly to the UI; its retained image budget remains 32 MiB. The filtered upload
+temporarily allocates the fitted pixels and cell-aligned canvas, then discards
+them.
 
 To update dependencies, change the exact version in the tracked manifest and Go
 constant, regenerate the lockfile with npm in a private cache directory, then
@@ -42,13 +63,10 @@ review every resolved URL/integrity change. Run unit tests, real math tests and
 Kitty visual checks after preparing the updated cache. The runtime never resolves
 an unpinned latest version automatically.
 
-Fresh-process Node+PNG samples on the development host (Node 26.5.1,
-librsvg 2.62.3) measured 215–247 ms before warming. Ten-render warm benchmarks
-averaged 21.7 ms for inline math, 22.5 ms for a matrix and 28.1 ms for aligned
-equations, including PNG conversion. Benchmark the actual warm renderer with:
+Benchmark the actual warm renderer, including PNG conversion, with:
 
 ```sh
 go test ./internal/assets -run '^$' -bench BenchmarkMathJax -benchtime=10x
 ```
 
-These timings exclude first-time npm downloads. Cached PNGs bypass both engines.
+Benchmarks exclude first-time npm downloads. Cached PNGs bypass both engines.

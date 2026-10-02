@@ -29,6 +29,7 @@ def main():
     script.write_text(json.dumps([
         {'prefix': 'user: Edited in external editor.\nsecond line', 'text': 'Editor round completed.'},
         {'prefix': 'user: look @', 'text': 'Attachment round completed.'},
+        {'prefix': 'user: first line\nsecond line', 'text': 'Ctrl+J round completed.'},
         {'prefix': 'user: exercise tools', 'text': 'Waiting for the fixture gate.', 'calls': [
             {'id': 'write', 'name': 'write', 'arguments': {'path': 'result.py', 'content': 'print("evidence")\n'}},
             {'id': 'gate', 'name': 'shell', 'arguments': {'command': "printf 'ready\\n'; while [ ! -e release-main ]; do sleep 0.02; done; printf 'done\\n'; i=0; while [ $i -lt 1200 ]; do printf '\\n'; i=$((i+1)); done"}},
@@ -39,6 +40,12 @@ def main():
         ]},
         {'prefix': 'tool:', 'text': '## Side answer\n\nThe fixture prints **evidence**.\n\n| File | Behavior |\n| --- | --- |\n| result.py | Prints evidence |'},
         {'prefix': 'tool:', 'text': 'Main fixture completed.'},
+        {'prefix': 'user: promote shell', 'calls': [
+            {'id': 'promoted-shell', 'name': 'shell', 'arguments': {
+                'command': 'touch promotion.ready; while [ ! -e promotion.release ]; do sleep 0.02; done; printf promoted-done',
+                'wake_on_exit': False}},
+        ]},
+        {'prefix': 'user: steer promoted', 'text': 'Steering and promotion verified.'},
     ]))
     editor = root / 'fake editor.py'
     editor.write_text('''import json, os, sys
@@ -126,6 +133,23 @@ path.write_text('Edited in external editor.\\nsecond line')
         send(b'\r')
         expect('Attachment round completed.')
         expect('Turn completed')
+        send(b'first line\x0asecond line')  # Ctrl+J inserts LF without submitting.
+        read_for(0.2)
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            assert db.execute("SELECT count(*) FROM turns WHERE trigger='user'").fetchone()[0] == 2
+        send(b'\r')
+        expect('Ctrl+J round completed.')
+        expect('Turn completed')
+        send(b'/rename Fixture inspection\r')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            read_for(0.1)
+            with sqlite3.connect(data / 'history.sqlite') as db:
+                name, source = db.execute('SELECT name,name_source FROM sessions').fetchone()
+            if (name, source) == ('Fixture inspection', 'manual'):
+                break
+        assert (name, source) == ('Fixture inspection', 'manual'), (name, source)
+        read_for(0.2)
         send(b'/he\t\r')
         expect('TTC help')
         send(b'\x1b')
@@ -174,6 +198,53 @@ path.write_text('Edited in external editor.\\nsecond line')
                 "SELECT content_json FROM entries WHERE kind='message' AND role='user' ORDER BY id")]
         assert messages[0] == 'Edited in external editor.\nsecond line', messages
         assert 'attachment snapshot evidence' in messages[1] and 'changed after snapshot' not in messages[1], messages
+        assert messages[2] == 'first line\nsecond line', messages
+        # Inspect a human input without submitting the draft, then select its
+        # pre-input checkpoint and restore the immutable tip without rerunning tools.
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            session_id, final_tip = db.execute('SELECT id,active_entry_id FROM sessions').fetchone()
+        send(b'retained branch draft\x18g')
+        expect('User inputs')
+        send(b'\x1b[H ')
+        expect('user')
+        send(b'\x1b')
+        read_for(0.2)
+        send(b'\x1b')
+        read_for(0.2)  # Incremental terminal paints may keep the unchanged draft.
+        send(b'\x01\x0b\x18g')
+        expect('User inputs')
+        send(b'\x1b[H\r')  # Restore the checkpoint before the first human input.
+        deadline = time.monotonic() + 5
+        while (project / 'result.py').exists() and time.monotonic() < deadline:
+            read_for(0.1)
+        assert not (project / 'result.py').exists(), 'tree selection did not undo fixture edits'
+        assert (project / 'release-main').exists(), 'shell side effect entered undo history'
+        read_for(0.2)
+        send(f'/branch {final_tip}\r'.encode())
+        deadline = time.monotonic() + 5
+        while not (project / 'result.py').exists() and time.monotonic() < deadline:
+            read_for(0.1)
+        assert (project / 'result.py').read_text() == 'print("evidence")\n'
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            assert db.execute('SELECT active_entry_id FROM sessions WHERE id=?', (session_id,)).fetchone()[0] == final_tip
+        send(b'promote shell\r')
+        deadline = time.monotonic() + 5
+        while not (project / 'promotion.ready').exists() and time.monotonic() < deadline:
+            read_for(0.1)
+        assert (project / 'promotion.ready').exists(), 'foreground promotion fixture did not start'
+        send(b'steer promoted\x1b\r')  # Alt+Enter keeps this instruction in the current coding turn.
+        expect('Steer')
+        send(b'\x02')  # Ctrl+B releases the foreground tool without canceling its process.
+        expect('Steering and promotion verified.')
+        expect('Turn completed')
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            promoted = json.loads(db.execute("SELECT result_json FROM tool_calls WHERE provider_call_id='promoted-shell'").fetchone()[0])
+            assert promoted['status'] == 'running', promoted
+            turns = db.execute("SELECT count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding' AND turn_id IN (SELECT turn_id FROM entries WHERE json_extract(content_json,'$.content')='promote shell')").fetchone()[0]
+            assert turns == 1, turns
+        assert not (project / 'promotion.release').exists()
+        (project / 'promotion.release').write_text('release')
+        read_for(0.2)
         send(b'/clear\r')
         expect('session_')
         read_for(0.2)
@@ -184,7 +255,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         _, status = os.waitpid(pid, 0)
         finished = True
         assert os.waitstatus_to_exitcode(status) == 0, status
-        print('PASS: PTY editor/completion/export, parallel read-only btw popup, diff inspector, strict shell and blank-tail preview; artifacts:', root)
+        print('PASS: PTY editor/completion/export, history tree inspect/restore, steering/shell promotion, read-only btw popup, diff inspector and strict shell; artifacts:', root)
     except BaseException:
         save()
         (root / 'failure.txt').write_text(traceback.format_exc())

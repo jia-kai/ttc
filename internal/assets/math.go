@@ -18,6 +18,10 @@ import (
 
 const mathjaxVersion = "4.1.3"
 
+// MathRasterScale is the number of raster pixels per logical formula pixel.
+// Placements divide PNG dimensions by this factor to preserve the display size.
+const MathRasterScale = 3
+
 //go:embed mathjax_backend.cjs
 var mathBackend string
 
@@ -73,7 +77,7 @@ func checkMath(ctx context.Context, root string) error {
 func formulaAt(ctx context.Context, root, tex string, pixels int) (image.Image, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "node", "--input-type=commonjs", "--eval", mathBackend, root, fmt.Sprint(max(8, min(pixels, 128))))
+	cmd := exec.CommandContext(ctx, "node", "--input-type=commonjs", "--eval", mathBackend, root, fmt.Sprint(max(8, min(pixels, 128))), fmt.Sprint(MathRasterScale))
 	cmd.Env = mathEnvironment()
 	svg, err := renderOutput(ctx, cmd, []byte(tex), MaxBytes)
 	if err != nil {

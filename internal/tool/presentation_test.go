@@ -84,14 +84,14 @@ func TestShellStrictDefaultAndOptOut(t *testing.T) {
 	r, w, x, req := toolFixture(t)
 	m := jobs.New(context.Background(), nil)
 	defer m.Close()
-	AddShell(r, m, w)
+	AddShell(r, m, w, nil)
 	for _, tc := range []struct {
 		name, command, extra string
 		wantExitZero         bool
 	}{
 		{"default", "false; printf should-not-run", "", false},
 		{"explicit", "false; printf should-not-run", `,"strict":true`, false},
-		{"unset", "unset SCICODE_TEST_UNSET_STRICT; printf '%s' \"$SCICODE_TEST_UNSET_STRICT\"; printf should-not-run", "", false},
+		{"unset", "unset TTC_TEST_UNSET_STRICT; printf '%s' \"$TTC_TEST_UNSET_STRICT\"; printf should-not-run", "", false},
 		{"opt-out", "false; printf continued", `,"strict":false`, true},
 		{"condition", "if false; then printf unused; fi; printf continued", "", true},
 	} {

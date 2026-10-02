@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"golang.org/x/sys/unix"
 	"scicode/internal/provider"
 	"scicode/internal/session"
 )
@@ -82,5 +83,52 @@ func TestReadEditedDraftPreservesFailureAndAcceptsEmpty(t *testing.T) {
 	f.Close()
 	if got, err := readEditedDraft(path, "original"); err == nil || got != "original" {
 		t.Fatal("oversize accepted", err)
+	}
+}
+
+func TestReadEditedDraftRejectsSubstitutedFIFOAndSymlink(t *testing.T) {
+	for _, kind := range []string{"fifo", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "input.md")
+			if kind == "fifo" {
+				if err := unix.Mkfifo(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				target := filepath.Join(root, "other.md")
+				if err := os.WriteFile(target, []byte("unrelated contents"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			type result struct {
+				text string
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				text, err := readEditedDraft(path, "preserve draft")
+				done <- result{text, err}
+			}()
+			select {
+			case got := <-done:
+				if got.err == nil || got.text != "preserve draft" {
+					t.Fatalf("unsafe editor replacement changed draft: %q %v", got.text, got.err)
+				}
+			case <-time.After(time.Second):
+				if kind == "fifo" {
+					// Release a regression to blocking open before reporting failure.
+					f, err := os.OpenFile(path, os.O_WRONLY|unix.O_NONBLOCK, 0)
+					if err == nil {
+						f.Close()
+						<-done
+					}
+				}
+				t.Fatal("replacement validation blocked")
+			}
+		})
 	}
 }

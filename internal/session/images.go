@@ -114,7 +114,7 @@ func (r *Runtime) addImageTool() {
 			r.images.mu.Unlock()
 		}
 		r.routeMu.RLock()
-		r.emit(Event{Kind: "image", CallID: x.CallID, Image: &v, SessionID: r.Current()})
+		r.emit(Event{Kind: "image", Actor: x.Actor, CallID: x.CallID, Image: &v, SessionID: r.Current()})
 		r.routeMu.RUnlock()
 		return v, nil
 	})
@@ -181,11 +181,8 @@ func (r *Runtime) ConfirmImage(id string, point *[2]int) error {
 		return nil
 	}
 	delete(r.images.actors, v.Actor)
-	r.mu.Lock()
-	r.notifications = append(r.notifications, m)
-	r.mu.Unlock()
 	r.images.mu.Unlock()
-	return nil
+	return r.queueNotification(m.Content)
 }
 
 func (r *Runtime) childImageReply(ctx context.Context, actor string, wait bool) (*provider.Message, error) {

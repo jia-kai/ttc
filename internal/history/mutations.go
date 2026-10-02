@@ -68,6 +68,14 @@ func (s *Store) CommitChange(session, call string, paths any, reversible bool) (
 		if _, e = tx.Exec(`UPDATE sessions SET file_tip_id=?,observed_generation=(SELECT generation FROM workspaces WHERE id=workspace_id) WHERE id=?`, id, session); e != nil {
 			return e
 		}
+		var actor, turn string
+		if e := tx.QueryRow("SELECT c.actor_id,coalesce(q.turn_id,'') FROM tool_calls c JOIN model_requests q ON q.id=c.request_id WHERE c.id=?", call).Scan(&actor, &turn); e != nil {
+			return e
+		}
+		event, _ := json.Marshal(map[string]any{"type": "file_changed", "change_id": id, "call_id": call, "paths": paths})
+		if _, e := appendTx(tx, session, turn, actor, "status", "", false, event, 0); e != nil {
+			return e
+		}
 		_, e = tx.Exec("DELETE FROM fs_operation WHERE slot=1 AND session_id=?", session)
 		return e
 	})
@@ -134,7 +142,7 @@ func (s *Store) UndoTarget(session string) (RestoreTarget, error) {
 			if e = s.DB.QueryRow("SELECT start_entry_id,start_file_tip_id,trigger FROM turns WHERE id=?", x.TurnID).Scan(&start, &tip, &trigger); e != nil {
 				return RestoreTarget{}, e
 			}
-			if trigger != "user" {
+			if trigger != "user" && trigger != "steer" {
 				continue
 			}
 			if start.Int64 < v.UndoFloor {

@@ -2,11 +2,94 @@ package assets
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
+	"fmt"
+	"image/png"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestMathRasterResolutionPreservesLogicalSize(t *testing.T) {
+	isolatedMathCache(t)
+	r, err := NewMathRenderer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for i, tex := range []string{`x^2`, `\frac{1}{n}`, `\begin{pmatrix}1&2\\3&4\end{pmatrix}`} {
+		cmd := exec.CommandContext(ctx, "node", "--input-type=commonjs", "--eval", mathBackend, r.root, "16", "1")
+		cmd.Env = mathEnvironment()
+		svg, err := renderOutput(ctx, cmd, []byte(tex), MaxBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var canvas struct {
+			Width   string `xml:"width,attr"`
+			Height  string `xml:"height,attr"`
+			ViewBox string `xml:"viewBox,attr"`
+		}
+		if err := xml.Unmarshal(svg, &canvas); err != nil {
+			t.Fatal(err)
+		}
+		var x, y, width, height float64
+		if _, err := fmt.Sscan(canvas.ViewBox, &x, &y, &width, &height); err != nil {
+			t.Fatal(err)
+		}
+		pw, _ := strconv.ParseFloat(canvas.Width, 64)
+		ph, _ := strconv.ParseFloat(canvas.Height, 64)
+		if math.Abs(pw/width-16.0/1000) > 1e-9 || math.Abs(ph/height-16.0/1000) > 1e-9 {
+			t.Fatal("SVG padding changed em scale or aspect ratio", canvas)
+		}
+		encoded, err := renderOutput(ctx, exec.CommandContext(ctx, "rsvg-convert"), svg, MaxBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base, err := Decode(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		high, err := r.Render(ctx, tex, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if high.Bounds().Dx() != MathRasterScale*base.Bounds().Dx() || high.Bounds().Dy() != MathRasterScale*base.Bounds().Dy() {
+			t.Fatalf("formula %q: %v -> %v", tex, base.Bounds(), high.Bounds())
+		}
+		if i == 0 {
+			setup, err := formulaAt(ctx, r.root, tex, 16)
+			if err != nil || setup.Bounds() != high.Bounds() {
+				t.Fatal("setup renderer disagrees with warm raster resolution", err)
+			}
+		}
+		// An explicit directory saves real PNGs for visual inspection without
+		// making tests depend on machine-local paths.
+		if dir := os.Getenv("TTC_MATH_TEST_ARTIFACTS"); dir != "" {
+			file, err := os.Create(filepath.Join(dir, fmt.Sprintf("formula-%d-3x.png", i)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = png.Encode(file, high)
+			closeErr := file.Close()
+			if err != nil || closeErr != nil {
+				t.Fatal(err, closeErr)
+			}
+		}
+	}
+	// This canvas fits the former logical bounds but not the supersampled
+	// physical pixel budget. Reject it before asking librsvg to allocate it.
+	if _, err := r.Render(ctx, `\rule{31em}{6em}`, 128); err == nil || !strings.Contains(err.Error(), "dimensions exceed render limits") {
+		t.Fatal("supersampling bypassed physical pixel bounds", err)
+	}
+}
 
 func TestWarmRendererRecoveryCancellationAndClose(t *testing.T) {
 	fakeMathInstall(t)

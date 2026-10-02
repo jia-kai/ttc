@@ -8,6 +8,26 @@ import (
 	"testing"
 )
 
+func TestAttachmentDisplayMetadataDoesNotChangeWireInput(t *testing.T) {
+	text := "Review this file."
+	content := text + "\n\nAttachment (text): file.txt\nPreserve complete snapshot."
+	body, err := wire(provider.Request{ConversationID: "attachments", Selection: provider.Selection{Provider: "openai", Model: provider.ScriptModel()}, Messages: []provider.Message{{Role: "user", Content: content, UserText: &text}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Input []struct {
+			Content []struct{ Text string }
+		}
+	}
+	if err := json.Unmarshal(body, &request); err != nil || len(request.Input) != 1 || len(request.Input[0].Content) != 1 || request.Input[0].Content[0].Text != content {
+		t.Fatal("provider lost the attachment payload", string(body), err)
+	}
+	if strings.Contains(string(body), "user_text") {
+		t.Fatal("presentation metadata leaked onto provider wire", string(body))
+	}
+}
+
 func TestNativePhaseStateUsageAndStatelessWire(t *testing.T) {
 	reason := map[string]any{"type": "reasoning", "id": "rs", "encrypted_content": "encrypted"}
 	message := map[string]any{"type": "message", "id": "msg", "role": "assistant", "status": "completed", "phase": "commentary", "content": []any{map[string]any{"type": "output_text", "text": "Working on it.", "annotations": []any{}}}}

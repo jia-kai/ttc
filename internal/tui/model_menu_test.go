@@ -91,6 +91,9 @@ func (p *gatedModelProvider) Models(context.Context) ([]provider.ModelSpec, erro
 	return menuModels(), nil
 }
 func (p *gatedModelProvider) Login(context.Context, provider.LoginUI) error { return nil }
+func (p *gatedModelProvider) EstimateReplay(m provider.Message) int {
+	return provider.ReplayTokens(m.State)
+}
 func (p *gatedModelProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
 	p.requests <- req
 	select {
@@ -221,7 +224,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	waitFrame("Turn completed")
 	key(tcell.KeyEnter)
 	third := request()
-	if third.Selection.Model.ID != "family-b" || third.Selection.Variant != "max" || third.Messages[len(third.Messages)-2].Content != "draft stays" {
+	if third.Selection.Model.ID != "family-b" || third.Selection.Variant != "max" || third.Messages[len(third.Messages)-1].Content != "draft stays" {
 		t.Fatal("next turn did not use chosen model and preserved draft", third.Selection, third.Messages)
 	}
 }

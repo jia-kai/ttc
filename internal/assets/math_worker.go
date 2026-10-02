@@ -111,6 +111,8 @@ func (r *MathRenderer) read() (mathReply, error) {
 }
 
 // Render typesets one formula using the warm engine and converts its SVG to PNG.
+// Pixels is the logical font size, clamped to 8–128 pixels. Returned image
+// dimensions are supersampled by MathRasterScale, including transparent padding.
 // Cancellation interrupts the current engine; the next render starts a new one.
 // Unsupported TeX is an ordinary error and leaves the engine available.
 func (r *MathRenderer) Render(ctx context.Context, tex string, pixels int) (image.Image, error) {
@@ -132,7 +134,8 @@ func (r *MathRenderer) Render(ctx context.Context, tex string, pixels int) (imag
 	request := struct {
 		TeX    string `json:"tex"`
 		Pixels int    `json:"pixels"`
-	}{tex, max(8, min(pixels, 128))}
+		Scale  int    `json:"scale"`
+	}{tex, max(8, min(pixels, 128)), MathRasterScale}
 	data, err := json.Marshal(request)
 	if err == nil {
 		_, err = r.input.Write(append(data, '\n'))

@@ -104,10 +104,11 @@ def main():
                     assert results['parallel_left']['stdout'] == 'left-overlapped'
                     assert results['parallel_right']['stdout'] == 'right-overlapped'
                     assert all(results[call['id']]['ok'] for call in responses[index-1]['calls'])
-                context = json.loads(body['input'][-1]['content'][0]['text'])
+                contexts = [item for item in body['input'] if item.get('role') == 'developer']
+                assert contexts, 'missing initial runtime context'
+                context = json.loads(contexts[-1]['content'][0]['text'])
                 assert context['type'] == 'runtime_context'
-                assert body['input'][-1]['role'] == 'developer'
-                last = body['input'][-2]
+                last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 if last['type'] == 'function_call_output':
                     message = 'tool: ' + last['output']
                     assert json.loads(last['output'])['ok'] is True

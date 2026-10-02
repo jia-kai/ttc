@@ -116,24 +116,52 @@ type Image struct {
 // Adapters validate their own codec and never replay another provider/model's data.
 // Items replace the entire canonical message on the wire, rather than augmenting it.
 type ReplayState struct {
-	Provider string            `json:"provider"`
-	Model    string            `json:"model"`
-	Version  int               `json:"version"`
-	Items    []json.RawMessage `json:"items"`
+	Provider        string            `json:"provider"`
+	Model           string            `json:"model"`
+	Version         int               `json:"version"`
+	Items           []json.RawMessage `json:"items"`
+	EstimatedTokens *int              `json:"-"` // Adapter-derived context occupancy; transient, never wire/history metadata.
+}
+
+// ReplayTokens estimates opaque transport data when an adapter has not supplied
+// a model-visible estimate. It is conservative, not endpoint-reported usage.
+func ReplayTokens(state *ReplayState) int {
+	if state == nil {
+		return 0
+	}
+	if state.EstimatedTokens != nil {
+		return max(0, *state.EstimatedTokens)
+	}
+	n := 0
+	for _, item := range state.Items {
+		n += (len(item) + 2) / 3
+	}
+	return n
 }
 
 // Message is canonical history. State preserves provider-native replay data;
 // Content and Calls remain usable when a different provider/model is selected.
 type Message struct {
+	EventSeq  int64        `json:"event_seq,omitempty"`  // Source identity of an injected runtime event, never a provider wire field.
 	RequestID int64        `json:"request_id,omitempty"` // Durable producing request for audit/inspection.
 	Runtime   bool         `json:"runtime,omitempty"`    // Injected job/timer notices, rather than human instructions.
 	Role      string       `json:"role"`
 	Phase     string       `json:"phase,omitempty"` // Adapter-supplied assistant phase, retained if native state is compacted.
 	Content   string       `json:"content,omitempty"`
+	UserText  *string      `json:"user_text,omitempty"` // Authored human text before attachment expansion; nil uses Content for display.
 	Calls     []ToolCall   `json:"calls,omitempty"`
 	CallID    string       `json:"call_id,omitempty"`
 	Images    []Image      `json:"images,omitempty"`
 	State     *ReplayState `json:"state,omitempty"`
+}
+
+// DisplayText returns authored human text when attachment expansion is present.
+// Providers and inspectors use Content, which preserves the complete input.
+func (m Message) DisplayText() string {
+	if m.Role == "user" && !m.Runtime && m.UserText != nil {
+		return *m.UserText
+	}
+	return m.Content
 }
 
 // AppendState takes ownership of a copied adapter item and enforces one codec
@@ -234,4 +262,7 @@ type Provider interface {
 	Models(context.Context) ([]ModelSpec, error)
 	Login(context.Context, LoginUI) error
 	Stream(context.Context, Request, func(StreamEvent) error) error
+	// EstimateReplay returns nonnegative estimated context tokens for one native
+	// assistant message. It never changes replay bytes or endpoint usage counters.
+	EstimateReplay(Message) int
 }

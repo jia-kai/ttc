@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"scicode/internal/capture"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"scicode/internal/history"
+	"scicode/internal/lsp"
 )
 
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
@@ -35,12 +37,15 @@ type Snapshot struct {
 	Truncated  bool   `json:"truncated"`
 }
 type job struct {
-	view           Snapshot
-	cmd            *exec.Cmd
-	cancel         context.CancelFunc
-	done           chan struct{}
-	stdout, stderr *capture.Buffer
-	background     bool
+	view             Snapshot
+	cmd              *exec.Cmd
+	cancel           context.CancelFunc
+	done             chan struct{}
+	promoted         chan struct{} // Closed once when foreground shell ownership moves to background.
+	promotionClaimed bool          // The original waiter owns promotion; later waits observe ordinary completion.
+	stdout, stderr   *capture.Buffer
+	background       bool
+	client           *lsp.Client
 }
 
 // Manager owns jobs for one runtime. Close cancels and joins all process groups.
@@ -52,7 +57,10 @@ type Manager struct {
 	jobs   map[string]*job
 	closed bool
 	Notify func(Snapshot)
-	pool   *capture.Pool
+	// OnState publishes launch and terminal states outside the manager lock.
+	// Set before launching jobs; callbacks must not wait for this job to finish.
+	OnState func(Snapshot)
+	pool    *capture.Pool
 }
 
 // New constructs a live supervisor; foreground contexts do not own background jobs.
@@ -64,9 +72,19 @@ func New(ctx context.Context, notify func(Snapshot)) *Manager {
 // Start launches a closed-stdin shell in a dedicated process group.
 // strict enables POSIX errexit and nounset; it does not enable pipefail.
 func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, background, wake, false)
+}
+
+// StartLSP launches a background stdio server. Protocol stdout is owned by the
+// LSP client; only stderr is available through Read. Stop cancels the process group.
+func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict, wake bool) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, true, wake, true)
+}
+
+func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool) (string, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return "", errors.New("runtime ended")
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -92,19 +110,56 @@ func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, s
 		return e
 	}
 	cmd.WaitDelay = time.Second
-	j := &job{view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339)}, cmd: cmd, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j := &job{view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	cmd.Stdout = j.stdout
 	cmd.Stderr = j.stderr
+	var input io.WriteCloser
+	var output, writer *os.File
+	if protocol {
+		var err error
+		input, err = cmd.StdinPipe()
+		if err == nil {
+			output, writer, err = os.Pipe()
+		}
+		if err != nil {
+			if input != nil {
+				_ = input.Close()
+			}
+			cancel()
+			m.mu.Unlock()
+			return "", fmt.Errorf("create LSP pipes: %w", err)
+		}
+		cmd.Stdout = writer
+		j.view.Kind = "lsp"
+	}
 	if e := cmd.Start(); e != nil {
+		if input != nil {
+			_ = input.Close()
+			_ = output.Close()
+			_ = writer.Close()
+		}
 		cancel()
+		m.mu.Unlock()
 		return "", e
+	}
+	if protocol {
+		_ = writer.Close() // Only the child retains the stdout writer.
+		j.client = lsp.New(ctx, workdir, input, output)
 	}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
+	launch := j.view
+	m.mu.Unlock()
+	if m.OnState != nil {
+		m.OnState(launch)
+	}
 	go func() {
 		defer m.wg.Done()
 		e := cmd.Wait() // Kill lingering descendants even if the group leader exits first.
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if j.client != nil {
+			j.client.Close()
+		}
 		m.mu.Lock()
 		j.view.Status = "completed"
 		if ctx.Err() != nil {
@@ -113,6 +168,10 @@ func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, s
 			var exit *exec.ExitError
 			if !errors.As(e, &exit) {
 				j.view.Status = "failed"
+				fmt.Fprintf(j.stderr, "Shell supervision failed: %v\n", e)
+				if errors.Is(e, exec.ErrWaitDelay) {
+					io.WriteString(j.stderr, "Descendants kept output pipes open after the shell exited. Run the long command directly with background=true, or use tmux for work outside this runtime.\n")
+				}
 			}
 		}
 		if cmd.ProcessState != nil {
@@ -127,14 +186,39 @@ func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, s
 		view := preview(j)
 		view.WakeOnExit = wake
 		notify := j.background
-		close(j.done)
 		m.mu.Unlock()
+		if m.OnState != nil {
+			m.OnState(view)
+		}
+		close(j.done)
 		cancel()
 		if notify && m.Notify != nil {
 			m.Notify(view)
 		}
 	}()
-	return j.view.ID, nil
+	return launch.ID, nil
+}
+
+// QueryLSP performs a bounded read-only query on an actor-visible running server.
+// The caller owns the query deadline; cancellation preserves the background job.
+func (m *Manager) QueryLSP(ctx context.Context, owner, id string, query lsp.Query) (map[string]any, error) {
+	m.mu.Lock()
+	j, ok := m.jobs[id]
+	if !ok || !allowed(owner, j.view.Owner) {
+		m.mu.Unlock()
+		return nil, &lsp.Error{Code: "not_found", Message: "unknown or inaccessible live LSP job; use job_list or start shell(protocol=lsp, background=true)"}
+	}
+	if j.client == nil {
+		m.mu.Unlock()
+		return nil, &lsp.Error{Code: "invalid_input", Message: "job is not an LSP server; start shell(protocol=lsp, background=true)"}
+	}
+	if j.view.Status != "running" {
+		m.mu.Unlock()
+		return nil, &lsp.Error{Code: "job_not_running", Message: "language server exited; inspect job_read(stream=stderr) and start a new server"}
+	}
+	client := j.client
+	m.mu.Unlock()
+	return client.Query(ctx, query)
 }
 func allowed(owner, jobOwner string) bool {
 	return owner == "main" || owner == jobOwner || strings.HasPrefix(jobOwner, owner+"/")
@@ -160,6 +244,11 @@ func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapsh
 		return Snapshot{}, errors.New("not_found")
 	}
 	done := j.done
+	var promoted <-chan struct{}
+	if !j.promotionClaimed {
+		promoted = j.promoted
+		j.promotionClaimed = true
+	}
 	m.mu.Unlock()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -176,8 +265,28 @@ func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapsh
 		select {
 		case <-done:
 			return m.View(owner, id)
+		case <-promoted:
+			view, err := m.View(owner, id)
+			if err != nil || view.Status == "running" {
+				return view, err
+			}
+			// Terminal state is observable before its durable publication. A
+			// promoted waiter must join that commit before returning the result.
+			<-done
+			return m.View(owner, id)
 		case <-ctx.Done():
+			m.mu.Lock()
+			if j.background {
+				view := preview(j)
+				m.mu.Unlock()
+				if view.Status != "running" {
+					<-done
+					return m.View(owner, id)
+				}
+				return view, nil
+			}
 			j.cancel()
+			m.mu.Unlock()
 			<-done
 			return m.View(owner, id)
 		case <-ticker.C:
@@ -242,6 +351,12 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 	stream := options.Stream
 	if stream == "" {
 		stream = "stdout"
+		if j.client != nil {
+			stream = "stderr"
+		}
+	}
+	if j.client != nil && stream != "stderr" {
+		return nil, &lsp.Error{Code: "invalid_input", Message: "LSP stdout belongs to the protocol client; set stream=stderr for server diagnostics"}
 	}
 	buffer := j.stdout
 	if stream == "stderr" {
@@ -314,14 +429,19 @@ func preview(j *job) Snapshot {
 // as shell jobs. The worker must honor ctx and finish before its callback is joined.
 func (m *Manager) StartTask(owner, kind, label string, background, wake bool, run func(context.Context, io.Writer, io.Writer) error) (string, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return "", errors.New("runtime ended")
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	j := &job{view: Snapshot{ID: history.NewID("job"), Kind: kind, Owner: owner, Label: label, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339)}, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
+	launch := j.view
+	m.mu.Unlock()
+	if m.OnState != nil {
+		m.OnState(launch)
+	}
 	go func() {
 		defer m.wg.Done()
 		err := run(ctx, j.stdout, j.stderr)
@@ -336,14 +456,17 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 		view := preview(j)
 		view.WakeOnExit = wake
-		close(j.done)
 		m.mu.Unlock()
+		if m.OnState != nil {
+			m.OnState(view)
+		}
+		close(j.done)
 		cancel()
 		if background && m.Notify != nil {
 			m.Notify(view)
 		}
 	}()
-	return j.view.ID, nil
+	return launch.ID, nil
 }
 
 // Close stops all jobs, waits for output capture, then discards every handle.

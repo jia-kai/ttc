@@ -2,50 +2,67 @@ package graphics
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"strings"
 	"time"
 
-	"encoding/base64"
 	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
-// Probe queries the underlying terminal before tcell owns input. Terminal names
-// are not reliable through SSH/tmux. The raw descriptor is restored on return;
+// Probe detects Kitty before tcell owns input. In tmux it uses the detected
+// client identity and effective passthrough setting, since a graphics query's
+// reply may not reach the pane. Direct connections query the terminal instead.
+// The raw descriptor is restored on return;
 // unrelated input is returned for the frontend to deliver to its terminal reader.
-// The query is bounded to 500 ms and 4 KiB. tmux must permit DCS passthrough.
-func Probe(tmux bool) (bool, []byte) {
+// Metadata queries take at most two seconds; direct queries take 500 ms and
+// retain at most 4 KiB. An error explains why optional graphics are disabled.
+func Probe(ctx context.Context, tmux bool) (bool, []byte, error) {
+	if tmux {
+		err := probeTmux(ctx)
+		return err == nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, nil, err
+	}
 	fd, err := unix.Open("/dev/tty", unix.O_RDWR|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return false, nil
+		return false, nil, fmt.Errorf("open terminal for graphics query: %w", err)
 	}
 	defer unix.Close(fd)
 	state, err := term.MakeRaw(fd)
 	if err != nil {
-		return false, nil
+		return false, nil, fmt.Errorf("prepare terminal for graphics query: %w", err)
 	}
 	defer term.Restore(fd, state)
 	var pngBytes bytes.Buffer
 	_ = png.Encode(&pngBytes, image.NewNRGBA(image.Rect(0, 0, 1, 1)))
 	seq := ansi.KittyGraphics([]byte(base64.StdEncoding.EncodeToString(pngBytes.Bytes())), "a=q", "i=31337", "f=100", "s=1", "v=1", "t=d")
-	if tmux {
-		seq = "\x1bPtmux;" + strings.ReplaceAll(seq, "\x1b", "\x1b\x1b") + "\x1b\\"
+	written, err := unix.Write(fd, []byte(seq))
+	if err != nil {
+		return false, nil, fmt.Errorf("send graphics query: %w", err)
 	}
-	if _, err = unix.Write(fd, []byte(seq)); err != nil {
-		return false, nil
+	if written != len(seq) {
+		return false, nil, errors.New("incomplete graphics query write")
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
 	var reply []byte
 	for time.Now().Before(deadline) && len(reply) < 4096 {
+		if err := ctx.Err(); err != nil {
+			return false, reply, err
+		}
 		poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 		if _, err = unix.Poll(poll, 20); err != nil {
 			if err == unix.EINTR {
 				continue
 			}
-			break
+			return false, reply, fmt.Errorf("wait for graphics reply: %w", err)
 		}
 		if poll[0].Revents&unix.POLLIN == 0 {
 			continue
@@ -56,14 +73,23 @@ func Probe(tmux bool) (bool, []byte) {
 			if err == unix.EINTR || err == unix.EAGAIN {
 				continue
 			}
-			break
+			return false, reply, fmt.Errorf("read graphics reply: %w", err)
+		}
+		if n == 0 {
+			return false, reply, errors.New("terminal closed during graphics query")
 		}
 		reply = append(reply, b[:n]...)
 		if supported, found, pending := probeReply(reply); found {
-			return supported, pending
+			if !supported {
+				return false, pending, errors.New("terminal rejected the Kitty graphics query")
+			}
+			return true, pending, nil
 		}
 	}
-	return false, reply
+	if len(reply) == 4096 {
+		return false, reply, errors.New("graphics query input exceeds 4 KiB without a reply")
+	}
+	return false, reply, errors.New("terminal graphics query timed out after 500 ms")
 }
 
 // probeReply removes only a complete response to our query, preserving all other

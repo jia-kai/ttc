@@ -130,6 +130,8 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 		c.erase(c.cursor, end, true)
 	case tcell.KeyCtrlY:
 		c.insert(c.killed)
+	case tcell.KeyCtrlJ:
+		c.insert("\n")
 	case tcell.KeyEnter:
 		if ev.Modifiers()&tcell.ModShift == 0 {
 			return false

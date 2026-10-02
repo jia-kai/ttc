@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestPatchMatchesCompleteLinesAndActualEOF(t *testing.T) {
@@ -121,7 +124,7 @@ func TestDirectoryReadCancellationBoundsAndSortedPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := readDirectoryEntries(context.Background(), dir); err != nil {
+	if _, err := readPage(context.Background(), dir, 1, 1); err != nil {
 		t.Fatalf("directory at the limit rejected: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "overflow"), nil, 0600); err != nil {
@@ -152,5 +155,111 @@ func TestRecoverableParameterErrorsIdentifyAdjustment(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(w.Root, "text"))
 	if err != nil || string(b) != "same\nsame\n" {
 		t.Fatalf("failed edits changed the file: %q, %v", b, err)
+	}
+}
+
+func TestReadUsesOpenedDescriptorWhenPathIsReplaced(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		t.Run(fmt.Sprint("directory=", directory), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "target")
+			if directory {
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(path, "item"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, []byte("original\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			if err := os.Rename(path, path+".old"); err != nil {
+				t.Fatal(err)
+			}
+			if err := syscall.Mkfifo(path, 0600); err != nil {
+				t.Fatal(err)
+			}
+			// A path reopen would now block. Both branches must consume the
+			// descriptor that was validated, irrespective of later replacements.
+			page, err := readOpenedPage(context.Background(), f, path, 1, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(page)
+			want := "original"
+			if directory {
+				want = "item"
+			}
+			if !strings.Contains(string(data), want) {
+				t.Fatalf("read replacement instead of opened descriptor: %s", data)
+			}
+		})
+	}
+}
+
+func TestReadSymlinksAndRejectsFIFOWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+	if err := os.WriteFile(path, []byte("linked\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPage(context.Background(), link, 1, 1); err != nil {
+		t.Fatalf("ordinary symlink reads must remain supported: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := readPage(ctx, link, 1, 1)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != "unsupported_content" {
+		t.Fatalf("FIFO must be rejected from its descriptor: %v", err)
+	}
+}
+
+func TestEditRejectsExpansionBeforeAllocation(t *testing.T) {
+	r, w, x, req := toolFixture(t)
+	path := filepath.Join(w.Root, "text")
+	before := strings.Repeat("a", 4096)
+	if err := os.WriteFile(path, []byte(before), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args, err := json.Marshal(map[string]any{"path": "text", "old_text": "a", "new_text": strings.Repeat("b", 16384), "replace_all": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start, end runtime.MemStats
+	runtime.ReadMemStats(&start)
+	record := invoke(t, r, w, x, req, "edit", string(args))
+	runtime.ReadMemStats(&end)
+	if !strings.Contains(string(record.Result), `"code":"file_too_large"`) || !strings.Contains(string(record.Result), "replace fewer occurrences") {
+		t.Fatalf("oversized expansion needs actionable rejection: %s", record.Result)
+	}
+	// These small arguments describe a 64 MiB result. The file limit must
+	// prevent allocation, rather than reject the result after constructing it.
+	if allocated := end.TotalAlloc - start.TotalAlloc; allocated > 32<<20 {
+		t.Fatalf("rejected expansion allocated %d bytes", allocated)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != before {
+		t.Fatalf("rejected edit changed file: %q, %v", data, err)
+	}
+	ok(t, invoke(t, r, w, x, req, "edit", `{"path":"text","old_text":"a","new_text":"","replace_all":true}`))
+	data, err = os.ReadFile(path)
+	if err != nil || len(data) != 0 {
+		t.Fatalf("shrinking replacements must still work: %q, %v", data, err)
 	}
 }

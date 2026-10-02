@@ -33,6 +33,7 @@ func TestComposerEditing(t *testing.T) {
 		{"character movement", "αβ", 0, []*tcell.EventKey{key(tcell.KeyCtrlF), key(tcell.KeyRight), key(tcell.KeyCtrlB), key(tcell.KeyLeft), key(tcell.KeyLeft)}, "αβ", 0},
 		{"empty edges", "", 0, []*tcell.EventKey{key(tcell.KeyDelete), key(tcell.KeyBackspace), key(tcell.KeyCtrlW), alt('b'), alt('f'), key(tcell.KeyCtrlK)}, "", 0},
 		{"shift enter", "ab", 1, []*tcell.EventKey{tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift)}, "a\nb", 2},
+		{"ctrl j", "ab", 1, []*tcell.EventKey{key(tcell.KeyCtrlJ)}, "a\nb", 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newComposer(tt.text)

@@ -40,7 +40,7 @@ func newSidebar() *sidebar {
 }
 func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []session.TimerView) {
 	c := &b.sections[0]
-	c.rows = []string{"No parent request yet"}
+	c.rows = []string{"No request yet"}
 	if u.Limit > 0 {
 		input, qualifier := u.Input, "estimated"
 		if u.RequestID > 0 && u.Reported != nil && u.Reported.RequestID == u.RequestID {
@@ -54,6 +54,9 @@ func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []
 				c.rows = append(c.rows, render.Clean(v.Model))
 			}
 			c.rows = append(c.rows, fmt.Sprintf("Input %d · cached %s", v.Tokens.InputTokens, optionalTokens(v.Tokens.CachedInputTokens)), fmt.Sprintf("Output %d · reasoning %s", v.Tokens.OutputTokens, optionalTokens(v.Tokens.ReasoningOutputTokens)))
+			if cached := v.Tokens.CachedInputTokens; cached != nil && *cached <= v.Tokens.InputTokens {
+				c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", v.Tokens.InputTokens-*cached))
+			}
 			c.rows = append(c.rows, "Cache writes "+optionalTokens(v.Tokens.CacheWriteTokens))
 		} else {
 			c.rows = append(c.rows, "Reported usage unavailable")
@@ -65,6 +68,9 @@ func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []
 	}
 	if totals := u.Totals; totals.Requests > 0 {
 		c.rows = append(c.rows, "Run totals · all agents", fmt.Sprintf("Reported %d/%d requests", totals.ReportedRequests, totals.Requests), fmt.Sprintf("Input %d · cached %s", totals.Tokens.InputTokens, optionalTokens(totals.Tokens.CachedInputTokens)), "Cache writes "+optionalTokens(totals.Tokens.CacheWriteTokens), fmt.Sprintf("Output %d · reasoning %s", totals.Tokens.OutputTokens, optionalTokens(totals.Tokens.ReasoningOutputTokens)))
+		if cached := totals.Tokens.CachedInputTokens; cached != nil && *cached <= totals.Tokens.InputTokens {
+			c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", totals.Tokens.InputTokens-*cached))
+		}
 		if cached, written := totals.Tokens.CachedInputTokens, totals.Tokens.CacheWriteTokens; cached != nil && written != nil && *cached+*written <= totals.Tokens.InputTokens {
 			c.rows = append(c.rows, fmt.Sprintf("Ordinary input %d", totals.Tokens.InputTokens-*cached-*written))
 		}

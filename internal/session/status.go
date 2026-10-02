@@ -14,7 +14,7 @@ type TokenPart struct {
 }
 
 // ContextUsage describes the latest parent request's frozen model and reserves.
-// It stays unchanged between requests and is cleared on an explicit session change.
+// Admission and compaction handoffs refresh it; explicit session changes clear it.
 type ContextUsage struct {
 	Model                  string
 	RequestID              int64 // Identity of the estimated parent request; zero before it starts.
@@ -103,9 +103,7 @@ func estimateUsage(selection provider.Selection, system string, defs []provider.
 	}
 	for _, m := range messages {
 		if m.State != nil {
-			for _, item := range m.State.Items {
-				counts[4] += contextbuild.Estimate(string(item))
-			}
+			counts[4] += provider.ReplayTokens(m.State)
 			continue
 		}
 		i := 2
@@ -126,6 +124,21 @@ func estimateUsage(selection provider.Selection, system string, defs []provider.
 	}
 	u.Parts = append(u.Parts, TokenPart{"Output reserve", b.OutputAllowance}, TokenPart{"Safety margin", b.EstimationMargin})
 	return u
+}
+
+// contextMessages copies the selected provider projection and annotates replay
+// occupancy without changing durable history or the payload sent to the model.
+func (r *Runtime) contextMessages(selection provider.Selection, messages []provider.Message) []provider.Message {
+	out := provider.ContextFor(selection, messages)
+	for i, m := range out {
+		if m.State != nil {
+			state := *m.State
+			tokens := r.Provider.EstimateReplay(m)
+			state.EstimatedTokens = &tokens
+			out[i].State = &state
+		}
+	}
+	return out
 }
 
 // UsageSnapshot returns an immutable estimate without rebuilding history on UI ticks.

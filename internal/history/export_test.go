@@ -3,6 +3,8 @@ package history
 import (
 	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"os"
 	"strings"
 	"testing"
@@ -10,6 +12,36 @@ import (
 	"scicode/internal/provider"
 	"scicode/internal/render"
 )
+
+func TestInternalEventsRemainExactWithoutConversationDuplication(t *testing.T) {
+	s, v, turn, _ := historyFixture(t)
+	id, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{"type": "job_state", "job_id": "job", "state": "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := s.Entry(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := s.ExportText(entry)
+	if err != nil || text != "" || !entry.InternalEvent() {
+		t.Fatalf("bookkeeping became a conversation row: %q, %v", text, err)
+	}
+	detail, err := s.Inspect(entry)
+	if err != nil || !strings.Contains(detail, "running") || s.Label(entry) != "job_state" {
+		t.Fatalf("bookkeeping no longer inspectable: %q, %v", detail, err)
+	}
+	exact, err := s.TranscriptJSONL(v.ID, 0)
+	if err != nil || !bytes.Contains(exact, []byte(`"type":"job_state"`)) {
+		t.Fatal("exact transcript lost internal event", err)
+	}
+	for _, kind := range []string{"system_prompt", "job_completion", "child_turn_finished", "compaction_failed", "turn_end"} {
+		entry.Content = json.RawMessage(`{"type":"` + kind + `"}`)
+		if entry.InternalEvent() {
+			t.Fatalf("user-facing event %s hidden", kind)
+		}
+	}
+}
 
 func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
 	s, v, turn, request := historyFixture(t)
@@ -34,6 +66,43 @@ func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
 		} else if !strings.Contains(got, "```json") || !strings.Contains(got, `"role": "assistant"`) {
 			t.Fatalf("naming inspector lost message metadata: %s", got)
 		}
+	}
+}
+
+func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
+	s, v, turn, _ := historyFixture(t)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
+		t.Fatal(err)
+	}
+	path, err := s.Artifact(v.ID, "images", encoded.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := provider.Message{Role: "user", Images: []provider.Image{{Path: path, DataURL: "data:image/png;base64,exact-image-payload"}}}
+	id, err := s.Append(v.ID, turn, "main", "message", "user", true, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := s.Entry(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := s.ExportText(entry)
+	if err != nil || !strings.Contains(text, "2×3") || !strings.Contains(text, path) || strings.Contains(text, "data:image") {
+		t.Fatal("image-only message lost or duplicated exact data", text, err)
+	}
+	archive, err := s.ArchiveTranscript(v.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown, err := os.ReadFile(archive)
+	if err != nil || !strings.Contains(string(markdown), path) {
+		t.Fatal("image absent from compaction Markdown", err)
+	}
+	exact, err := os.ReadFile(archive + ".jsonl")
+	if err != nil || !strings.Contains(string(exact), message.Images[0].DataURL) {
+		t.Fatal("exact image absent from sidecar", err)
 	}
 }
 

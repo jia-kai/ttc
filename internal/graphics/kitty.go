@@ -19,9 +19,12 @@ import (
 type Kitty struct {
 	Writer io.Writer
 	Tmux   bool
-	next   uint32
-	images map[string]uint32
-	used   map[string]bool
+	// CellWidth and CellHeight are positive display pixels per terminal cell.
+	// The frontend updates them before layout; defaults are 8x16 when unmeasured.
+	CellWidth, CellHeight int
+	next                  uint32
+	images                map[string]uint32
+	used                  map[string]bool
 }
 
 // New creates an image sender with randomized IDs to avoid other TUI collisions.
@@ -30,7 +33,7 @@ func New(w io.Writer, tmux bool) *Kitty {
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(err)
 	}
-	return &Kitty{Writer: w, Tmux: tmux, next: binary.LittleEndian.Uint32(b[:]) | 0x1000000, images: map[string]uint32{}}
+	return &Kitty{Writer: w, Tmux: tmux, CellWidth: 8, CellHeight: 16, next: binary.LittleEndian.Uint32(b[:]) | 0x1000000, images: map[string]uint32{}}
 }
 
 // Begin starts a frame, marking previously sent images unused until placed.
@@ -45,20 +48,30 @@ func (k *Kitty) format(s string) string {
 // Place sends PNG bytes once for an asset/geometry, then returns self-contained
 // placeholder rows. Each cell carries explicit row, column and all image ID bits.
 // Grid axes are terminal columns/rows, limited to the diacritic table (297).
-func (k *Kitty) Place(key string, m image.Image, columns, rows int) ([]string, error) {
-	if columns < 1 || rows < 1 || columns > 297 || rows > 297 {
+// Images fit uniformly within the placement, with transparent padding and area
+// filtering. rasterScale is the source supersampling factor (1 for ordinary
+// images); sources remain unchanged. Cell-size changes require a fresh upload.
+func (k *Kitty) Place(key string, m image.Image, columns, rows, rasterScale int) ([]string, error) {
+	if columns < 1 || rows < 1 || columns > 297 || rows > 297 || k.CellWidth < 1 || k.CellHeight < 1 || rasterScale < 1 {
 		return nil, fmt.Errorf("invalid image grid %dx%d", columns, rows)
 	}
-	placement := fmt.Sprintf("%s:%dx%d", key, columns, rows)
+	if k.CellWidth > maxPlacementPixels/columns || k.CellHeight > maxPlacementPixels/rows {
+		return nil, fmt.Errorf("image placement exceeds 16-megapixel canvas limit")
+	}
+	placement := k.placement(key, columns, rows)
 	id, ok := k.images[placement]
 	if !ok {
+		pixels, err := fitPlacement(m, columns*k.CellWidth, rows*k.CellHeight, rasterScale)
+		if err != nil {
+			return nil, err
+		}
 		hash := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", k.next, placement)))
 		id = binary.LittleEndian.Uint32(hash[:4])
 		if id == 0 {
 			id = 1
 		}
 		opts := &kitty.Options{Action: kitty.TransmitAndPut, Quite: 2, ID: int(id), Format: kitty.PNG, Transmission: kitty.Direct, Chunk: true, ChunkFormatter: k.format, Columns: columns, Rows: rows, VirtualPlacement: true, DoNotMoveCursor: true}
-		if err := kitty.EncodeGraphics(k.Writer, m, opts); err != nil {
+		if err := kitty.EncodeGraphics(k.Writer, pixels, opts); err != nil {
 			return nil, err
 		}
 		k.images[placement] = id
@@ -70,10 +83,10 @@ func (k *Kitty) Place(key string, m image.Image, columns, rows int) ([]string, e
 // Rows returns placeholder cells without sending pixels. Layout uses this before
 // the viewport is known; Place transmits only assets that intersect visible rows.
 func (k *Kitty) Rows(key string, columns, rows int) ([]string, error) {
-	if columns < 1 || rows < 1 || columns > 297 || rows > 297 {
+	if columns < 1 || rows < 1 || columns > 297 || rows > 297 || k.CellWidth < 1 || k.CellHeight < 1 {
 		return nil, fmt.Errorf("invalid image grid")
 	}
-	key = fmt.Sprintf("%s:%dx%d", key, columns, rows)
+	key = k.placement(key, columns, rows)
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", k.next, key)))
 	id := binary.LittleEndian.Uint32(hash[:4])
 	if id == 0 {
@@ -93,6 +106,10 @@ func (k *Kitty) Rows(key string, columns, rows int) ([]string, error) {
 		out[y] = b.String()
 	}
 	return out, nil
+}
+
+func (k *Kitty) placement(key string, columns, rows int) string {
+	return fmt.Sprintf("%s:%dx%d:%dx%dpx", key, columns, rows, k.CellWidth, k.CellHeight)
 }
 
 // End frees images outside the viewport, bounding terminal memory by visible assets.

@@ -18,8 +18,24 @@ type shellArgs struct {
 	Strict     *bool  `json:"strict,omitempty"` // Nil enables set -eu; false disables it.
 }
 
-// AddShell exposes managed commands and owner-scoped live handles.
-func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager) {
+// ChildView is copied live metadata for one reusable coding context.
+type ChildView struct {
+	ID     string `json:"child_id"`
+	Label  string `json:"label"`
+	State  string `json:"state"`
+	TurnID string `json:"child_turn_id"`
+	JobID  string `json:"job_id"`
+}
+
+// ChildController supplies optional coding-child ownership to job tools.
+type ChildController interface {
+	ChildViews(string) []ChildView
+	StopChild(context.Context, string, string) (any, error)
+}
+
+// AddShell exposes managed commands and owner-scoped live handles. A nil child
+// controller leaves standalone shell registries without reusable child contexts.
+func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
 	Register(r, "shell", "Run /bin/sh with set -eu and closed stdin. Set strict=false to disable errexit/nounset; pipefail is not enabled. Use tmux for work that must outlive this runtime.", map[string]any{"command": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
@@ -35,9 +51,6 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a shellArgs) (any, error) {
-		if a.Protocol != "" {
-			return nil, Fail("unsupported_operation", "LSP protocol jobs are not implemented; omit protocol to run an ordinary shell command")
-		}
 		dir := w.Root
 		if a.Workdir != "" {
 			dir = w.Path(a.Workdir)
@@ -49,10 +62,17 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 		if a.Timeout != nil {
 			ms = *a.Timeout
 		}
-		wake := a.Background && (a.Wake == nil || *a.Wake)
-		id, e := m.Start(x.Actor, a.Command, dir, time.Duration(ms)*time.Millisecond, a.Strict == nil || *a.Strict, a.Background, wake)
+		// Retain the preference for a foreground command promoted by the user.
+		wake := a.Wake == nil || *a.Wake
+		var id string
+		var e error
+		if a.Protocol == "lsp" {
+			id, e = m.StartLSP(x.Actor, a.Command, dir, time.Duration(ms)*time.Millisecond, a.Strict == nil || *a.Strict, wake)
+		} else {
+			id, e = m.Start(x.Actor, a.Command, dir, time.Duration(ms)*time.Millisecond, a.Strict == nil || *a.Strict, a.Background, wake)
+		}
 		if e != nil {
-			return nil, e
+			return nil, lspToolError(e)
 		}
 		if a.Background {
 			return m.View(x.Actor, id)
@@ -72,7 +92,17 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a list) (any, error) {
-		return map[string]any{"jobs": m.List(x.Actor, a.State == "all")}, nil
+		result := map[string]any{"jobs": m.List(x.Actor, a.State == "all")}
+		if children != nil {
+			views := []ChildView{}
+			for _, child := range children.ChildViews(x.Actor) {
+				if a.State == "all" || child.State == "running" {
+					views = append(views, child)
+				}
+			}
+			result["children"] = views
+		}
+		return result, nil
 	})
 	type read struct {
 		ID            string `json:"job_id"`
@@ -91,18 +121,31 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 	}, func(ctx context.Context, x Execution, a read) (any, error) {
 		v, e := m.Read(ctx, x.Actor, a.ID, jobs.ReadOptions{Stream: a.Stream, Cursor: a.Cursor, Limit: intDefault(a.Limit, 16384), Grep: a.Grep, Literal: a.Literal, IgnoreCase: a.CaseSensitive != nil && !*a.CaseSensitive})
 		if e != nil {
-			return nil, e
+			return nil, lspToolError(e)
 		}
 		return v, nil
 	})
 	type stop struct {
-		ID string `json:"job_id"`
+		ID    string `json:"job_id,omitempty"`
+		Child string `json:"child_id,omitempty"`
 	}
-	Register(r, "job_stop", "Stop a live command process group.", map[string]any{"job_id": Property("string")}, []string{"job_id"}, func(a stop) error { return Required("job_id", a.ID) }, func(ctx context.Context, x Execution, a stop) (any, error) {
+	Register(r, "job_stop", "Stop a live command process group or close a reusable coding child. Supply exactly one of job_id or child_id. Main alone can close children.", map[string]any{"job_id": Property("string"), "child_id": Property("string")}, nil, func(a stop) error {
+		if (a.ID == "") == (a.Child == "") {
+			return Fail("invalid_arguments", "supply exactly one of job_id or child_id")
+		}
+		return nil
+	}, func(ctx context.Context, x Execution, a stop) (any, error) {
+		if a.Child != "" {
+			if children == nil {
+				return nil, Fail("not_found", "no coding children in this runtime")
+			}
+			return children.StopChild(ctx, x.Actor, a.Child)
+		}
 		v, e := m.Stop(x.Actor, a.ID)
 		if e != nil {
 			return nil, Fail("not_found", e.Error())
 		}
 		return map[string]any{"job_id": v.ID, "status": v.Status}, nil
 	})
+	addLSP(r, m, w)
 }

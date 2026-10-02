@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"scicode/internal/provider"
 	"scicode/internal/render"
@@ -28,7 +30,7 @@ import (
 //go:embed schema.sql
 var schema string
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // Store serializes commits; callers must close it after stopping runtime workers.
 type Store struct {
@@ -41,6 +43,7 @@ type Store struct {
 
 // Session identifies the selected history/file tips. Zero tips mean an empty tree.
 type Session struct {
+	CompactionError                                   string // Nonempty permanently disables inference in this context; history remains inspectable.
 	ID, WorkspaceID, LineageID, Name                  string
 	ReadOnly                                          bool
 	EntryTip, FileTip, RedoTip, UndoFloor, Generation int64
@@ -50,6 +53,7 @@ type Session struct {
 
 // Entry is one immutable node in chronological history.
 type Entry struct {
+	MainTurnID, UndoOwnerTurnID          string // Chronological inference attribution and most recent human undo checkpoint.
 	ID, Parent, Source, FileTip          int64
 	SessionID, TurnID, Actor, Kind, Role string
 	Visible                              bool
@@ -69,10 +73,10 @@ func NewID(prefix string) string {
 // DataRoot resolves an absolute XDG root, falling back to the user's home.
 func DataRoot() (string, error) {
 	if p := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(p) {
-		return filepath.Join(p, "scicode"), nil
+		return filepath.Join(p, "ttc"), nil
 	}
 	h, e := os.UserHomeDir()
-	return filepath.Join(h, ".local/share/scicode"), e
+	return filepath.Join(h, ".local/share/ttc"), e
 }
 
 // Open obtains the process lock and marks uncertain requests interrupted.
@@ -277,6 +281,9 @@ func (s *Store) StartSession(id, path string, model provider.Selection, message 
 		if _, e := tx.Exec(`INSERT INTO turns(id,session_id,trigger,status,model_json,started_ms) VALUES(?,?,'user','running',?,?)`, turn, id, string(m), time.Now().UnixMilli()); e != nil {
 			return e
 		}
+		if _, e := tx.Exec("UPDATE sessions SET metadata_json=json_set(metadata_json,'$.main_turn_id',?,'$.undo_owner_turn_id',?) WHERE id=?", turn, turn, id); e != nil {
+			return e
+		}
 		entry, e = appendTx(tx, id, turn, "main", "message", "user", true, content, 0)
 		return e
 	})
@@ -286,29 +293,52 @@ func (s *Store) StartSession(id, path string, model provider.Selection, message 
 	return turn, entry, nil
 }
 
+// RenameSession sets a human title of 1–60 characters. A manual name cannot be
+// overwritten by a pending automatic naming request. Missing sessions fail.
+func (s *Store) RenameSession(id, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 60 || strings.IndexFunc(name, unicode.IsControl) >= 0 || !utf8.ValidString(name) {
+		return errors.New("session name must be 1–60 characters without control characters")
+	}
+	return s.transact(func(tx *sql.Tx) error {
+		result, err := tx.Exec("UPDATE sessions SET name=?,name_source='manual' WHERE id=?", name, id)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err == nil && count == 0 {
+			return sql.ErrNoRows
+		}
+		return err
+	})
+}
+
 // Session loads metadata without reviving transient handles.
 func (s *Store) Session(id string) (Session, error) {
 	var v Session
 	var model string
-	e := s.DB.QueryRow(`SELECT id,workspace_id,lineage_id,name,read_only,coalesce(active_entry_id,0),coalesce(file_tip_id,0),coalesce(redo_entry_id,0),coalesce(undo_floor_id,0),observed_generation,model_json,last_activity_ms FROM sessions WHERE id=?`, id).Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &v.Generation, &model, &v.LastActivityMS)
+	e := s.DB.QueryRow(`SELECT id,workspace_id,lineage_id,name,read_only,coalesce(active_entry_id,0),coalesce(file_tip_id,0),coalesce(redo_entry_id,0),coalesce(undo_floor_id,0),observed_generation,model_json,last_activity_ms,coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?`, id).Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &v.Generation, &model, &v.LastActivityMS, &v.CompactionError)
 	if e != nil {
 		return v, e
 	}
 	e = json.Unmarshal([]byte(model), &v.Model)
-	if e == nil {
-		e = s.ValidateArchive(id)
-	}
 	return v, e
 }
 
 // Load sets an undo floor when another session has changed this workspace.
 func (s *Store) Load(id string) (Session, error) {
+	if err := s.ValidateArchive(id); err != nil {
+		return Session{}, err
+	}
 	e := s.transact(func(tx *sql.Tx) error {
 		_, e := tx.Exec(`UPDATE sessions SET undo_floor_id=active_entry_id,redo_entry_id=NULL,observed_generation=(SELECT generation FROM workspaces WHERE id=workspace_id) WHERE id=? AND observed_generation!=(SELECT generation FROM workspaces WHERE id=workspace_id)`, id)
 		return e
 	})
 	if e != nil {
 		return Session{}, e
+	}
+	if _, err := s.DB.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", time.Now().UnixMilli(), id); err != nil {
+		return Session{}, err
 	}
 	return s.Session(id)
 }
@@ -320,7 +350,7 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("session listing requires an absolute workspace path")
 	}
-	rows, err := s.DB.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.observed_generation,s.model_json,s.last_activity_ms FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
+	rows, err := s.DB.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.observed_generation,s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +359,7 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 	for rows.Next() {
 		var v Session
 		var model string
-		if err := rows.Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &v.Generation, &model, &v.LastActivityMS); err != nil {
+		if err := rows.Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &v.Generation, &model, &v.LastActivityMS, &v.CompactionError); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(model), &v.Model); err != nil {
@@ -342,7 +372,18 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 
 // BeginTurn records the start checkpoint and frozen selection before model work.
 func (s *Store) BeginTurn(session, trigger string, model provider.Selection) (string, error) {
+	id, _, err := s.AdmitTurn(session, trigger, model, nil)
+	return id, err
+}
+
+// AdmitTurn commits a main checkpoint and optional human instruction atomically.
+// Call while owning the workspace admission gate so file mutations cannot cross it.
+func (s *Store) AdmitTurn(session, trigger string, model provider.Selection, message *provider.Message) (string, int64, error) {
+	if message != nil && trigger != "user" {
+		return "", 0, errors.New("only user turns accept a human instruction")
+	}
 	id := NewID("turn")
+	var entry int64
 	m, _ := json.Marshal(model)
 	e := s.transact(func(tx *sql.Tx) error {
 		var ro bool
@@ -353,15 +394,56 @@ func (s *Store) BeginTurn(session, trigger string, model provider.Selection) (st
 			return errors.New("session is read-only")
 		}
 		_, e := tx.Exec(`INSERT INTO turns(id,session_id,trigger,start_entry_id,start_file_tip_id,status,model_json,started_ms) SELECT ?,id,?,active_entry_id,file_tip_id,'running',?,? FROM sessions WHERE id=?`, id, trigger, string(m), time.Now().UnixMilli(), session)
+		if e != nil {
+			return e
+		}
+		if _, e = tx.Exec("UPDATE sessions SET metadata_json=json_set(metadata_json,'$.main_turn_id',?) WHERE id=?", id, session); e != nil {
+			return e
+		}
+		if trigger == "user" {
+			if _, e = tx.Exec("UPDATE sessions SET metadata_json=json_set(metadata_json,'$.undo_owner_turn_id',?) WHERE id=?", id, session); e != nil {
+				return e
+			}
+		}
+		if message != nil {
+			b, err := json.Marshal(message)
+			if err != nil {
+				return err
+			}
+			entry, e = appendTx(tx, session, id, "main", "message", "user", true, b, 0)
+		}
 		return e
 	})
-	return id, e
+	return id, entry, e
 }
 
 // FinishTurn records a terminal status; it never resends a failed request.
 func (s *Store) FinishTurn(id, status string) error {
-	_, e := s.DB.Exec("UPDATE turns SET status=?,finished_ms=? WHERE id=? AND status='running'", status, time.Now().UnixMilli(), id)
-	return e
+	return s.transact(func(tx *sql.Tx) error {
+		var session, actor string
+		if err := tx.QueryRow("SELECT session_id,actor_id FROM turns WHERE id=?", id).Scan(&session, &actor); err != nil {
+			return err
+		}
+		if err := tx.QueryRow("SELECT id FROM sessions WHERE lineage_id=(SELECT lineage_id FROM sessions WHERE id=?) AND read_only=0", session).Scan(&session); err != nil {
+			return err
+		}
+		result, err := tx.Exec("UPDATE turns SET status=?,finished_ms=? WHERE id=? AND status='running'", status, time.Now().UnixMilli(), id)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil || count == 0 {
+			return err
+		}
+		b, _ := json.Marshal(map[string]any{"type": "turn_finished", "status": status})
+		if _, err = appendTx(tx, session, id, actor, "status", "", false, b, 0); err != nil {
+			return err
+		}
+		if actor == "main" {
+			_, err = tx.Exec("UPDATE sessions SET metadata_json=json_remove(metadata_json,'$.main_turn_id') WHERE id=? AND json_extract(metadata_json,'$.main_turn_id')=?", session, id)
+		}
+		return err
+	})
 }
 func appendTx(tx *sql.Tx, session, turn, actor, kind, role string, visible bool, data json.RawMessage, source int64) (int64, error) {
 	if !json.Valid(data) {
@@ -375,7 +457,16 @@ func appendTx(tx *sql.Tx, session, turn, actor, kind, role string, visible bool,
 	if ro {
 		return 0, errors.New("session is read-only")
 	}
-	r, e := tx.Exec(`INSERT INTO entries(session_id,parent_id,source_id,turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, session, parent, n(source), textOrNil(turn), actor, kind, textOrNil(role), visible, string(data), tip, time.Now().UnixMilli())
+	var mainTurn, undoOwner sql.NullString
+	if e := tx.QueryRow("SELECT json_extract(metadata_json,'$.main_turn_id'),json_extract(metadata_json,'$.undo_owner_turn_id') FROM sessions WHERE id=?", session).Scan(&mainTurn, &undoOwner); e != nil {
+		return 0, e
+	}
+	if source != 0 {
+		if e := tx.QueryRow("SELECT main_turn_id,undo_owner_turn_id FROM entries WHERE id=?", source).Scan(&mainTurn, &undoOwner); e != nil {
+			return 0, e
+		}
+	}
+	r, e := tx.Exec(`INSERT INTO entries(session_id,parent_id,source_id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, session, parent, n(source), textOrNil(turn), mainTurn, undoOwner, actor, kind, textOrNil(role), visible, string(data), tip, time.Now().UnixMilli())
 	if e != nil {
 		return 0, e
 	}
@@ -404,14 +495,15 @@ func (s *Store) Append(session, turn, actor, kind, role string, visible bool, da
 
 // Branch returns selected ancestry through tip (zero means the session's tip).
 func (s *Store) Branch(session string, tip int64) ([]Entry, error) {
+	return branchWith(s.DB, session, tip)
+}
+func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 	if tip == 0 {
-		v, e := s.Session(session)
-		if e != nil {
+		if e := q.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); e != nil {
 			return nil, e
 		}
-		tip = v.EntryTip
 	}
-	rows, e := s.DB.Query(`WITH RECURSIVE ancestry AS (SELECT * FROM entries WHERE id=? AND session_id=? UNION ALL SELECT e.* FROM entries e JOIN ancestry a ON e.id=a.parent_id) SELECT id,coalesce(parent_id,0),coalesce(source_id,0),coalesce(file_tip_id,0),session_id,coalesce(turn_id,''),actor_id,kind,coalesce(role,''),model_visible,content_json,created_ms FROM ancestry ORDER BY id`, tip, session)
+	rows, e := q.Query(`WITH RECURSIVE ancestry AS (SELECT * FROM entries WHERE id=? AND session_id=? UNION ALL SELECT e.* FROM entries e JOIN ancestry a ON e.id=a.parent_id) SELECT id,coalesce(parent_id,0),coalesce(source_id,0),coalesce(file_tip_id,0),session_id,coalesce(turn_id,''),actor_id,kind,coalesce(role,''),model_visible,content_json,created_ms,coalesce(main_turn_id,''),coalesce(undo_owner_turn_id,'') FROM ancestry ORDER BY id`, tip, session)
 	if e != nil {
 		return nil, e
 	}
@@ -420,7 +512,7 @@ func (s *Store) Branch(session string, tip int64) ([]Entry, error) {
 	for rows.Next() {
 		var v Entry
 		var content string
-		if e = rows.Scan(&v.ID, &v.Parent, &v.Source, &v.FileTip, &v.SessionID, &v.TurnID, &v.Actor, &v.Kind, &v.Role, &v.Visible, &content, &v.CreatedMS); e != nil {
+		if e = rows.Scan(&v.ID, &v.Parent, &v.Source, &v.FileTip, &v.SessionID, &v.TurnID, &v.Actor, &v.Kind, &v.Role, &v.Visible, &content, &v.CreatedMS, &v.MainTurnID, &v.UndoOwnerTurnID); e != nil {
 			return nil, e
 		}
 		v.Content = json.RawMessage(content)
@@ -431,7 +523,10 @@ func (s *Store) Branch(session string, tip int64) ([]Entry, error) {
 
 // Messages projects only model-visible canonical messages, resolving tool references.
 func (s *Store) Messages(session string) ([]provider.Message, error) {
-	entries, e := s.Branch(session, 0)
+	return messagesWith(s.DB, session)
+}
+func messagesWith(q historyReader, session string) ([]provider.Message, error) {
+	entries, e := branchWith(q, session, 0)
 	if e != nil {
 		return nil, e
 	}
@@ -448,7 +543,7 @@ func (s *Store) Messages(session string) ([]provider.Message, error) {
 				return nil, e
 			}
 			var result, pcid string
-			if e = s.DB.QueryRow("SELECT result_json,provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&result, &pcid); e != nil {
+			if e = q.QueryRow("SELECT result_json,provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&result, &pcid); e != nil {
 				return nil, e
 			}
 			out = append(out, provider.Message{Role: "tool", CallID: pcid, Content: result})
@@ -460,27 +555,86 @@ func (s *Store) Messages(session string) ([]provider.Message, error) {
 			out = append(out, m)
 		}
 	}
-	return out, nil
+	return orderedToolResults(out), nil
+}
+
+// orderedToolResults keeps canonical call order while entry rows retain actual
+// completion chronology. Missing results stay missing until callers settle them.
+func orderedToolResults(messages []provider.Message) []provider.Message {
+	for i, m := range messages {
+		if m.Role != "assistant" || len(m.Calls) < 2 {
+			continue
+		}
+		end := i + 1
+		for end < len(messages) && messages[end].Role == "tool" {
+			end++
+		}
+		if end-i-1 < 2 {
+			continue
+		}
+		results := map[string]provider.Message{}
+		for _, r := range messages[i+1 : end] {
+			results[r.CallID] = r
+		}
+		position := i + 1
+		for _, call := range m.Calls {
+			if r, ok := results[call.ID]; ok {
+				messages[position] = r
+				position++
+			}
+		}
+	}
+	return messages
 }
 
 // StartRequest persists uncertain request state before network I/O.
-func (s *Store) StartRequest(session, turn, actor, purpose string, model provider.Selection) (int64, error) {
-	m, _ := json.Marshal(model)
-	r, e := s.DB.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,attempts_json,created_ms) VALUES(?,?,?,?,?,'running','[]',?)`, session, textOrNil(turn), actor, purpose, string(m), time.Now().UnixMilli())
-	if e != nil {
-		return 0, e
+func (s *Store) StartRequest(session, turn, actor, purpose string, model provider.Selection) (id int64, err error) {
+	m, err := json.Marshal(model)
+	if err != nil {
+		return 0, err
 	}
-	return r.LastInsertId()
+	err = s.transact(func(tx *sql.Tx) error {
+		var cutoff int64
+		if err := tx.QueryRow("SELECT coalesce(max(id),0) FROM entries").Scan(&cutoff); err != nil {
+			return err
+		}
+		result, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,attempts_json,event_cutoff,created_ms) VALUES(?,?,?,?,?,'running','[]',?,?)`, session, textOrNil(turn), actor, purpose, string(m), cutoff, time.Now().UnixMilli())
+		if err != nil {
+			return err
+		}
+		id, err = result.LastInsertId()
+		if err != nil {
+			return err
+		}
+		b, _ := json.Marshal(map[string]any{"type": "request_admitted", "request_id": id, "event_cutoff": cutoff, "purpose": purpose})
+		_, err = appendTx(tx, session, turn, actor, "status", "", false, b, 0)
+		return err
+	})
+	return id, err
 }
 
-// FinishRequest saves bounded attempts/usage metadata supplied by the caller.
+// FinishRequest commits terminal request metadata and its chronological event.
 func (s *Store) FinishRequest(id int64, status string, attempts any) error {
-	b, e := json.Marshal(attempts)
-	if e != nil {
-		return e
+	b, err := json.Marshal(attempts)
+	if err != nil {
+		return err
 	}
-	_, e = s.DB.Exec("UPDATE model_requests SET status=?,attempts_json=? WHERE id=?", status, string(b), id)
-	return e
+	return s.transact(func(tx *sql.Tx) error {
+		var session, turn, actor string
+		if err := tx.QueryRow("SELECT session_id,coalesce(turn_id,''),actor_id FROM model_requests WHERE id=?", id).Scan(&session, &turn, &actor); err != nil {
+			return err
+		}
+		// A main continuation routes active requests into its writable successor.
+		if err := tx.QueryRow("SELECT id FROM sessions WHERE lineage_id=(SELECT lineage_id FROM sessions WHERE id=?) AND read_only=0", session).Scan(&session); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("UPDATE model_requests SET status=?,attempts_json=? WHERE id=?", status, string(b), id); err != nil {
+			return err
+		}
+		event, _ := json.Marshal(map[string]any{"type": "request_finished", "request_id": id, "status": status})
+		_, err := appendTx(tx, session, turn, actor, "status", "", false, event, 0)
+		return err
+	})
 }
 
 // CallIntent commits validated or invalid input before execution begins.
@@ -544,11 +698,13 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 	}
 	h := sha256.Sum256(data)
 	p := filepath.Join(dir, hex.EncodeToString(h[:]))
-	if old, e := os.ReadFile(p); e == nil {
+	if old, e := readArtifact(p, int64(len(data))); e == nil {
 		if sha256.Sum256(old) != h {
 			return "", errors.New("artifact hash conflict")
 		}
 		return p, nil
+	} else if !os.IsNotExist(e) {
+		return "", fmt.Errorf("read saved artifact: %w", e)
 	}
 	if e = AtomicFile(p, data, 0600); e != nil {
 		return "", e
@@ -600,6 +756,9 @@ func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
 // entry without clearing redo: an instruction refresh is not a user action.
 // Authentication never belongs in this prompt or its artifact.
 func (s *Store) RecordSystemPrompt(session, turn, actor string, request int64, prompt string) (int64, error) {
+	if len(prompt) > instructionSnapshotBytes {
+		return 0, errors.New("instruction snapshot exceeds 1 MiB")
+	}
 	path, e := s.Artifact(session, "prompts", []byte(prompt))
 	if e != nil {
 		return 0, e
@@ -682,7 +841,7 @@ func (s *Store) Inspect(entry Entry) (string, error) {
 			return "", e
 		}
 		if status.Type == "system_prompt" {
-			b, e := os.ReadFile(status.Path)
+			b, e := readArtifact(status.Path, instructionSnapshotBytes)
 			return string(b), e
 		}
 	}

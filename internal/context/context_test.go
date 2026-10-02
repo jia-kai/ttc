@@ -85,3 +85,27 @@ func TestNativeReplayIsCountedOnce(t *testing.T) {
 		t.Fatalf("native payload counted twice: %d", got)
 	}
 }
+
+func TestAttachmentDisplayKeepsAuthoredTextAndExactModelInput(t *testing.T) {
+	for _, text := range []string{"Inspect the attached file.", "", "Attachment (text): this is authored text"} {
+		m := Message(text, []Attachment{{Kind: "text", Path: "notes.txt", Text: "immutable snapshot", Truncated: true}, {Path: "field.png", Image: &provider.Image{Path: "field.png", DataURL: "data:image/png;base64,snapshot"}}})
+		if m.DisplayText() != text || !strings.Contains(m.Content, "immutable snapshot") || !strings.Contains(m.Content, "[attachment truncated]") || len(m.Images) != 1 {
+			t.Fatal("presentation lost authored text or model attachments", m)
+		}
+		encoded, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reloaded provider.Message
+		if err := json.Unmarshal(encoded, &reloaded); err != nil || reloaded.DisplayText() != text || reloaded.Content != m.Content {
+			t.Fatal("round trip changed attachment input", reloaded, err)
+		}
+		m.Runtime = true
+		if m.DisplayText() != m.Content {
+			t.Fatal("runtime notice was hidden as user input")
+		}
+	}
+	if m := Message("Ordinary input", nil); m.UserText != nil || m.DisplayText() != m.Content {
+		t.Fatal("ordinary input acquired unnecessary display metadata", m)
+	}
+}

@@ -57,6 +57,53 @@ func TestChunksPreserveMarkdownContainersAndLongIndentedCode(t *testing.T) {
 	}
 }
 
+func TestChunksPreserveInlineAndBlockMath(t *testing.T) {
+	for _, expression := range []string{"$x^2 + y^2$", "$$\nx^2 + y^2\n$$", `\(x^2 + y^2\)`, `\[x^2 + y^2\]`} {
+		source := strings.Repeat("a", (16<<10)-4) + expression + " rest"
+		v := transcriptOf([]line{{text: source, markdown: true}})
+		formulas := 0
+		var reconstructed strings.Builder
+		for _, b := range v.blocks {
+			reconstructed.WriteString(b.text)
+			if len(b.text) > 16<<10 {
+				t.Fatal("formula changed chunk bound", len(b.text))
+			}
+			render.Math(b.text, func(tex string, block bool) string {
+				formulas++
+				return "formula"
+			})
+		}
+		if formulas != 1 || reconstructed.String() != source {
+			t.Fatal("formula split or source changed", expression, formulas)
+		}
+	}
+}
+
+func TestPageDownAtBottomResumesFollowing(t *testing.T) {
+	v := newTranscript()
+	for i := range 50 {
+		v.append(line{text: fmt.Sprintf("line-%d", i)})
+	}
+	v.viewport(80, 5)
+	v.scroll(-10, 5)
+	v.viewport(80, 5)
+	v.pageDown(5)
+	if v.followTail {
+		t.Fatal("page down away from bottom started following")
+	}
+	v.scroll(10000, 5)
+	v.viewport(80, 5)
+	if v.followTail {
+		t.Fatal("wheel scrolling started following")
+	}
+	v.pageDown(5)
+	v.append(line{text: "new streamed output"})
+	rows := v.viewport(80, 5)
+	if !v.followTail || rows[len(rows)-1].text != "new streamed output" {
+		t.Fatal("page down at bottom did not reveal incoming output", rows)
+	}
+}
+
 func TestTranscriptManualBottomAndSourceAnchor(t *testing.T) {
 	v := newTranscript()
 	var source strings.Builder

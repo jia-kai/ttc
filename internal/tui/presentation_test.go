@@ -6,7 +6,6 @@ import (
 	"scicode/internal/provider"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestSharedPresentationInterleavingAndFinalImmutability(t *testing.T) {
@@ -77,7 +76,7 @@ func TestStreamingSpeakerDrawUsesStyledCells(t *testing.T) {
 	s.SetSize(60, 12)
 	v := newTranscript()
 	v.assistant(1, "assistant", "plain *streamed* body", 0, false)
-	if err := draw(s, v, newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, false, time.Time{}, nil, provider.Selection{}); err != nil {
+	if err := draw(s, v, newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{}); err != nil {
 		t.Fatal(err)
 	}
 	for i, r := range "assistant" {

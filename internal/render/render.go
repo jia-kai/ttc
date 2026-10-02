@@ -112,7 +112,7 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 			if status == "running" && a["background"] == true && v["job_id"] != nil {
 				status = "started"
 			}
-			summary += " · " + Inline(status)
+			summary += " · " + Inline(Status(status))
 		}
 		if code, ok := v["exit_code"].(float64); ok {
 			summary += fmt.Sprintf(" · exit %d", int(code))

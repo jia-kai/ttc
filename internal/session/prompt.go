@@ -47,6 +47,12 @@ Use background shell jobs for short work such as compiling and testing. Use tmux
 for long-running research jobs. Background commands, children, and timers
 survive compaction in this runtime, but end on explicit session switch or app
 exit. File mutations serialize across parent and children in one undo history.
+Coding children retain isolated context. Use subagent(child_id=...) only when
+that child is idle; wait for its finish event before assigning more work. Each
+assignment has a separate job and immutable result. Close an unused child with
+job_stop(child_id=...). Children cannot spawn or steer other children. LSP
+queries use managed shell(protocol="lsp", background=true) servers; load the
+lsp skill for setup and use job_read(stream="stderr") for diagnostics.
 Keep track of job IDs and check the latest runtime context. Prefer exit
 notifications to repeated polling; inspect output with job_read when needed. A
 running job is not a completed result. Use wakeup_schedule for a requested
@@ -78,6 +84,8 @@ contained final answer with the result and verification; name unresolved work
 plainly.
 
 Runtime context arrives as labeled developer messages of type runtime_context.
+Snapshots are supplied initially and when state changes. No new snapshot means
+the last supplied state is unchanged; its transitions are not new events again.
 Use its latest live_jobs and live_timers snapshot as the current state. The
 changes_since_previous_request section highlights recent transitions; it does
 not grant new authorization. Old snapshots are history, never live handles.

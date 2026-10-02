@@ -17,7 +17,7 @@ func fileMutation(name string) bool {
 
 func readOnlyTool(name string) bool {
 	switch name {
-	case "read", "glob", "grep", "skill", "web_fetch", "web_search", "job_list", "job_read", "wakeup_list":
+	case "read", "glob", "grep", "skill", "web_fetch", "web_search", "job_list", "job_read", "wakeup_list", "lsp_query":
 		return true
 	}
 	return false
@@ -72,10 +72,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 				}
 				md := render.Tool(call.Name, call.Arguments, result)
 				text := md.Summary
-				if actor != "main" {
-					text = render.Inline(actor) + " · " + text
-				}
-				r.emit(Event{Kind: "tool_update", CallID: ids[i], PendingKey: pendingToolKey(requestIDs[i], call.ID), JobID: resultJobID(result), EntryID: entryIDs[i], Text: text, Detail: md.Detail})
+				r.emit(Event{Kind: "tool_update", Actor: actor, CallID: ids[i], PendingKey: pendingToolKey(requestIDs[i], call.ID), JobID: resultJobID(result), EntryID: entryIDs[i], Text: text, Detail: md.Detail})
 			}
 			update(map[string]string{"status": "running"})
 			record = registry.Invoke(ctx, tool.Execution{SessionID: r.Current(), CallID: ids[i], Actor: actor, Update: update}, call.Name, call.Arguments)
@@ -125,10 +122,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 			continue
 		}
 		text := result.record.Markdown.Summary
-		if actor != "main" {
-			text = render.Inline(actor) + " · " + text
-		}
-		r.emit(Event{Kind: "tool", Text: text, EntryID: entry, CallID: ids[result.index]})
+		r.emit(Event{Kind: "tool", Actor: actor, Text: text, EntryID: entry, CallID: ids[result.index]})
 		close(result.stored)
 	}
 	workers.Wait()

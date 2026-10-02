@@ -68,7 +68,7 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 		t.Fatal(string(b), e)
 	}
 	messages, e := r.Store.Messages(r.Current())
-	if e != nil || len(messages) != 6 || messages[3].Role != "tool" {
+	if e != nil || len(messages) != 5 || messages[3].Role != "tool" {
 		t.Fatal(messages, e)
 	}
 	prompts := 0
@@ -143,9 +143,10 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 	if !r.HasNotifications() {
 		t.Fatal("timer did not deliver")
 	}
-	if e = r.deliver(""); e != nil {
+	if _, _, e = r.admitMain(context.Background(), "", r.CurrentSelection()); e != nil {
 		t.Fatal(e)
 	}
+	r.timers.deliveredThrough(wake.ID, 1)
 	listed := r.timers.list()
 	if len(listed) != 1 || listed[0].ID != wake.ID || listed[0].Last != "delivered" {
 		t.Fatal(listed)
@@ -202,6 +203,9 @@ func (p *gatedNamingProvider) Models(context.Context) ([]provider.ModelSpec, err
 	return []provider.ModelSpec{provider.ScriptModel()}, nil
 }
 func (p *gatedNamingProvider) Login(context.Context, provider.LoginUI) error { return nil }
+func (p *gatedNamingProvider) EstimateReplay(m provider.Message) int {
+	return provider.ReplayTokens(m.State)
+}
 func (p *gatedNamingProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
 	if req.NoTools {
 		p.naming <- req
@@ -362,7 +366,7 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if label := r.Store.Label(entry); !strings.Contains(label, "completed") || strings.Contains(label, "line-01") || !strings.Contains(label, "line-20") {
+	if label := r.Store.Label(entry); !strings.Contains(label, "done") || strings.Contains(label, "line-01") || !strings.Contains(label, "line-20") {
 		t.Fatal(label)
 	}
 	detail, err := r.Store.Inspect(entry)

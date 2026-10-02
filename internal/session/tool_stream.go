@@ -35,9 +35,6 @@ func (r *Runtime) toolAnnouncement(turn, actor string, request int64, start *pro
 		return fmt.Errorf("record tool announcement: %w", err)
 	}
 	text = "awaiting " + render.Clean(start.Name) + " ..."
-	if actor != "main" {
-		text = actor + " · " + text
-	}
-	r.emit(Event{Kind: "tool_pending", SessionID: session, EntryID: id, CallID: pendingToolKey(request, start.ID), Text: text})
+	r.emit(Event{Kind: "tool_pending", Actor: actor, SessionID: session, EntryID: id, CallID: pendingToolKey(request, start.ID), Text: text})
 	return nil
 }

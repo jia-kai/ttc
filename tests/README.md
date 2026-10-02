@@ -20,9 +20,10 @@ Space selects without advancing.
 Left/Right preserves answers while switching tabs; nothing submits until the
 final button. Esc dismisses; `/questions` reopens the pending dialog.
 
-The fixture exercises all 19
+The fixture exercises all 20
 implemented tool types: file read/search,
-three edit types, shell, a child task, background job list/read/stop, local web
+three edit types, shell, a reusable child with an idle follow-up and explicit close, a managed stdio LSP
+query, background job list/read/stop, local web
 fetch/search, skill loading, a saved image and its dimensions, questions, and three timer tools.
 The final notebook demonstrates headings, tables, emphasis, quotes, nested and
 ordered lists, checkboxes, code, links, Unicode, and inline/block TeX math.
@@ -46,7 +47,7 @@ Glob shows only its pattern. Generated IDs use readable
 prefixes and a 16-character URL-safe random suffix.
 Inside the shared display window, use Page Up/Down, Ctrl+U/D,
 Home/End, and Esc. Up/Down in the composer recalls prompts and restores drafts.
-Ctrl+U/D scrolls the conversation; Ctrl+D never exits. Ctrl+C exits from any
+Ctrl+U/D scrolls the conversation; Ctrl+D at the bottom follows new output and never exits. Ctrl+C exits from any
 view. Try `/model` or Ctrl+X,
 then M to browse model families and variants; Esc cancels. Keep Demo Sol/low
 selected while running the fixed interactive script. After completion you can
@@ -67,7 +68,7 @@ For reproducible headless validation:
 make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
-python3 tests/pty_input.py          # offline external editor/completion/export
+python3 tests/pty_input.py          # offline editor/completion/export, Ctrl+J and /rename
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery
 python3 -m unittest discover -s tests -p test_scratch.py # scratch permissions
 make check                        # race tests and vet
@@ -94,8 +95,10 @@ sudo pacman -S --needed kitty xorg-server-xvfb xorg-xauth mesa noto-fonts noto-f
 ./ttc --install-math               # optional math setup; pinned npm dependencies
 make kitty-test                    # builds and captures real Kitty under Xvfb
 python3 tests/kitty_visual.py      # reuse the current ./ttc binary
-python3 tests/kitty_visual.py --tmux # private tmux; Kitty identity/override cleared
+python3 tests/kitty_visual.py --tmux # private tmux; Kitty identity cleared
 python3 tests/kitty_visual.py --offline --tmux # short palette/image/math fixture
+python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
+python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
 
 Kitty 0.49.1 was verified; the driver requires `kitten @ screenshot`. Xvfb runs
@@ -124,14 +127,17 @@ MathJax cache exists; run `./ttc --install-math` first to enable them. Benchmark
 warm typesetting plus PNG conversion with
 `go test ./internal/assets -run '^$' -bench BenchmarkMathJax -benchtime=10x`.
 
-The `--tmux` mode enables passthrough and RGB in a private tmux, clearing
-`KITTY_WINDOW_ID` and `SCICODE_KITTY` inside it. It exercises automatic graphics
+The `kitty_visual.py --tmux` mode enables passthrough and RGB in a private tmux, clearing
+`KITTY_WINDOW_ID` inside it. It exercises automatic graphics
 probing through tmux. The short `--offline` fixture uses the scripted provider,
 a shell and an image thumbnail plus the notebook, without a TCP listener.
 Both screenshot modes need local display/control sockets. Restricted sandboxes
 may prohibit these and the HTTP mock's loopback listener; saved exceptions and
 logs identify the environment limitation. Unit provider tests use in-process
 HTTP handlers; the separate mock-server tests exercise real transport.
+`pty_math.py` needs the built binary and prepared MathJax, Node and librsvg;
+it needs no Kitty, Xvfb, display or socket. Its `--tmux` option simulates DCS
+passthrough without starting tmux, and checks graphics without `COLORTERM`.
 The full demo also checks stable instructions, immutable input prefixes and
 reported cached/reasoning counters. Unit regressions distinguish unavailable
 counters from zero, preserve model provenance, and avoid double-counting native
@@ -151,3 +157,15 @@ files, scripts, SQLite history and complete terminal/failure logs are saved in
 the printed scratch directory. To inspect visually, `make demo` shows the real
 tool cards, diff inspectors and Markdown; in a live session run `/btw QUESTION`
 while a turn is working and dismiss its result with Esc.
+
+When local socket creation is restricted, the socket-free integration still uses
+an actual mock HTTP server and OpenAI adapter, covering all twenty tools:
+
+```sh
+go test -race ./internal/session -run TestHTTPMockOpenAIIntegrationTwentyToolTypes -v
+python3 tests/pty_input.py       # offline editor, history, steering and promotion
+python3 tests/pty_compaction.py  # offline automatic compaction
+```
+
+No subscription credentials or inference are used. The interactive demo needs
+permission to bind a loopback TCP socket.

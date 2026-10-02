@@ -13,7 +13,8 @@ import (
 // the new entry ID, or zero when no refresh is needed, without inference.
 // Call before replacing a live runtime so failure leaves that runtime usable.
 // Every subsequent request uses the same current template; project and live
-// environment context are assembled separately for each request.
+// environment state are sampled separately at each boundary, with runtime
+// context appended only when changed.
 func RefreshInstructions(store *history.Store, saved history.Session) (int64, error) {
 	if saved.ReadOnly || saved.EntryTip == 0 {
 		return 0, nil

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"scicode/internal/provider"
+	"syscall"
 )
 
 // Continue atomically freezes a predecessor and copies a retained visible suffix.
@@ -16,6 +18,14 @@ import (
 // promptFrom optionally preserves an earlier initiating user entry before the
 // suffix. Its file tip becomes the cut's baseline, preserving suffix-only undo.
 func (s *Store) Continue(session, summary, archive string, retainFrom, promptFrom int64) (Session, error) {
+	archiveHash, e := filepathHash(archive)
+	if e != nil {
+		return Session{}, fmt.Errorf("validate Markdown compaction archive: %w", e)
+	}
+	exactHash, e := filepathHash(archive + ".jsonl")
+	if e != nil {
+		return Session{}, fmt.Errorf("validate exact compaction archive: %w", e)
+	}
 	old, e := s.Session(session)
 	if e != nil {
 		return Session{}, e
@@ -137,7 +147,12 @@ func (s *Store) Continue(session, summary, archive string, retainFrom, promptFro
 				return e
 			}
 		}
-		_, e = tx.Exec("INSERT INTO compactions(continuation_id,predecessor_id,source_tip_id,ordinal,archive_path,archive_sha256,summary_entry_id) VALUES(?,?,?,?,?,?,?)", id, session, old.EntryTip, ordinal, archive, filepathHash(archive), summaryID)
+		// In-flight actors can have their entire visible tail summarized. Their
+		// active turn still routes to the writable continuation before finishing.
+		if _, e = tx.Exec("UPDATE turns SET session_id=? WHERE session_id=? AND status='running'", id, session); e != nil {
+			return e
+		}
+		_, e = tx.Exec("INSERT INTO compactions(continuation_id,predecessor_id,source_tip_id,ordinal,archive_path,archive_sha256,archive_exact_sha256,summary_entry_id) VALUES(?,?,?,?,?,?,?,?)", id, session, old.EntryTip, ordinal, archive, archiveHash, exactHash, summaryID)
 		return e
 	})
 	if e != nil {
@@ -146,11 +161,22 @@ func (s *Store) Continue(session, summary, archive string, retainFrom, promptFro
 	return s.Session(id)
 }
 
-func filepathHash(path string) string {
-	b, e := os.ReadFile(path)
+func filepathHash(path string) (string, error) {
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if e != nil {
-		return ""
+		return "", e
 	}
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])
+	defer f.Close()
+	info, e := f.Stat()
+	if e != nil {
+		return "", e
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("compaction archive must be a regular file")
+	}
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		return "", e
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

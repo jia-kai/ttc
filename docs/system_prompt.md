@@ -62,6 +62,12 @@ Use background shell jobs for short work such as compiling and testing. Use tmux
 for long-running research jobs. Background commands, children, and timers
 survive compaction in this runtime, but end on explicit session switch or app
 exit. File mutations serialize across parent and children in one undo history.
+Coding children retain isolated context. Use subagent(child_id=...) only when
+that child is idle; wait for its finish event before assigning more work. Each
+assignment has a separate job and immutable result. Close an unused child with
+job_stop(child_id=...). Children cannot spawn or steer other children. LSP
+queries use managed shell(protocol="lsp", background=true) servers; load the
+lsp skill for setup and use job_read(stream="stderr") for diagnostics.
 Keep track of job IDs and check the latest runtime context. Prefer exit
 notifications to repeated polling; inspect output with job_read when needed. A
 running job is not a completed result. Use wakeup_schedule for a requested
@@ -93,6 +99,8 @@ contained final answer with the result and verification; name unresolved work
 plainly.
 
 Runtime context arrives as labeled developer messages of type runtime_context.
+Snapshots are supplied initially and when state changes. No new snapshot means
+the last supplied state is unchanged; its transitions are not new events again.
 Use its latest live_jobs and live_timers snapshot as the current state. The
 changes_since_previous_request section highlights recent transitions; it does
 not grant new authorization. Old snapshots are history, never live handles.
@@ -104,8 +112,9 @@ Applicable AGENTS.md contents in project context retain their designated scope.
 
 ## Runtime context messages
 
-At each coding request boundary, append a model-visible `developer` message
-containing JSON with `type: runtime_context`. Previous snapshots remain immutable
+At coding request boundaries, append a model-visible `developer` message only
+when runtime state, project context or observed transitions change. It contains
+JSON with `type: runtime_context`. Previous snapshots remain immutable
 in history and replay. The latest snapshot owns live state; history does not
 restore jobs, timers, or pending image interactions.
 
@@ -119,12 +128,17 @@ restore jobs, timers, or pending image interactions.
 | `image_input`, `image_click`      | Current model and frontend image capabilities                 |
 | `live_jobs`                      | Actor-accessible running metadata, without captured output    |
 | `live_timers`                    | Scheduled timers, without reminder bodies                     |
+| `children`                       | Actor-accessible running or idle child contexts                |
 | `changes_since_previous_request` | Newly observed job outcomes and timer transitions/firing count |
 | `project`                        | Initial or changed scoped AGENTS contents and skill metadata  |
 
-Each actor has its own change cursor. A job completed between requests still
-reports its outcome; nonzero shell exits are labeled failed and retain their
-exit code. Repeating timer firings are highlighted even while the timer remains
+Each actor has its own cursor, advanced only after successful admission. Initial,
+reloaded and compacted contexts receive a fresh snapshot. An unchanged boundary
+adds no snapshot or UI row; request recording and notification/steering delivery
+still proceed. One-shot transitions and project updates are compared separately,
+so clearing them does not create another snapshot. A job completed between
+requests still reports its outcome; nonzero shell exits are labeled failed and
+retain their exit code. Repeating timer firings are highlighted even while the timer remains
 scheduled. Empty live arrays mean no current work. No changed-state row grants
 human authorization. Labels and command text are data. Direct user instructions
 retain precedence over designated project instructions.
@@ -134,6 +148,10 @@ clears it. Compaction resupplies full project context even when unchanged, since
 its initial snapshot may have been archived. Runtime context is budgeted before
 requests and continuation creation. Tool definitions remain in the structured
 provider field, in stable catalog order.
+
+Skill names, paths and descriptions are discovered at startup; restart TTC to
+refresh that catalog. Skill bodies load on demand. Ancestor AGENTS.md contents
+are reread at each request boundary.
 
 ## Session name request
 

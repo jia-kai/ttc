@@ -12,19 +12,24 @@ import (
 
 // Window displays messages, tool records, system prompts, and command results using the same widget.
 type Window struct {
-	Title, Text string
-	Header      string // Optional fixed header, used for question tabs above scrolling content.
-	HeaderFocus string // Active header label shown alone when the whole header cannot fit.
-	Hint        string // Optional title-bar key hint; empty uses "Esc closes".
-	Scroll      int
-	System      bool   // Distinct color for inspected system prompts/runtime messages.
-	Markdown    bool   // Render portable Markdown for messages, tool details and command results.
-	CallID      string // Transient tool-card identity; cleared when its final record arrives.
-	JobID       string // Live inspector capture; never set when replaying stored history.
-	Detail      string // Base transient detail, without the expanded capture tail.
-	cachedText  string
-	cachedWidth int
-	cachedLines []string
+	actor, subagentName string // Same attribution as the conversation card.
+	Title, Text         string
+	Header              string // Optional fixed header, used for question tabs above scrolling content.
+	HeaderFocus         string // Active header label shown alone when the whole header cannot fit.
+	Hint                string // Optional title-bar key hint; empty uses "Esc closes".
+	Scroll              int
+	System              bool   // Distinct color for inspected system prompts/runtime messages.
+	Markdown            bool   // Render portable Markdown for messages, tool details and command results.
+	CallID              string // Transient tool-card identity; cleared when its final record arrives.
+	JobID               string // Live inspector capture; never set when replaying stored history.
+	Detail              string // Base transient detail, without the expanded capture tail.
+	cachedText          string
+	cachedWidth         int
+	cachedLines         []string
+	assets              []displayRow // Parallel to cachedLines; only viewport assets are requested.
+	renderer            *imageRenderer
+	cachedRevision      uint64
+	pages               *inspectionPages // Optional retained history pager; only the current page is rendered.
 }
 
 // HeaderLines wraps the fixed header, leaving layout ownership with the frontend.
@@ -42,10 +47,22 @@ func (w *Window) HeaderLines(width, limit int) []string {
 // Lines wraps portable Markdown as readable text within a terminal viewport.
 func (w *Window) Lines(width, height int) []string {
 	height = max(0, height)
-	if w.cachedLines == nil || w.cachedText != w.Text || w.cachedWidth != width {
+	revision := uint64(0)
+	if w.renderer != nil {
+		revision = w.renderer.revision
+	}
+	if w.cachedLines == nil || w.cachedText != w.Text || w.cachedWidth != width || w.cachedRevision != revision {
 		w.cachedText = w.Text
 		w.cachedWidth = width
-		if w.Markdown {
+		w.cachedRevision = revision
+		w.assets = nil
+		if w.Markdown && w.renderer != nil {
+			w.assets = w.renderer.layout(line{text: w.Text, markdown: true}, max(1, width))
+			w.cachedLines = make([]string, len(w.assets))
+			for i, row := range w.assets {
+				w.cachedLines[i] = row.text
+			}
+		} else if w.Markdown {
 			text, err := render.Terminal(w.Text, max(1, width))
 			if err != nil {
 				w.cachedLines = wrap(render.Clean(w.Text), width)
@@ -77,6 +94,9 @@ func (w *Window) Lines(width, height int) []string {
 // Key handles scrolling; false means the caller should handle the key.
 func (w *Window) Key(ev *tcell.EventKey, height int) bool {
 	height = max(1, height)
+	if ev.Key() == tcell.KeyRune && w.pageKey(ev.Rune()) {
+		return true
+	}
 	switch ev.Key() {
 	case tcell.KeyUp:
 		w.Scroll--

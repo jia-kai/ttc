@@ -133,7 +133,7 @@ func TestWebCacheBoundsExpiryAndImmutability(t *testing.T) {
 func TestWebSearchJSONAndSSE(t *testing.T) {
 	for _, sse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "json", true: "sse"}[sse], func(t *testing.T) {
-			t.Setenv("SCICODE_EXA_URL", "https://mock.test/mcp")
+			t.Setenv("TTC_EXA_URL", "https://mock.test/mcp")
 			t.Setenv("EXA_API_KEY", "synthetic-key")
 			r, w, x, request := toolFixture(t)
 			AddWeb(r, &http.Client{Transport: fetchTransport(func(req *http.Request) (*http.Response, error) {

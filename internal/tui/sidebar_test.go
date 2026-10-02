@@ -8,8 +8,18 @@ import (
 	"scicode/internal/session"
 	"strings"
 	"testing"
-	"time"
 )
+
+func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
+	cached := 800
+	u := session.ContextUsage{Limit: 10000, Input: 1000, Reported: &session.ReportedUsage{Tokens: provider.Usage{InputTokens: 1000, CachedInputTokens: &cached}}, Totals: session.UsageTotals{Requests: 1, ReportedRequests: 1, Tokens: provider.Usage{InputTokens: 1000, CachedInputTokens: &cached}}}
+	b := newSidebar()
+	b.update(u, nil, nil)
+	text := strings.Join(b.sections[0].rows, "\n")
+	if strings.Count(text, "Uncached input 200") != 2 || !strings.Contains(text, "Input 1000") {
+		t.Fatal("cached/full input remain indistinguishable", text)
+	}
+}
 
 func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
 	s := tcell.NewSimulationScreen("UTF-8")
@@ -106,11 +116,11 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 		v.append(line{text: fmt.Sprintf("message %d", i), id: int64(i + 1)})
 	}
 	b := newSidebar()
-	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, false, time.Time{}, nil, provider.Selection{})
+	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{})
 	v.scroll(-50, 27)
-	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, false, time.Time{}, nil, provider.Selection{})
+	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{})
 	anchor := v.entryAt(0)
-	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, false, time.Time{}, nil, provider.Selection{})
+	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{})
 	if v.entryAt(0) != anchor {
 		t.Fatal("fullscreen changed anchor")
 	}
@@ -118,12 +128,12 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 	if visible || b.width != 0 {
 		t.Fatal("fullscreen left composer/sidebar")
 	}
-	draw(s, v, b, true, nil, nil, -1, newComposer("draft"), 0, nil, false, time.Time{}, nil, provider.Selection{})
+	draw(s, v, b, true, nil, nil, -1, newComposer("draft"), 0, nil, nil, "", nil, provider.Selection{})
 	_, _, visible = s.GetCursor()
 	if !visible {
 		t.Fatal("typing did not show composer")
 	}
-	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, true, time.Now(), nil, provider.Selection{})
+	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "Working · 0s", nil, provider.Selection{})
 	var status string
 	for x := range 40 {
 		r, _, _, _ := s.GetContent(x, 29)

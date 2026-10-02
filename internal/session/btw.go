@@ -27,6 +27,9 @@ and does not enter the main agent's context.`
 // Context and model selection freeze at admission. A blank session is rejected;
 // session changes and exit cancel and join the task through the job supervisor.
 func (r *Runtime) StartBTW(question string) (string, error) {
+	if err := r.checkContext(); err != nil {
+		return "", err
+	}
 	question = strings.TrimSpace(question)
 	if question == "" || len(question) > 4096 || !utf8.ValidString(question) || strings.ContainsRune(question, 0) {
 		return "", errors.New("/btw requires a UTF-8 question of 1–4096 bytes without NUL")
@@ -50,6 +53,9 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if saved.ReadOnly {
 		return "", errors.New("session is read-only; load a writable session before /btw")
 	}
+	if saved.CompactionError != "" {
+		return "", errors.New("session unusable after compaction; load or start another session before /btw")
+	}
 	if saved.RedoTip != 0 {
 		return "", errors.New("redo is pending; use /redo before /btw, or submit a new turn to start a history branch")
 	}
@@ -72,9 +78,9 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	task := childTask{actor: "main/" + history.NewID("btw"), turn: turn, prompt: question, selection: selection, prefix: prefix, tools: r.Tools.Filter(readOnlyTool), aside: true}
 	r.childStartMu.Lock()
 	defer r.childStartMu.Unlock()
-	count := 0
+	count := len(r.children)
 	for _, v := range r.Jobs.Live() {
-		if v.Kind == "subagent" || v.Kind == "btw" {
+		if v.Kind == "btw" {
 			count++
 		}
 	}

@@ -258,7 +258,7 @@ func TestFormulaPressureSchedulesOnlyViewportAndSettles(t *testing.T) {
 			task := <-r.tasks
 			n++
 			queued++
-			if r.accept(renderReply{key: task.key, pixels: image.NewNRGBA(image.Rect(0, 0, 32, 12))}) {
+			if r.accept(renderReply{key: task.key, pixels: image.NewNRGBA(image.Rect(0, 0, 32*assets.MathRasterScale, 12*assets.MathRasterScale)), math: true}) {
 				v.invalidate()
 			}
 		}
@@ -304,12 +304,12 @@ func TestFormulaLayoutUsesImagesPromotesAndKeepsCode(t *testing.T) {
 	g.Begin()
 	r := &imageRenderer{graphics: g, cellWidth: 8, cellHeight: 16, backend: "test", ready: map[string]renderReply{}}
 	for _, tex := range []string{"x^2", `\frac{1}{n}`} {
-		key := assets.Key("mathjax-v1", r.backend, tex, "16")
+		key := assets.Key("mathjax-hires-v1", r.backend, tex, "16", fmt.Sprint(assets.MathRasterScale))
 		height := 12
 		if strings.Contains(tex, "frac") {
 			height = 40
 		}
-		r.ready[key] = renderReply{pixels: image.NewNRGBA(image.Rect(0, 0, 40, height))}
+		r.ready[key] = renderReply{pixels: image.NewNRGBA(image.Rect(0, 0, 40*assets.MathRasterScale, height*assets.MathRasterScale))}
 	}
 	rows := r.layout(line{text: "before $x^2$ after\n\ninline $\\frac{1}{n}$ end\n\n`$x^2$`", markdown: true}, 80)
 	var texts []string
@@ -339,6 +339,140 @@ func TestFormulaLayoutUsesImagesPromotesAndKeepsCode(t *testing.T) {
 	rows = r.layout(line{text: `$\alpha$`, markdown: true}, 80)
 	if len(rows) == 0 || !strings.Contains(rows[0].text, `\alpha`) {
 		t.Fatal("missing backend lost TeX")
+	}
+}
+
+func TestHighResolutionFormulaPlacementAndCache(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		cellWidth, cellHeight int
+		width, height, pane   int
+		columns, rows         int
+	}{
+		{"inline", 8, 16, 40, 12, 80, 5, 1},
+		{"fraction", 8, 16, 40, 40, 80, 5, 3},
+		{"larger terminal font", 12, 24, 80, 20, 80, 7, 1},
+		{"narrow pane", 8, 16, 80, 12, 16, 10, 1},
+		{"tall formula", 8, 16, 400, 1000, 30, 10, 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := graphics.New(&bytes.Buffer{}, false)
+			r := &imageRenderer{graphics: g, backend: "test", cellWidth: tc.cellWidth, cellHeight: tc.cellHeight, ready: map[string]renderReply{}}
+			key := assets.Key("mathjax-hires-v1", r.backend, "x", fmt.Sprint(tc.cellHeight), fmt.Sprint(assets.MathRasterScale))
+			r.ready[key] = renderReply{pixels: image.NewNRGBA(image.Rect(0, 0, tc.width*assets.MathRasterScale, tc.height*assets.MathRasterScale))}
+			rows := r.layout(line{text: "$x$", markdown: true}, tc.pane)
+			found := false
+			for _, row := range rows {
+				for _, asset := range row.assets {
+					found = true
+					if asset.columns != tc.columns || asset.rows != tc.rows {
+						t.Fatalf("supersampling changed placement: %dx%d, want %dx%d", asset.columns, asset.rows, tc.columns, tc.rows)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("formula lost its placement")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	old := assets.Key("mathjax-v1", "test", "x", "16")
+	r := &imageRenderer{graphics: graphics.New(&bytes.Buffer{}, false), backend: "test", cellWidth: 8, cellHeight: 16, ctx: ctx, tasks: make(chan renderTask, 1), pending: map[string]context.CancelFunc{}, ready: map[string]renderReply{old: {pixels: image.NewNRGBA(image.Rect(0, 0, 40, 12))}}}
+	rows := r.layout(line{text: "$x$", markdown: true}, 80)
+	var visible []line
+	for _, row := range rows {
+		if strings.ContainsRune(row.text, '\U0010eeee') {
+			t.Fatal("reused a low-resolution cached formula")
+		}
+		visible = append(visible, line{text: row.text, assets: row.assets})
+	}
+	if err := r.ensure(visible); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case task := <-r.tasks:
+		if task.key == old || task.pixels != 14 {
+			t.Fatal("cache refresh changed logical font size", task)
+		}
+	default:
+		t.Fatal("high-resolution formula was not queued")
+	}
+}
+
+func TestCellMeasurementFallbackWarningAndRecovery(t *testing.T) {
+	r := &imageRenderer{graphics: graphics.New(&bytes.Buffer{}, false), cellWidth: 8, cellHeight: 16}
+	for _, tc := range []struct {
+		name    string
+		size    tcell.WindowSize
+		cw, ch  int
+		changed bool
+		warn    bool
+	}{
+		{"missing", tcell.WindowSize{}, 8, 16, false, true},
+		{"still missing", tcell.WindowSize{Width: 80, Height: 24}, 8, 16, false, false},
+		{"measured", tcell.WindowSize{Width: 80, Height: 24, PixelWidth: 960, PixelHeight: 576}, 12, 24, true, false},
+		{"same", tcell.WindowSize{Width: 80, Height: 24, PixelWidth: 960, PixelHeight: 576}, 12, 24, false, false},
+		{"partial", tcell.WindowSize{Width: 80, Height: 24, PixelWidth: 960}, 8, 16, true, true},
+		{"zero grid", tcell.WindowSize{PixelWidth: 960, PixelHeight: 576}, 8, 16, false, false},
+		{"negative", tcell.WindowSize{Width: -1, Height: 24, PixelWidth: 960, PixelHeight: 576}, 8, 16, false, false},
+		{"subpixel cell", tcell.WindowSize{Width: 80, Height: 24, PixelWidth: 1, PixelHeight: 1}, 8, 16, false, false},
+		{"fallback sized measurement", tcell.WindowSize{Width: 80, Height: 24, PixelWidth: 640, PixelHeight: 384}, 8, 16, false, false},
+		{"missing again", tcell.WindowSize{}, 8, 16, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed, warning := r.updateCellDimensions(tc.size)
+			if changed != tc.changed || (warning != "") != tc.warn || r.cellWidth != tc.cw || r.cellHeight != tc.ch {
+				t.Fatal("incorrect fallback transition", changed, warning, r.cellWidth, r.cellHeight)
+			}
+			if r.graphics.CellWidth != tc.cw || r.graphics.CellHeight != tc.ch {
+				t.Fatal("upload geometry not synchronized")
+			}
+		})
+	}
+}
+
+func TestFallbackWarningIsVisibleAndNotModelContext(t *testing.T) {
+	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Warning check complete."}}}, graphics.New(&bytes.Buffer{}, false))
+	u.typeText("draw marker")
+	frame := u.wait(t, "draw marker")
+	if strings.Count(frame, "Warning: using estimated") != 1 || !strings.Contains(frame, "8×16") {
+		t.Fatal("missing or repeated fallback warning", frame)
+	}
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn completed")
+	messages, err := u.runtime.Store.Messages(u.runtime.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if strings.Contains(message.Content, "Warning: using estimated") {
+			t.Fatal("presentation warning entered model context")
+		}
+	}
+}
+
+func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(50, 20)
+	g := graphics.New(&bytes.Buffer{}, false)
+	p := newImagePreview(session.ImageSnapshot{ID: "image", Width: 20, Height: 10}, image.NewRGBA(image.Rect(0, 0, 20, 10)), false, 8, 16)
+	g.Begin()
+	if err := p.draw(s, g); err != nil {
+		t.Fatal(err)
+	}
+	old := p.canvasKey
+	p.cellWidth, p.cellHeight = 10, 20
+	g.CellWidth, g.CellHeight = 10, 20
+	if err := p.draw(s, g); err != nil {
+		t.Fatal(err)
+	}
+	if p.canvasKey == old || p.canvas.Bounds().Dx() != p.width*10 || p.canvas.Bounds().Dy() != p.height*20 {
+		t.Fatal("preview canvas retained stale pixel geometry")
 	}
 }
 func TestImageFrontendPreviewAndClickNotification(t *testing.T) {

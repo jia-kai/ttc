@@ -13,6 +13,7 @@ import (
 
 	contextbuild "scicode/internal/context"
 	"scicode/internal/graphics"
+	"scicode/internal/history"
 	"scicode/internal/provider"
 	"scicode/internal/render"
 	"scicode/internal/session"
@@ -35,22 +36,23 @@ type Frontend struct {
 	Models    []provider.ModelSpec                          // Provider catalog snapshot fetched at startup; picker actions stay local.
 }
 type line struct {
-	text      string
-	speaker   string // Separate left-aligned label; its body is indented by two cells.
-	requestID int64  // Stable assistant-block identity, including replayed completions.
-	id        int64
-	human     bool
-	system    bool
-	styled    bool // Generated ANSI row (such as a streaming speaker label), independent of Markdown source.
-	markdown  bool
-	brief     bool // One clipped row; the complete saved result remains inspectable.
-	callID    string
-	jobID     string
-	detail    string
-	complete  bool
-	awaiting  bool // Tool name announced; arguments are still being streamed.
-	image     *session.ImageSnapshot
-	assets    []placedImage
+	actor, subagentName string // Presentation attribution; never part of the model message.
+	text                string
+	speaker             string // Separate left-aligned label; its body is indented by two cells.
+	requestID           int64  // Stable assistant-block identity, including replayed completions.
+	id                  int64
+	human               bool
+	system              bool
+	styled              bool // Generated ANSI row (such as a streaming speaker label), independent of Markdown source.
+	markdown            bool
+	brief               bool // One clipped row; the complete saved result remains inspectable.
+	callID              string
+	jobID               string
+	detail              string
+	complete            bool
+	awaiting            bool // Tool name announced; arguments are still being streamed.
+	image               *session.ImageSnapshot
+	assets              []placedImage
 }
 type input struct{ text string }
 type operationResult struct {
@@ -67,12 +69,13 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	var screen tcell.Screen
 	var tty *terminalTTY
 	var g *graphics.Kitty
+	graphicsWarning := ""
 	var e error
 	if !f.Plain {
 		screen = f.Screen
 		g = f.Graphics
 		if screen == nil {
-			screen, tty, g, e = newTerminal()
+			screen, tty, g, e = newTerminal(ctx)
 		}
 		if e != nil {
 			return e
@@ -83,6 +86,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		defer screen.Fini()
 		if tty != nil && g != nil && screen.Colors() < 1<<24 {
 			g = nil
+			graphicsWarning = "24-bit color is disabled; Kitty math/images require RGB colors. Remove NO_COLOR or TCELL_TRUECOLOR=disable."
+		} else if tty != nil && g == nil {
+			graphicsWarning = "Kitty graphics unavailable; math stays as TeX."
+			if tty.graphicsError != nil {
+				graphicsWarning += " " + tty.graphicsError.Error()
+			}
 		}
 		screen.EnableMouse(tcell.MouseButtonEvents)
 		screen.EnablePaste()
@@ -133,6 +142,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		}
 	}()
 	queue := []provider.Message{}
+	queueGeneration := f.Runtime.Generation()
 	view := newTranscript()
 	seenPrompts := map[string]int64{}
 	showPrompt := func(id int64) bool {
@@ -297,12 +307,68 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	esc := false
 	started := time.Time{}
+	var activity turnActivity
 	eof := false
 	add := func(text string, id int64) {
 		view.append(line{text: text, id: id})
 		if f.Plain {
 			fmt.Fprintln(f.Output, render.Clean(text))
 		}
+	}
+	names := map[string]string{}
+	nameForActor := func(actor string) string {
+		if actor == "" || actor == "main" {
+			return ""
+		}
+		if name, found := names[actor]; found {
+			return name
+		}
+		loaded, err := f.Runtime.Store.SubagentNames(ctx, f.Runtime.Current())
+		if err != nil {
+			add("Subagent names failed: "+err.Error(), 0)
+		}
+		for id, name := range loaded {
+			names[id] = name
+		}
+		name := names[actor]
+		names[actor] = name // Cache unnamed asides too; never query per chunk or frame.
+		return name
+	}
+	attribute := func(item line, actor string) line {
+		item.actor, item.subagentName = actor, nameForActor(actor)
+		return item
+	}
+	attributeWindow := func(window *Window, actor string) {
+		window.actor, window.subagentName = actor, nameForActor(actor)
+	}
+	plainActor := func(actor, text string) string {
+		if name := nameForActor(actor); name != "" {
+			return render.SubagentBadge(actor, name, 64, false) + " " + render.Clean(text)
+		}
+		return render.Clean(text)
+	}
+	addActor := func(item line, actor string) {
+		view.append(attribute(item, actor))
+		if f.Plain {
+			fmt.Fprintln(f.Output, plainActor(actor, item.text))
+		}
+	}
+	startEditor := func() {
+		if screen == nil {
+			add("Editor requires the terminal UI", 0)
+			return
+		}
+		if err := screen.Suspend(); err != nil {
+			add("Editor failed: "+err.Error(), 0)
+			return
+		}
+		editing, editorSuspended = true, true
+		editor := f.EditInput
+		if editor == nil {
+			editor = editDraft
+		}
+		text := draft.text
+		go func() { text, err := editor(ctx, text); editorDone <- operationResult{text: text, err: err} }()
 	}
 	finishPreview := func(confirm bool) {
 		if modal.preview != nil && modal.preview.pending {
@@ -322,8 +388,24 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	inspect := func(id int64) {
 		esc, viewChord = false, false
+		historyView := modal.history
 		modal.clear()
+		modal.history = historyView
 		modal.generation = f.Runtime.Generation()
+		if !f.Plain {
+			page, err := f.Runtime.Store.InspectPage(ctx, id, 0, history.InspectionPageChars)
+			if err != nil {
+				add("Inspection failed: "+err.Error(), 0)
+				return
+			}
+			if page.Supported && (page.Total > page.Limit || page.LargeEnvelope) {
+				modal.window = NewPagedWindow(page, func(offset int) (history.InspectionPage, error) {
+					return f.Runtime.Store.InspectPage(ctx, id, offset, history.InspectionPageChars)
+				})
+				attributeWindow(modal.window, page.Actor)
+				return
+			}
+		}
 		if renderer != nil {
 			snapshot, err := f.Runtime.ImageForEntry(id)
 			if err == nil && snapshot != nil {
@@ -333,6 +415,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				}
 				modal.loading = &previewLoad{snapshot: *snapshot, generation: f.Runtime.Generation(), entryID: id}
 				modal.window = &Window{Title: "Image", Text: "Loading full image…"}
+				attributeWindow(modal.window, snapshot.Actor)
 				return
 			}
 		}
@@ -350,6 +433,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			fmt.Fprintln(f.Output, render.Clean(text))
 		} else {
 			modal.window = &Window{Title: strings.Split(f.Runtime.Store.Label(v), "\n")[0], Text: text, System: v.Kind == "status" || v.Role == "system" || v.Role == "developer", Markdown: true}
+			attributeWindow(modal.window, v.Actor)
 			var status struct{ Type string }
 			if json.Unmarshal(v.Content, &status) == nil && status.Type == "system_prompt" {
 				modal.window.Markdown = false
@@ -385,6 +469,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	replay := func() {
 		view.reset()
+		loaded, err := f.Runtime.Store.SubagentNames(ctx, f.Runtime.Current())
+		if err != nil {
+			add("Subagent names failed: "+err.Error(), 0)
+			return
+		}
+		names = loaded
 		saved, err := f.Runtime.CurrentSession()
 		if err != nil {
 			add("Session metadata failed: "+err.Error(), 0)
@@ -398,11 +488,14 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			return
 		}
 		for _, v := range entries {
+			if v.InternalEvent() {
+				continue
+			}
 			var prompt struct{ Type string }
 			if json.Unmarshal(v.Content, &prompt) == nil && prompt.Type == "system_prompt" && !showPrompt(v.ID) {
 				continue
 			}
-			item := line{text: f.Runtime.Store.Label(v), id: v.ID, system: v.Kind == "status" || v.Role == "system"}
+			item := attribute(line{text: f.Runtime.Store.Label(v), id: v.ID, system: v.Kind == "status" || v.Role == "system"}, v.Actor)
 			if v.Kind == "message" && v.Role == "developer" {
 				item.system = true
 			}
@@ -420,9 +513,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				var message provider.Message
 				if err := json.Unmarshal(v.Content, &message); err == nil {
 					title := "assistant"
-					if v.Actor != "main" {
-						title += " · " + v.Actor
-					}
 					item.text, item.speaker, item.markdown, item.complete, item.requestID = message.Content, title, true, true, message.RequestID
 				}
 			}
@@ -447,14 +537,14 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						break
 					}
 					if item.id == card.EntryID {
-						item = line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}
+						item = attribute(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}, card.Snapshot.Actor)
 						view.replace(i, item)
 						present = true
 						break
 					}
 				}
 				if !present {
-					view.append(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot})
+					view.append(attribute(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}, card.Snapshot.Actor))
 				}
 			}
 		}
@@ -464,6 +554,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	start := func(message *provider.Message) {
 		busy = true
 		started = time.Now()
+		activity = turnActivity{}
 		go func() { done <- operationResult{err: f.Runtime.Run(message)} }()
 	}
 	openModelMenu := func() {
@@ -506,6 +597,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			}
 			modal.menu = nil
 			modal.window = &modal.question.Window
+			attributeWindow(modal.window, form.Actor)
 			return
 		}
 		add("No pending question", 0)
@@ -525,6 +617,33 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		modal.sessions = newSessionMenu(list, f.Runtime.Current(), time.Now())
 		modal.window = &modal.sessions.Window
 	}
+	openHistoryMenu := func() {
+		esc, viewChord = false, false
+		if busy {
+			add("History picker requires an idle turn", 0)
+			return
+		}
+		tree, err := f.Runtime.History()
+		if err != nil {
+			add("History failed: "+err.Error(), 0)
+			return
+		}
+		modal.clear()
+		modal.history = newHistoryMenu(tree)
+		modal.window = &modal.history.Window
+	}
+	openBackgroundMenu := func() {
+		if commandBusy {
+			return
+		}
+		list := f.Runtime.Jobs.Foreground("main")
+		if len(list) == 0 {
+			return
+		}
+		modal.clear()
+		modal.background = newBackgroundMenu(list)
+		modal.window = &modal.background.Window
+	}
 	selectModel := func(id, variant string) {
 		selection, err := provider.Resolve(f.Runtime.CurrentSelection().Provider, f.Models, id, variant)
 		if err != nil {
@@ -542,6 +661,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if generation := f.Runtime.Generation(); generation != queueGeneration {
+			queue = nil
+			queueGeneration = generation
+			activity = turnActivity{}
+		}
 		if !f.Plain && !fullscreen && !editing && !draft.pasting && modal.empty() && len(pendingBTW) > 0 {
 			event := pendingBTW[0]
 			pendingBTW = pendingBTW[1:]
@@ -601,10 +725,25 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				width, height := windowContentSize(w, h, modal.window)
 				modal.menu.reveal(width, height)
 			}
+			if modal.commands != nil {
+				w, h := screen.Size()
+				width, height := windowContentSize(w, h, modal.window)
+				modal.commands.reveal(width, height)
+			}
 			if modal.sessions != nil {
 				w, h := screen.Size()
 				width, height := windowContentSize(w, h, modal.window)
 				modal.sessions.reveal(width, height)
+			}
+			if modal.history != nil && modal.window == &modal.history.Window {
+				w, h := screen.Size()
+				width, height := windowContentSize(w, h, modal.window)
+				modal.history.reveal(width, height)
+			}
+			if modal.background != nil {
+				w, h := screen.Size()
+				width, height := windowContentSize(w, h, modal.window)
+				modal.background.reveal(width, height)
 			}
 			if modal.question != nil {
 				w, h := screen.Size()
@@ -615,14 +754,21 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				sidebar.update(f.Runtime.UsageSnapshot(), f.Runtime.Jobs.Live(), f.Runtime.LiveTimers())
 			}
 			if renderer != nil {
+				var size tcell.WindowSize
 				if tty != nil {
-					if size, err := tty.WindowSize(); err == nil {
-						cw, ch := size.CellDimensions()
-						if cw > 0 && ch > 0 && (cw != renderer.cellWidth || ch != renderer.cellHeight) {
-							renderer.cellWidth, renderer.cellHeight = cw, ch
-							view.invalidate()
-						}
+					if measured, err := tty.WindowSize(); err == nil {
+						size = measured
 					}
+				}
+				changed, warning := renderer.updateCellDimensions(size)
+				if changed {
+					view.invalidate()
+					if modal.preview != nil {
+						modal.preview.cellWidth, modal.preview.cellHeight = renderer.cellWidth, renderer.cellHeight
+					}
+				}
+				if warning != "" {
+					view.append(line{text: warning, system: true})
 				}
 				g.Begin()
 			}
@@ -633,7 +779,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if fullscreen {
 				drawFocus = copyFocused
 			}
-			if err := draw(screen, displayView(), sidebar, fullscreen, modal.preview, renderer, drawFocus, draft, len(attachments), queue, busy, started, modal.window, f.Runtime.CurrentSelection()); err != nil {
+			steers := f.Runtime.PendingSteers()
+			indicator := ""
+			if busy {
+				indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C exit", activity.indicator(time.Now(), started), len(queue)+len(steers))
+			}
+			if err := draw(screen, displayView(), sidebar, fullscreen, modal.preview, renderer, drawFocus, draft, len(attachments), queue, steers, indicator, modal.window, f.Runtime.CurrentSelection()); err != nil {
 				return err
 			}
 			if renderer != nil {
@@ -645,6 +796,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		dirty = false
 		submit := ""
 		haveInput := false
+		steering := false
 		select {
 		case <-ctx.Done():
 
@@ -661,6 +813,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						modal.window.Text = "Image preview failed: " + result.err.Error()
 					} else {
 						modal.preview = newImagePreview(modal.loading.snapshot, result.pixels, f.Runtime.ImageClickPending(result.key), renderer.cellWidth, renderer.cellHeight)
+						attributeWindow(&modal.preview.Window, modal.loading.snapshot.Actor)
 						detailEntry, err := f.Runtime.Store.Entry(modal.loading.entryID)
 						if err == nil {
 							modal.preview.detailText, err = f.Runtime.Store.Inspect(detailEntry)
@@ -675,6 +828,13 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			} else {
 				if renderer.accept(result) {
 					view.invalidate()
+					failure := result.err
+					if result.backend == "" {
+						failure = renderer.ready[result.key].err
+					}
+					if failure != nil {
+						view.append(line{text: "Warning: math/image rendering failed: " + render.Clean(failure.Error()), system: true})
+					}
 				}
 			}
 		case result := <-completer.results:
@@ -716,6 +876,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				draft.set(result.text)
 			}
 		case result := <-done:
+			activity = turnActivity{}
 			if modal.generation != 0 && modal.generation != f.Runtime.Generation() {
 				modal.clear()
 			}
@@ -745,7 +906,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						if modal.empty() {
 							modal.window = &Window{Title: "Command result", Text: result.text, Markdown: result.markdown}
 						}
-					case "/load":
+					case "/load", "/branch":
 						// The loaded conversation is the success feedback.
 					default:
 						add(result.text, 0)
@@ -759,6 +920,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if event.Generation != f.Runtime.Generation() || event.Kind != "btw_result" && event.SessionID != "" && event.SessionID != f.Runtime.Current() {
 				continue
 			}
+			activity.observe(event, time.Now())
 			switch event.Kind {
 			case "continuation":
 				// Rebuild the committed history before rendering subsequent coding
@@ -786,13 +948,15 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				sidebar.update(f.Runtime.UsageSnapshot(), f.Runtime.Jobs.Live(), f.Runtime.LiveTimers())
 				continue
 			case "session_name":
-				sidebar.sessionName = event.Text
+				saved, err := f.Runtime.CurrentSession()
+				if err != nil {
+					add("Session metadata failed: "+err.Error(), 0)
+				} else {
+					sidebar.sessionName = saved.Name
+				}
 				continue
 			case "tool_pending":
-				view.append(line{text: event.Text, id: event.EntryID, callID: event.CallID, awaiting: true, system: true})
-				if f.Plain {
-					fmt.Fprintln(f.Output, render.Clean(event.Text))
-				}
+				addActor(line{text: event.Text, id: event.EntryID, callID: event.CallID, awaiting: true, system: true}, event.Actor)
 			case "tool_stream_end":
 				for key, index := range view.calls {
 					if strings.HasPrefix(key, event.PendingKey) && view.lines[index].awaiting {
@@ -809,11 +973,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						item.image = event.Image
 						view.replace(index, item)
 					} else {
-						view.append(line{text: "**image_show** · " + render.Inline(event.Image.Path), callID: event.CallID, markdown: true, brief: true, image: event.Image})
+						view.append(attribute(line{text: "**image_show** · " + render.Inline(event.Image.Path), callID: event.CallID, markdown: true, brief: true, image: event.Image}, event.Actor))
 					}
 				}
 			case "tool_update", "tool":
-				item := line{text: event.Text, id: event.EntryID, callID: event.CallID, jobID: event.JobID, detail: event.Detail, markdown: true, brief: true, complete: event.Kind == "tool"}
+				item := attribute(line{text: event.Text, id: event.EntryID, callID: event.CallID, jobID: event.JobID, detail: event.Detail, markdown: true, brief: true, complete: event.Kind == "tool"}, event.Actor)
 				if !view.publish(item, event.PendingKey, false) {
 					break
 				}
@@ -822,19 +986,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					if err != nil {
 						return fmt.Errorf("render tool briefing: %w", err)
 					}
-					fmt.Fprintln(f.Output, brief)
+					fmt.Fprintln(f.Output, plainActor(event.Actor, brief))
 				}
 				if modal.window != nil && modal.window.CallID != "" && (modal.window.CallID == event.CallID || modal.window.CallID == event.PendingKey) {
 					modal.window.CallID = event.CallID
 					if event.Kind == "tool" {
-						entry, err := f.Runtime.Store.Entry(event.EntryID)
-						if err == nil {
-							modal.window.Text, err = f.Runtime.Store.Inspect(entry)
-						}
-						if err != nil {
-							modal.window.Text = "Inspection failed: " + err.Error()
-						}
-						modal.window.CallID, modal.window.JobID = "", ""
+						inspect(event.EntryID)
 					} else {
 						modal.window.JobID, modal.window.Detail, modal.window.Text = event.JobID, event.Detail, event.Detail
 						if modal.window.JobID != "" && !commandBusy {
@@ -843,48 +1000,55 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 				}
 			case "job":
-				view.append(line{text: event.Text, id: event.EntryID, markdown: true, brief: true})
+				view.append(attribute(line{text: event.Text, id: event.EntryID, markdown: true, brief: true}, event.Actor))
 				if f.Plain {
 					brief, err := render.TerminalBriefing(event.Text, 500, false)
 					if err != nil {
 						return fmt.Errorf("render job briefing: %w", err)
 					}
-					fmt.Fprintln(f.Output, brief)
+					fmt.Fprintln(f.Output, plainActor(event.Actor, brief))
 				}
 			case "delta":
-				if view.assistant(event.RequestID, "assistant", event.Text, 0, false) && f.Plain {
+				_, existing := view.requests[event.RequestID]
+				if view.publish(attribute(line{text: event.Text, speaker: "assistant", requestID: event.RequestID}, event.Actor), "", true) && f.Plain {
+					if !existing && nameForActor(event.Actor) != "" {
+						fmt.Fprintln(f.Output, plainActor(event.Actor, "assistant"))
+					}
 					fmt.Fprint(f.Output, event.Text)
 				}
 			case "assistant":
 				speaker := "assistant"
-				if event.Actor != "" && event.Actor != "main" {
-					speaker += " · " + event.Actor
-				}
 				index, streamed := view.requests[event.RequestID]
 				streamed = streamed && !view.lines[index].complete
-				if view.assistant(event.RequestID, speaker, event.Text, event.EntryID, true) && f.Plain {
+				if view.publish(attribute(line{text: event.Text, speaker: speaker, requestID: event.RequestID, id: event.EntryID, complete: true, markdown: true}, event.Actor), "", false) && f.Plain {
 					if streamed {
 						fmt.Fprintln(f.Output)
 					} else {
-						fmt.Fprintln(f.Output, speaker+" · "+event.Text)
+						fmt.Fprintln(f.Output, plainActor(event.Actor, speaker+" · "+event.Text))
+					}
+				}
+				if graphicsWarning != "" {
+					hasMath := false
+					render.Math(event.Text, func(tex string, block bool) string { hasMath = true; return tex })
+					if hasMath {
+						view.append(line{text: "Warning: " + graphicsWarning, system: true})
+						graphicsWarning = ""
 					}
 				}
 			case "question":
 				if f.Plain {
-					add(event.Text, event.EntryID)
+					addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 				} else {
 					if event.Question == nil {
 						return fmt.Errorf("question event is missing its form")
 					}
 					label := "Waiting for answer · " + event.Question.ID
-					if event.Question.Actor != "main" {
-						label = event.Question.Actor + " · " + label
-					}
-					add(label, event.EntryID)
-					view.lines[len(view.lines)-1].system = true
+					addActor(line{text: label, id: event.EntryID, system: true}, event.Question.Actor)
 				}
-				if !f.Plain && event.Question != nil && modal.empty() {
-					if draft.pasting || fullscreen || editing {
+				// An active question keeps focus. Dismissing it must not reopen
+				// another form; successful submission already advances pending forms.
+				if !f.Plain && event.Question != nil && modal.question == nil {
+					if !modal.empty() || draft.pasting || fullscreen || editing {
 						deferredQuestions[event.Question.ID] = true
 					} else {
 						openQuestions(event.Question.ID)
@@ -907,15 +1071,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				}
 			case "system_prompt":
 				if showPrompt(event.EntryID) {
-					add(event.Text, event.EntryID)
-					view.lines[len(view.lines)-1].system = true
+					addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 				}
 			case "runtime_context", "status", "wake":
-				add(event.Text, event.EntryID)
-				view.lines[len(view.lines)-1].system = true
+				addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 			default:
-				add(event.Text, event.EntryID)
-				view.lines[len(view.lines)-1].human = event.Human
+				addActor(line{text: event.Text, id: event.EntryID, human: event.Human}, event.Actor)
 			}
 			focused = len(view.lines) - 1
 		case v := <-inputs:
@@ -933,7 +1094,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					esc, viewChord = false, false
 					clear(deferredQuestions)
 					pasteQuestion = modal.question
-					pasteIntoComposer = pasteQuestion == nil && modal.menu == nil && modal.preview == nil
+					pasteIntoComposer = pasteQuestion == nil && modal.menu == nil && modal.commands == nil && modal.preview == nil
 				}
 				if pasteQuestion != nil {
 					esc = false
@@ -974,6 +1135,16 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					continue
 				}
 				if modal.window != nil {
+					if modal.background != nil {
+						w, h := screen.Size()
+						modal.background.mouse(ev, w, h)
+						continue
+					}
+					if modal.history != nil && modal.window == &modal.history.Window {
+						w, h := screen.Size()
+						modal.history.mouse(ev, w, h)
+						continue
+					}
 					if modal.sessions != nil {
 						w, h := screen.Size()
 						modal.sessions.mouse(ev, w, h)
@@ -994,6 +1165,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					if action.jobID != "" && !commandBusy {
 						modal.clear()
 						modal.window = &Window{Title: "Running job", Text: f.Runtime.JobDetail(action.jobID, ""), Markdown: true, JobID: action.jobID}
+						if job, err := f.Runtime.Jobs.View("main", action.jobID); err == nil {
+							attributeWindow(modal.window, job.Owner)
+						} else {
+							modal.window.Text = "Job inspection failed: " + err.Error()
+						}
 					}
 					continue
 				}
@@ -1011,6 +1187,10 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 				}
 			case *tcell.EventKey:
+				// Legacy tty Alt+Enter is ESC CR; tcell decodes it as Alt+Ctrl+M.
+				if ev.Key() == tcell.KeyRune && (ev.Rune() == 'm' || ev.Rune() == 'j') && ev.Modifiers()&(tcell.ModAlt|tcell.ModCtrl) == tcell.ModAlt|tcell.ModCtrl {
+					ev = tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt)
+				}
 				if ev.Key() == tcell.KeyCtrlC {
 					submit, haveInput = "/quit", true
 					break
@@ -1055,18 +1235,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				if viewChord {
 					viewChord = false
 					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'e' || ev.Rune() == 'E') {
-						if err := screen.Suspend(); err != nil {
-							add("Editor failed: "+err.Error(), 0)
-							continue
-						}
-						editing = true
-						editorSuspended = true
-						editor := f.EditInput
-						if editor == nil {
-							editor = editDraft
-						}
-						text := draft.text
-						go func() { text, err := editor(ctx, text); editorDone <- operationResult{text: text, err: err} }()
+						startEditor()
 						continue
 					}
 					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'f' || ev.Rune() == 'F') {
@@ -1086,9 +1255,54 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						openSessionMenu()
 						continue
 					}
+					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'g' || ev.Rune() == 'G') {
+						openHistoryMenu()
+						continue
+					}
+					if ev.Key() == tcell.KeyRune {
+						switch ev.Rune() {
+						case '?':
+							openQuestions("")
+							continue
+						case 'j', 'J':
+							submit = "/jobs"
+						case 't', 'T':
+							submit = "/timers"
+						case 'n', 'N':
+							submit = "/new"
+						case 'q', 'Q':
+							submit = "/quit"
+						}
+						if submit != "" {
+							modal.clear()
+							setFullscreen(false)
+							haveInput = true
+							break
+						}
+					}
 				}
 				if ev.Key() == tcell.KeyCtrlX {
 					viewChord = true
+					continue
+				}
+				if ev.Key() == tcell.KeyCtrlP {
+					modal.clear()
+					modal.generation = f.Runtime.Generation()
+					modal.commands = newCommandMenu()
+					modal.window = &modal.commands.Window
+					continue
+				}
+				if modal.commands != nil {
+					w, h := screen.Size()
+					_, height := windowContentSize(w, h, modal.window)
+					command, closed := modal.commands.key(ev, height)
+					if closed {
+						modal.clear()
+						if command != "" {
+							draft.set(command)
+							setFullscreen(false)
+						}
+					}
 					continue
 				}
 				if modal.menu != nil {
@@ -1100,6 +1314,18 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						modal.clear()
 						if id != "" {
 							selectModel(id, variant)
+						}
+					}
+					continue
+				}
+				if modal.background != nil {
+					id, closed := modal.background.key(ev)
+					if closed {
+						modal.clear()
+						if id != "" {
+							if _, err := f.Runtime.Jobs.Promote("main", id); err != nil {
+								add("Background failed: "+err.Error(), 0)
+							}
 						}
 					}
 					continue
@@ -1122,9 +1348,33 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 					break // Selected reload owns Enter; preserve the composer draft.
 				}
+				if modal.history != nil && modal.window == &modal.history.Window {
+					esc = false
+					w, h := screen.Size()
+					_, height := windowContentSize(w, h, modal.window)
+					action, id := modal.history.key(ev, height)
+					switch action {
+					case "close":
+						modal.clear()
+					case "inspect":
+						inspect(id)
+					case "restore":
+						modal.clear()
+						submit, haveInput = fmt.Sprintf("/branch %d", id), true
+						setFullscreen(false)
+					}
+					if !haveInput {
+						continue
+					}
+					break // Preserve the composer while selecting a branch.
+				}
 				if modal.window != nil {
 					if ev.Key() == tcell.KeyEscape {
-						modal.clear()
+						if modal.history != nil {
+							modal.window = &modal.history.Window
+						} else {
+							modal.clear()
+						}
 						esc = false
 						continue
 					}
@@ -1181,13 +1431,24 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					break
 				}
 				esc = false
+				if ev.Key() == tcell.KeyCtrlB && modal.empty() && !commandBusy {
+					foreground := f.Runtime.Jobs.Foreground("main")
+					if len(foreground) > 0 {
+						for _, job := range foreground {
+							if _, err := f.Runtime.Jobs.Promote("main", job.ID); err != nil {
+								add("Background failed: "+err.Error(), 0)
+							}
+						}
+						continue
+					}
+				}
 				if draft.key(ev) {
 					modal.clear()
 					continue
 				}
 				switch ev.Key() {
 				case tcell.KeyCtrlD:
-					displayView().scroll(max(1, len(displayView().visible)/2), len(displayView().visible))
+					displayView().pageDown(len(displayView().visible))
 				case tcell.KeyCtrlU:
 					displayView().scroll(-max(1, len(displayView().visible)/2), len(displayView().visible))
 				case tcell.KeyUp:
@@ -1231,6 +1492,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						inspect(displayView().lines[target].id)
 					} else {
 						submit = draft.text
+						steering = busy && !commandBusy && ev.Modifiers()&tcell.ModAlt != 0
 						setFullscreen(false)
 						draft.set("")
 						haveInput = true
@@ -1262,6 +1524,27 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		}
 		if text == "/eof" {
 			eof = true
+			continue
+		}
+		if text == "/editor" {
+			startEditor()
+			continue
+		}
+		if text == "/jobs" || text == "/timers" {
+			var snapshot any = f.Runtime.LiveTimers()
+			if text == "/jobs" {
+				snapshot = f.Runtime.Jobs.Metadata("main")
+			}
+			body, err := json.MarshalIndent(snapshot, "", "  ")
+			if err != nil {
+				add("Inspection failed: "+err.Error(), 0)
+			} else if f.Plain {
+				fmt.Fprintln(f.Output, string(body))
+			} else {
+				modal.clear()
+				modal.generation = f.Runtime.Generation()
+				modal.window = &Window{Title: strings.TrimPrefix(text, "/"), Text: render.Fence(string(body), "json"), Markdown: true}
+			}
 			continue
 		}
 		if text == "/btw" || strings.HasPrefix(text, "/btw ") {
@@ -1343,6 +1626,26 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			openSessionMenu()
 			continue
 		}
+		if text == "/history" && !f.Plain {
+			openHistoryMenu()
+			continue
+		}
+		if text == "/background" {
+			if commandBusy {
+				add("Background requires the current history command to finish", 0)
+				continue
+			}
+			if f.Plain {
+				for _, job := range f.Runtime.Jobs.Foreground("main") {
+					if _, err := f.Runtime.Jobs.Promote("main", job.ID); err != nil {
+						add("Background failed: "+err.Error(), 0)
+					}
+				}
+			} else {
+				openBackgroundMenu()
+			}
+			continue
+		}
 		if strings.HasPrefix(text, "/") {
 			if busy {
 				add("Command requires an idle turn; Esc twice interrupts work, Ctrl+C exits", 0)
@@ -1364,6 +1667,15 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			continue
 		}
 		message := contextbuild.Message(submit, attachments)
+		if steering {
+			if err := f.Runtime.Steer(message); err != nil {
+				draft.set(submit)
+				add("Steering failed: "+err.Error(), 0)
+			} else {
+				attachments = nil
+			}
+			continue
+		}
 		attachments = nil
 		queue = append(queue, message)
 		if busy {
@@ -1388,13 +1700,13 @@ func put(s tcell.Screen, x, y, width int, text string, style tcell.Style) {
 		width -= cells
 	}
 }
-func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue []provider.Message, busy bool, started time.Time, window *Window, selection provider.Selection) error {
+func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue, steers []provider.Message, indicator string, window *Window, selection provider.Selection) error {
 	s.Clear()
 	w, h := s.Size()
 	paneWidth := sidebar.bounds(w, h, fullscreen)
 	w = paneWidth
 	style := tcell.StyleDefault.Foreground(tcell.GetColor(render.TextColor))
-	queuedLines := min(len(queue), max(0, h-4))
+	queuedLines := min(len(queue)+len(steers), max(0, h-4))
 	height := max(0, h-3-queuedLines)
 	if fullscreen {
 		queuedLines = 0
@@ -1410,7 +1722,24 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	all := view.viewport(columns, height)
 	start := view.firstLine
 	if renderer != nil {
-		if err := renderer.ensure(all); err != nil {
+		assets := all
+		if window != nil && preview == nil && window.Markdown {
+			if window.renderer != renderer {
+				window.renderer = renderer
+				window.cachedLines = nil
+			}
+			// Prepare the popup viewport before requesting assets. The shared
+			// worker and memory bound cover both visible conversation and popup.
+			fullWidth, fullHeight := s.Size()
+			innerWidth, bodyHeight := windowContentSize(fullWidth, fullHeight, window)
+			rows := window.Lines(innerWidth, bodyHeight)
+			assets = append(append([]line(nil), all...), make([]line, len(rows))...)
+			for i := range rows {
+				row := window.assets[window.Scroll+i]
+				assets[len(all)+i] = line{text: row.text, assets: row.assets}
+			}
+		}
+		if err := renderer.ensure(assets); err != nil {
 			return err
 		}
 	}
@@ -1440,13 +1769,21 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 		drawScrollBar(s, w-1, 0, height, view.total, start, style.Foreground(tcell.GetColor(render.MutedColor)))
 	}
 	status := selection.Model.ID + " · " + selection.Variant + " · /help · Ctrl+X F full · Ctrl+X M model"
-	if busy {
-		status = fmt.Sprintf("Working · %ds · %d queued · Esc Esc interrupt · Ctrl+C exit", int(time.Since(started).Seconds()), len(queue))
+	if indicator != "" {
+		status = indicator
 	}
 	if !fullscreen {
 		put(s, 0, height, w, status, style.Foreground(tcell.GetColor(render.CyanColor)))
 		for i := range queuedLines {
-			text := "Queued · " + strings.Join(strings.Fields(render.Clean(queue[i].Content)), " ")
+			label := "Queued · "
+			var message provider.Message
+			if i < len(steers) {
+				label = "Steer · "
+				message = steers[i]
+			} else {
+				message = queue[i-len(steers)]
+			}
+			text := label + strings.Join(strings.Fields(render.Clean(message.DisplayText())), " ")
 			put(s, 0, height+1+i, w, strings.Repeat(" ", max(0, w)), style.Background(tcell.GetColor(render.HumanColor)))
 			put(s, 0, height+1+i, w, text, style.Background(tcell.GetColor(render.HumanColor)))
 		}
@@ -1536,7 +1873,11 @@ func drawWindowFrame(s tcell.Screen, window *Window) {
 	if hint == "" {
 		hint = "Esc closes"
 	}
-	put(s, left+1, top, width-2, window.Title+" · "+hint, style.Bold(true))
+	title := render.Clean(window.Title + " · " + hint)
+	if window.subagentName != "" {
+		title = render.SubagentBadge(window.actor, window.subagentName, max(1, (width-2)/2), true) + " " + title
+	}
+	putStyled(s, left+1, top, width-2, title, style.Bold(true))
 }
 func drawWindow(s tcell.Screen, window *Window) {
 	w, h := s.Size()
@@ -1559,7 +1900,7 @@ func drawWindow(s tcell.Screen, window *Window) {
 			put(s, left+1, top+1+i, innerWidth, text, style)
 		}
 	}
-	progress := scrollIndicator(len(window.cachedLines), bodyHeight, window.Scroll, width-2)
+	progress := window.Progress(bodyHeight, width-2)
 	put(s, left+width-1-runewidth.StringWidth(progress), top+height-1, width-2, progress, style.Bold(true))
 	drawScrollBar(s, left+width-1, top+1+len(header), bodyHeight, len(window.cachedLines), window.Scroll, style)
 }

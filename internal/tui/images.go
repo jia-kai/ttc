@@ -42,26 +42,33 @@ type renderReply struct {
 	pixels  image.Image
 	err     error
 	source  bool
+	math    bool // Formula raster; never a thumbnail or full-resolution source.
 	backend string
 }
 
+var errViewportImageMemory = errors.New("viewport image memory limit exceeded")
+
 // imageRenderer owns one cancelable worker and only queues assets in visible rows.
-// The decoded working set is bounded to 32 MiB; nonvisible results are discarded.
+// Decoded thumbnails and the formula LRU share a 32 MiB budget. Kitty uploads
+// remain viewport-only, and nonvisible worker results are discarded.
 type imageRenderer struct {
 	graphics              *graphics.Kitty
 	cellWidth, cellHeight int
+	cellFallback          bool // A warning has been shown for this fallback interval.
 	tasks                 chan renderTask
 	sources               chan renderTask
 	results               chan renderReply
 	pending               map[string]context.CancelFunc
 	ready                 map[string]renderReply
 	visible               map[string]bool
-	imageBytes            int
+	imageBytes            int // Visible thumbnail bytes; formula bytes belong to mathCache.
+	mathCache             *mathRasterCache
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	wg                    sync.WaitGroup
 	backend               string
 	backendError          error
+	revision              uint64 // Invalidates visible Markdown layouts when a reply arrives.
 	pendingClick          func(string) bool
 }
 
@@ -71,10 +78,36 @@ func newImageRenderer(ctx context.Context, root string, g *graphics.Kitty) (*ima
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	r := &imageRenderer{graphics: g, cellWidth: 8, cellHeight: 16, tasks: make(chan renderTask, 32), sources: make(chan renderTask, 1), results: make(chan renderReply, 32), pending: map[string]context.CancelFunc{}, ready: map[string]renderReply{}, visible: map[string]bool{}, ctx: ctx, cancel: cancel}
+	// Hand decoded images directly to the UI; supersampled replies must not
+	// accumulate in a buffered queue outside the viewport's memory accounting.
+	r := &imageRenderer{graphics: g, cellWidth: 8, cellHeight: 16, tasks: make(chan renderTask, 32), sources: make(chan renderTask, 1), results: make(chan renderReply), pending: map[string]context.CancelFunc{}, ready: map[string]renderReply{}, visible: map[string]bool{}, ctx: ctx, cancel: cancel}
 	r.wg.Add(1)
 	go r.work(cache)
 	return r, nil
+}
+
+// updateCellDimensions checks measurements before division, reports entry into
+// fallback once, and synchronizes placement identity with the effective size.
+func (r *imageRenderer) updateCellDimensions(size tcell.WindowSize) (changed bool, warning string) {
+	cw, ch := 0, 0
+	if size.Width > 0 && size.Height > 0 && size.PixelWidth > 0 && size.PixelHeight > 0 {
+		cw, ch = size.CellDimensions()
+	}
+	fallback := cw < 1 || ch < 1
+	if fallback {
+		cw, ch = 8, 16
+		if !r.cellFallback {
+			warning = "Warning: using estimated 8×16 pixel cells.\nTerminal pixel dimensions unavailable; graphics sizing may be inaccurate."
+		}
+	}
+	r.cellFallback = fallback
+	changed = cw != r.cellWidth || ch != r.cellHeight
+	if changed {
+		r.revision++
+	}
+	r.cellWidth, r.cellHeight = cw, ch
+	r.graphics.CellWidth, r.graphics.CellHeight = cw, ch
+	return changed, warning
 }
 func (r *imageRenderer) work(cache *assets.Cache) {
 	defer r.wg.Done()
@@ -159,12 +192,12 @@ func (r *imageRenderer) work(cache *assets.Cache) {
 					if err != nil {
 						return nil, err
 					}
-					return assets.Resize(m, 2048, 256), nil
+					return m, nil
 				})
 			}
 		}
 		select {
-		case r.results <- renderReply{key: task.key, pixels: pixels, err: err, source: task.source}:
+		case r.results <- renderReply{key: task.key, pixels: pixels, err: err, source: task.source, math: task.tex != ""}:
 		case <-r.ctx.Done():
 			return
 		}
@@ -188,7 +221,11 @@ func imageBytes(m image.Image) int {
 func (r *imageRenderer) accept(reply renderReply) bool {
 	if reply.backend != "" {
 		r.backend, r.backendError = reply.backend, reply.err
+		r.revision++
 		return true
+	}
+	if reply.source {
+		return false
 	}
 	if cancel := r.pending[reply.key]; cancel != nil {
 		cancel()
@@ -197,16 +234,36 @@ func (r *imageRenderer) accept(reply renderReply) bool {
 	if !r.visible[reply.key] || errors.Is(reply.err, context.Canceled) {
 		return false
 	}
-	if r.imageBytes+imageBytes(reply.pixels) > 32<<20 {
-		reply.pixels = nil
-		reply.err = fmt.Errorf("viewport image memory limit exceeded")
+	old := r.ready[reply.key]
+	if !old.math {
+		r.imageBytes -= imageBytes(old.pixels)
 	}
-	r.imageBytes -= imageBytes(r.ready[reply.key].pixels)
+	if reply.math && reply.pixels != nil && reply.err == nil {
+		if r.mathCache == nil {
+			r.mathCache = &mathRasterCache{}
+		}
+		ok, removed := r.mathCache.put(reply.key, reply.pixels, decodedImageLimit-r.imageBytes)
+		r.evictMath(removed)
+		if !ok {
+			reply.pixels = nil
+			reply.err = errViewportImageMemory
+		}
+	} else if !reply.math && r.imageBytes+imageBytes(reply.pixels) > decodedImageLimit {
+		reply.pixels = nil
+		reply.err = errViewportImageMemory
+	}
 	r.ready[reply.key] = reply
-	r.imageBytes += imageBytes(reply.pixels)
+	if !reply.math {
+		r.imageBytes += imageBytes(reply.pixels)
+		r.trimMath(decodedImageLimit - r.imageBytes)
+	}
+	r.revision++
 	return true
 }
 func (r *imageRenderer) request(p placedImage) {
+	if p.tex != "" {
+		r.cachedMath(p.key)
+	}
 	if _, ok := r.ready[p.key]; ok {
 		return
 	}
@@ -264,17 +321,22 @@ func (r *imageRenderer) layout(v line, width int) []displayRow {
 	replacements := map[rune]*replacement{}
 	marker := rune(0xe000)
 	source := render.Math(v.text, func(tex string, block bool) string {
-		p := placedImage{key: assets.Key("mathjax-v1", r.backend, tex, fmt.Sprint(r.cellHeight)), tex: tex}
-		reply := r.ready[p.key]
+		p := placedImage{key: assets.Key("mathjax-hires-v1", r.backend, tex, fmt.Sprint(r.cellHeight), fmt.Sprint(assets.MathRasterScale)), tex: tex}
+		reply := r.cachedMath(p.key)
 		var grid []string
 		if reply.pixels != nil {
-			p.columns, p.rows = graphics.Geometry(reply.pixels, r.cellWidth, r.cellHeight, max(1, min(width-6, 200)), 12)
+			// Measure the supersampled bitmap in logical terminal pixels. The
+			// upload filters it to this cell grid's measured pixel dimensions.
+			p.columns, p.rows = graphics.Geometry(reply.pixels, r.cellWidth*assets.MathRasterScale, r.cellHeight*assets.MathRasterScale, max(1, min(width-6, 200)), 12)
 			if p.rows > 1 || p.columns > max(8, width/2) {
 				block = true
 			}
 			grid, _ = r.graphics.Rows(p.key, p.columns, p.rows)
 		} else {
 			literal := strings.Join(strings.Fields(render.Clean(tex)), " ")
+			if reply.err != nil || r.backendError != nil {
+				literal = "[math unavailable] " + literal
+			}
 			p.columns = max(1, min(max(1, width-6), runewidth.StringWidth(literal)))
 			p.rows = 1
 			grid = []string{ansi.Truncate(literal, p.columns, "…")}
@@ -328,7 +390,11 @@ func (r *imageRenderer) ensure(rows []line) error {
 			if m := r.ready[p.key].pixels; m != nil && strings.ContainsRune(v.text, '\U0010eeee') {
 				id := fmt.Sprintf("%s:%dx%d", p.key, p.columns, p.rows)
 				if !placed[id] {
-					if _, err := r.graphics.Place(p.key, m, p.columns, p.rows); err != nil {
+					scale := 1
+					if p.tex != "" {
+						scale = assets.MathRasterScale
+					}
+					if _, err := r.graphics.Place(p.key, m, p.columns, p.rows, scale); err != nil {
 						return err
 					}
 					placed[id] = true
@@ -344,7 +410,9 @@ func (r *imageRenderer) ensure(rows []line) error {
 	}
 	for key, reply := range r.ready {
 		if !seen[key] {
-			r.imageBytes -= imageBytes(reply.pixels)
+			if !reply.math {
+				r.imageBytes -= imageBytes(reply.pixels)
+			}
 			delete(r.ready, key)
 		}
 	}
@@ -413,7 +481,7 @@ func (p *imagePreview) key(ev *tcell.EventKey) (close, confirm bool) {
 	case tcell.KeyRune:
 		switch ev.Rune() {
 		case 'i':
-			p.details = &Window{Title: "Image tool details", Text: p.detailText, Markdown: true}
+			p.details = &Window{Title: "Image tool details", Text: p.detailText, Markdown: true, actor: p.Window.actor, subagentName: p.Window.subagentName}
 		case 'h':
 			p.panX -= float64(p.cellWidth) * 4 / p.scale
 		case 'l':
@@ -478,9 +546,18 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 	w, h := s.Size()
 	p.geometry(w, h)
 	drawWindowFrame(s, &p.Window)
-	key := fmt.Sprintf("preview:%s:%dx%d:%g:%g:%g", p.snapshot.ID, p.width, p.height, p.zoom, p.panX, p.panY)
+	key := fmt.Sprintf("preview:%s:%dx%d:%dx%dpx:%g:%g:%g", p.snapshot.ID, p.width, p.height, p.cellWidth, p.cellHeight, p.zoom, p.panX, p.panY)
 	if p.canvasKey != key {
+		// Terminal pixel measurements are external input. Check the canvas
+		// before multiplication/allocation, using the graphics upload budget.
+		const maxPixels = 16 << 20
+		if p.cellWidth > maxPixels/p.width || p.cellHeight > maxPixels/p.height {
+			return fmt.Errorf("image preview exceeds 16-megapixel canvas limit")
+		}
 		pw, ph := p.width*p.cellWidth, p.height*p.cellHeight
+		if pw > maxPixels/ph {
+			return fmt.Errorf("image preview exceeds 16-megapixel canvas limit")
+		}
 		canvas := image.NewNRGBA(image.Rect(0, 0, pw, ph))
 		bounds := p.pixels.Bounds()
 		for y := range ph {
@@ -499,7 +576,7 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 		p.canvas = canvas
 		p.canvasKey = key
 	}
-	grid, err := g.Place(key, p.canvas, p.width, p.height)
+	grid, err := g.Place(key, p.canvas, p.width, p.height, 1)
 	if err != nil {
 		return err
 	}

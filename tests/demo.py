@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible local OpenAI mock: all 19 tool types and a Markdown notebook.
+"""Reproducible local OpenAI mock: all 20 tool types and a Markdown notebook.
 
 Run normally for automated plain PTY validation, --tui for keyboard/menu testing,
 or --interactive to inspect the full TUI yourself. No real credentials or tokens.
@@ -43,6 +43,9 @@ def main():
     fixture = Path(__file__).resolve().parent / 'fixtures/research'
     workspace = root / 'project'
     shutil.copytree(fixture, workspace)
+    lsp_fixture = workspace / '.lsp/server.fixture'
+    lsp_fixture.parent.mkdir(mode=0o700)
+    shutil.copyfile(Path(__file__).resolve().parent.parent / 'internal/lsp/testdata/server.py', lsp_fixture)
     if shutil.which("git"):
         subprocess.run(["git", "-C", str(workspace), "init", "--quiet", "-b", "demo"], check=True)
     markdown = (fixture / 'markdown.md').read_text()
@@ -52,8 +55,11 @@ def main():
     requests, errors = [], []
     main_requests, child_requests = [], []
 
+    call_serial = 0
     def call(name, arguments):
-        return {'type': 'function_call', 'id': f'item_{len(requests)}_{name}', 'call_id': f'demo_{len(requests)}_{name}', 'name': name,
+        nonlocal call_serial
+        call_serial += 1
+        return {'type': 'function_call', 'id': f'item_{call_serial}_{name}', 'call_id': f'demo_{call_serial}_{name}', 'name': name,
                 'arguments': json.dumps(arguments)}
 
     class Mock(BaseHTTPRequestHandler):
@@ -103,10 +109,12 @@ def main():
                 assert body['model'] == expected_model and body['reasoning']['effort'] == effort
                 assert body['parallel_tool_calls'] is True
                 assert body['stream'] and not body['store'] and 'max_output_tokens' not in body
-                context = json.loads(body['input'][-1]['content'][0]['text'])
+                # Unchanged tool boundaries reuse the last runtime snapshot.
+                contexts = [item for item in body['input'] if item.get('role') == 'developer']
+                assert contexts, 'missing initial runtime context'
+                context = json.loads(contexts[-1]['content'][0]['text'])
                 assert context['type'] == 'runtime_context'
-                assert body['input'][-1]['role'] == 'developer'
-                last = body['input'][-2]
+                last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 child = context['actor'] != 'main'
                 conversation = child_requests if child else main_requests
                 if conversation:
@@ -117,7 +125,7 @@ def main():
                 stage = len(conversation) - 1
                 if stage == 0 and not child:
                     assert last['role'] == 'user' and last['content'][0]['text'].startswith('Run demo')
-                elif stage > 0 and stage < 6:
+                elif stage > 0 and stage < 6 and (not child or stage == 1):
                     assert last['type'] == 'function_call_output'
                 results = {}
                 for item in body['input']:
@@ -125,8 +133,10 @@ def main():
                         result = json.loads(item['output'])
                         assert result['ok'], result
                         results[item['call_id'].split('_', 2)[-1]] = result
+                        if result.get('kind') == 'lsp':
+                            results['lsp_job'] = result
                 if child:
-                    assert stage <= 1
+                    assert stage <= 2
                     if args.visual_hold and stage == 1:
                         deadline = time.monotonic() + 45
                         while not (workspace / 'child.ready').exists():
@@ -147,7 +157,10 @@ def main():
                              call('web_search', {'query': 'local fixture observations'}),
                              call('wakeup_schedule', {'name': 'demo', 'message': 'Check observations', 'delay_seconds': 600})]
                 elif stage == 2:
-                    calls = [call('wakeup_list', {}), call('shell', {'command': "printf 'background evidence\\n'; touch background.ready; sleep 30",
+                    calls = [call('wakeup_list', {}),
+                             call('subagent', {'child_id': results['subagent']['child_id'], 'prompt': 'Verify the final fixture report.'}),
+                             call('shell', {'command': 'python3 .lsp/server.fixture', 'background': True, 'protocol': 'lsp', 'wake_on_exit': False}),
+                             call('shell', {'command': "printf 'background evidence\\n'; touch background.ready; sleep 30",
                                            'background': True, 'wake_on_exit': False})]
                 elif stage == 3:
                     if args.visual_hold:
@@ -160,7 +173,9 @@ def main():
                         assert time.monotonic() < deadline, 'background fixture did not become ready'
                         time.sleep(0.01)
                     job = results['shell']['job_id']
-                    calls = [call('job_list', {'state': 'all'}), call('job_read', {'job_id': job, 'stream': 'stdout', 'cursor': 'eof:-10:lines', 'grep': 'evidence'}),
+                    calls = [call('lsp_query', {'job_id': results['lsp_job']['job_id'], 'operation': 'hover', 'path': 'analysis.py', 'line': 1, 'column': 1}),
+                             call('job_stop', {'child_id': results['subagent']['child_id']}),
+                             call('job_list', {'state': 'all'}), call('job_read', {'job_id': job, 'stream': 'stdout', 'cursor': 'eof:-10:lines', 'grep': 'evidence'}),
                              call('job_stop', {'job_id': job}), call('wakeup_cancel', {'name': 'demo'})]
                 elif stage == 4:
                     calls = [call('question', {'questions': [{'id': 'continue', 'prompt': 'Finish the Markdown report?',
@@ -202,7 +217,7 @@ def main():
                          'item_id': item['id'], 'arguments': item['arguments']},
                         {'type': 'response.output_item.done', 'output_index': index,
                          'item': dict(item, status='completed')}])
-                if child and stage == 1:
+                if child and stage in (1, 2):
                     events.append({'type': 'response.output_text.delta', 'delta': 'Three samples; the mean is 4.0.'})
                 elif not child and stage == 5:
                     events.append({'type': 'response.output_text.delta', 'delta': markdown})
@@ -232,7 +247,7 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Mock)
     endpoint = f'http://127.0.0.1:{server.server_port}'
-    os.environ['SCICODE_EXA_URL'] = endpoint + '/mcp'
+    os.environ['TTC_EXA_URL'] = endpoint + '/mcp'
     os.environ.pop('EXA_API_KEY', None)
     binary = str(Path(args.binary).resolve())
     command = [binary, '--data-dir', str(root / 'data'), '--workdir', str(workspace),
@@ -341,13 +356,13 @@ def main():
             time.sleep(0.05)
         assert waited, 'demo process did not stop'
         assert not errors, errors
-        assert len(main_requests) == 6 and len(child_requests) == 2, (len(main_requests), len(child_requests))
+        assert len(main_requests) == 6 and len(child_requests) == 3, (len(main_requests), len(child_requests))
         db = sqlite3.connect(root / 'data/history.sqlite')
         records = [json.loads(row[0]) for row in db.execute('SELECT record_json FROM tool_records')]
         names = {record['name'] for record in records}
         expected = {'read', 'glob', 'grep', 'write', 'edit', 'patch', 'shell', 'job_list', 'job_read',
                     'job_stop', 'web_fetch', 'web_search', 'skill', 'image_show', 'question', 'wakeup_schedule',
-                    'wakeup_list', 'wakeup_cancel', 'subagent'}
+                    'wakeup_list', 'wakeup_cancel', 'subagent', 'lsp_query'}
         assert names == expected, (names, expected)
         results = {}
         for record in records:
@@ -358,7 +373,12 @@ def main():
         assert results['shell'][0]['stdout'] == 'Mean: 4.0\n'
         assert results['job_read'][0]['output'] == 'background evidence\n'
         assert results['job_read'][0]['matches'][0]['line'] == 1
-        assert results['job_stop'][0]['status'] == 'cancelled'
+        assert any(result.get('status') == 'cancelled' for result in results['job_stop'])
+        assert any(result.get('state') == 'closed' for result in results['job_stop'])
+        assert results['lsp_query'][0]['kind'] == 'hover'
+        assert '**fixture**' in results['lsp_query'][0]['markdown']
+        assert results['subagent'][0]['child_id'] == results['subagent'][1]['child_id']
+        assert results['subagent'][0]['child_turn_id'] != results['subagent'][1]['child_turn_id']
         assert results['wakeup_list'][0]['wakeups'][0]['status'] == 'scheduled'
         assert results['wakeup_cancel'][0]['status'] == 'cancelled'
         assert results['glob'][0]['paths'] == ['analysis.py', 'make_image.py']

@@ -22,7 +22,7 @@ type catalogTransport func(*http.Request) (*http.Response, error)
 func (f catalogTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
-	if data := os.Getenv("SCICODE_TEST_MODEL_DATA"); data != "" {
+	if data := os.Getenv("TTC_TEST_MODEL_DATA"); data != "" {
 		// Run the real CLI with an in-process HTTP transport: no sockets or auth.
 		catalogs := 0
 		http.DefaultTransport = catalogTransport(func(req *http.Request) (*http.Response, error) {
@@ -31,22 +31,22 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 				return nil, fmt.Errorf("unexpected HTTP request")
 			}
 			catalogs++
-			if os.Getenv("SCICODE_TEST_MODEL_CATALOG_RETRY") == "1" && catalogs <= 2 {
+			if os.Getenv("TTC_TEST_MODEL_CATALOG_RETRY") == "1" && catalogs <= 2 {
 				return &http.Response{StatusCode: 503, Header: http.Header{"Retry-After": {"0"}}, Body: io.NopCloser(strings.NewReader("unavailable")), Request: req}, nil
 			}
 			body := `{"models":[{"slug":"first","display_name":"First","visibility":"list","priority":1,"context_window":100000,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},{"slug":"second","display_name":"Second","visibility":"list","priority":2,"context_window":100000,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"service_tiers":[{"id":"priority","name":"Fast"}]}]}`
 			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 		})
 		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
-		os.Args = []string{"ttc", "--data-dir", data, "--workdir", os.Getenv("SCICODE_TEST_MODEL_WORK")}
-		if os.Getenv("SCICODE_TEST_MODEL_TUI") != "1" {
+		os.Args = []string{"ttc", "--data-dir", data, "--workdir", os.Getenv("TTC_TEST_MODEL_WORK")}
+		if os.Getenv("TTC_TEST_MODEL_TUI") != "1" {
 			os.Args = append(os.Args, "--plain")
 		}
-		if load := os.Getenv("SCICODE_TEST_MODEL_LOAD"); load != "" {
+		if load := os.Getenv("TTC_TEST_MODEL_LOAD"); load != "" {
 			os.Args = append(os.Args, "--session", load, "--model", "second/fast", "--variant", "high")
 		}
 		err := run()
-		if want := os.Getenv("SCICODE_TEST_MODEL_ERROR"); want != "" {
+		if want := os.Getenv("TTC_TEST_MODEL_ERROR"); want != "" {
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("startup error=%v; want %q", err, want)
 			}
@@ -54,7 +54,7 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantCatalogs := 1
-		if os.Getenv("SCICODE_TEST_MODEL_CATALOG_RETRY") == "1" {
+		if os.Getenv("TTC_TEST_MODEL_CATALOG_RETRY") == "1" {
 			wantCatalogs = 3
 		}
 		if catalogs != wantCatalogs {
@@ -93,9 +93,9 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		{"/quit\n", "second/fast", "high", true},
 	} {
 		cmd := exec.Command(executable, "-test.run=^TestStartupWithoutModelAndSwitchAcrossRestarts$")
-		cmd.Env = append(os.Environ(), "SCICODE_TEST_MODEL_DATA="+data, "SCICODE_TEST_MODEL_WORK="+work)
+		cmd.Env = append(os.Environ(), "TTC_TEST_MODEL_DATA="+data, "TTC_TEST_MODEL_WORK="+work)
 		if step.retryCatalog {
-			cmd.Env = append(cmd.Env, "SCICODE_TEST_MODEL_CATALOG_RETRY=1")
+			cmd.Env = append(cmd.Env, "TTC_TEST_MODEL_CATALOG_RETRY=1")
 		}
 		cmd.Stdin = strings.NewReader(step.input)
 		output, err := cmd.CombinedOutput()
@@ -176,7 +176,7 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(executable, "-test.run=^TestStartupWithoutModelAndSwitchAcrossRestarts$")
-			cmd.Env = append(os.Environ(), "SCICODE_TEST_MODEL_DATA="+data, "SCICODE_TEST_MODEL_WORK="+work, "SCICODE_TEST_MODEL_LOAD="+id, "SCICODE_TEST_MODEL_ERROR="+wantError)
+			cmd.Env = append(os.Environ(), "TTC_TEST_MODEL_DATA="+data, "TTC_TEST_MODEL_WORK="+work, "TTC_TEST_MODEL_LOAD="+id, "TTC_TEST_MODEL_ERROR="+wantError)
 			cmd.Stdin = strings.NewReader("/quit\n")
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("CLI failure regression failed: %v\n%s", err, output)
@@ -215,7 +215,7 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 }
 
 func TestStartupRequiresRipgrepBeforeCreatingState(t *testing.T) {
-	if data := os.Getenv("SCICODE_TEST_NO_RG_DATA"); data != "" {
+	if data := os.Getenv("TTC_TEST_NO_RG_DATA"); data != "" {
 		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--data-dir", data}
 		if err := run(); err == nil || !strings.Contains(err.Error(), "ripgrep (rg) is required") {
@@ -230,7 +230,7 @@ func TestStartupRequiresRipgrepBeforeCreatingState(t *testing.T) {
 	empty := t.TempDir()
 	data := filepath.Join(empty, "data")
 	cmd := exec.Command(executable, "-test.run=^TestStartupRequiresRipgrepBeforeCreatingState$")
-	cmd.Env = append(os.Environ(), "PATH="+empty, "SCICODE_TEST_NO_RG_DATA="+data)
+	cmd.Env = append(os.Environ(), "PATH="+empty, "TTC_TEST_NO_RG_DATA="+data)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("startup test failed: %v\n%s", err, output)
 	}

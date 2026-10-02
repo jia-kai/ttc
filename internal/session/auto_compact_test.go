@@ -20,7 +20,7 @@ func compactionBudget(t *testing.T, r *Runtime) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []provider.Message{message})
+	u := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []provider.Message{*message})
 	b := &r.selection.Model.Budget
 	b.ContextLimit = u.Input + u.Reserved + 2000
 	b.RecentTokensTarget = 700

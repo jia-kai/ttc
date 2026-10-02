@@ -22,7 +22,7 @@ func TestMutationReadsRejectShellGrownFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Truncate(path, maxFileBytes+1); err != nil {
+	if err := os.Truncate(path, MaxFileBytes+1); err != nil {
 		t.Fatal(err)
 	}
 	if err := current(path, state); err == nil || !strings.Contains(err.Error(), "8 MiB") {

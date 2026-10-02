@@ -25,9 +25,9 @@ type webSearchArgs struct {
 
 // addWebSearch calls Exa's documented headless, keyless MCP endpoint directly.
 // No general MCP connection/session layer or implicit backend fallback is needed.
-// SCICODE_EXA_URL supports private/mock endpoints; EXA_API_KEY is optional.
+// TTC_EXA_URL supports private/mock endpoints; EXA_API_KEY is optional.
 func addWebSearch(r *Registry, client *http.Client, cache *webCache) {
-	endpoint := os.Getenv("SCICODE_EXA_URL")
+	endpoint := os.Getenv("TTC_EXA_URL")
 	if endpoint == "" {
 		endpoint = "https://mcp.exa.ai/mcp"
 	}

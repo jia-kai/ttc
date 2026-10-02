@@ -22,7 +22,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const maxFileBytes = 8 << 20
+// MaxFileBytes bounds each mutation's original and resulting file contents.
+// Transform callers must check expansion before allocating their result.
+const MaxFileBytes = 8 << 20
 
 // State represents absence or immutable bytes and permission bits.
 type State struct {
@@ -169,14 +171,14 @@ func readFile(path string) ([]byte, error) {
 	if !st.Mode().IsRegular() {
 		return nil, fmt.Errorf("not a regular file: %s", path)
 	}
-	if st.Size() > maxFileBytes {
+	if st.Size() > MaxFileBytes {
 		return nil, errors.New("file exceeds 8 MiB mutation limit")
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxFileBytes {
+	if len(data) > MaxFileBytes {
 		return nil, errors.New("file exceeds 8 MiB mutation limit")
 	}
 	return data, nil
@@ -192,7 +194,7 @@ func (m *Manager) capture(session, path string) (State, []byte, error) {
 	if e != nil {
 		return State{}, nil, e
 	}
-	if st.Size() > maxFileBytes {
+	if st.Size() > MaxFileBytes {
 		return State{}, nil, errors.New("file exceeds 8 MiB mutation limit")
 	}
 	data, e := readFile(path)
@@ -269,6 +271,13 @@ func apply(path string, s State) error {
 func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutation) (Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	metadata, err := m.Store.Session(session)
+	if err != nil {
+		return Result{}, err
+	}
+	if metadata.CompactionError != "" {
+		return Result{}, fmt.Errorf("session unusable after compaction: %s", metadata.CompactionError)
+	}
 	if m.blocked {
 		return Result{}, errors.New("filesystem journal requires recovery")
 	}
@@ -315,7 +324,7 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 			} else {
 				data = op.Data
 			}
-			if len(data) > maxFileBytes {
+			if len(data) > MaxFileBytes {
 				return Result{}, errors.New("file exceeds 8 MiB mutation limit")
 			}
 			blob, e := m.Store.Artifact(session, "snapshots", data)
@@ -570,4 +579,18 @@ func (m *Manager) Recover() error {
 	}
 	cleanupDirs(manifest.Changes)
 	return m.Store.CommitRestore(p.SessionID, manifest.Target)
+}
+
+// Admit serializes a context/turn checkpoint with complete file mutations. The
+// callback must not call Apply or Restore, which own the same gate.
+func (m *Manager) Admit(ctx context.Context, fn func() error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.blocked {
+		return errors.New("filesystem journal requires recovery")
+	}
+	return fn()
 }

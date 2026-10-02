@@ -22,7 +22,7 @@ type childProvider struct {
 
 func TestSubagentRequiresConciseTitle(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	for _, label := range []string{"", "   ", strings.Repeat("界", 65), "two\nlines", "tab\ttitle", "bad\x1btitle"} {
+	for _, label := range []string{"", "   ", strings.Repeat("界", 65), "two\nlines", "two\u2028lines", "tab\ttitle", "bad\x1btitle", "one two three four five"} {
 		args, _ := json.Marshal(map[string]any{"prompt": "task", "label": label})
 		record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main", CallID: "invalid"}, "subagent", args)
 		if !strings.Contains(string(record.Result), "invalid_arguments") {
@@ -51,7 +51,7 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 	var childTool bool
 	for len(events) > 0 {
 		e := <-events
-		if e.Kind == "tool" && strings.HasPrefix(e.Text, "main/child") {
+		if e.Kind == "tool" && strings.HasPrefix(e.Actor, "main/child") {
 			entry, err := r.Store.Entry(e.EntryID)
 			if err != nil || entry.Kind != "tool_result" || entry.Visible || entry.Actor == "main" {
 				t.Fatal(entry, err)
@@ -98,7 +98,15 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	p := &childProvider{}
 	p.stream = func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
 		if strings.Contains(req.System, "\nYou are an isolated child agent.") {
-			if req.Selection.Model.ID != frozen.Model.ID || !strings.Contains(req.Messages[len(req.Messages)-1].Content, frozen.Model.ID+"/none") {
+			var latest runtimeContext
+			for _, message := range req.Messages {
+				if message.Role == "developer" && message.Runtime {
+					if err := json.Unmarshal([]byte(message.Content), &latest); err != nil {
+						return err
+					}
+				}
+			}
+			if req.Selection.Model.ID != frozen.Model.ID || !strings.Contains(latest.Model, frozen.Model.ID+"/none") {
 				t.Error("child selection changed", req.Selection, req.System)
 			}
 			if strings.Contains(req.Messages[0].Content, "Private parent") {
@@ -128,7 +136,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 		}
 		last := req.Messages[len(req.Messages)-2]
 		if last.Role == "user" && strings.HasPrefix(last.Content, "Private parent") {
-			call := provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"write after gate","label":"background writer","background":true,"wake_on_exit":false}`)}
+			call := provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"write after gate","label":"background writer","background":true}`)}
 			return emit(provider.StreamEvent{Kind: "call", Call: &call})
 		}
 		return emit(provider.StreamEvent{Kind: "text", Text: "Parent done."})

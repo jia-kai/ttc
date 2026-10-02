@@ -195,9 +195,6 @@ func (d *questionDialog) values() ([]session.Answer, int) {
 
 func (d *questionDialog) update() {
 	d.Window.Title = "Questions"
-	if d.form.Actor != "main" {
-		d.Window.Title += " · " + d.form.Actor
-	}
 	d.Window.Hint = "←/→ tabs · Esc dismisses"
 	var tabs []string
 	for i := range d.form.Questions {

@@ -71,6 +71,24 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 	}
 }
 
+func TestShellSupervisionFailureExplainsRecovery(t *testing.T) {
+	m := New(context.Background(), nil)
+	defer m.Close()
+	id, err := m.Start("main", "printf 'leader finished\\n'; sleep 5 &", t.TempDir(), 3*time.Second, true, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	view, err := m.Wait(ctx, "main", id, nil)
+	if err != nil || view.Status != "failed" || view.ExitCode == nil || *view.ExitCode != 0 {
+		t.Fatal("expected output-pipe supervision failure after successful leader exit", view, err)
+	}
+	if !strings.Contains(view.Stdout, "leader finished") || !strings.Contains(view.Stderr, "Shell supervision failed") || !strings.Contains(view.Stderr, "output pipes") || !strings.Contains(view.Stderr, "background=true") || !strings.Contains(view.Stderr, "tmux") {
+		t.Fatal("supervision failure lost output or recovery guidance", view)
+	}
+}
+
 func TestForegroundExitStatusBackgroundNotificationAndStaleHandles(t *testing.T) {
 	notify := make(chan Snapshot, 2)
 	m := New(context.Background(), func(v Snapshot) { notify <- v })
