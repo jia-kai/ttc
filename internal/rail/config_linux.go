@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 const maxConfigBytes = 1 << 20
+const maxPolicyEntries = 256
+const maxPolicyConfigFiles = 2
 
 // Mount exposes Source at the absolute container path Dest. Writable defaults
 // to false. Source existence and file type are checked by the mount planner.
@@ -23,62 +23,43 @@ type Mount struct {
 	Writable bool
 }
 
-// Policy is the merged global and project filesystem policy.
+// Policy is the merged global and project filesystem policy. Mounts and Denies
+// together may contain at most 256 entries; ConfigFiles may contain at most the
+// two global/project entrypoints. Specification construction also enforces these
+// limits for policies constructed directly by callers.
 type Policy struct {
 	Mounts      []Mount
 	Denies      []string // Absolute container paths; masks also cover descendants.
 	ConfigFiles []string // Canonical existing config paths, for read-only mounts.
 	Docker      bool     // Authorized and requested, and not denied.
+	SSHAgent    bool     // Authorized and requested, and not denied.
 }
 
+// filePolicy holds parsed, lexically resolved paths and service choices for one
+// config. File IO supplies configFile, the canonical read-only entrypoint.
 type filePolicy struct {
-	mounts     []Mount
-	denies     []string
-	request    bool
-	denyDocker bool
-	authorize  bool
+	configFile          string
+	mounts              []Mount
+	denies              []string
+	requests            map[string]bool
+	deniedServices      map[string]bool
+	authorizedServices  map[string]bool
+	ttcAllowSSHAuthSock bool
 }
 
-// LoadPolicy reads configHome/ttc/rail.json and workdir/ttc-rail.json, skipping
-// missing files. An empty configHome uses home/.config; other roots must be
-// absolute. Project allows replace global allows at the same destination, while
-// denies always win. Docker requests require global authorization even if denied.
-//
-// Files are limited to 1 MiB and reject unknown/duplicate keys and trailing JSON.
-// Paths expand only ~ and ~/; all other characters (including $) are literal.
-// Relative paths use the named config's parent. Config files must be regular,
-// nonsymlink files so their workspace entrypoints can be protected read-only.
-func LoadPolicy(home, configHome, workdir string) (Policy, error) {
+// resolvePolicy merges parsed global/project layers without consulting the host.
+// Exact destination replacements retain their original position. Limits apply
+// after replacement/deduplication but before denies remove mounts. Returned slices
+// are owned by the result; resolving does not mutate either layer.
+func resolvePolicy(global, project filePolicy) (Policy, error) {
 	var result Policy
-	if err := absoluteRoot("home", home); err != nil {
-		return result, err
-	}
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
-	}
-	if err := absoluteRoot("config home", configHome); err != nil {
-		return result, err
-	}
-	if err := absoluteRoot("workdir", workdir); err != nil {
-		return result, err
-	}
-	paths := []string{filepath.Join(configHome, "ttc", "rail.json"), filepath.Join(workdir, "ttc-rail.json")}
-	var authorized, requested, denied bool
+	requested, denied := map[string]bool{}, map[string]bool{}
 	mountIndex := make(map[string]int)
 	deniedPaths := make(map[string]bool)
-	for i, path := range paths {
-		data, realPath, err := readPolicyFile(path)
-		if err != nil {
-			return Policy{}, fmt.Errorf("rail config %s: %w", path, err)
+	for _, parsed := range []filePolicy{global, project} {
+		if parsed.configFile != "" {
+			result.ConfigFiles = appendUnique(result.ConfigFiles, parsed.configFile)
 		}
-		if data == nil {
-			continue
-		}
-		parsed, err := parsePolicy(data, filepath.Dir(path), home, i == 0)
-		if err != nil {
-			return Policy{}, fmt.Errorf("rail config %s: %w", path, err)
-		}
-		result.ConfigFiles = appendUnique(result.ConfigFiles, realPath)
 		for _, mount := range parsed.mounts {
 			if j, exists := mountIndex[mount.Dest]; exists {
 				result.Mounts[j] = mount
@@ -93,14 +74,21 @@ func LoadPolicy(home, configHome, workdir string) (Policy, error) {
 				deniedPaths[dest] = true
 			}
 		}
-		authorized = authorized || parsed.authorize
-		requested = requested || parsed.request
-		denied = denied || parsed.denyDocker
+		for _, service := range []string{"docker", "ssh-agent"} {
+			requested[service] = requested[service] || parsed.requests[service]
+			denied[service] = denied[service] || parsed.deniedServices[service]
+		}
 	}
-	if requested && !authorized {
-		return Policy{}, fmt.Errorf("docker requires authorize_services in the global rail config")
+	if err := checkPolicySize(result); err != nil {
+		return Policy{}, err
 	}
-	result.Docker = requested && !denied
+	for _, service := range []string{"docker", "ssh-agent"} {
+		if requested[service] && !global.authorizedServices[service] {
+			return Policy{}, fmt.Errorf("%s requires authorize_services in the global rail config", service)
+		}
+	}
+	result.Docker = requested["docker"] && !denied["docker"]
+	result.SSHAgent = requested["ssh-agent"] && !denied["ssh-agent"]
 	mounts := result.Mounts[:0]
 	for _, mount := range result.Mounts {
 		blocked := false
@@ -128,46 +116,30 @@ func absoluteRoot(name, path string) error {
 	return nil
 }
 
-func readPolicyFile(path string) ([]byte, string, error) {
-	// Do not follow a final symlink: its directory entry would remain replaceable
-	// inside a writable workspace even after protecting the canonical target.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
-	if os.IsNotExist(err) {
-		// An absent config is optional; an existing invalid entry is not.
-		if _, statErr := os.Lstat(path); os.IsNotExist(statErr) {
-			return nil, "", nil
-		}
+func checkPolicySize(policy Policy) error {
+	if len(policy.Mounts)+len(policy.Denies) > maxPolicyEntries {
+		return fmt.Errorf("rail policy exceeds %d combined mount/deny entries", maxPolicyEntries)
 	}
-	if err != nil {
-		return nil, "", err
+	if len(policy.ConfigFiles) > maxPolicyConfigFiles {
+		return fmt.Errorf("rail policy exceeds %d config files", maxPolicyConfigFiles)
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, "", err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, "", fmt.Errorf("not a regular file")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
-	if err != nil {
-		return nil, "", err
-	}
-	if len(data) > maxConfigBytes {
-		return nil, "", fmt.Errorf("exceeds %d-byte limit", maxConfigBytes)
-	}
-	realPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return nil, "", err
-	}
-	return data, realPath, nil
+	return nil
 }
 
 func parsePolicy(data []byte, base, home string, global bool) (filePolicy, error) {
-	var result filePolicy
-	obj, err := strictObject(data, "allow", "deny", "authorize_services")
+	result := filePolicy{requests: map[string]bool{}, deniedServices: map[string]bool{}, authorizedServices: map[string]bool{}}
+	obj, err := strictObject(data, "allow", "deny", "authorize_services", "ttc_allow_ssh_auth_sock")
 	if err != nil {
 		return result, err
+	}
+	if raw, ok := obj["ttc_allow_ssh_auth_sock"]; ok {
+		if !global {
+			return result, fmt.Errorf("ttc_allow_ssh_auth_sock is only permitted in the global config")
+		}
+		if !bytes.Equal(raw, []byte("true")) && !bytes.Equal(raw, []byte("false")) {
+			return result, fmt.Errorf("ttc_allow_ssh_auth_sock must be a boolean")
+		}
+		result.ttcAllowSSHAuthSock = bytes.Equal(raw, []byte("true"))
 	}
 	if auth, ok := obj["authorize_services"]; ok {
 		if !global {
@@ -179,12 +151,13 @@ func parsePolicy(data []byte, base, home string, global bool) (filePolicy, error
 		}
 		for _, entry := range entries {
 			service, err := strictString(entry)
-			if err != nil || service != "docker" {
-				return result, fmt.Errorf("authorize_services supports only the string docker")
+			if err != nil || !knownService(service) {
+				return result, fmt.Errorf("authorize_services supports only the strings docker and ssh-agent")
 			}
-			result.authorize = true
+			result.authorizedServices[service] = true
 		}
 	}
+	entryCount := 0
 	for _, key := range []string{"allow", "deny"} {
 		raw, ok := obj[key]
 		if !ok {
@@ -194,19 +167,23 @@ func parsePolicy(data []byte, base, home string, global bool) (filePolicy, error
 		if err != nil {
 			return result, fmt.Errorf("%s: %w", key, err)
 		}
+		entryCount += len(entries)
+		if entryCount > maxPolicyEntries {
+			return result, fmt.Errorf("exceeds %d combined allow/deny entries", maxPolicyEntries)
+		}
 		for i, entry := range entries {
-			mount, docker, err := parseEntry(entry, base, home, key == "allow")
+			mount, service, err := parseEntry(entry, base, home, key == "allow")
 			if err != nil {
 				return result, fmt.Errorf("%s[%d]: %w", key, i, err)
 			}
 			if key == "allow" {
-				if docker {
-					result.request = true
+				if service != "" {
+					result.requests[service] = true
 				} else {
 					result.mounts = append(result.mounts, mount)
 				}
-			} else if docker {
-				result.denyDocker = true
+			} else if service != "" {
+				result.deniedServices[service] = true
 			} else {
 				result.denies = append(result.denies, mount.Dest)
 			}
@@ -215,14 +192,16 @@ func parsePolicy(data []byte, base, home string, global bool) (filePolicy, error
 	return result, nil
 }
 
-func parseEntry(raw []byte, base, home string, allow bool) (Mount, bool, error) {
+func knownService(name string) bool { return name == "docker" || name == "ssh-agent" }
+
+func parseEntry(raw []byte, base, home string, allow bool) (Mount, string, error) {
 	var mount Mount
 	if path, err := strictString(raw); err == nil {
-		if path == "docker" {
-			return mount, true, nil
+		if knownService(path) {
+			return mount, path, nil
 		}
 		resolved, err := policyPath(path, base, home)
-		return Mount{Source: resolved, Dest: resolved}, false, err
+		return Mount{Source: resolved, Dest: resolved}, "", err
 	}
 	keys := []string{"source", "dest"}
 	if allow {
@@ -230,17 +209,17 @@ func parseEntry(raw []byte, base, home string, allow bool) (Mount, bool, error) 
 	}
 	obj, err := strictObject(raw, keys...)
 	if err != nil {
-		return mount, false, err
+		return mount, "", err
 	}
 	for _, key := range []string{"source", "dest"} {
 		if value, ok := obj[key]; ok {
 			path, err := strictString(value)
 			if err != nil {
-				return mount, false, fmt.Errorf("%s: %w", key, err)
+				return mount, "", fmt.Errorf("%s: %w", key, err)
 			}
 			resolved, err := policyPath(path, base, home)
 			if err != nil {
-				return mount, false, fmt.Errorf("%s: %w", key, err)
+				return mount, "", fmt.Errorf("%s: %w", key, err)
 			}
 			if key == "source" {
 				mount.Source = resolved
@@ -250,7 +229,7 @@ func parseEntry(raw []byte, base, home string, allow bool) (Mount, bool, error) 
 		}
 	}
 	if mount.Source == "" && (allow || mount.Dest == "") {
-		return mount, false, fmt.Errorf("source is required (deny may instead specify dest)")
+		return mount, "", fmt.Errorf("source is required (deny may instead specify dest)")
 	}
 	if mount.Dest == "" {
 		mount.Dest = mount.Source
@@ -258,11 +237,11 @@ func parseEntry(raw []byte, base, home string, allow bool) (Mount, bool, error) 
 	if rawMode, ok := obj["mode"]; ok {
 		mode, err := strictString(rawMode)
 		if err != nil || (mode != "ro" && mode != "rw") {
-			return mount, false, fmt.Errorf("mode must be ro or rw")
+			return mount, "", fmt.Errorf("mode must be ro or rw")
 		}
 		mount.Writable = mode == "rw"
 	}
-	return mount, false, nil
+	return mount, "", nil
 }
 
 func policyPath(path, base, home string) (string, error) {

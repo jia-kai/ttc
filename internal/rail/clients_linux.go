@@ -235,10 +235,11 @@ func localSessions(ctx context.Context, socket string) ([]string, error) {
 }
 
 // Instance paths stay launch-time values; terminal/display settings may change
-// between attachments. In particular, preserve rail's TTC_DATA_DIR.
+// between attachments. Preserve the shared data root and forwarded agent socket;
+// tmux's update-environment must not replace them with host attachment paths.
 func insideClientEnvironment(requested []string) []string {
 	fixed := map[string]bool{}
-	for _, key := range []string{"HOME", "SHELL", "PATH", "TTC_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "TMUX", "TMUX_PANE"} {
+	for _, key := range []string{"HOME", "SHELL", "PATH", "TTC_DATA_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK", "TMUX", "TMUX_PANE"} {
 		fixed[key] = true
 	}
 	var env []string

@@ -1,91 +1,77 @@
 # LLM-facing tool contracts
 
-These are TTC's complete target tool contracts. Current definitions are in the
-[registry](../internal/tool/tool.go), [file tools](../internal/tool/files.go)
-and [session tools](../internal/session/session.go); read pages are capped at
-40,000 bytes and mutation files at 8 MiB.
-Canonical LLM guidance lives in [prompt/tools.yaml](../prompt/tools.yaml).
-This document defines types, defaults and execution semantics. Tools take one
-JSON object with only the listed fields; `?` means optional.
-Paths may be absolute or relative to the session working directory unless a
-tool says otherwise. Text is UTF-8; integer bounds are inclusive. Page sizes,
-limits and byte caps must be positive; offsets use each tool's documented base. Reject unknown
-fields and invalid operation-specific combinations before dispatch.
+These are TTC's complete target contracts. Current code:
+[registry](../internal/tool/tool.go), [file tools](../internal/tool/files.go),
+[session tools](../internal/session/session.go). Canonical LLM guidance lives in
+[prompt/tools.yaml](../prompt/tools.yaml).
 
-Every tool returns one JSON object. Success adds `"ok": true` to the stated
-result. Invalid input or an execution failure returns
-`{"ok":false,"error":{"code":"snake_case_code","message":"actionable detail"}}`.
-`details` is omitted unless the caller needs structured recovery data.
-An empty search result is a success. A shell command's nonzero exit code is a
-successful tool call with a nonzero `exit_code`. No result silently drops
-truncated content: it sets `truncated: true` and gives a continuation or a
-way to narrow the request. Historical call/entry IDs remain stable while
-retained. Job, timer, and child handles belong to the live runtime and return
-`not_found` after explicit session switch or restart. Compaction keeps them valid.
+## Common contracts
 
-Every tool implements the versioned call/record serialization contract in
-[design.md](design.md). SQLite uses these codecs for durable arguments,
-historical states, results, errors, and artifact references. Live jobs, timers,
-and pending interactions remain in memory; decoding never reruns a tool or
-recreates a handle. Unknown versions fail explicitly.
+- Input is one JSON object containing only listed fields; `?` means optional.
+  Reject unknown fields and invalid operation-specific combinations before dispatch.
+  Paths are absolute or relative to the session workdir unless stated otherwise.
+  Text is UTF-8; integer bounds are inclusive. Page sizes, limits and byte caps
+  are positive; offsets use each tool's documented base. Read pages are capped
+  at 40,000 bytes; mutation files at 8 MiB.
+- Result is one JSON object: success adds `"ok":true`; failure returns
+  `{"ok":false,"error":{"code":"snake_case_code","message":"actionable detail"}}`.
+  Include `error.details` only for structured recovery. Empty search results and
+  nonzero shell exits are tool successes. Disclose omitted content with
+  `truncated:true` and a continuation or narrowing strategy.
+- Historical call/entry IDs stay stable while retained. Jobs, timers, children and
+  interactions are live-runtime state: compaction preserves them; session changes
+  and restart invalidate handles (`not_found`). Versioned codecs persist arguments,
+  historical states, results, errors and artifact references; decoding never
+  executes work or restores handles. Reject unknown versions. See
+  [runtime boundaries](design.md#boundaries).
+- Cap model-facing results at 64 KiB of UTF-8 JSON, without context-budget-dependent
+  shrinking. Overflow returns `result_too_large`; successful sidecar storage adds
+  `truncated:true` and retained JSON `detail_path`. Narrow/page the original call or
+  use `shell` for bounded field/byte extraction: single-line JSON can exceed `read`'s
+  line cap. Exact available bytes/arguments remain inspectable and exportable.
+  Later boundaries may compact; there is no automatic context-overflow recovery.
+- Calls in one response must be independent. Read-only calls run concurrently
+  before ordered mutations/controls; shells/subagents overlap both phases. File
+  mutations share the workspace queue. Errors do not skip siblings; cancellation
+  skips unstarted calls and joins foreground workers. The next response receives
+  all results by call ID. Turns/children have no cycle limit.
+  Read-only calls are `read`, `glob`, `grep`, `skill`, `web_fetch`, `web_search`,
+  `job_list`, `job_read`, `wakeup_list` and `lsp_query`.
 
-Every tool invocation returns a version-one Markdown presentation record,
-separate from the LLM-facing JSON result. `summary` is a bounded, portable
-Markdown briefing normally displayed as one clipped row; applied file mutations
-add up to six diff preview lines, each capped at 120 characters. `detail` renders
-paths and highlighted diffs before labeled supplied parameters/results. Diffs
-compare immutable before/after snapshots using GNU diff, with a shared 256 KiB
-capture and five-second deadline per call; failures/truncation are disclosed.
-Only applied changes appear, including partial patches. Model JSON is unchanged. Glob shows only its pattern, plus
-failure text when needed. Other briefings show a primary argument and available
-status/error. Commands are fenced as `sh` for highlighting (preview at most
-192 bytes); other arguments use escaped inline code (at most 128 bytes).
-Shell/child briefings include at most the final 64 UTF-8 bytes per output stream,
-collapsed onto one line with stdout/stderr labels. LLM results retain the
-ten-line/1 KiB shared output-tail budget. Inspectors show labeled Markdown
-parameters/results, language-tagged commands/file contents/patches, structured
-question options, exact large integers and fenced long text. Original JSON is
-retained in records and export sidecars. Narrow panes truncate by terminal cell
-width without cutting generated ANSI styles; inspect the row for additional detail.
-Untrusted values are escaped, fenced safely, and stripped of terminal controls.
-Click metadata stays separate from Markdown. Shell/child inspectors save up to
-the last 8 KiB per retained stream. `job_read` inspectors display the exact returned
-page, respecting its stream, cursor and filter, without adding current capture tails.
-Completed job states display as `done`; model JSON retains `completed`.
-Child rows and inspector titles use colored `[Sub name]` badges; names over 26
-characters display 23 characters plus `...` without changing the stored name.
+## Saved presentation and live updates
 
-`Execution.Update` lets a tool publish multiple transient snapshots. The current
-shell/child wait loop samples bounded captures every 250 ms, with synchronous
-callbacks and no accumulating polling queue or separate polling goroutine. The
-frontend replaces one card keyed by committed call identity and can refresh its
-open inspector. Final results point to a new immutable, durable result entry.
-Background completion appends a separate clickable Markdown card with saved
-details, even when `wake_on_exit` is false; it never changes the initial model
-result. A completion that arrives before the launch result remains independent.
-Historical records never restore a live polling handle. Session changes join
-jobs, and live inspector polling pauses during lifecycle commands.
+Each invocation saves a version-one portable Markdown record alongside its exact
+JSON. CLI, inspectors, exports and compaction archives share the saved presentation;
+it never replaces or changes model-facing results.
 
-Persist the presentation with its history entry. The CLI renderer, export, and
-compaction archive share these records; exact exports also retain original
-arguments/results. Presentation never replaces model-facing results.
-
-Cap each model-facing tool result at 64 KiB of UTF-8 JSON. Keep the existing
-bounded tool outputs; do not shrink results against the remaining context budget.
-When a result exceeds the cap, return `result_too_large`. Successful sidecar
-storage adds `truncated: true` and a retained JSON `detail_path`. Extract bounded
-fields/bytes with `shell` if available; single-line JSON may exceed `read`'s line
-limit. Page unusually long results
-with tool-specific limits; exact available bytes and arguments remain inspectable
-in records and export sidecars. A later context boundary may compact history;
-there is no context-aware tool truncation or automatic overflow recovery.
-
-Tool calls in one model response must be independent. TTC runs read-only
-calls concurrently before ordered file mutations/control calls; shells and
-subagents run concurrently with both. File mutations still share the workspace
-queue. A tool failure is recorded without skipping siblings; cancellation skips
-unstarted calls and joins active foreground workers. The next response sees all
-results, correctly associated by call ID. Turns/children have no cycle limit.
+- `summary`: normally one clipped row with the primary argument and status/error.
+  Glob shows only its pattern plus any failure. Commands use `sh` fences (192-byte
+  preview); other arguments use escaped inline code (128 bytes). Applied mutations
+  add at most six diff lines, each at most 120 characters. Shell/child rows show
+  the final 64 UTF-8 bytes per stream, collapsed and labeled stdout/stderr; model
+  results keep the separate ten-line/1 KiB shared tail budget.
+- `detail`: paths and highlighted immutable snapshot diffs precede labeled supplied
+  parameters/results. GNU diff has a shared 256 KiB capture and five-second deadline
+  per call; disclose failures/truncation and show only applied changes, including
+  partial patches. Language-tag commands/contents/patches, structure question
+  options, preserve large integers and fence long text. Exact JSON stays in records
+  and export sidecars; click metadata is separate.
+- Escape/fence untrusted values and strip terminal controls. Clip narrow rows by
+  terminal cell width without splitting generated ANSI styles. Display completed
+  jobs as `done` while JSON retains `completed`. Colored `[Sub name]` badges label
+  child rows/inspectors; names over 26 characters display 23 plus `...`, unchanged
+  in storage.
+- At completion/stop, shell/child records save at most the last 8 KiB per stream
+  for durable inspection. `job_read` inspectors show only the returned page
+  with its stream/cursor/filter, never
+  additional current capture tails.
+- `Execution.Update` replaces the card identified by its committed call and
+  refreshes open inspection. Shell/child waits sample bounded captures every 250 ms
+  with synchronous callbacks, no polling queue or separate polling goroutine.
+  Final results are immutable durable entries. Background completion appends a
+  separate clickable card even with `wake_on_exit=false` or completion before the
+  launch result; it never rewrites that result. History restores no polling handles.
+  Session changes join jobs; lifecycle commands pause live inspector polling.
 
 ## Files and search
 
@@ -170,15 +156,14 @@ results, correctly associated by call ID. Turns/children have no cycle limit.
 
 ### Reversible file operations
 
-`edit`, `write`, and `patch` prepare durable before/after states through the
-workspace mutation service before modifying files. Their internal result adds
-a stable `change_id` and reversibility status for session history; these are
-not new LLM arguments. Session undo/redo calls the same service directly.
-Persist every applied path, even when a patch fails partway. Redo restores
-recorded bytes and metadata without reapplying a potentially changed patch.
-Outside-workspace edits remain allowed and are explicitly non-undoable.
-See [design.md](design.md) for local edit ordering and restoration conflict checks.
-Filesystem effects and history commits are independent; TTC does not repair crashes.
+- `edit`, `write` and `patch` prepare durable before/after states through the
+  workspace mutation service. Internal results add stable `change_id` and
+  reversibility status for history, not new LLM arguments. Undo/redo uses the
+  same service; redo restores saved bytes/metadata, never reruns a patch.
+- Record every applied path, including partial failures. Outside-workspace edits
+  are allowed but explicitly non-undoable. Filesystem effects and history commits
+  are independent; no crash repair. See [design](design.md#serialized-edits-and-shared-undo)
+  for ordering and restoration conflict checks.
 
 ## Execution and jobs
 
@@ -244,11 +229,9 @@ Filesystem effects and history commits are independent; TTC does not repair cras
   transcript. File mutations share the workspace queue and main-session undo history.
   Child messages/prompts/tool records remain inspectable and outside parent model
   context, apart from explicit completion/compaction events. No cycle limit applies.
-- Before a request would overflow, use the same compaction algorithm as the main
-  agent on the child projection. Preserve recent message/tool pairs, child ID,
-  active turn and live jobs; emit `child_compacted` after successful handoff.
-  A failed compaction leaves its old context unchanged and reports actionable
-  overflow/failure. Never switch main history or its undo floor for a child cut.
+- Child input uses [compaction](compaction.md), including its retention, handoff
+  and failure policy. A child cut never switches main history or its undo floor;
+  successful handoff emits the [child_compacted event](#async-messages-sent-to-the-model).
 - A final response with settled foreground tools/interactions publishes
   `child_turn_finished`. With `persistent:true`, success leaves the child idle;
   with `false`, it closes the context and cancels and joins its owned background
@@ -520,10 +503,10 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 ### `wakeup_schedule`
 
 - Input: `{name:string, message:string, at?:string,
-  delay_seconds?:integer, repeat_seconds?:integer}`. `at` is an ISO 8601
-  timestamp with timezone; `delay_seconds` is nonnegative;
-  `repeat_seconds`, if present, is positive. Names are unique among active
-  wakeups in the session.
+  delay_seconds?:integer, repeat_seconds?:integer}`. Require exactly one of `at`
+  (RFC3339 with timezone) or `delay_seconds` (0–31536000).
+  `repeat_seconds`, if present, is 1–31536000; omission makes a one-shot timer.
+  Names are unique among active wakeups in the session.
 - Result: `{wakeup_id:string, name:string, next_at:string,
   repeat_seconds?:integer, status:"scheduled"}`.
 
@@ -541,19 +524,16 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 - Result: `{wakeup_id:string,status:"cancelled"}`. An already-finished or
   unknown wakeup returns `not_found`.
 
-Foreground shell calls return their exit result without a `job_exit` message.
-`wake_on_exit` controls shell completion, including calls moved to background
-with Ctrl+B. Coding children use the always-delivered turn event above. The UI
-records terminal job status during normal execution. Job operations are scoped
-to the current runtime and caller/descendant jobs. Compaction preserves that
-runtime; it does not transfer or restart jobs. Large live output uses bounded
-memory; only captured history artifacts remain after the runtime ends.
-
 ## Async messages sent to the model
 
-Background `shell` with `wake_on_exit=true` delivers a session event at
-the next model boundary, or wakes an idle session. The event is a separate
-`user` message whose content is a JSON string:
+Job operations are scoped to the current runtime and caller/descendant jobs;
+only saved history artifacts survive its end. The UI records terminal status.
+Foreground shell exits return results without `job_exit`; background shell exits
+notify only with `wake_on_exit=true`, including calls moved to background with
+Ctrl+B. Coding children always deliver their turn event.
+
+Events arrive at the next model boundary or wake an idle session as separate
+`user` messages containing JSON strings:
 
 ```json
 {"type":"job_exit","job_id":"job_7","status":"completed"}
@@ -569,24 +549,16 @@ Coding child events use the same generic ordering/delivery contract:
 {"type":"child_turn_finished","event_seq":42,"child_id":"c7","child_turn_id":"t3","job_id":"j9","status":"completed","persistent":false,"result_entry_id":123,"answer":"Verified the fixture."}
 ```
 
-A foreground tool result carries the finish event for acknowledgment at request
-admission; otherwise enqueue one main-agent message. A compact event is emitted only after
-successful child handoff. Payloads reference committed immutable results/archives;
-wall-clock time and later child state do not decide order. `/btw` remains UI-only.
+Wakeups send `{"type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}`.
 
-A wakeup similarly sends
-`{"type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}`.
-Tool results and these later user messages are separate events. Delivered
-messages appear in the same conversation shown by the TUI and sent to the
-model. Commit a history entry before model delivery. Pending notifications
-are in-memory only; admitted delivery IDs are durable. Freeze a committed cutoff
-at request admission, deliver eligible events in sequence order, and acknowledge
-only their inclusion in that persisted request. Delivery attached to a foreground
-result is acknowledged when that result enters admitted input, not merely when
-it is written. Later arrivals remain pending; failed admission consumes nothing.
-Compaction delivers pending events to the current conversation and never
-re-emits copied events; explicit session switch or exit discards them. Loading history
-never sends an old notification again.
-
-Implementation boundaries and reviewed primary sources are in
-[design.md](design.md).
+- A foreground child result carries its finish event; otherwise enqueue one main
+  message. Emit `child_compacted` only after successful handoff. Payloads reference
+  committed immutable results/archives; sequence, not wall-clock time or later
+  child state, determines order. `/btw` stays UI-only.
+- Commit history before delivery. Tool results and later messages are distinct
+  events visible in the TUI/model conversation. Pending notices are memory-only;
+  admitted delivery IDs are durable.
+- [Admission ordering](design.md#event-ordering-and-main-timeline) freezes and
+  acknowledges delivered input, leaving later arrivals pending. Compaction must
+  not replay copied notices; session switch/exit discards pending delivery and
+  loading never resends old notices.

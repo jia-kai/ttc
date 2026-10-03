@@ -28,6 +28,7 @@ import (
 )
 
 const supervisorCommand = "__rail_serve"
+const maxInstanceBytes = 64 << 10
 
 // Options describes an attach/create or list operation. Input is the attached
 // terminal; Output receives lists. Both belong to the caller. DataDir is TTC's
@@ -208,11 +209,23 @@ func serverRunning(dir string) (bool, error) {
 
 func readInstance(dir string) (instance, error) {
 	var info instance
-	data, err := os.ReadFile(filepath.Join(dir, "instance.json"))
+	f, err := os.OpenFile(filepath.Join(dir, "instance.json"), os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return info, err
 	}
-	if len(data) > 64<<10 {
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return info, err
+	}
+	if !stat.Mode().IsRegular() {
+		return info, errors.New("rail instance metadata must be a regular file")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxInstanceBytes+1))
+	if err != nil {
+		return info, err
+	}
+	if len(data) > maxInstanceBytes {
 		return info, errors.New("rail instance metadata is too large")
 	}
 	if err = json.Unmarshal(data, &info); err != nil {
@@ -352,23 +365,37 @@ func Serve(ctx context.Context) (err error) {
 			return err
 		}
 	}
-	args, err := SandboxArgs(SandboxOptions{
+	environment := clientEnvironment()
+	sandbox, err := resolveSandboxSpec(ctx, sandboxOptions{
 		Workdir: spec.Workdir, Home: spec.Home, DataDir: spec.DataDir,
 		CacheDir: spec.CacheDir, ConfigHome: spec.ConfigHome, Executable: spec.Executable,
 		SocketDir: runDir, Hostname: spec.Hostname, Policy: policy,
+	}, planningEnvironment(environment, os.Geteuid()))
+	if err != nil {
+		return err
+	}
+	plan, err := planSandbox(ctx, sandbox, "/")
+	if err != nil {
+		return err
+	}
+	command, err := bubblewrapInvocation(*plan, sandboxProcess{
+		command:     []string{spec.Executable, clientServerCommand},
+		environment: environment, dieWithParent: true,
 	})
 	if err != nil {
 		return err
 	}
-	startup := tmuxStartup(spec)
+	startup := tmuxStartup(*plan)
 	if err = os.WriteFile(filepath.Join(runDir, "tmux.conf"), []byte(startup), 0600); err != nil {
 		return err
 	}
-	args = append(args, "--die-with-parent", "--setenv", "PATH", filepath.Dir(spec.Executable)+":"+os.Getenv("PATH"), "--setenv", "TTC_DATA_DIR", spec.DataDir, "--setenv", "XDG_RUNTIME_DIR", "/run/ttc-rail", "--", spec.Executable, clientServerCommand)
-	cmd := exec.CommandContext(ctx, "bwrap", args...)
-	cmd.Env = clientEnvironment()
+	cmd := exec.CommandContext(ctx, command.executable, command.args...)
+	cmd.Env = command.environment
 	cmd.Stdin = nil
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err = plan.validateHost(ctx); err != nil {
+		return err
+	}
 	if err = cmd.Start(); err != nil {
 		return err
 	}
@@ -418,20 +445,17 @@ func tmuxQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func tmuxStartup(spec launchSpec) string {
+func tmuxStartup(plan sandboxPlan) string {
 	var b strings.Builder
 	b.WriteString("source-file -q /etc/tmux.conf\n")
-	for _, config := range []string{filepath.Join(spec.Home, ".tmux.conf"), filepath.Join(spec.ConfigHome, "tmux", "tmux.conf")} {
-		if _, err := os.Stat(config); err == nil {
-			fmt.Fprintf(&b, "source-file %s\n", tmuxQuote(config))
-			break
-		}
+	if plan.tmuxConfig != "" {
+		fmt.Fprintf(&b, "source-file %s\n", tmuxQuote(plan.tmuxConfig))
 	}
 	// Explicit lifetime settings override user config only for this server.
 	b.WriteString("set-option -g exit-unattached off\n")
-	fmt.Fprintf(&b, "new-session -d -s rail -c %s\n", tmuxQuote(spec.Workdir))
+	fmt.Fprintf(&b, "new-session -d -s rail -c %s\n", tmuxQuote(plan.workdir))
 	b.WriteString("set-option -g exit-empty on\n")
-	fmt.Fprintf(&b, "set-option -g status-left %s\n", tmuxQuote("[#S] #H · "+filepath.Base(spec.Workdir)+" "))
+	fmt.Fprintf(&b, "set-option -g status-left %s\n", tmuxQuote("[#S] #H · "+filepath.Base(plan.workdir)+" "))
 	return b.String()
 }
 
@@ -453,6 +477,9 @@ func listInstances(ctx context.Context, root string, output io.Writer) error {
 	type row struct{ workdir, session string }
 	var rows []row
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !entry.IsDir() || len(entry.Name()) != 24 {
 			continue
 		}

@@ -128,19 +128,26 @@ func TestInsideClientEnvironmentPreservesInstancePaths(t *testing.T) {
 	t.Setenv("TTC_DATA_DIR", "/instance/state")
 	t.Setenv("HOME", "/instance/home")
 	t.Setenv("PATH", "/instance/bin")
+	t.Setenv("SSH_AUTH_SOCK", "/run/ssh-agent.sock")
 	env := strings.Join(insideClientEnvironment([]string{
 		"TTC_DATA_DIR=/other/state", "HOME=/other/home", "PATH=/other/bin",
-		"TMUX=host", "TMUX_PANE=%1", "TERM=terminal-fixture", "DISPLAY=display-fixture",
+		"TMUX=host", "TMUX_PANE=%1", "TERM=terminal-fixture", "DISPLAY=display-fixture", "SSH_AUTH_SOCK=/host/agent.sock",
 	}), "\n")
-	for _, want := range []string{"TTC_DATA_DIR=/instance/state", "HOME=/instance/home", "PATH=/instance/bin", "TERM=terminal-fixture", "DISPLAY=display-fixture"} {
+	for _, want := range []string{"TTC_DATA_DIR=/instance/state", "HOME=/instance/home", "PATH=/instance/bin", "TERM=terminal-fixture", "DISPLAY=display-fixture", "SSH_AUTH_SOCK=/run/ssh-agent.sock"} {
 		if !strings.Contains(env, want) {
 			t.Fatal("missing environment", want, env)
 		}
 	}
-	for _, unwanted := range []string{"/other/", "TMUX=", "TMUX_PANE="} {
+	for _, unwanted := range []string{"/other/", "TMUX=", "TMUX_PANE=", "/host/agent.sock"} {
 		if strings.Contains(env, unwanted) {
 			t.Fatal("invalid environment override", env)
 		}
+	}
+	if err := os.Unsetenv("SSH_AUTH_SOCK"); err != nil {
+		t.Fatal(err)
+	}
+	if env := strings.Join(insideClientEnvironment([]string{"SSH_AUTH_SOCK=/host/agent.sock"}), "\n"); strings.Contains(env, "SSH_AUTH_SOCK=") {
+		t.Fatal("attachment restored disabled service", env)
 	}
 }
 

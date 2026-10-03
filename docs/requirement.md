@@ -1,38 +1,39 @@
 # TTC requirements draft
 
-TTC targets research coding in headless SSH/tmux sessions on Linux, including
-containers. This document defines the complete target; [README](../README.md)
-describes setup/current behavior. One process owns runtime and TUI. Kitty renders
-Markdown/math; input remains anchored while responses stream.
+- Target research coding in headless Linux SSH/tmux sessions, including containers.
+  This is the complete intended target, not a completed-feature list; see
+  [README](../README.md) for setup/current behavior.
+- One process owns runtime/TUI. Kitty renders Markdown/math; anchor input while
+  responses stream.
+- Detailed contracts linked below are part of this target. Their references to
+  implementation sources are not claims that every requirement is complete.
 
 ## Provider and context
 
-- Keep messages, tools, streams, usage and cancellation provider-neutral. OpenAI
-  subscription is initial; providers own catalogs/capabilities, image input and
-  typed device-code login. Frontends render steps; secrets never enter history.
-  Switching providers reconstructs local history, not foreign response IDs.
-- Catalogs define models, variants, capacities, output limits, retention and
-  headroom. Store turn-start and per-request selections. Switch after the current
-  tool batch and append an inspectable message; active requests/children keep their
-  selection. Advertised Fast choices share base model/reasoning with an explicit tier.
+- Keep messages/tools/streams/usage/cancellation provider-neutral. Start with
+  OpenAI subscription; providers own catalogs/capabilities, image input and typed
+  device-code login. Frontends render steps; never store secrets in history.
+  Provider switches reconstruct local history, not foreign response IDs.
+- Catalogs define models/variants/capacities/output limits/retention/headroom.
+  Record turn-start/per-request selections; expose inspectable switching without
+  changing active requests or children. [Model contracts](models.md) define catalog,
+  startup, variants, Fast tiers, replay compatibility and metering details.
 - Keep stable instructions/tool definitions. Temporarily forbid tools through a
   provider's hard no-tools mode or by omitting definitions, never artificial tool
   errors. Canonical LLM assets and runtime use are in [system_prompt.md](system_prompt.md).
-- Retry transient transport, rate-limit and server errors until interruption by
-  default, using the same model. Honor numeric/date Retry-After capped at 30 seconds;
-  otherwise bounded exponential jitter. Show clickable request-linked notices
-  before waits; keep them outside model input. Esc, Esc interrupts waits.
-- Retry only before committed output/calls. Keep partial streams and fail; never
-  execute incomplete calls, resume streams or resend uncertain work after restart.
-  Persist retry/final status, IDs, timing and usage. Retain compatible native replay
-  separately from visible text; never reuse across incompatible models/branches/
-  compaction or replay an executed tool.
-- Compact automatically near capacity or with `/compact`. Main continuation names
-  use `{original_name}-cont-0`, `-cont-1`, etc.; predecessor becomes read-only.
-  Visible input starts with summary/recent messages exactly as sent. Preserve full
-  source history and searchable branch archives. Child cuts share the single-pass
-  algorithm without switching main history. Oversized summary input fails. See
-  [compaction.md](compaction.md) for retention, handoff and failures.
+- Retry transient pre-output failures until interrupted by default, without
+  duplicating uncertain work. Preserve/fail partial streams; never execute incomplete
+  calls, resume streams or restart unfinished requests. Require inspectable status
+  and interruptible waits under [request retries](design.md#request-retries).
+  Persist retry/final status, IDs, timing and usage.
+- Keep native replay separate from visible text and reject incompatible reuse;
+  [replay validation](design.md#provider-and-model-abstraction) and
+  [model compatibility](models.md#switching-and-replay) define the contract.
+- Compact automatically near capacity or with `/compact`. Create named main
+  continuations and freeze predecessors while preserving inspectable source history
+  and searchable archives. Visible input matches the summary/recent messages sent.
+  Main and child cuts follow [compaction.md](compaction.md), including retention,
+  single-pass summary, continuation naming, handoff and failures.
 
 ## LLM-facing tools
 
@@ -61,20 +62,17 @@ Markdown/math; input remains anchored while responses stream.
 - [tools.md](tools.md) defines exact inputs/results; [prompt/tools.yaml](../prompt/tools.yaml)
   is canonical model guidance. Tool permissions belong to the host/container;
   TTC asks for no tool approvals.
-- Embed `default-skills`; discover without disk copies. Project overrides user,
-  then bundled. The LSP skill supplies language/server setup; the backend owns
-  protocol correctness/cleanup. Start with `shell(background=true, protocol="lsp")`:
-  reserve stdin/stdout for JSON-RPC, disable PTY, retain stderr, initialize and sync
-  files. `job_read` never consumes protocol output.
+- Embed/discover `default-skills` without disk copies; project overrides user,
+  then bundled. The LSP skill owns language/server setup; the backend owns protocol
+  and cleanup. [LSP contracts](tools.md#lsp) define managed stdio and file sync.
 
 ## Scratch experiments
 
-- Before inference, create `/tmp/ttc` as shared sticky 1777 (possibly another
-  owner's) and `/tmp/ttc/{effective_numeric_uid}` as owned 0700. Reject symlinks,
-  wrong ownership/permissions; apply modes independently of umask without repairing
-  unsafe existing paths.
-- Supply its absolute runtime-context path. Reverify/recreate before use after
-  `/tmp` cleanup; report unsafe/unavailable paths instead of supplying them.
+- Before inference, create shared sticky 1777 `/tmp/ttc` (any owner) and owned
+  0700 `/tmp/ttc/{effective_numeric_uid}`. Reject symlinks/wrong ownership/modes;
+  apply modes independently of umask, never repair unsafe existing paths.
+- Supply its absolute runtime-context path; reverify/recreate before use after
+  `/tmp` cleanup. Report unsafe/unavailable paths instead of supplying them.
 - One-time scripts/probes use scratch cwd; requested project edits stay in the
   workspace. Scratch is ephemeral/outside SQLite and undo: no archives, attachment
   snapshots or retained output artifacts there.
@@ -83,115 +81,79 @@ Markdown/math; input remains anchored while responses stream.
 
 ### Event ordering and main timeline
 
-- One serialized writer commits all actors' semantic events with durable monotonic
-  `event_seq`, actor, causal request/call, chronological main turn and latest human
-  `undo_owner_turn_id`. Never reuse sequences after restart/branching/cleanup;
-  gaps are allowed. Timestamps are display metadata; workers choose no history position.
-- Queued input remains transient until user/steer admission. Provider-ordered
-  intents precede dispatch; each gets one terminal result. Results commit by arrival,
-  while actor input reconstructs call order. Failed/interrupted streams execute no
-  calls; streaming/progress are transient views, not durable events.
-- Human admission/checkpoint and complete file apply/record share a mutation gate.
-  Commit order decides undo ownership; idle writes extend the latest human suffix,
-  while notification turns create no checkpoint. Launch IDs preserve provenance.
-  Shell/external effects are outside serialized file undo.
-- Freeze each request's committed cutoff; include eligible notices in sequence
-  order and atomically acknowledge their IDs. Failed admission consumes nothing.
-  Delivery means persisted inclusion through a result/notice, not a saved result
-  alone or successful inference. Later arrivals stay pending. Idle wakes use the
-  same gate, never another concurrent main turn.
-- Copies preserve source/delivery identity and never notify again. Summary-first
-  actor input differs from chronological lineage order; record handoff once.
-  Closing rejects admission, joins work, records terminal states and discards
-  undelivered notices before activation. See [design ordering](design.md#event-ordering-and-main-timeline).
+- Require one durable, monotonic semantic event order across actors, with causal
+  attribution and human-checkpoint undo ownership. Transient streams/progress are
+  not historical events; queued input enters history only on admission.
+- Admission must freeze and acknowledge exactly the committed input delivered;
+  failures consume nothing, later arrivals remain pending and copies never redeliver.
+  File commits and human checkpoints must share a gate. The full sequence,
+  transaction and lifecycle contract is [design ordering](design.md#event-ordering-and-main-timeline).
 
 ### Input and background work
 
-- Parent/child requests may overlap without cycle limits. Run read-only calls
-  together, then ordered mutations/controls; shells/children overlap both. Ordering
-  is best effort; dependent operations need later responses.
+- Parent/child requests may overlap without cycle limits. Require
+  [tool batch ordering](tools.md#common-contracts); dependencies need later responses.
 - **Enter:** idle starts a turn; busy queues FIFO, visibly unsent and excluded from
   input until promotion. **Alt+Enter:** steer active main work after response/tools
   settle, retaining the TTC turn. No native streaming/child steering.
 - **Esc, Esc:** interrupt request/foreground tools, leaving independent jobs alive.
   **Ctrl+B:** promote foreground shells without canceling; a race with completion
   returns one final result. `/background` selects live shells; none is a no-op.
-- **Shell completion:** persist bounded output and update UI. Default
-  `wake_on_exit=true` notifies at a boundary or starts idle work; false is UI-only.
-  Foreground results never duplicate completion notices.
-- Foreground shells default to a 20000 ms deadline; explicit `timeout_ms` must
-  be 1–86400000 and cannot disable it. Background shells have no default deadline;
-  `0` means none, and a positive timeout is an optional explicit deadline.
-- **Question:** main only, one pending round; children finish useful work, report
-  material information gaps to main and stop. Keep composer/jobs usable. Tabs use Left/Right,
-  final Submit sends all answers. Choose exactly one option or Other/free text;
-  Up/Down focuses, Enter selects/advances, Space selects without advancing.
-  Recommendation focuses without selection. Preserve drafts across tabs/types;
-  Esc leaves editing then dismisses without answering. Only explicit `/questions`
-  reopening clears dismissal. The next normal message returns `{dismissed:true}`
-  and redirects main at its settled request boundary; local commands leave the
-  round pending. Never restore pending forms on restart.
-- **Wakeup:** deliver ahead of queued prompts at a boundary or while idle. Coalesce
-  repeats to one outstanding latest immutable firing at/before cutoff, with its
-  cumulative count/sequence. Ack only that firing; later arrivals remain pending.
-  No missed-wakeup replay after exit/switch.
-- **Image click:** `image_show(request_click=true)` returns immediately; allow one
-  pending interaction per actor. Clicking inside selects source coordinates; OK
-  explicitly confirms, Esc cancels. Retain exact displayed snapshot, not pending state.
-- Persist conversation/tool/file history; jobs, timers, handles, queues, steers,
-  questions, clicks and capture rings stay in memory. IDs in history are not live.
-  Compaction preserves runtime/IDs; explicit new/clear/load/exit cancels and joins
-  work, drops queues/interactions, and records interrupted output. Child inspection
-  is not switching. tmux detach keeps TTC alive; long work belongs in tmux.
-  Session loading never relaunches calls; old handles return `not_found`.
-- Append inspectable developer runtime context only on committed changes, with
-  jobs/timers/transitions. Activation/compaction force it. Stable instructions are
-  separate; snapshots cannot revive work or establish future outcomes. Delivered
-  notices become history; pending ones remain transient.
+- **Shell completion:** persist bounded output/update UI. `wake_on_exit=true`
+  (default) notifies at a boundary or starts idle work; false is UI-only. Never
+  duplicate foreground results as completion notices.
+- **Shell deadlines:** enforce the foreground deadline and optional background
+  deadline in the [shell contract](tools.md#shell).
+- **Question:** main only, one pending round; composer/jobs remain usable. Require
+  explicit submission, preserved drafts and dismissal/redirection rather than
+  implied answers. [question](tools.md#question) defines the dialog and results.
+- **Wakeup:** deliver ahead of queued prompts; repeating firings coalesce without
+  losing later arrivals. Require [admission/coalescing ordering](design.md#event-ordering-and-main-timeline)
+  and [wakeup contracts](tools.md#wakeups), with no replay after exit/switch.
+- **Image click:** return immediately and require explicit confirmation of source
+  coordinates. [image_show](tools.md#image_show) defines actor ownership,
+  cancellation and snapshot retention.
+- Persist conversation/tool/file history, never execution. Require the
+  [durable/live boundary](design.md#boundaries): compaction preserves live work;
+  explicit session changes/exit cancel it, and loads never relaunch calls.
+  Long work belongs in tmux, not a durable TTC scheduler.
+- Supply inspectable [runtime snapshots](system_prompt.md#runtime-snapshots)
+  separately from stable instructions. They report observed state, never revive
+  work or establish future outcomes.
 
 ### Child agents
 
-- Each child has stable ID and fresh turn/job IDs per assignment. Require explicit
-  `persistent` every time: false closes context and joins owned work on completion;
-  true retains successful idle context. Failure/cancellation always close. Retain
-  at most four coding contexts, including idle ones; closing frees capacity.
-- Only main assigns idle follow-ups; running children reject with wait-for-finish
-  guidance and accept no steering/queues. Final completion waits for foreground
-  tools/interactions. Children cannot spawn children; inspectors are read-only.
-- Model identity freezes; optional supported reasoning `variant` inherits parent
-  at creation or retains child choice when omitted on follow-up. Changes are idle-only.
-- Commit terminal state and one `child_turn_finished` before accepting follow-up.
-  Include status, child/turn/job, up to 8 KiB UTF-8 final answer with explicit
-  truncation and exact immutable reply/error reference, never the full transcript.
-  Foreground result carries/acknowledges finish at admission; background queues
-  one notice. No extra `job_exit` or redundant wake for active main work.
-- Share [compaction](compaction.md) on actor input. Successful cut emits one
-  `child_compacted`, preserving child/turn/jobs/interactions without changing main
-  session/undo floor. Main cuts preserve children. Chunked summaries are excluded.
-  `/btw` shares frozen context with enforced read-only tools; its answer/events are
-  UI-only, outside main input.
+- Require isolated assignments with explicit persistence, bounded capacity,
+  stable identity, frozen models and idle-only follow-ups. Children share serialized
+  workspace edits, not parent input or independent undo; they cannot spawn children
+  or ask the user questions. [subagent](tools.md#subagent) defines lifecycle,
+  limits and results; [async messages](tools.md#async-messages-sent-to-the-model)
+  defines exactly-once completion/compaction delivery.
+- Child [compaction](compaction.md) must preserve live work without switching main
+  history or undo. `/btw` must enforce read-only tools on frozen main context and
+  keep answers/events outside parent input; see [aside design](design.md#read-only-side-questions).
 
 ## Session naming
 
-- After the first settled main tool batch, or final response without tools, send
-  one no-tools metadata request using that boundary's model. Supply first user
-  and current assistant text up to 4 KiB each plus four tool names; mark truncation.
-- Request a plain descriptive 3–6-word title, 32-token output budget, one transport
-  attempt and 15-second deadline. Trim quotes/Markdown/whitespace; reject controls,
-  line breaks, invalid word counts or more than 60 characters, never cutting a word.
+- After the first settled main tool batch or tool-free final response, send one
+  no-tools metadata request with that boundary's model: first user/current assistant
+  text up to 4 KiB each and four tool names; mark truncation.
+- Request a plain descriptive title using the canonical format and request limits
+  in [prompt/naming.yaml](../prompt/naming.yaml). Trim quotes/Markdown/whitespace;
+  reject controls, line breaks and titles outside those word/character bounds,
+  never cutting a word.
   Invalid/failure leaves default name and an inspectable notice.
 - Persist claim/trigger before inference so restart cannot resend; mark crash/
   timeout failed. Inputs/replies are inspectable but outside model history, do not
   delay queued turns, and may finish while main continues. Later failures do not
   revoke a title. Commit only while name remains default; manual rename wins.
 - Show title in header/list. Do not name children or continuations. Compaction
-  waits for bounded pending naming then freezes root name. Canonical text/limits
-  live in [prompt/naming.yaml](../prompt/naming.yaml).
+  waits for bounded pending naming then freezes root name.
 
 ## Data retention
 
-- Clean at startup/every hour and refresh the loaded session's activity for other
-  instances. Expire entire lineages after 30 inactive days; copies share retention.
+- Clean at startup/hourly; refresh loaded-session activity for other instances.
+  Expire entire lineages after 30 inactive days; copies share retention.
 - Delete history, tools, requests, snapshots, attachments and archives together;
   keep predecessor data required by retained continuations. Private managed files
   belong to one lineage, without cross-lineage blobs. Asset deletion is best
@@ -201,34 +163,24 @@ Markdown/math; input remains anchored while responses stream.
 
 ## Session history and undo
 
-- SQLite has immutable entries and a selected tree cursor. Main input includes
-  main-visible messages; child records stay inspectable outside its context.
-  Ctrl+X G shows linear human inputs with fork connectors; arrows navigate,
-  Enter restores before input, Space inspects and Esc closes. Predecessors are read-only.
-- Serialize parent/child edit/write/patch through one mutation queue, capturing
-  before/after bytes/modes and advancing shared file history. No child undo;
-  shell and outside-workspace changes are non-undoable.
-- Undo/redo/branch selection require idle main work and stop/join jobs/children,
-  clearing transients. Undo reverses everything after the latest human checkpoint,
-  including child/trailing async writes and failed/interrupted turns. The gate
-  orders checkpoint versus complete commits, not launch attribution. Redo restores
-  saved bytes without tool execution/live handles. New input branches/clears redo.
-- Reject restoration conflicts. Filesystem changes and SQL commits are independent;
-  there is no crash repair. Loading writable history copies its last balanced
-  tool exchange into an independent session, never restoring files or live work.
-  Only new work is undoable; imported history remains inspectable. Instances can
-  share data/workspaces; conflicts between independent writers are the user's responsibility.
-- Compaction keeps retained checkpoints undoable; summarized edits establish
-  the baseline. See [design](design.md#serialized-edits-and-shared-undo).
+- Require immutable SQLite history with selectable branches, inspectable child
+  records outside main input and one serialized parent/child file-undo history.
+  Undo must include async edits after the latest human checkpoint; redo restores
+  snapshots, never tool execution. Restoration requires idle/stopped work and
+  rejects file conflicts. Shell/outside-workspace effects are non-undoable.
+- Session loading must copy balanced history without restoring files/live work;
+  only new work is undoable. No crash repair or cross-instance workspace locking.
+  The complete branch, restore, load and compaction-baseline contract is
+  [serialized edits and shared undo](design.md#serialized-edits-and-shared-undo).
 
 ## `@` attachments
 
 - `@` opens text/directory/image paths; selected tokens are visible, literal `@`
   remains text. Resolve/snapshot on submit so queued/steered input keeps that version.
-- Text contributes path/up to 32 KiB; directories contribute up to 500 sorted
-  recursive paths, listing but not following symlinks. Mark limits; tools can page.
-  Images contribute path/bytes as multimodal input. Reject missing/unreadable/
-  unsupported assets or provider-incompatible images; never silently drop them.
+- Text supplies path/up to 32 KiB; directories up to 500 sorted recursive paths,
+  listing but not following symlinks. Mark limits; tools can page. Images supply
+  path/bytes as multimodal input. Reject missing/unreadable/unsupported assets or
+  provider-incompatible images; never silently drop them.
 - Persist snapshots when admitted. Queues/attachments remain transient until then
   and never survive session changes/restart.
 
@@ -245,35 +197,31 @@ Markdown/math; input remains anchored while responses stream.
 - Inspect every conversation/internal message. System placeholders open exact
   prompts in the shared bordered scrollable window, not expanded main rows.
   Auth/login stays outside history. Plain mode has `/inspect <entry-id>`.
-- Tool calls show compact highlighted running/failed summaries. Click/focus opens
-  parameters, result/error, retained output or file diff. Page large details from
-  storage, not full TUI loads. Shared portable Markdown serves UI/export/archives;
-  these views add no model messages. `/export <path>` writes the selected cut/assets.
-- Window scroll: wheel, arrows, pages, Ctrl+U/D; Esc closes. Enter opens focused
-  rows/diffs, Space in history because Enter restores. Show window/conversation
-  scroll indicators and borders; assistant heading aligns left, content indents two.
+- Show compact highlighted running/failed tool summaries; click/focus opens
+  parameters, result/error, retained output or diff. Page large details from storage.
+  Shared portable Markdown serves UI/export/archives, adding no model messages.
+  `/export <path>` writes the selected cut/assets.
+- Windows: wheel/arrows/pages/Ctrl+U/D scroll, Esc closes, Enter opens focused
+  rows/diffs (Space in history; Enter restores). Show borders/scroll indicators
+  for windows/conversation; left-align assistant heading, indent content two.
 - Sidebar independently collapses/scrolls context, jobs/children and timers. Display
-  latest parent frozen model/input breakdown/reserves with estimates labeled;
-  reported usage and all-agent totals stay separate. Totals survive compaction and
-  session changes; only restart or `/new` clears them. Refresh copied metadata without
-  capture/history scans. Below 100 columns, Ctrl+X S opens overlay; Tab focuses,
+  parent context separately from all-agent usage under [metering rules](models.md#usage-accounting).
+  Refresh copied metadata without capture/history scans. Below 100 columns,
+  Ctrl+X S opens overlay; Tab focuses,
   arrows/pages scroll and Left/Right collapse. Show session/cwd/Git root/branch;
   roll overflowing text horizontally, with full path inspection and Git refresh
-  outside drawing. Live tools/agents have states/titles; new child labels are
-  1–4 words, ≤64 single-line characters.
-- Up/Down recalls human input across sessions/restarts and restores draft past
-  newest. Ctrl-R matches every whitespace-separated case-insensitive substring
-  in any order against bounded prompt history, newest first, highlighting matches.
-  Enter fills input,
-  Esc cancels. Alt+Up/Down focuses conversation; dialogs own their arrows.
+  outside drawing. Live tools/agents have states/titles under the
+  [child label contract](tools.md#subagent).
+- Require cross-session prompt recall and highlighted bounded search under the
+  [composer contract](design.md#composer-and-session-windows), restoring draft past
+  newest. Alt+Up/Down focuses conversation; dialogs own arrows.
 - Ctrl+U/D scroll half viewport. Ctrl+D never exits; at bottom it resumes follow.
   Scrolling anchors message/source offset through streams/resize. Reaching bottom
   alone does not follow. Enter/Alt+Enter/prompt-submitting commands follow again.
   Ctrl+C exits/cancels from any view; inspectors handle their own Ctrl+U/D.
-- Fullscreen Ctrl+X F preserves reading anchor, uses all columns, hides sidebar/
-  scrollbar/composer, keeps bottom indicator and reveals typing overlay. Freeze
-  display/automatic dialogs while runtime continues; disable mouse/clicks for copy.
-  Keyboard scroll/resize works; exit restores live view/mouse; sending leaves fullscreen.
+- Require a frozen fullscreen copy view while runtime continues, with preserved
+  reading anchor and live-view restoration. [Terminal rendering ownership](design.md#terminal-rendering-ownership)
+  defines fullscreen layout, input and focus behavior; sending leaves fullscreen.
 - Ctrl+X L lists dated/selectable sessions; Enter loads. Predecessors are read-only;
   compaction selects its continuation. New/clear preserve old history and edits but
   cancel work/transients. Every coding request uses current instructions and
@@ -317,5 +265,5 @@ Markdown/math; input remains anchored while responses stream.
 | Compact context          | `/compact`                    |
 | Exit                     | Ctrl+C or Ctrl+X Q or `/quit` |
 
-With tmux's default Ctrl+B prefix, press twice to pass it to TTC, or use
-`/background`/the palette.
+- With tmux's default Ctrl+B prefix, press twice to pass it to TTC, or use
+  `/background`/the palette.

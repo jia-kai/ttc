@@ -1,6 +1,8 @@
 .DEFAULT_GOAL := build
 
-.PHONY: prompts build test check integration rail-integration demo kitty-test
+.PHONY: prompts build test check integration rail-integration demo kitty-test full-test
+# Share build prerequisites, but never run suites concurrently, even with -j.
+.NOTPARALLEL: full-test
 prompts:
 	go run ./cmd/embed-prompts
 
@@ -31,3 +33,15 @@ rail-integration: build
 
 kitty-test: build
 	python3 tests/kitty_visual.py
+
+full-test: test check integration rail-integration kitty-test
+	python3 -m unittest discover -s tests -p 'test_*.py'
+	python3 tests/kitty_visual.py --tmux
+	python3 tests/kitty_visual.py --offline
+	python3 tests/kitty_visual.py --offline --tmux
+	python3 tests/pty_math.py
+	python3 tests/pty_math.py --tmux
+	python3 tests/pty_math.py --disable-color
+	python3 tests/pty_math.py --disable-color no-color
+	python3 tests/pty_math.py --tmux --disable-color
+	python3 tests/pty_math.py --tmux --disable-color no-color

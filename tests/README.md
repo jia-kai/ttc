@@ -68,6 +68,7 @@ by that user and private (0700). Test drivers reject unsafe existing paths.
 For reproducible headless validation:
 
 ```sh
+make full-test                    # all automated suites, including graphics/math
 make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
@@ -82,11 +83,22 @@ make check                        # race tests and vet
 make rail-integration             # real filesystem sandbox and tmux lifecycle
 ```
 
+`make full-test` runs Go tests/race/vet, PTY and rail regressions, Python unit
+tests, all direct/tmux and mock/offline Kitty modes, and math protocol tests with
+both explicit color-disable settings. Suites run sequentially even with `-j`;
+the first failure stops the run. Manual demos and benchmarks are excluded.
+Run it outside rail if `./ttc` is read-only. Install the rail and graphics/math
+dependencies listed below and prepare MathJax with `make build` followed by
+`./ttc --install-math` first; the target does not install dependencies or silently
+omit unavailable suites.
+
 Rail integration additionally needs `bubblewrap`, `tmux`, and permission to
 create unprivileged user/PID/UTS namespaces. It checks mounts, denies, shared
 loopback networking, TTC startup, detach/reattach and concurrent creation, plus
 independent tmux bootstrap and containment of tmux client replacement commands.
-It uses private scratch fixtures
+It also checks SSH-agent socket forwarding and reattachment, service denies,
+read-only Neovim/global Git config, and writable Zsh history. Unit/CLI tests verify TTC's
+SSH_AUTH_SOCK removal and global opt-in. It uses private scratch fixtures
 and no credentials or external network access.
 
 The automated demo checks server-side request shapes, all tool types and their

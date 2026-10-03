@@ -76,6 +76,9 @@ func run() error {
 	load := flag.String("session", "", "load stored session ID")
 	autoName := flag.Bool("auto-name", true, "one small naming request at the first tool boundary or completed response")
 	flag.Parse()
+	if e = applySSHAuthSockPolicy(); e != nil {
+		return e
+	}
 	if *installMath {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()

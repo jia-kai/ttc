@@ -8,6 +8,7 @@ import (
 
 func TestRailOptions(t *testing.T) {
 	t.Setenv("TMUX", "")
+	t.Setenv("TTC_DATA_DIR", "")
 	t.Setenv("XDG_DATA_HOME", "/fixture/data")
 	opts, err := railOptions(nil)
 	if err != nil || opts.Workdir != "." || opts.DataDir != "/fixture/data/ttc" || opts.List {

@@ -1,94 +1,104 @@
 # Context compaction
 
-Compaction replaces one actor's input with a Markdown summary and recent messages.
-Main compaction creates a continuation and freezes its predecessor; child
-compaction changes only its context. The live runtime keeps jobs, timers, queued
-input and interactions. Explicit session changes/exit cancel them.
+Compaction replaces an actor's input with a Markdown summary and recent messages.
+Main creates a continuation and freezes its predecessor; child compaction changes
+only child context. Jobs, timers, queued input and interactions stay live;
+explicit session changes/exit cancel them.
 
 ## Trigger and retention
 
-- `/compact [focus]` requests a main handoff. Before main/child admission, estimate
-  instructions, tools, attachments, history and output allowance against model
-  capacity. Compact before oversized admission. Native replay estimates count
-  model-visible occupancy, not encrypted transport JSON; reported usage is separate.
-  Provider context-length rejection fails directly, without compaction/retry.
-- Preserve up to two latest admitted normal/queued prompts combined and up to
-  two committed steers independently, in chronological order with exact text and
-  attachments. Child task/aside inputs count with normal/queued prompts. Pending
-  unadmitted input stays in live state, not retained history. Each copied input
-  gets a separate metadata marker with its source, original commit time,
-  compaction time and age; repeated compaction preserves original identity/time.
-  Markers are historical context and survive manual loads; live runtime notices do not.
-  Canonical marker instructions live in [prompt/retained-input.md](../prompt/retained-input.md).
-- Retain recent assistant/tool cycles after the latest human input, not complete
-  user/model turns. Set the tail
-  target to `min(recent_tokens_max, max(recent_tokens_min, last_two_cycle_tokens))`
-  and keep the longest suffix within it at a complete cycle boundary. A large
-  cycle can enter the summary. Never split tool pairs; unresolved calls block compaction.
-  Subscription defaults are 4096–16000 estimated tokens, excluding the retained
-  inputs. The complete replacement must fit capacity and next-turn headroom.
-  Without older model work or an unretained human input to summarize, fail explicitly.
+- With capacity `C`, coding output allowance `O`, estimation margin `M` and
+  estimated input `I`, compact when `I + O + M >= C`. A handoff must satisfy:
+
+  ```text
+  fixed_input + summary_and_archive_links + retained_history + O + M
+      + next_turn_input_reserve < C
+  recent_cycle_tail <= recent_tokens_max
+  ```
+
+  [Model budget metadata](models.md#budget-metadata) defines the fields and
+  validation, including the distinction between context reserves and output caps.
+- `/compact [focus]` requests main compaction. Before main/child admission,
+  estimate instructions, tools, attachments, history and output allowance against
+  capacity; compact before overflow. Native replay estimates model-visible
+  occupancy, not encrypted transport JSON; reported usage is separate. Provider
+  context-length rejection fails directly, without compaction/retry.
+- Preserve up to two latest admitted normal/queued prompts combined and up to two
+  committed steers independently, chronologically, with exact text/attachments.
+  Child tasks/asides count as normal/queued prompts. Unadmitted input stays live.
+  Each copied input gets a separate marker: source, original commit time,
+  compaction time and age. Repeated compaction preserves identity/original time.
+  Markers survive manual loads; live runtime notices do not. Canonical instructions:
+  [prompt/retained-input.md](../prompt/retained-input.md).
+- Retain complete assistant/tool cycles after the latest human input, not whole
+  user/model turns. Target:
+
+  ```text
+  min(recent_tokens_max, max(recent_tokens_min, last_two_cycle_tokens))
+  ```
+
+  Keep the longest suffix within that target at a complete cycle boundary.
+  Summarize oversized cycles; never split tool pairs. Unresolved calls block
+  compaction. Subscription defaults: 4096–16000 estimated tokens, excluding
+  independently retained inputs. The replacement must fit capacity/next-turn
+  headroom. Fail if no older model work or unretained human input can be summarized.
 
 ## Summary and archives
 
-- Freeze/archive a cut and summarize its canonical actor prefix once, without
-  tools, using that actor's model and summary output allowance. Preserve goals,
-  constraints, decisions, results, open work and lookup details. Raw arguments/
-  results enter the summary request; UI activity/expanded tool views do not.
-- No chunks, regeneration or mandatory heading schema. Reject empty summaries,
-  tool calls, oversized summary requests and summaries over 1 MiB. The complete
-  replacement must fit capacity/headroom; subscription output allowance is a
-  reserve, not a generation cap. Canonical summary instructions and templates
-  live in [prompt/compaction.yaml](../prompt/compaction.yaml).
-- Immutable private files belong to the main lineage:
+- Freeze/archive a cut; summarize its canonical actor prefix once, without tools,
+  using the actor's model and summary output allowance. The canonical
+  [summary instructions](../prompt/compaction.yaml) define handoff content.
+  Include raw arguments/results, not UI activity or expanded tool views.
+- No chunking, regeneration or mandatory headings. Reject empty/tool-calling
+  summaries, oversized summary requests and summaries over 1 MiB. Output reserves
+  follow [model metadata](models.md#budget-metadata); input/link templates live in
+  [prompt/compaction.yaml](../prompt/compaction.yaml).
+- Private immutable archives belong to the main lineage:
 
-```text
-<data-root>/lineages/<lineage-id>/compactions/<content-hash>.md
-<data-root>/lineages/<lineage-id>/compactions/<content-hash>.md.jsonl
-```
+  ```text
+  <data-root>/lineages/<lineage-id>/compactions/<content-hash>.md
+  <data-root>/lineages/<lineage-id>/compactions/<content-hash>.md.jsonl
+  ```
 
-- Main Markdown matches dense `/export`, omitting system bodies and duplicated
-  request payloads. JSONL preserves original envelopes, exact tool records and
-  instructions. Child archives hold selected child messages; `/btw` includes its
-  frozen main prefix. Preserve actor, replay and attachment data in JSONL.
-  Shared source history remains inspectable. Archives include retained suffixes;
-  later arrivals belong to another archive.
-- Append verified absolute Markdown/JSONL paths and grep/read guidance to the
-  summary. Drop opaque replay from the replacement context. Resupply full project
-  instructions and current runtime context at the next request; summaries do not
-  establish whether jobs still run.
+  Main Markdown matches dense `/export`, omitting system bodies/duplicated request
+  payloads. JSONL preserves exact envelopes, tool records, instructions, actors,
+  replay and attachments. Child archives contain selected child messages; `/btw`
+  includes its frozen main prefix. Source history remains inspectable. Include
+  retained suffixes; later arrivals belong to another archive.
+- Append verified absolute archive paths and grep/read guidance to the summary.
+  Drop opaque replay from replacement input; resupply full project instructions
+  and current runtime context next request. Summaries are not live-job status.
 
 ## Handoff
 
-- Only the compacting actor pauses requests; others may append committed tails.
-  Main handoff takes the routing gate, waits for file mutations and rechecks summary,
-  retained messages, committed tail, pending notices and fresh context together.
-  Abort if the assembled input does not fit.
+- Pause only the compacting actor; others may append committed tails. Main takes
+  the routing gate, waits for file mutations and rechecks summary, retained input,
+  committed tail, pending notices and fresh context together. Abort if they do
+  not fit capacity/headroom.
 - One SQLite transaction creates `{lineage-name}-cont-0`, then `-cont-1`, inserts
-  summary/suffix/tail and freezes the predecessor. Copies retain source/event
-  identities. Update the runtime session pointer before releasing the gate.
-  Summary-first input is a projection, not global event order. Retained checkpoints
-  stay undoable; pre-cut edits establish the continuation's floor.
-- Child handoff preserves ID/read-only policy and changes no main session/file tip/
-  undo checkpoint. Success commits one `child_compacted` with child/turn, archive
-  references and estimated usage, without the summary body. Failed handoffs publish
-  no success event and end that child turn. `/btw` uses the same algorithm but keeps
-  events/answers outside main input.
-- Main handoff refreshes estimated occupancy immediately. Previous reported usage
-  remains separately labeled. Summary inference counts once in run totals even
-  when the later handoff fails.
+  summary/suffix/tail and freezes the predecessor. Preserve source/event identity;
+  update the runtime session pointer before releasing the gate. Summary-first
+  input is a projection, not global event order. Retained checkpoints stay undoable;
+  pre-cut edits establish the continuation floor.
+- Child handoff preserves ID/read-only policy, leaving main session/file tip/undo
+  untouched. Commit one `child_compacted` on success with child/turn, archive links
+  and estimated usage, not the summary body. Failure ends the child turn without
+  a success event. `/btw` uses the same algorithm with events/answers outside main
+  input.
+- Refresh main estimated occupancy immediately; label previous reported usage
+  separately. Summary inference counts once in run totals even if handoff fails.
 
 ## Failure policy
 
 - Cancellation, transport interruption, timeout, rate limits, temporary server
-  failure or exhausted disk leave prior context usable. A later request may try
-  after conditions change; there is no automatic recovery attempt.
-- Other summary/budget/invariant/persistence failures invalidate the affected
-  context. Persist main failure and block the live process even if that write
-  fails; cancel jobs/timers/interactions. History stays inspectable/exportable.
-  Start or load another usable session; reloading never clears failure. Close a
-  failed child without invalidating main context.
-- Failed handoff never switches/freezes main history. Unused archives are disposable
-  with their lineage. Startup leaves saved execution records untouched. Manual
-  loading copies balanced context without repairing work or restoring jobs, timers
-  or pending clicks.
+  failure or exhausted disk leave prior context usable. Retry only on a later
+  request after conditions change, not automatic compaction recovery.
+- Other summary/budget/invariant/persistence failures invalidate affected context.
+  Persist main failure and block the live process even if that write fails;
+  cancel jobs/timers/interactions. History remains inspectable/exportable. Start
+  or load another usable session; reloading does not clear failure. Failed children
+  close without invalidating main.
+- Failed handoff never switches/freezes main history. Unused archives are
+  disposable with their lineage. Startup leaves execution records untouched;
+  manual loading copies balanced context without work repair or restored jobs,
+  timers or pending clicks.

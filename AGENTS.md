@@ -4,7 +4,8 @@ TTC is a coding agent for research workflows in the terminal. Read
 `README.md` before changing product behavior. Keep this file aligned with the
 features and constraints documented there as the project grows. Go is the
 implementation language. The repository contains a runnable initial runtime and
-specifications for remaining features. Linux hosts are the only supported platform. See `docs/design.md` for module and persistence contracts.
+specifications for remaining features. Linux hosts are the only supported
+platform. See `docs/design.md` for module and persistence contracts.
 
 ## Product constraints
 
@@ -15,10 +16,8 @@ specifications for remaining features. Linux hosts are the only supported platfo
 - Image and formula renders share a disposable filesystem cache; original image
   snapshots remain durable history assets. Pending image clicks are live runtime
   state and require explicit user confirmation; never restore them from history.
-- MathJax initializes through npm ci with embedded hash-pinned package metadata
-  under the user's XDG cache at `ttc/mathjax`; dependencies belong in cache, not
-  scratch or the executable. One warm Node process serves visible formulas.
-  Node/librsvg are optional host requirements; npm is needed for initial setup.
+- Keep MathJax optional and its dependencies outside scratch/the executable.
+  See `docs/mathjax.md` for setup, cache and worker contracts.
 - The sidebar reads copied runtime metadata. Refresh optional Git information
   outside the draw loop; derived asset work is bounded to visible rows.
 - Markdown rendering, including math, targets Kitty. Check any rendering
@@ -26,11 +25,9 @@ specifications for remaining features. Linux hosts are the only supported platfo
   is unavailable.
 - Basic shell and edit tools are part of the agent workflow. Preserve clear
   command results and file-edit feedback so users can inspect what happened.
-- `ttc rail` is an opt-in Bubblewrap filesystem launcher, with one persistent
-  tmux server per canonical workdir and shared host networking. Its instance
-  registry/supervisor is separate from agent history and live runtime jobs.
-  Preserve deny precedence, read-only rail configs, global service authorization,
-  and fail-closed setup; Docker socket access is not a host security boundary.
+- Keep rail's instance registry/supervisor separate from agent history and live
+  runtime jobs. For rail behavior and configuration constraints, consult the
+  `ttc-config` skill (`default-skills/ttc-config/SKILL.md`) and its README references.
 - Background subagents, commands, timers, and pending input are in-memory state
   of one active runtime. Compaction preserves it; explicit main-session changes
   and exit cancel it. Use tmux for long-running work. Keep live jobs/timers in

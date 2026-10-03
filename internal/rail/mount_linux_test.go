@@ -1,23 +1,25 @@
 package rail
 
 import (
+	"context"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
 
 type mountFixture struct {
 	root string
-	opts SandboxOptions
+	opts sandboxOptions
 	env  map[string]string
 }
 
 func newMountFixture(t *testing.T) *mountFixture {
 	t.Helper()
-	f := &mountFixture{root: t.TempDir(), env: map[string]string{}, opts: SandboxOptions{
+	f := &mountFixture{root: t.TempDir(), env: map[string]string{}, opts: sandboxOptions{
 		Workdir: "/home/user/projects/demo", Home: "/home/user", DataDir: "/home/user/.local/share/ttc",
 		CacheDir: "/home/user/.cache/ttc", ConfigHome: "/home/user/.config", Executable: "/opt/ttc",
 		SocketDir: "/registry/instance/private", Hostname: "host",
@@ -54,67 +56,80 @@ func (f *mountFixture) link(t *testing.T, path, target string) {
 		t.Fatal(err)
 	}
 }
-func (f *mountFixture) args(t *testing.T) []string {
+func (f *mountFixture) environment() sandboxEnvironment {
+	return sandboxEnvironment{
+		SSHAuthSock: f.env["SSH_AUTH_SOCK"], DockerHost: f.env["DOCKER_HOST"],
+		HistoryFile: f.env["HISTFILE"], ZDotDir: f.env["ZDOTDIR"],
+		Path: "/usr/bin:/bin", UID: 1000,
+	}
+}
+func (f *mountFixture) plan(ctx context.Context) (*sandboxPlan, error) {
+	spec, err := resolveSandboxSpec(ctx, f.opts, f.environment())
+	if err != nil {
+		return nil, err
+	}
+	return planSandbox(ctx, spec, f.root)
+}
+func (f *mountFixture) mustPlan(t *testing.T) *sandboxPlan {
 	t.Helper()
-	args, err := sandboxArgs(f.opts, f.root, func(key string) string { return f.env[key] })
+	plan, err := f.plan(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return args
+	return plan
 }
-func mountArgIndex(args []string, wanted ...string) int {
-	for i := 0; i+len(wanted) <= len(args); i++ {
-		if reflect.DeepEqual(args[i:i+len(wanted)], wanted) {
-			return i
-		}
-	}
-	return -1
-}
-func requireMountArgs(t *testing.T, args []string, wanted ...string) int {
+func requireFilesystemOperation(t *testing.T, plan *sandboxPlan, wanted filesystemOperation) int {
 	t.Helper()
-	index := mountArgIndex(args, wanted...)
+	index := slices.Index(plan.filesystem, wanted)
 	if index < 0 {
-		t.Fatalf("missing arguments %q in %q", wanted, args)
+		t.Fatalf("missing filesystem operation %+v in %+v", wanted, plan.filesystem)
 	}
 	return index
 }
 
+func requireEnvironmentChange(t *testing.T, plan *sandboxPlan, wanted environmentChange) {
+	t.Helper()
+	if !slices.Contains(plan.environment, wanted) {
+		t.Fatalf("missing environment change %+v in %+v", wanted, plan.environment)
+	}
+}
+
 func TestSandboxMinimalRootAndLifecycle(t *testing.T) {
 	f := newMountFixture(t)
-	args := f.args(t)
-	for _, option := range []string{"--unshare-user", "--unshare-pid", "--unshare-uts", "--new-session"} {
-		requireMountArgs(t, args, option)
+	plan := f.mustPlan(t)
+	if !slices.Equal(plan.namespaces, []namespaceKind{namespaceUser, namespaceProcess, namespaceHostname}) {
+		t.Fatalf("unexpected namespaces: %v", plan.namespaces)
 	}
-	requireMountArgs(t, args, "--hostname", "host-ttc")
-	requireMountArgs(t, args, "--cap-drop", "ALL")
-	for _, option := range []string{"--unshare-net", "--die-with-parent", "--as-pid-1", "--"} {
-		if mountArgIndex(args, option) >= 0 {
-			t.Errorf("unexpected %s", option)
-		}
+	if plan.hostname != "host-ttc" || !plan.newSession || !plan.dropCapabilities || plan.workdir != f.opts.Workdir {
+		t.Fatalf("unexpected sandbox settings: %+v", plan)
 	}
-	for i, arg := range args {
-		if (arg == "--bind" || arg == "--ro-bind") && args[i+1] == f.root {
+	for _, operation := range plan.filesystem {
+		if operation.kind == filesystemBind && operation.source == f.root {
 			t.Fatal("host root exposed")
 		}
+		if operation.source == f.host("/registry/instance") {
+			t.Fatal("host supervisor metadata directory exposed")
+		}
 	}
-	requireMountArgs(t, args, "--ro-bind", f.host("/usr"), "/usr")
-	requireMountArgs(t, args, "--ro-bind", f.host("/etc"), "/etc")
-	requireMountArgs(t, args, "--symlink", "usr/bin", "/bin")
-	requireMountArgs(t, args, "--symlink", "usr/lib", "/lib64")
-	requireMountArgs(t, args, "--proc", "/proc")
-	requireMountArgs(t, args, "--dev", "/dev")
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/usr"), dest: "/usr"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/etc"), dest: "/etc"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemSymlink, source: "usr/bin", dest: "/bin"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemSymlink, source: "usr/lib", dest: "/lib64"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemProc, dest: "/proc"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemDevices, dest: "/dev"})
 	for _, path := range []string{"/tmp", "/run", f.opts.Home} {
-		requireMountArgs(t, args, "--tmpfs", path)
+		requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemTmpfs, dest: path, writable: true})
+	}
+	shared := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemDirectory, dest: "/tmp/ttc", mode: fs.ModeSticky | 0777})
+	private := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemDirectory, dest: "/tmp/ttc/1000", mode: 0700})
+	if shared >= private {
+		t.Fatal("private scratch directory precedes its parent")
 	}
 	for _, path := range []string{f.opts.Workdir, f.opts.DataDir, f.opts.CacheDir} {
-		requireMountArgs(t, args, "--bind", f.host(path), path)
+		requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(path), dest: path, writable: true})
 	}
-	requireMountArgs(t, args, "--ro-bind", f.host(f.opts.Executable), f.opts.Executable)
-	requireMountArgs(t, args, "--bind", f.host(f.opts.SocketDir), "/run/ttc-rail")
-	if strings.Contains(strings.Join(args, "\n"), f.host("/registry/instance")+"\n") {
-		t.Fatal("host supervisor metadata directory exposed")
-	}
-	requireMountArgs(t, args, "--chdir", f.opts.Workdir)
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.Executable), dest: f.opts.Executable})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.SocketDir), dest: "/run/ttc-rail", writable: true})
 }
 
 func TestSandboxNonMergedSystemDirectories(t *testing.T) {
@@ -125,9 +140,9 @@ func TestSandboxNonMergedSystemDirectories(t *testing.T) {
 		}
 		f.dir(t, path)
 	}
-	args := f.args(t)
+	plan := f.mustPlan(t)
 	for _, path := range []string{"/bin", "/sbin", "/lib", "/lib64"} {
-		requireMountArgs(t, args, "--ro-bind", f.host(path), path)
+		requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(path), dest: path})
 	}
 }
 
@@ -135,9 +150,9 @@ func TestSandboxResolverSymlinkDoesNotExposeHostRun(t *testing.T) {
 	f := newMountFixture(t)
 	f.file(t, "/run/systemd/resolve/resolv.conf")
 	f.link(t, "/etc/resolv.conf", "/run/systemd/resolve/resolv.conf")
-	args := f.args(t)
-	requireMountArgs(t, args, "--ro-bind", f.host("/run/systemd/resolve/resolv.conf"), "/run/systemd/resolve/resolv.conf")
-	if mountArgIndex(args, "--ro-bind", f.host("/run"), "/run") >= 0 {
+	plan := f.mustPlan(t)
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/run/systemd/resolve/resolv.conf"), dest: "/run/systemd/resolve/resolv.conf"})
+	if slices.Contains(plan.filesystem, filesystemOperation{kind: filesystemBind, source: f.host("/run"), dest: "/run"}) {
 		t.Fatal("resolver exposed host runtime directory")
 	}
 }
@@ -161,20 +176,20 @@ func TestSandboxShellAndDiscoveryDefaults(t *testing.T) {
 		f.file(t, path)
 		paths = append(paths, path)
 	}
-	args := f.args(t)
+	plan := f.mustPlan(t)
 	for _, path := range paths {
-		requireMountArgs(t, args, "--ro-bind", f.host(path), path)
+		requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(path), dest: path})
 	}
-	if mountArgIndex(args, "--bind", f.host(f.opts.Home), f.opts.Home) >= 0 {
+	if slices.Contains(plan.filesystem, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.Home), dest: f.opts.Home, writable: true}) {
 		t.Fatal("host home exposed")
 	}
 }
 
 func TestSandboxDefaultMissingAndExplicitMissing(t *testing.T) {
 	f := newMountFixture(t)
-	f.args(t) // No shell, skills or global configuration files are required.
+	f.mustPlan(t) // No shell, skills or global configuration files are required.
 	f.opts.Policy.Mounts = []Mount{{Source: "/missing", Dest: "/extra"}}
-	if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "/extra") {
+	if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "/extra") {
 		t.Fatalf("explicit missing source error: %v", err)
 	}
 }
@@ -190,14 +205,14 @@ func TestSandboxMountOrderAndExactOverride(t *testing.T) {
 		{Source: "/other/parent", Dest: "/extra"},
 		{Source: "/other/bashrc", Dest: "/home/user/.bashrc", Writable: true},
 	}
-	args := f.args(t)
-	parent := requireMountArgs(t, args, "--ro-bind", f.host("/other/parent"), "/extra")
-	child := requireMountArgs(t, args, "--bind", f.host("/other/child"), "/extra/child")
+	plan := f.mustPlan(t)
+	parent := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/other/parent"), dest: "/extra"})
+	child := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/other/child"), dest: "/extra/child", writable: true})
 	if parent > child {
 		t.Fatal("descendant mounted before ancestor")
 	}
-	requireMountArgs(t, args, "--bind", f.host("/other/bashrc"), "/home/user/.bashrc")
-	if mountArgIndex(args, "--ro-bind", f.host("/home/user/.bashrc"), "/home/user/.bashrc") >= 0 {
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/other/bashrc"), dest: "/home/user/.bashrc", writable: true})
+	if slices.Contains(plan.filesystem, filesystemOperation{kind: filesystemBind, source: f.host("/home/user/.bashrc"), dest: "/home/user/.bashrc"}) {
 		t.Fatal("default was not replaced by exact destination override")
 	}
 }
@@ -214,11 +229,11 @@ func TestSandboxMountOrderAccountsForDestinationSymlinks(t *testing.T) {
 		{Source: "/other/tool", Dest: "/extra/link", Writable: true},
 		{Source: "/other/target", Dest: "/target"},
 	}
-	args := f.args(t)
-	usr := requireMountArgs(t, args, "--ro-bind", f.host("/usr"), "/usr")
-	tool := requireMountArgs(t, args, "--bind", f.host("/other/tool"), "/usr/bin/tool")
-	target := requireMountArgs(t, args, "--ro-bind", f.host("/other/target"), "/target")
-	redirected := requireMountArgs(t, args, "--bind", f.host("/other/tool"), "/target/nested")
+	plan := f.mustPlan(t)
+	usr := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/usr"), dest: "/usr"})
+	tool := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/other/tool"), dest: "/usr/bin/tool", writable: true})
+	target := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/other/target"), dest: "/target"})
+	redirected := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/other/tool"), dest: "/target/nested", writable: true})
 	if usr >= tool || target >= redirected {
 		t.Fatal("a canonical ancestor hid the descendant overlay")
 	}
@@ -228,7 +243,7 @@ func TestSandboxRejectsAmbiguousCanonicalDestinations(t *testing.T) {
 	f := newMountFixture(t)
 	f.file(t, "/other/tool")
 	f.opts.Policy.Mounts = []Mount{{Source: "/other/tool", Dest: "/bin/tool"}, {Source: "/other/tool", Dest: "/usr/bin/tool"}}
-	if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "same path") {
+	if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "same path") {
 		t.Fatalf("ambiguous alias destinations: %v", err)
 	}
 }
@@ -241,14 +256,14 @@ func TestSandboxConfigsReadonlyAfterWritableMountsAndSymlinkAliases(t *testing.T
 	f.link(t, link, "settings.json")
 	f.opts.Policy.ConfigFiles = []string{link}
 	f.opts.Policy.Mounts = []Mount{{Source: f.opts.Workdir, Dest: "/alias", Writable: true}, {Source: config, Dest: "/direct", Writable: true}}
-	args := f.args(t)
-	writable := requireMountArgs(t, args, "--bind", f.host(f.opts.Workdir), f.opts.Workdir)
-	readonly := requireMountArgs(t, args, "--ro-bind", f.host(config), config)
+	plan := f.mustPlan(t)
+	writable := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.Workdir), dest: f.opts.Workdir, writable: true})
+	readonly := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(config), dest: config})
 	if readonly <= writable {
 		t.Fatal("mandatory config overlay precedes writable workspace")
 	}
-	requireMountArgs(t, args, "--ro-bind", f.host(config), "/alias/settings.json")
-	requireMountArgs(t, args, "--ro-bind", f.host(config), "/direct")
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(config), dest: "/alias/settings.json"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(config), dest: "/direct"})
 }
 
 func TestSandboxAbsoluteSourceSymlinksAreFixtureRooted(t *testing.T) {
@@ -256,9 +271,9 @@ func TestSandboxAbsoluteSourceSymlinksAreFixtureRooted(t *testing.T) {
 	f.file(t, "/secrets/bashrc")
 	f.link(t, "/home/user/.bashrc", "/secrets/bashrc")
 	f.opts.Policy.Mounts = []Mount{{Source: "/secrets", Dest: "/allowed", Writable: true}}
-	args := f.args(t)
-	requireMountArgs(t, args, "--ro-bind", f.host("/secrets/bashrc"), "/home/user/.bashrc")
-	requireMountArgs(t, args, "--ro-bind", f.host("/secrets/bashrc"), "/allowed/bashrc")
+	plan := f.mustPlan(t)
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/secrets/bashrc"), dest: "/home/user/.bashrc"})
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/secrets/bashrc"), dest: "/allowed/bashrc"})
 }
 
 func TestSandboxDenyWinsAfterAllMounts(t *testing.T) {
@@ -270,16 +285,22 @@ func TestSandboxDenyWinsAfterAllMounts(t *testing.T) {
 	f.opts.Policy.ConfigFiles = []string{file}
 	f.opts.Policy.Mounts = []Mount{{Source: "/outside", Dest: "/extra", Writable: true}, {Source: "/outside/child", Dest: "/extra/child", Writable: true}}
 	f.opts.Policy.Denies = []string{"/extra/child", file, "/extra"}
-	args := f.args(t)
-	denyDir := requireMountArgs(t, args, "--tmpfs", "/extra", "--remount-ro", "/extra")
-	denyFile := requireMountArgs(t, args, "--ro-bind", f.host("/dev/null"), file)
-	for _, mount := range [][]string{{"--bind", f.host("/outside/child"), "/extra/child"}, {"--ro-bind", f.host(file), file}} {
-		if requireMountArgs(t, args, mount...) >= denyDir || requireMountArgs(t, args, mount...) >= denyFile {
+	plan := f.mustPlan(t)
+	denyDir := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemTmpfs, dest: "/extra"})
+	denyFile := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/dev/null"), dest: file})
+	for _, mount := range []filesystemOperation{
+		{kind: filesystemBind, source: f.host("/outside/child"), dest: "/extra/child", writable: true},
+		{kind: filesystemBind, source: f.host(file), dest: file},
+	} {
+		index := requireFilesystemOperation(t, plan, mount)
+		if index >= denyDir || index >= denyFile {
 			t.Fatal("deny masks must follow all mounts")
 		}
 	}
-	if mountArgIndex(args, "--tmpfs", "/extra/child") >= 0 {
-		t.Fatal("redundant nested deny can reopen denied ancestor")
+	for _, operation := range plan.filesystem {
+		if operation.kind == filesystemTmpfs && operation.dest == "/extra/child" {
+			t.Fatal("redundant nested deny can reopen denied ancestor")
+		}
 	}
 }
 
@@ -288,7 +309,7 @@ func TestSandboxDenySymlinkMasksItsVisibleTarget(t *testing.T) {
 	f.file(t, filepath.Join(f.opts.Workdir, "secret"))
 	f.link(t, filepath.Join(f.opts.Workdir, "link"), "secret")
 	f.opts.Policy.Denies = []string{filepath.Join(f.opts.Workdir, "link")}
-	requireMountArgs(t, f.args(t), "--ro-bind", f.host("/dev/null"), filepath.Join(f.opts.Workdir, "secret"))
+	requireFilesystemOperation(t, f.mustPlan(t), filesystemOperation{kind: filesystemBind, source: f.host("/dev/null"), dest: filepath.Join(f.opts.Workdir, "secret")})
 }
 
 func TestSandboxRejectsWorkspaceAndReservedDenies(t *testing.T) {
@@ -296,7 +317,7 @@ func TestSandboxRejectsWorkspaceAndReservedDenies(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			f := newMountFixture(t)
 			f.opts.Policy.Denies = []string{path}
-			if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil {
+			if _, err := f.plan(context.Background()); err == nil {
 				t.Fatal("accepted conflicting deny")
 			}
 		})
@@ -308,7 +329,7 @@ func TestSandboxRejectsReservedMountsIncludingSymlinkRedirect(t *testing.T) {
 		t.Run(dest, func(t *testing.T) {
 			f := newMountFixture(t)
 			f.opts.Policy.Mounts = []Mount{{Source: "/usr", Dest: dest}}
-			if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil {
+			if _, err := f.plan(context.Background()); err == nil {
 				t.Fatal("accepted reserved mount")
 			}
 		})
@@ -316,7 +337,7 @@ func TestSandboxRejectsReservedMountsIncludingSymlinkRedirect(t *testing.T) {
 	f := newMountFixture(t)
 	f.link(t, filepath.Join(f.opts.Workdir, "redirect"), "/run/ttc-rail")
 	f.opts.Policy.Mounts = []Mount{{Source: "/usr", Dest: filepath.Join(f.opts.Workdir, "redirect")}}
-	if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "reserved") {
+	if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("symlink redirected mount should fail: %v", err)
 	}
 }
@@ -331,14 +352,14 @@ func TestSandboxDockerSystemSocketAndDeny(t *testing.T) {
 	defer listener.Close()
 	f.opts.Policy.Docker = true
 	f.opts.Policy.Denies = []string{"/var/run/docker.sock"}
-	args := f.args(t)
-	bind := requireMountArgs(t, args, "--bind", f.host("/run/docker.sock"), "/run/docker.sock")
-	deny := requireMountArgs(t, args, "--ro-bind", f.host("/dev/null"), "/run/docker.sock")
+	plan := f.mustPlan(t)
+	bind := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/run/docker.sock"), dest: "/run/docker.sock", writable: true})
+	deny := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host("/dev/null"), dest: "/run/docker.sock"})
 	if deny <= bind {
 		t.Fatal("Docker authorization overrode deny")
 	}
 	f.env["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
-	if _, err := sandboxArgs(f.opts, f.root, func(key string) string { return f.env[key] }); err == nil || !strings.Contains(err.Error(), "DOCKER_HOST") {
+	if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "DOCKER_HOST") {
 		t.Fatalf("unsupported Docker host: %v", err)
 	}
 }
@@ -353,11 +374,11 @@ func TestDockerAccessGate(t *testing.T) {
 			}
 			f.link(t, "/socket-alias", "/run/docker.sock")
 			f.opts.Policy.Mounts = []Mount{{Source: source, Dest: "/extra", Writable: writable}}
-			if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "Docker") {
+			if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "Docker") {
 				t.Fatalf("unauthorized Docker mount accepted: %s rw=%v: %v", source, writable, err)
 			}
 			f.opts.Policy.Docker = true
-			f.args(t)
+			f.mustPlan(t)
 			listener.Close()
 		}
 	}
@@ -370,7 +391,7 @@ func TestSandboxDockerRejectsMissingOrNonSocket(t *testing.T) {
 			f.file(t, "/run/docker.sock")
 		}
 		f.opts.Policy.Docker = true
-		if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "socket") {
+		if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "socket") {
 			t.Fatalf("missing/non-socket Docker source: %v", err)
 		}
 	}
@@ -380,12 +401,12 @@ func TestSandboxRequiredPathsAndExecutableInsideWorkdir(t *testing.T) {
 	f := newMountFixture(t)
 	f.opts.Executable = filepath.Join(f.opts.Workdir, "ttc")
 	f.file(t, f.opts.Executable)
-	args := f.args(t)
-	requireMountArgs(t, args, "--ro-bind", f.host(f.opts.Executable), f.opts.Executable)
+	plan := f.mustPlan(t)
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.Executable), dest: f.opts.Executable})
 	if err := os.RemoveAll(f.host(f.opts.DataDir)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "writable directory") {
+	if _, err := f.plan(context.Background()); err == nil || !strings.Contains(err.Error(), "writable directory") {
 		t.Fatalf("missing required writable directory: %v", err)
 	}
 }
@@ -395,12 +416,12 @@ func TestSandboxGlobalConfigSymlinkTargetIsReadonly(t *testing.T) {
 	target := filepath.Join(f.opts.Workdir, "search-settings.json")
 	f.file(t, target)
 	f.link(t, filepath.Join(f.opts.ConfigHome, "ttc", "web-search.json"), target)
-	args := f.args(t)
-	readonly := requireMountArgs(t, args, "--ro-bind", f.host(target), target)
-	writable := requireMountArgs(t, args, "--bind", f.host(f.opts.Workdir), f.opts.Workdir)
+	plan := f.mustPlan(t)
+	readonly := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(target), dest: target})
+	writable := requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.Workdir), dest: f.opts.Workdir, writable: true})
 	// The initial entrypoint overlay can precede the writable workspace, but
 	// alias protection must overlay it again after all writable mounts.
-	if mountArgIndex(args[writable+3:], "--ro-bind", f.host(target), target) < 0 {
+	if !slices.Contains(plan.filesystem[writable+1:], filesystemOperation{kind: filesystemBind, source: f.host(target), dest: target}) {
 		t.Fatalf("configuration source was writable after workspace overlay (first RO mount %d)", readonly)
 	}
 }
@@ -409,14 +430,14 @@ func TestSandboxZdotdirHomeDoesNotExposeHostHome(t *testing.T) {
 	f := newMountFixture(t)
 	f.env["ZDOTDIR"] = f.opts.Home
 	f.file(t, filepath.Join(f.opts.Home, ".zshrc"))
-	args := f.args(t)
-	if mountArgIndex(args, "--ro-bind", f.host(f.opts.Home), f.opts.Home) >= 0 {
+	plan := f.mustPlan(t)
+	if slices.Contains(plan.filesystem, filesystemOperation{kind: filesystemBind, source: f.host(f.opts.Home), dest: f.opts.Home}) {
 		t.Fatal("ZDOTDIR=$HOME exposed the entire host home")
 	}
-	requireMountArgs(t, args, "--ro-bind", f.host(filepath.Join(f.opts.Home, ".zshrc")), filepath.Join(f.opts.Home, ".zshrc"))
+	requireFilesystemOperation(t, plan, filesystemOperation{kind: filesystemBind, source: f.host(filepath.Join(f.opts.Home, ".zshrc")), dest: filepath.Join(f.opts.Home, ".zshrc")})
 	for _, value := range []string{"relative", "/", f.opts.Workdir} {
 		f.env["ZDOTDIR"] = value
-		if _, err := sandboxArgs(f.opts, f.root, func(key string) string { return f.env[key] }); err == nil {
+		if _, err := f.plan(context.Background()); err == nil {
 			t.Fatalf("accepted unsafe ZDOTDIR %q", value)
 		}
 	}
@@ -446,7 +467,7 @@ func TestSandboxMandatoryConfigAndSystemErrors(t *testing.T) {
 			case "workspace contains home":
 				f.opts.Workdir = f.opts.Home
 			}
-			if _, err := sandboxArgs(f.opts, f.root, func(string) string { return "" }); err == nil {
+			if _, err := f.plan(context.Background()); err == nil {
 				t.Fatal("accepted invalid sandbox options")
 			}
 		})

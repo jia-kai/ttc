@@ -68,3 +68,24 @@ func runRail(args []string) error {
 	defer cancel()
 	return rail.Run(ctx, opts)
 }
+
+// Only TTC drops agent credentials. Rail's launcher and private service
+// processes must retain the host socket so interactive shells can forward it.
+func applySSHAuthSockPolicy() error {
+	socket, present := os.LookupEnv("SSH_AUTH_SOCK")
+	if err := os.Unsetenv("SSH_AUTH_SOCK"); err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	allowed, err := rail.AllowSSHAuthSock(home, os.Getenv("XDG_CONFIG_HOME"))
+	if err != nil {
+		return err
+	}
+	if allowed && present {
+		return os.Setenv("SSH_AUTH_SOCK", socket)
+	}
+	return nil
+}

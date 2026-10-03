@@ -4,14 +4,15 @@ TTC is an opinionated coding agent for terminal-native, research-heavy coding
 workflows on headless servers. If you agree with the following, then TTC may
 be helpful to you:
 
-* Agents should be collaborative tools instead of owning the full project.
+* Agents should be collaborative tools, not owners of the whole project.
 * A minimalistic, fully terminal-based workflow is productive. Agents should
   live in tmux as normal processes instead of having their own background
   session management or a lifespan longer than their TUIs. No need for
   complications like a server-client agent architecture.
-* Agents should not decide the "safety" of individual tool calls or impose
-  permissions. Users choose their isolation boundary: run directly, use the
-  opt-in `ttc rail` filesystem wrapper, or provide an external container.
+* Agents should not try to decide the safety of individual tool calls. Users
+  choose their isolation boundary: run directly, use the opt-in `ttc rail`
+  [filesystem wrapper](#filesystem-guardrails-with-rail), or provide an external
+  container. Agents should be fully autonomous within the predefined boundary.
 * Agents should provide a small set of useful LLM-facing tools to make effective
   use of LLM capabilities.
 * Agents only need to run on Linux hosts.
@@ -28,7 +29,7 @@ TTC also supports the following:
   raw messages and saved tool details.
 
 TTC reads `AGENTS.md` and `.agents/skills`. TTC deliberately omits things like
-MCP, plugins, different modes like plan mode.
+MCP, plugins, and modes such as plan mode.
 
 The [requirements](docs/requirement.md), [implementation design](docs/design.md),
 [tool contracts](docs/tools.md), [compaction design](docs/compaction.md), and
@@ -95,8 +96,9 @@ install -m 600 /dev/null "${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json"
 
 Edit that file to contain `{"api_key":"YOUR_EXA_KEY"}`. Optional `endpoint`
 selects an HTTP(S) backend URL. `--web-search-config PATH` selects another file;
-restart TTC after changes. Keep credential files private (use mode 0600). No key is
-supplied through the `web_search` tool arguments.
+restart TTC after changes. Inside rail, also recreate it if the host replaced an
+imported config file; see [restart rules](default-skills/ttc-config/SKILL.md#restart-rules).
+Keep credential files private (mode 0600). No key is supplied through tool arguments.
 
 Use Kitty as the terminal client for TTC's graphics features. When
 running through tmux, enable graphics passthrough in your tmux configuration:
@@ -136,11 +138,13 @@ user namespaces.
 
 Host executables/libraries and `/etc` are read-only. The workdir and TTC's
 existing data/cache directories are writable. Home, `/tmp` and `/run` are
-private. Existing Bash/Zsh startup files, Zsh/tmux config directories, TTC
-configuration, and ancestor AGENTS.md/skill directories are imported read-only.
-Configs that source other home files may need additional allows. The hostname is
-`{hostname}-ttc`, and the process namespace is private. **Networking is shared
-with the host:** host services, the LAN and the Internet remain accessible.
+private. Existing Bash/Zsh startup files, `~/.gitconfig`, Zsh/tmux/Neovim config
+directories (including `~/.config/nvim`), TTC configuration, and ancestor
+`AGENTS.md` files and skill directories are imported read-only. Existing Zsh
+history is shared writable.
+The hostname is `{hostname}-ttc`, and the process namespace is private.
+**Networking is shared with the host:** host services, the LAN and the Internet
+remain accessible.
 
 Detach to keep an instance running; rerun `ttc rail` in that workdir to attach.
 Additional tmux sessions share its sandbox; attach uses tmux's usual session
@@ -153,15 +157,12 @@ run `tmux kill-server` inside it. Runtime records live under
 Rail reads `${XDG_CONFIG_HOME:-~/.config}/ttc/rail.json`, then
 `<workdir>/ttc-rail.json` (no ancestor search). Allow/deny lists combine;
 project allows replace global allows with the same destination. **Denies always
-win.** Config files must be regular files, not symlinks, so their named
-entrypoints can be mounted read-only inside the sandbox. Changes apply only
-after the instance is stopped and recreated, not on reattachment.
-
-A global config can authorize Docker without enabling it everywhere:
+win.** Below is an example global config:
 
 ```json
 {
-  "authorize_services": ["docker"],
+  "authorize_services": ["docker", "ssh-agent"],
+  "ttc_allow_ssh_auth_sock": false,
   "allow": ["~/tools"],
   "deny": ["~/.ssh"]
 }
@@ -174,29 +175,28 @@ A project config might contain:
   "allow": [
     {"source": "/datasets", "dest": "/data"},
     {"source": "../results", "mode": "rw"},
-    "docker"
+    "docker",
+    "ssh-agent"
   ],
   "deny": ["./secrets", {"dest": "/data/private"}]
 }
 ```
 
-`docker` is the only service name currently supported: it mounts
-`/var/run/docker.sock` read-write. Requests require `authorize_services:
-["docker"]` in the global config; projects cannot authorize themselves. Ordinary
-allows exposing the standard socket or its parent directory also require the
-enabled, authorized service, even if read-only. `deny: ["docker"]` disables that
-service. Custom `DOCKER_HOST` endpoints are not supported by the service
-shorthand.
+**TTC itself unsets `SSH_AUTH_SOCK` by default**, inside or outside rail, so tool
+processes do not inherit SSH-agent access. Set `ttc_allow_ssh_auth_sock: true`
+in **global** `rail.json` to preserve it; project config cannot opt in.
 
 **Rail is write containment, not a complete security boundary.** The workspace,
 TTC credentials/history/cache, and any additional read-write allows remain
 modifiable. Read-only secrets can still be read and sent over the shared
 network. Docker access can grant control of the host and defeats filesystem
-isolation.
+isolation. SSH-agent access permits authentication/signing with loaded keys;
+authorize it only for trusted workloads.
 
 The bundled `ttc-config` skill helps the agent configure supported rail,
 web-search and launch settings. Inside rail, read-only config changes must be
 made from the host; the skill does not bypass that boundary.
+For implementation boundaries, see [rail layering](docs/design.md#rail-layering).
 
 ### Interactive usage
 
@@ -231,6 +231,7 @@ requests:
 
 ```sh
 make test
+make full-test                # all automated suites; prerequisites in tests/README.md
 make check                    # race tests and vet
 make integration              # PTY workflows and automated demos; needs Python 3
 make rail-integration         # real Bubblewrap/tmux PTY regression; needs user namespaces

@@ -176,8 +176,8 @@ func TestListLiveSessionsAndIgnoreStale(t *testing.T) {
 }
 
 func TestTmuxStartupQuotesAndLifetimeSettings(t *testing.T) {
-	spec := launchSpec{Home: t.TempDir(), ConfigHome: t.TempDir(), Workdir: "/project/with 'quotes'"}
-	config := tmuxStartup(spec)
+	plan := sandboxPlan{workdir: "/project/with 'quotes'", tmuxConfig: "/home/user/.tmux.conf"}
+	config := tmuxStartup(plan)
 	for _, want := range []string{"exit-unattached off", "exit-empty on", "new-session -d -s rail", "#H"} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("missing %s: %s", want, config)

@@ -332,6 +332,9 @@ def main():
         key('end')
         capture('shell-output')
         key('esc')
+        # Wait for bare Escape to cross tmux before sending a leading slash;
+        # otherwise the next command can be decoded as an Alt+/ key sequence.
+        wait('Esc closes', present=False)
         send(f'/inspect {job_read}\r')
         wait('Parameters:')
         key('end')
@@ -340,12 +343,14 @@ def main():
         assert 'showing tail' not in result_text, result_text
         capture('job-read-output')
         key('esc')
+        wait('Esc closes', present=False)
         send(f'/inspect {prompt}\r')
         wait('You are TTC')
         capture('system-prompt')
         key('end')
         capture('system-prompt-end')
         key('esc')
+        wait('Esc closes', present=False)
         send('/rename Long session title for scrolling TAIL-SEEN\r')
         wait('TAIL-SEEN')  # A local rename emits no transcript title; this is the scrolling sidebar tail.
         capture('sidebar-title-tail')

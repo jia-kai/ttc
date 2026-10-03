@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real Bubblewrap/tmux regression; no credentials or Internet access required."""
+import argparse
 import fcntl
 import hashlib
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import pty
 import select
 import shlex
+import shutil
 import signal
 import socket
 import struct
@@ -22,7 +24,9 @@ from scratch import private_scratch
 
 
 def main():
-    binary = str(Path('./ttc').resolve())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', default='./ttc', help='TTC executable to test')
+    binary = str(Path(parser.parse_args().binary).resolve())
     root = Path(tempfile.mkdtemp(prefix='rail-', dir=private_scratch()))
     home, project, runtime = root / 'home', root / "project 'quoted'", root / 'r'
     for path in (home, project, runtime, home / '.config', home / '.config/ttc'):
@@ -36,13 +40,27 @@ def main():
     (home / '.bashrc').write_text('PS1="rail-test$ "\n')
     (home / '.zshrc').write_text('# read-only fixture\n')
     (home / '.tmux.conf').write_text('set -g history-limit 2000\n')
-    global_config.write_text(json.dumps({'allow': [str(outside)], 'deny': []}))
+    (home / '.gitconfig').write_text('[user]\n\tname = Rail Fixture\n')
+    (home / '.config/nvim').mkdir()
+    (home / '.config/nvim/init.lua').write_text('-- read-only fixture\n')
+    (home / '.zsh_history').write_text('history fixture\n')
+    agent_path = root / 'agent.sock'
+    agent = socket.socket(socket.AF_UNIX)
+    agent.bind(str(agent_path))
+    agent.listen()
+    agent.settimeout(15)
+    global_config.write_text(json.dumps({'authorize_services': ['ssh-agent'],
+                                        'allow': [str(outside), 'ssh-agent'], 'deny': []}))
     local_config.write_text(json.dumps({'deny': ['secret']}))
     env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'),
                XDG_CACHE_HOME=str(home / '.cache'), XDG_DATA_HOME=str(home / '.local/share'),
-               XDG_RUNTIME_DIR=str(runtime), SHELL='/bin/bash', TERM='xterm-256color')
-    for key in ('TMUX', 'TMUX_PANE', 'ZDOTDIR', 'DOCKER_HOST'):
+               XDG_RUNTIME_DIR=str(runtime), SHELL='/bin/bash', TERM='xterm-256color',
+               SSH_AUTH_SOCK=str(agent_path))
+    for key in ('TMUX', 'TMUX_PANE', 'ZDOTDIR', 'DOCKER_HOST', 'HISTFILE', 'TTC_DATA_DIR'):
         env.pop(key, None)
+    for key in list(env):
+        if key.startswith('GIT_CONFIG'):
+            env.pop(key)
     clients, sockets = [], []
     logs = {}
 
@@ -138,6 +156,17 @@ def main():
 
     thread = threading.Thread(target=serve_network, daemon=True)
     thread.start()
+
+    def serve_agent():
+        try:
+            conn, _ = agent.accept()
+            with conn:
+                conn.sendall(b'forwarded-agent-ok')
+        except OSError:
+            pass
+
+    agent_thread = threading.Thread(target=serve_agent, daemon=True)
+    agent_thread.start()
     try:
         assert run(binary, 'rail', '--list').stdout == 'No live rail sessions.\n'
         sock = socket_for(project)
@@ -187,13 +216,19 @@ for path in json.loads(os.environ['RAIL_STATE']):
     Path(path, 'rail-probe').write_text('ok')
 result['private-home'] = not Path.home().joinpath('unimported').exists()
 result['uid'] = os.getuid()
+result['agent-path'] = os.environ.get('SSH_AUTH_SOCK')
+with socket.socket(socket.AF_UNIX) as s:
+    s.connect(os.environ['SSH_AUTH_SOCK'])
+    result['agent'] = s.recv(100).decode()
+with Path.home().joinpath('.zsh_history').open('a') as f:
+    f.write('rail history append\\n')
 with socket.create_connection(('127.0.0.1', int(os.environ['RAIL_PORT'])), timeout=5) as s:
     result['network'] = s.recv(100).decode()
 Path('probe.json').write_text(json.dumps(result))
 ''')
         (home / 'unimported').write_text('not mounted')
         state = [str(home / '.local/share/ttc'), str(home / '.cache/ttc')]
-        protected = [str(global_config), str(local_config), str(outside), str(home / '.bashrc'), str(home / '.zshrc'), str(home / '.tmux.conf')]
+        protected = [str(global_config), str(local_config), str(outside), str(home / '.bashrc'), str(home / '.zshrc'), str(home / '.tmux.conf'), str(home / '.gitconfig'), str(home / '.config/nvim/init.lua')]
         probe_cmd = 'env ' + ' '.join(shlex.quote(k + '=' + v) for k, v in {
             'RAIL_PROTECTED': json.dumps(protected), 'RAIL_STATE': json.dumps(state),
             'RAIL_PORT': str(listener.getsockname()[1]),
@@ -204,9 +239,27 @@ Path('probe.json').write_text(json.dumps(result))
         assert all(result[path] == 'readonly' for path in protected), result
         assert result['secret'] and result['private-home'], result
         assert result['uid'] == os.getuid() and result['network'] == 'host-network-ok', result
+        assert result['agent-path'] == '/run/ssh-agent.sock' and result['agent'] == 'forwarded-agent-ok', result
+        assert (home / '.zsh_history').read_text() == 'history fixture\nrail history append\n'
         assert outside.read_text() == 'outside sentinel'
         assert (project / 'workspace-write').read_text() == 'ok'
+        if shutil.which('git'):
+            tmux(sock, 'new-window', '-d', '-n', 'git-config', '-c', str(project),
+                 "git config --global user.name > git-config-name; touch git-config.done")
+            wait_file(project / 'git-config.done')
+            assert (project / 'git-config-name').read_text().strip() == 'Rail Fixture'
         assert all(Path(path, 'rail-probe').read_text() == 'ok' for path in state)
+        if shutil.which('zsh'):
+            # File binds cannot be atomically replaced. Exercise the documented
+            # in-place save setting with real Zsh, not just a Python append.
+            zsh_cmd = "zsh -if -c " + shlex.quote(
+                'unsetopt HIST_SAVE_BY_COPY; HISTFILE=$HOME/.zsh_history; '
+                'SAVEHIST=100; fc -R; print -s -- rail-zsh-save; fc -W')
+            tmux(sock, 'new-window', '-d', '-n', 'history', '-c', str(project),
+                 zsh_cmd + ' > zsh-save.log 2>&1; touch zsh-save.done')
+            wait_file(project / 'zsh-save.done')
+            assert (project / 'zsh-save.log').read_text() == ''
+            assert 'rail-zsh-save' in (home / '.zsh_history').read_text()
         # TTC itself is available in the sandbox and uses the shared data mount.
         (project / 'script.json').write_text('[]')
         app_cmd = 'printf "/quit\\n" | ' + shlex.quote(binary) + ' --plain --offline-script script.json > app.log 2>&1; touch app.done'
@@ -231,6 +284,8 @@ Path('probe.json').write_text(json.dumps(result))
         assert len(tmux(sock, 'list-clients').splitlines()) == 2
         assert tmux(sock, 'display-message', '-p', '#{pid}').strip() == original_pid
         assert run(binary, 'rail', '--list').stdout.count(str(project)) == 1
+        # Host attachment environment must never replace the instance socket.
+        assert tmux(sock, 'show-environment', 'SSH_AUTH_SOCK').strip() == 'SSH_AUTH_SOCK=/run/ssh-agent.sock'
         # detach-client -E replaces the client with a shell command. That command
         # must still execute inside rail, not in the host-side launcher.
         replacement = project / 'detach.py'
@@ -272,10 +327,21 @@ Path(os.environ['RAIL_RESULT']).write_text(json.dumps(result))
 
         # Concurrent creation converges on a single server.
         local_config.write_text('{}')
+        global_config.write_text(json.dumps({'authorize_services': ['ssh-agent'],
+                                            'allow': [str(outside), 'ssh-agent'],
+                                            'deny': ['ssh-agent', str(home / '.config/nvim')]}))
         fourth, fifth = start(project), start(alias)
         wait_attach(fourth, sock)
         wait_attach(fifth, sock)
         assert run(binary, 'rail', '--list').stdout.count(str(project)) == 1
+        denied_probe = "python3 -c " + shlex.quote(
+            "import json, os; from pathlib import Path; "
+            "Path('denied.json').write_text(json.dumps({"
+            "'socket': os.environ.get('SSH_AUTH_SOCK'), "
+            "'nvim': list(str(p) for p in Path.home().joinpath('.config/nvim').iterdir())}))")
+        tmux(sock, 'new-window', '-d', '-n', 'denied', '-c', str(project), denied_probe)
+        wait_file(project / 'denied.json')
+        assert json.loads((project / 'denied.json').read_text()) == {'socket': None, 'nvim': []}
         detach(fourth, sock)
         interrupted = start(project)
         wait_attach(interrupted, sock)
@@ -295,6 +361,7 @@ Path(os.environ['RAIL_RESULT']).write_text(json.dumps(result))
         raise
     finally:
         listener.close()
+        agent.close()
         for sock in sockets:
             run('tmux', '-S', str(sock), 'kill-server', check=False)
         for client in clients:

@@ -1,11 +1,10 @@
 # TTC v1 design
 
-TTC is a Go application for Linux hosts. This design defines the complete
-first-version target; README.md describes setup and current behavior. TTC uses
-one process, one active main session, and SQLite for history and reversible
-file edits. [Requirements](requirement.md), [tool contracts](tools.md),
-[compaction](compaction.md), and the [system prompt](system_prompt.md) define
-the corresponding user and model behavior.
+TTC targets Linux with one Go process, one active main session and SQLite history/
+reversible edits. This defines the complete v1 target; [README](../README.md)
+describes setup and current behavior. Related contracts:
+[requirements](requirement.md), [tools](tools.md), [compaction](compaction.md),
+[system prompt](system_prompt.md).
 
 ## Boundaries
 
@@ -17,23 +16,19 @@ the corresponding user and model behavior.
 | File snapshots and undo cursors               | Queued prompts, steers, questions and armed image clicks |
 | Attachments and compaction archives           | Child contexts and concurrency slots                     |
 
-- History records execution; loading never restarts jobs or timers. The agent
-  runtime has no daemon, IPC service, process adoption or durable scheduler.
-  Long-lived research work belongs in tmux; detaching keeps TTC running. The
-  opt-in `rail` launcher has a separate ephemeral sandbox supervisor and tmux
-  socket registry; neither restores agent jobs or conversations.
-- Exit, `/new`, `/clear` and loading another main session cancel/join model work,
-  children, shell/LSP process groups and timers. Inspecting a child stays inside
-  the current runtime.
-- Compaction changes conversation context inside that runtime, preserving live
-  handles, jobs, timers and queued input. Completion handlers resolve its current
-  session ID when committing. A routing read lock covers child commits and file
-  tools; main handoff takes its write lock. Streams and blocking non-file tools
-  never hold it. Coding instructions stay fixed; changed runtime state is appended.
-- Graceful shutdown records interruptions and bounded output. Restart marks
-  unfinished calls/turns interrupted without relaunching work or firing missed
-  timers. An abrupt OS kill offers no process-cleanup guarantee. Managed commands
-  must stay in their process group; daemonization is outside the shell contract.
+- History records execution, never restarts it. No agent daemon, IPC service,
+  process adoption or durable scheduler. Long-lived work belongs in tmux;
+  detaching keeps TTC running. `rail` has a separate ephemeral sandbox supervisor/
+  tmux socket registry, not agent-job or conversation restoration.
+- Exit, `/new`, `/clear` and main-session loads cancel/join model work, children,
+  shell/LSP groups and timers. Child inspection stays in the current runtime.
+- Compaction preserves live state. Completion handlers resolve the current session
+  at commit. A routing read lock covers child commits/file tools; main handoff
+  takes its write lock. Streams/blocking non-file tools hold neither. Coding
+  instructions and changed runtime snapshots follow [system_prompt.md](system_prompt.md).
+- Graceful shutdown records interruptions and bounded output; startup leaves saved
+  execution records untouched. An abrupt OS kill guarantees no process cleanup.
+  Managed commands must stay in their process group; daemonization is unsupported.
 
 ## Go module structure
 
@@ -48,47 +43,75 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/provider`        | Models, streams, login and replay contracts         |
 | `internal/provider/openai` | Subscription transport and device-code login        |
 | `internal/tool`            | Registry, codecs, dispatch and tool implementations |
-| `internal/workspace`       | Runtime-local serialized edits and restore    |
+| `internal/workspace`       | Runtime-local serialized edits and restore          |
 | `internal/history`         | SQLite branches, artifacts and exports              |
 | `internal/context`         | Request projection and budgets                      |
 | `internal/tui`             | Composer, windows, sidebar and login rendering      |
 | `internal/jobs`            | Linux process groups and managed child tasks        |
 | `internal/capture`         | Shared bounded stream rings and cursors             |
 | `internal/scratch`         | Sticky root and verified private UID directory      |
-| `internal/rail`            | Workdir-scoped Bubblewrap mounts and tmux lifecycle  |
+| `internal/rail`            | Workdir-scoped Bubblewrap mounts and tmux lifecycle |
 | `internal/skills`          | Local/embedded discovery and precedence             |
 | `internal/render`          | Markdown, tool presentation and plain output        |
 | `internal/graphics`        | Kitty detection, protocol and passthrough           |
 | `internal/lsp`             | Language servers, document sync and query results   |
 | `internal/assets`          | Images, render cache and warm MathJax backend       |
 
-- Author LLM text in [prompt/](../prompt/README.md): stable system/child/aside
-  Markdown, compaction templates in `compaction.yaml`, tool guidance in
-  `tools.yaml`, and naming text/limits in `naming.yaml`. Go retains parameter
-  schemas, dynamic values and validation errors.
-- `make prompts` validates UTF-8, required assets, YAML fields, tool coverage and
-  naming limits, then atomically emits deterministic, git-ignored
-  `internal/prompts/assets_generated.go`. `make build`, `make test` and `make check`
-  generate first. Runtime consumers depend only on the leaf `internal/prompts`
-  package; the executable needs no prompt files or YAML parser.
-- Embed `default-skills` through its Go package. No plugin framework, service
-  locator or reflection-based persistence.
-- Read AGENTS.md root-to-cwd at request boundaries, supplying changes. The agent
-  reads deeper instructions before scoped edits. Discover `*/SKILL.md` in user
-  and ancestor `.agents/skill`/`.agents/skills`; exact-name precedence is nearest
-  project, parent, user, bundled, with plural paths winning at the same level.
-  Discovery reads metadata; the skill tool loads the selected body on demand.
-- One session loop owns live state; bounded worker channels and contexts define
-  lifetimes. Interrupting a turn leaves independent jobs alive. Questions suspend
-  the main agent only; children finish useful work, report material gaps and stop
-  without user dialogs. Parent/child requests may overlap with no cycle limit.
-- At most four child/asides run concurrently and four coding contexts are
-  retained, including persistent idle ones. Children lack `subagent` and `question`.
-  Each assignment explicitly chooses persistence, has fresh turn/job IDs and
-  returns up to 8 KiB of its final answer plus an immutable message reference.
-  Success retains context only when requested; otherwise close and join owned
-  background work. Failure/cancellation always close. See [tools](tools.md#subagent)
-  and [compaction](compaction.md) for assignment and actor-handoff contracts.
+- The leaf `internal/prompts` package contains generated assets; authoring,
+  validation and build integration belong to [prompt/README.md](../prompt/README.md).
+  Embed `default-skills` through its Go package; no plugin framework, service
+  locator or reflection persistence.
+- Read root-to-cwd AGENTS.md at request boundaries and supply changes; deeper
+  instructions apply before scoped edits. Discover `*/SKILL.md` in user/ancestor
+  `.agents/skill` and `.agents/skills`. Exact-name precedence: nearest project,
+  parent, user, bundled; plural paths win at the same level. Discovery reads
+  metadata; `skill` loads the selected body on demand.
+- One session loop owns live state; bounded channels/contexts own worker lifetimes.
+  Turn interruption leaves independent jobs alive. Questions suspend only main;
+  children finish useful work, report gaps and stop without dialogs. Requests
+  overlap with no cycle limit.
+- The shared supervisor enforces [child capacity and persistence](tools.md#subagent)
+  for coding assignments and read-only asides. Child context cuts follow
+  [compaction](compaction.md#handoff) without moving main history or undo state.
+
+## Rail layering
+
+Rail's Linux implementation uses concrete intermediate representations, not a
+backend/plugin framework:
+
+1. **Configuration:** bounded file IO supplies parsed `filePolicy` layers. Pure
+   resolution merges them into `Policy`: lexical paths, denies, protected config
+   entrypoints and authorized service selections. It does not determine effective
+   filesystem access; namespace-aware planning is authoritative.
+2. **Specification:** `sandboxSpec` combines the central default-import catalog
+   with explicit/service requests and captured host environment/UID. Requests
+   retain source requirements, protection and origin; this stage performs no
+   filesystem inspection.
+3. **Planning:** host probes and the evolving sandbox namespace resolve sources
+   and destinations separately. Audits, access modes, collision checks and
+   precedence produce `sandboxPlan`: ordered filesystem operations, namespace
+   choices, environment changes, workdir/hostname and selected tmux config.
+   Primary binds precede protective overlays; deny masks come last. Logical and
+   discovered canonical dependencies order parents before children; newly revealed
+   ancestors discard tentative placements and replay with the additional dependency.
+   Host observations detect inconsistent reads during planning. Cancellation is
+   checked between host syscalls, not within a blocking syscall.
+4. **Emission:** pure Bubblewrap translation consumes the plan plus typed process
+   settings (command, captured inherited environment, supervisor parent-death
+   policy). It validates representation shape, never reads the host, reorders
+   operations or makes access decisions. Planned set/unset operations override
+   inherited variables. The resulting invocation owns its argument/environment
+   slices; tmux startup generation likewise consumes planned inputs.
+5. **Execution:** the registry/supervisor owns locks, private runtime directories,
+   process launch, readiness, cleanup and client transport. It supplies lifecycle
+   settings but does not splice backend flags into an invocation. Immediately
+   before launch, bounded revalidation rejects changes to observed host facts.
+
+Specs/plans are transient owned values, not persisted state or filesystem
+snapshots. Revalidation covers observed entry identities, symlink targets and
+relevant metadata, not recursive directory contents. Host files can still change
+between the check and mounting; this is not atomic snapshot semantics. Configuration
+and user-visible security limits remain in the [rail reference](../default-skills/ttc-config/SKILL.md#rail-configuration-reference).
 
 ## Event ordering and main timeline
 
@@ -119,11 +142,10 @@ One Go module uses direct construction and small interfaces at their consumers:
   notifications in sequence order. Commit delivered IDs and versioned message
   counts, not another transcript. Unpublished updates cannot alter input; failed
   admission consumes nothing or advances no actor cursor.
-- Append inspectable runtime context only when state, project instructions or
-  transitions change; activation/compaction force it. Retry an admitted request
-  with identical in-memory input. Canonical history/archives retain exact messages.
-  Delivery means inclusion through a result or notice at admission, not successful
-  inference or merely recording a result.
+- [Runtime snapshots](system_prompt.md#runtime-snapshots) supply immutable state at
+  admission. Retry an admitted request with identical in-memory input. Canonical
+  history/archives retain exact messages. Delivery means inclusion through a result
+  or notice at admission, not successful inference or merely recording a result.
 - Admit idle wakes ahead of queued human input through the same gate. Repeating
   timers coalesce to the latest immutable firing at/before the cutoff, with its
   cumulative count and sequence. Acknowledgment advances only through that firing;
@@ -133,30 +155,27 @@ One Go module uses direct construction and small interfaces at their consumers:
   results carry that event for acknowledgment; background queues one notice, with
   no extra child `job_exit` or redundant wake. Child handoff and `child_compacted`
   commit together; `/btw` events are UI-only.
-- Main compaction retains committed tails and moves the current conversation;
-  child compaction moves only its actor cursor, not main read-only/undo state.
-  Neither loses pending events nor replays delivered ones. Closing rejects new
-  admissions, joins workers, records terminal events and discards model delivery.
+- [Compaction handoff](compaction.md#handoff) uses this gate to retain committed
+  tails and move actor context without losing pending events or replaying delivery.
+  Closing rejects new admissions, joins workers, records terminal events and
+  discards model delivery.
 
 This defines committed ordering, not repeatable worker completion order.
 
 ## Parallel tool execution
 
-- Read-only calls (`read`, `glob`, `grep`, `skill`, `web_fetch`, `web_search`,
-  `job_list`, `job_read`, `wakeup_list`, `lsp_query`) run concurrently. Then file
-  mutations and remaining controls run in model order. Shells/subagents overlap
-  both phases.
-- Ordering is best effort within one response, not isolation from shells or
-  children. Dependent calls require a later response. Join foreground calls before
-  the next request. Ordinary errors do not skip siblings; storage failure cancels
-  and joins the batch, settling unstarted calls where storage permits.
-- Interrupted streams execute no calls. History/UI preserve completion order;
-  actor input preserves original call order.
-- Each runtime's workspace queue serializes complete read/validate/write/record
-  operations and undo/redo across its actors. SQLite immediate transactions
-  serialize short history commits across instances. Never hold SQL while waiting
-  on models, users, filesystem operations or worker joins. Instances share data
-  and workspaces without lifetime locks; workspace conflicts are the user's responsibility.
+- The dispatcher applies [tool batch ordering](tools.md#common-contracts):
+  concurrent reads, ordered mutations/controls and overlapping shells/children.
+  This orders one response, not external shells or child work.
+- Join foreground calls before the next request. Ordinary errors do not skip
+  siblings; storage failure cancels/joins the batch and settles unstarted calls
+  where possible. Interrupted streams execute none. History/UI retain completion
+  order; actor input retains call order.
+- The workspace queue serializes full read/validate/write/record and undo/redo
+  across runtime actors. SQLite immediate transactions serialize short commits
+  across instances; never hold SQL while waiting on models, users, filesystem
+  work or joins. No lifetime data/workspace locks; cross-instance workspace
+  conflicts are the user's responsibility.
 
 ## Provider and model abstraction
 
@@ -184,40 +203,9 @@ type LoginUI interface {
   without modifying their source or switching billing mode.
 - `ModelSpec` supplies stable provider/model IDs, display name, variants,
   capabilities and catalog revision. Variants are validated reasoning/tier presets.
-  Save turn-start and per-request selections. Main picker changes apply after the
-  current tool batch, with an inspectable switch; children keep their model, with
-  reasoning changes only on explicit idle follow-up. Startup resolves remembered
-  choices against a fresh catalog; CLI overrides are optional. See [models](models.md).
-
-| Token field                | Meaning                                      |
-| -------------------------- | -------------------------------------------- |
-| `context_limit`            | Effective input-plus-output capacity         |
-| `max_output_tokens`        | Endpoint ceiling, or zero when unpublished   |
-| `output_allowance`         | Coding output reserve; cap where supported   |
-| `estimation_margin`        | Estimation/wire-overhead reserve             |
-| `recent_tokens_min`        | Soft minimum for recent model/tool cycles    |
-| `recent_tokens_max`        | Hard maximum for recent model/tool cycles    |
-| `next_turn_input_reserve`  | Free capacity for new input after compaction |
-| `summary_output_allowance` | Summary reserve; cap where supported         |
-
-- Reject unknown variants/options, nonpositive limits/allowances, negative
-  reserves/ceilings and budgets unable to fit fixed instructions plus required
-  summary/output/headroom. Providers supply defaults; never invent model limits.
-  Subscription transport publishes neither an output ceiling nor an output-cap
-  request field, so its allowance is a context reserve, not a generation cap.
-- For capacity `C`, output `O`, margin `M` and estimated input `I`, compact when
-  `I + O + M >= C`. A handoff must satisfy:
-
-```text
-fixed_input + summary_and_archive_links + retained_history + O + M
-    + next_turn_input_reserve < C
-recent_cycle_tail <= recent_tokens_max
-```
-
-- [Compaction](compaction.md) defines shared main/child retention, archives,
-  single-pass summary, concurrent tails and failure policy. The frontend reloads
-  without a popup, preserving input/interactions. No context-rejection retry,
-  summary regeneration or context-aware tool truncation.
+  [Models](models.md) owns catalog/startup, selection, budget metadata and metering;
+  [compaction](compaction.md) owns admission budgets, retention and failure policy.
+  The frontend reloads after handoff without a popup, preserving input/interactions.
 - Estimate images, schemas and native replay once. `ReplayState` identifies its
   provider, underlying model and codec; native items replace canonical assistant
   messages on the wire. Validate text/calls, phase, item IDs and encrypted reasoning.
@@ -226,12 +214,20 @@ recent_cycle_tail <= recent_tokens_max
 - Compare stored JSON arguments after marshaler normalization, preserving large
   numbers and allowing RawMessage whitespace/HTML escaping. Stream completion
   snapshots instead compare exact strings. `ContextFor` strips foreign state from
-  request copies, preserving originals; Standard/Fast of one base model are
-  compatible. Compaction drops replay. Unsupported codecs/representations fail.
+  request copies, preserving originals under [model compatibility](models.md#switching-and-replay).
+  Compaction drops replay. Unsupported codecs/representations fail.
+- Endpoint `Usage` remains separate from input estimates. The runtime owns copied
+  counters; [usage accounting](models.md#usage-accounting) defines their subsets,
+  response identity, coverage and reset rules.
+
+### Request retries
+
 - Main steering waits for a model boundary; children accept idle follow-ups only.
   Native steering and provider stream recovery are outside v1. Retry transient
-  failures until interrupted only before text/tool announcements/native items are
-  committed. Positive `MaxAttempts` bounds total attempts; naming uses one.
+  transport/rate-limit/server failures until interrupted only before text/tool
+  announcements/native items are committed. Positive `MaxAttempts` bounds total
+  attempts; naming limits come from
+  [prompt/naming.yaml](../prompt/naming.yaml).
 - Before each cancellable retry wait, emit a typed event and hidden inspectable
   request-linked notice for main, child or compaction. Callback failure stops retry.
   Backoff starts at one second, doubles with 25% jitter, and caps at 30 seconds.
@@ -239,21 +235,6 @@ recent_cycle_tail <= recent_tokens_max
   retry. Keep constant-size bookkeeping. Partial output fails without replay;
   restart never retries unfinished requests. Persist final aggregate metadata and
   separate notices, not a durable retry queue.
-- Endpoint `Usage` is separate from estimates. Cache reads/writes are disjoint
-  input subsets; reasoning is an output subset. Preserve zero versus unavailable.
-  Uncached input subtracts reads; ordinary input also subtracts writes.
-- The sidebar shows the latest successful parent input/cache counters and frozen
-  model, with cumulative output/reasoning for all actors/naming/compaction. Add each
-  response once, including later cache reads. Missing usage appears as coverage;
-  an optional total is unavailable if any reported response omitted it.
-- Copy counters under the runtime mutex. Match reported input to its producing
-  request ID; percentage/numerical context usage includes reserves, with estimated
-  components labeled separately. Handoff refreshes occupancy immediately while
-  prior reported usage stays visible. All-agent run totals are process memory,
-  preserved across compaction and session changes (including `/clear`); only
-  `/new` or restart clears them. Never rebuild totals from history. Parent context
-  usage still clears on explicit session changes. Mixed-model totals imply neither
-  cost nor subscription allowance; pricing requires each producing model/tier.
 
 ## Inspectable request messages
 
@@ -277,49 +258,43 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   unknown versions fail. `Execution` carries stable IDs, cancellation and narrow
   services. Commit intent before dispatch, then exact arguments/result/Markdown.
   Validation errors retain original input in a dispatcher record.
-- Delivered results are immutable, including background launch snapshots.
-  Completion appends another entry. Restart settles unresolved foreground calls
-  once as interrupted, without rerunning them; historical IDs are not live handles.
+- Delivered results, including background launch snapshots, are immutable;
+  completion appends another entry. Historical IDs are not live handles.
 - `render.Markdown` separates bounded summary, detail and optional export body.
-  Summary normally uses one clipped highlighted row; mutations add up to six
-  short diff lines. Inspectors show paths, snapshot diffs and labeled parameters.
-  Glob shows its pattern. Exact JSON remains in records/sidecars; click IDs are
-  metadata. Escape/fence untrusted values and filter terminal controls.
-- Persist presentation revision so CLI, inspector, export and compaction use the
-  same saved document rather than future renderer behavior. Export defaults to
-  inspector detail; system prompt Markdown is empty, but JSONL/inspection is exact.
-- `Execution.Update` publishes transient cards; shell/child waits sample bounded
-  tails every 250 ms. Replace by call identity and refresh live inspection without
-  accumulating history. Final/background completion cards are immutable/durable.
-- Capture defaults to 64 MiB per call (32 MiB per stream), sharing a 1 GiB runtime
-  pool. Pressure evicts the least recently written other ring. Preview at most
-  ten lines/1 KiB combined; `job_read` pages streams, EOF byte/line cursors and grep.
-  Persist at most 8 KiB per stream at completion/stop; earlier ring output is lost
-  on exit. Large durable details/attachments use private managed files.
+  Persist its revision/document so CLI, inspector, export and compaction never
+  substitute a future renderer. Export defaults to detail; system-prompt Markdown
+  is empty while JSONL/inspection remains exact. Keep exact JSON and click metadata
+  separate; escape/fence untrusted values and filter terminal controls.
+- `Execution.Update` replaces transient cards by call identity without history
+  accumulation; final/completion cards are immutable/durable.
+  [Tools](tools.md#saved-presentation-and-live-updates) defines update cadence and
+  row, diff, inspector and output limits.
+- Shared capture rings bound shell/child memory independently of durable records.
+  [Shell](tools.md#shell), [job_read](tools.md#job_read) and
+  [saved presentation](tools.md#saved-presentation-and-live-updates) own capture,
+  preview, cursor and saved-output limits. Large durable details/attachments use
+  private managed files.
 - `/export <path>` freezes a committed cut and writes dense Markdown, exact
-  `.jsonl` and a sibling assets directory with relative links. Reject existing
-  targets; user exports remain outside retention cleanup. See [tools](tools.md)
-  for result caps, preview budgets and rendering details.
+  `.jsonl` and sibling assets with relative links. Reject existing targets;
+  user exports are outside retention cleanup.
 
 ## Serialized edits and shared undo
 
-- One main undo history includes all parent/child file-tool edits. Child records
-  retain actor/call provenance but stay outside parent model input. Children cannot
-  restore independent branches or selectively undo dependent interleaved edits.
-- Each human turn saves history/file tips. Idle child writes extend that turn's
-  suffix; after another input, later commits belong to the new suffix regardless
-  of launch time. The [admission gate](#event-ordering-and-main-timeline) fixes races.
-- `/undo` requires idle main work, stops/joins jobs/children, clears transient
-  input/timers and reverses the latest human suffix, including trailing async
-  edits. Failed/interrupted turns remain undoable after work stops. `/redo` reapplies
-  saved bytes forward without rerunning tools or reviving handles. New input
-  branches history. Branch restoration reverses to the common ancestor, then
-  applies the selected suffix under the same idle/stop boundary.
-- Ctrl-X G displays only admitted human inputs, in linear columns except at forks.
-  Enter restores immediately before the input; Space inspects it. Arrows navigate
-  nearest human ancestry over hidden entries. Archived/blocked inputs remain
-  inspectable. `/branch ID` supports explicit balanced cuts; `/redo` then restores
-  the previously selected branch.
+- Parent/child file tools share one main undo history. Preserve child actor/call
+  provenance outside parent input; no independent child branch or selective undo
+  of interleaved edits.
+- Each human turn saves history/file tips. Idle child writes extend its suffix;
+  later commits follow newly admitted input regardless of launch time. The
+  [admission gate](#event-ordering-and-main-timeline) fixes races.
+- `/undo` requires idle main, stops/joins jobs/children, clears transient input/
+  timers and reverses the latest human suffix, including async edits and failed/
+  interrupted turns. `/redo` restores saved bytes, never tools/handles. New input
+  branches; branch restore reverses to the common ancestor then applies the chosen
+  suffix under the same idle/stop boundary.
+- Ctrl-X G shows admitted human inputs, linear except at forks. Enter restores
+  before the input; Space inspects; arrows follow nearest human ancestry across
+  hidden entries. Archived/blocked inputs stay inspectable. `/branch ID` accepts
+  balanced cuts; `/redo` restores the previously selected branch.
 - All file tools share apply/restore: capture bytes, mode, absence and created
   parent directories; moves are delete/create. Reject symlinks, special files and
   multiply linked regular files. Outside-workspace effects are marked non-undoable;
@@ -348,11 +323,8 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   Incompatible or nonempty unversioned schemas fail explicitly; no migrations,
   automatic resets or credential deletion. Select a new data directory for
   incompatible history.
-- Private `model-choices.json` stores provider model/variant choices independently,
-  capped at 64 KiB with invalid input rejected. A short file lock serializes
-  read-modify-write saves across instances. Save before queueing selection.
-  Preference failure rejects it; later SQLite switch failure keeps the active
-  model and already accepted startup preference.
+- Model preferences live outside SQLite; [catalog/startup](models.md#catalog-and-startup)
+  defines file locking, limits and selection failure semantics.
 - Blank identity/name/selection stays in memory. Startup/new/clear insert nothing;
   first user admission atomically creates workspace/session/turn/message with the
   same runtime ID and empty undo baseline. Failure starts no inference or partial
@@ -377,10 +349,8 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   prompts. Session lists/inspectors require no full transcript scan.
 - Artifacts are private, lineage-owned and referenced by relative paths/hashes;
   deduplicate only within the lineage. No global blob or durable job/timer/inbox
-  table. Cleanup expires whole lineages after thirty inactive days and atomically
-  rechecks activity before deletion. Loaded sessions refresh activity hourly;
-  copies protect their shared ancestry/assets. Asset deletion is best effort with
-  no restart repair. Credentials and preferences remain outside retention.
+  table. Enforce the [retention policy](requirement.md#data-retention) with an atomic
+  activity recheck before lineage deletion. Copies protect shared ancestry/assets.
 
 ## Validation
 
@@ -399,16 +369,11 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
 
 The concrete boundaries above are TTC decisions, informed by:
 
-- [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents):
-  simple composable tool and runtime boundaries.
-- [Effective context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents):
-  compaction and retrieval of exact supporting details.
-- [OpenAI reasoning models](https://developers.openai.com/api/docs/guides/reasoning):
-  context accounting and compatible reasoning continuity across tool calls.
-- [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching):
-  stable instruction/tool prefixes where the endpoint supports them.
-- [OpenAI authentication](https://learn.chatgpt.com/docs/auth):
-  device-code authorization from a headless terminal.
+- Anthropic: [composable agent boundaries](https://www.anthropic.com/engineering/building-effective-agents)
+  and [compaction/retrieval](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents).
+- OpenAI: [reasoning/context continuity](https://developers.openai.com/api/docs/guides/reasoning),
+  [stable prompt-cache prefixes](https://developers.openai.com/api/docs/guides/prompt-caching)
+  and [headless device-code authentication](https://learn.chatgpt.com/docs/auth).
 
 ## Terminal rendering ownership
 
@@ -449,10 +414,9 @@ The concrete boundaries above are TTC decisions, informed by:
   MathJax/librsvg work for conversation and Markdown inspectors. Queue/transmit
   only visible rows; cancel offscreen tasks and discard decoded thumbnails.
   An LRU holds up to 128 formula rasters; all retained pixels share 32 MiB.
-- Independent initialization hands a pre-warmed Node process to that worker;
-  exit cancels/joins both. Formula errors show warnings/labeled TeX. See
-  [MathJax setup and limits](mathjax.md) for pinned packages, worker lifecycle,
-  oversampling, filtering and placement budgets.
+- [MathJax](mathjax.md) owns setup, engine lifecycle, formula limits and rasterization.
+  Initialization hands its pre-warmed Node process to this worker; exit
+  cancels/joins both.
 - Graphics reuse x/ansi's chunked PNG encoder and Unicode image/row/column
   placeholders. Detect before tcell owns input and serialize graphics/screen
   writes through one TTY wrapper. Positive detection adds RGB to a private
@@ -465,9 +429,8 @@ The concrete boundaries above are TTC decisions, informed by:
   specific warnings. Mixed clients are outside the guarantee: tmux selects the
   current/recent client.
 - Bordered previews map cell centers through fit/letterbox/pan/zoom to source
-  pixels. Selecting a point and confirming OK are separate. Pending clicks belong
-  to the requesting actor and reach its next boundary; child completion waits for
-  its click. Compaction preserves interactions; lifecycle resets discard them.
+  pixels under [image_show](tools.md#image_show)'s confirmation and actor-delivery
+  contract. Child completion waits for its click.
 - Reserve one actor interaction before source I/O without holding its mutex over
   decoding/filesystem work. Keep the slot until child consumption; exit clears
   request/reply. Concrete modal/load state uses runtime generations to reject
@@ -499,9 +462,8 @@ The concrete boundaries above are TTC decisions, informed by:
 - `/load` and `--session` preflight archives and copy writable history before
   activation. Failed preparation leaves the prior runtime usable; read-only
   history stays immutable. Every coding request uses current system instructions.
-  Initial runtime context includes cwd, repository presence and branch; Git
-  metadata is sampled outside drawing with a two-second bound. Project/live
-  context refreshes per request. Explicit loads never restore source live state.
+  [Runtime snapshots](system_prompt.md#runtime-snapshots) define initial metadata
+  and per-request refresh. Explicit loads never restore source live state.
 - Events carry generation to reject stale publications after session changes or
   same-session restore. Metering updates after responses and tool batches. Loads
   replay without an acknowledgment window; new/clear, undo/redo and export use
@@ -517,8 +479,9 @@ The concrete boundaries above are TTC decisions, informed by:
   registry: no shell, mutations, interactions, timers or child creation. Timer
   listing is runtime-wide; job visibility still follows child ownership.
 - Each aside has its own actor/cache identity, hidden inspectable records,
-  supervisor captures and a 64 KiB final-answer limit. It shares the four-task
-  limit, survives compaction and is canceled/joined on switch/exit.
+  supervisor captures and a 64 KiB final-answer limit. It shares the
+  [supervisor limit](tools.md#subagent), survives compaction and is
+  canceled/joined on switch/exit.
 - Answers stay out of parent context and never enqueue wakes. Save Markdown and
   open the shared window once dialogs/editor/paste/fullscreen release focus.
   Queue at most 16 popups; older answers remain in history.
