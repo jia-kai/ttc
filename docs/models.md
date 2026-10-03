@@ -59,7 +59,8 @@
   Apply advertised `effective_context_window_percent`; do not automatically choose
   the larger maximum. The sidebar shows the latest parent request's resolved budget.
 - Endpoint usage distinguishes zero from unavailable. Preserve cache writes
-  separately. Run totals add every finished parent/child/aside/naming/compaction
+  separately. The sidebar shows latest parent input/cache and cumulative
+  output/reasoning. Run totals add every finished parent/child/aside/naming/compaction
   response once since process start or `/new`, including cache reads on later
   requests. Session changes and compaction retain these in-memory totals.
   Ordinary input is input minus reads/writes; reasoning is already included in

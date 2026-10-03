@@ -239,8 +239,8 @@ recent_cycle_tail <= recent_tokens_max
 - Endpoint `Usage` is separate from estimates. Cache reads/writes are disjoint
   input subsets; reasoning is an output subset. Preserve zero versus unavailable.
   Uncached input subtracts reads; ordinary input also subtracts writes.
-- The sidebar keeps the latest successful parent response and frozen model,
-  separate from cumulative totals for all actors/naming/compaction. Add each
+- The sidebar shows the latest successful parent input/cache counters and frozen
+  model, with cumulative output/reasoning for all actors/naming/compaction. Add each
   response once, including later cache reads. Missing usage appears as coverage;
   an optional total is unavailable if any reported response omitted it.
 - Copy counters under the runtime mutex. Match reported input to its producing

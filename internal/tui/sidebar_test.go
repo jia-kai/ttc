@@ -19,7 +19,7 @@ func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 	b := newSidebar()
 	b.update(u, nil, nil)
 	text := strings.Join(b.sections[0].rows, "\n")
-	if strings.Count(text, "Uncached input 200") != 2 || !strings.Contains(text, "Input 1000") {
+	if strings.Count(text, "Uncached input 200") != 1 || !strings.Contains(text, "Input 1000") {
 		t.Fatal("cached/full input remain indistinguishable", text)
 	}
 	if strings.Contains(text, "Cache writes") {
@@ -492,7 +492,7 @@ func TestSidebarReportedCountersRemainSeparateFromEstimates(t *testing.T) {
 	u := session.ContextUsage{Model: "new model", Limit: 10000, Input: 345, Reported: &session.ReportedUsage{Model: "old model", Tokens: provider.Usage{InputTokens: 1000, OutputTokens: 100, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
-	for _, want := range []string{"Last response · reported", "old model", "Input 1000 · cached 0", "Output 100 · reasoning 70", "Context 3.5%", "Input 345", "345 / 10000 tokens", "Breakdown · estimated"} {
+	for _, want := range []string{"Last input · reported", "old model", "Input 1000 · cached 0", "Context 3.5%", "Input 345", "345 / 10000 tokens", "Breakdown · estimated"} {
 		if !strings.Contains(rows, want) {
 			t.Fatalf("missing %q in %s", want, rows)
 		}
@@ -504,19 +504,48 @@ func TestSidebarReportedCountersRemainSeparateFromEstimates(t *testing.T) {
 	}
 }
 
-func TestSidebarRunTotalsPreserveInputSubsets(t *testing.T) {
+func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 	b := newSidebar()
 	cached, written, reasoning := 600, 100, 2
-	u := session.ContextUsage{Totals: session.UsageTotals{Requests: 3, ReportedRequests: 2, Tokens: provider.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}}}
+	lastCached, lastReasoning := 50, 1
+	u := session.ContextUsage{Limit: 10000, Input: 200, Reported: &session.ReportedUsage{Tokens: provider.Usage{InputTokens: 200, OutputTokens: 3, CachedInputTokens: &lastCached, ReasoningOutputTokens: &lastReasoning}}, Totals: session.UsageTotals{Requests: 3, ReportedRequests: 2, Tokens: provider.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
-	for _, want := range []string{"Run totals · all agents", "Reported 2/3 requests", "cached 600", "Ordinary input 300", "Output 10 · reasoning 2"} {
+	for _, want := range []string{"Last input · reported", "Input 200 · cached 50", "Uncached input 150", "Run output · all agents", "Reported 2/3 requests", "Output 10 · reasoning 2"} {
 		if !strings.Contains(rows, want) {
 			t.Fatal(want, rows)
 		}
 	}
-	if strings.Contains(rows, "Cache writes") {
-		t.Fatal("removed sidebar counter still visible", rows)
+	for _, unwanted := range []string{"Input 1000", "cached 600", "Output 3 · reasoning 1", "Ordinary input", "Cache writes"} {
+		if strings.Contains(rows, unwanted) {
+			t.Fatal("wrong counter scope", unwanted, rows)
+		}
+	}
+	if strings.Count(rows, "Output ") != 1 || strings.Index(rows, "Run output") > strings.Index(rows, "Breakdown") {
+		t.Fatal("run output duplicated or hidden below estimates", rows)
+	}
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 32)
+	b.bounds(120, 32, false)
+	b.draw(s)
+	var visible strings.Builder
+	for y := range 32 {
+		visible.WriteString(sidebarScreenText(s, b.left+1, y, b.width-2))
+		visible.WriteByte('\n')
+	}
+	for _, want := range []string{"Input 200 · cached 50", "Output 10 · reasoning 2"} {
+		if !strings.Contains(visible.String(), want) {
+			t.Fatal("counter not visible in headless terminal", want, visible.String())
+		}
+	}
+	u.Totals.Tokens.ReasoningOutputTokens = nil
+	b.update(u, nil, nil)
+	if rows = strings.Join(b.sections[0].rows, "\n"); !strings.Contains(rows, "Output 10 · reasoning —") {
+		t.Fatal("missing reasoning total shown as zero or last response", rows)
 	}
 }
 

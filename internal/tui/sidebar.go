@@ -45,36 +45,32 @@ func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []
 	c := &b.sections[0]
 	c.rows = append(c.rows[:0], "No request yet")
 	if u.Limit > 0 {
-		input, qualifier := u.Input, "estimated"
-		if u.RequestID > 0 && u.Reported != nil && u.Reported.RequestID == u.RequestID {
-			input, qualifier = u.Reported.Tokens.InputTokens, "reported input"
-		}
-		used := min(16, (input+u.Reserved)*16/max(1, u.Limit))
 		c.rows = append(c.rows[:0], u.Model)
 		if v := u.Reported; v != nil {
-			c.rows = append(c.rows, "Last response · reported")
+			c.rows = append(c.rows, "Last input · reported")
 			if v.Model != u.Model {
 				c.rows = append(c.rows, v.Model)
 			}
-			c.rows = append(c.rows, fmt.Sprintf("Input %d · cached %s", v.Tokens.InputTokens, optionalTokens(v.Tokens.CachedInputTokens)), fmt.Sprintf("Output %d · reasoning %s", v.Tokens.OutputTokens, optionalTokens(v.Tokens.ReasoningOutputTokens)))
+			c.rows = append(c.rows, fmt.Sprintf("Input %d · cached %s", v.Tokens.InputTokens, optionalTokens(v.Tokens.CachedInputTokens)))
 			if cached := v.Tokens.CachedInputTokens; cached != nil && *cached <= v.Tokens.InputTokens {
 				c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", v.Tokens.InputTokens-*cached))
 			}
 		} else {
 			c.rows = append(c.rows, "Reported usage unavailable")
 		}
+	}
+	if totals := u.Totals; totals.Requests > 0 {
+		c.rows = append(c.rows, "Run output · all agents", fmt.Sprintf("Reported %d/%d requests", totals.ReportedRequests, totals.Requests), fmt.Sprintf("Output %d · reasoning %s", totals.Tokens.OutputTokens, optionalTokens(totals.Tokens.ReasoningOutputTokens)))
+	}
+	if u.Limit > 0 {
+		input, qualifier := u.Input, "estimated"
+		if u.RequestID > 0 && u.Reported != nil && u.Reported.RequestID == u.RequestID {
+			input, qualifier = u.Reported.Tokens.InputTokens, "reported input"
+		}
+		used := min(16, (input+u.Reserved)*16/max(1, u.Limit))
 		c.rows = append(c.rows, fmt.Sprintf("Context %.1f%%", float64(input+u.Reserved)*100/float64(u.Limit)), fmt.Sprintf("%s%s", strings.Repeat("━", used), strings.Repeat("─", 16-used)), fmt.Sprintf("%d / %d tokens", input+u.Reserved, u.Limit), qualifier+" + reserve", fmt.Sprintf("Input %d · reserve %s", input, shortTokens(u.Reserved)), "Breakdown · estimated")
 		for _, p := range u.Parts {
 			c.rows = append(c.rows, fmt.Sprintf("%-19s %7s", p.Name, shortTokens(p.Tokens)))
-		}
-	}
-	if totals := u.Totals; totals.Requests > 0 {
-		c.rows = append(c.rows, "Run totals · all agents", fmt.Sprintf("Reported %d/%d requests", totals.ReportedRequests, totals.Requests), fmt.Sprintf("Input %d · cached %s", totals.Tokens.InputTokens, optionalTokens(totals.Tokens.CachedInputTokens)), fmt.Sprintf("Output %d · reasoning %s", totals.Tokens.OutputTokens, optionalTokens(totals.Tokens.ReasoningOutputTokens)))
-		if cached := totals.Tokens.CachedInputTokens; cached != nil && *cached <= totals.Tokens.InputTokens {
-			c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", totals.Tokens.InputTokens-*cached))
-		}
-		if cached, written := totals.Tokens.CachedInputTokens, totals.Tokens.CacheWriteTokens; cached != nil && written != nil && *cached+*written <= totals.Tokens.InputTokens {
-			c.rows = append(c.rows, fmt.Sprintf("Ordinary input %d", totals.Tokens.InputTokens-*cached-*written))
 		}
 	}
 	clear(c.rows[len(c.rows):cap(c.rows)])
