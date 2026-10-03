@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -15,7 +16,8 @@ type promptSearch struct {
 	Window          Window
 	query           composer
 	entries, folded []string
-	matches         []int // Original prompt indices, newest first.
+	terms           []string // Folded AND terms, longest first for early rejection.
+	matches         []int    // Original prompt indices, newest first.
 	selected, start int
 	rows            []string
 }
@@ -27,18 +29,30 @@ func newPromptSearch(entries []string) *promptSearch {
 		m.folded[i] = strings.ToLower(text)
 	}
 	m.Window.Title = "Prompt history search"
-	m.Window.Hint = "Type to search · ↑↓ select · Ctrl-R older · Enter fills input · Esc cancels"
+	m.Window.Styled = true
+	m.Window.Hint = "All words match · ↑↓ select · Ctrl-R older · Enter fills input · Esc cancels"
 	m.filter()
 	return m
 }
 
 func (m *promptSearch) filter() {
-	query := strings.ToLower(m.query.text)
-	m.matches = m.matches[:0]
-	for i := len(m.entries) - 1; i >= 0; i-- {
-		if strings.Contains(m.folded[i], query) {
-			m.matches = append(m.matches, i)
+	m.terms = strings.Fields(strings.ToLower(m.query.text))
+	slices.SortFunc(m.terms, func(a, b string) int {
+		if size := len(b) - len(a); size != 0 {
+			return size
 		}
+		return strings.Compare(a, b)
+	})
+	m.terms = slices.Compact(m.terms)
+	m.matches = m.matches[:0]
+search:
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		for _, term := range m.terms {
+			if !strings.Contains(m.folded[i], term) {
+				continue search
+			}
+		}
+		m.matches = append(m.matches, i)
 	}
 	m.selected, m.start, m.Window.Scroll = 0, 0, 0
 	m.update()
@@ -64,6 +78,7 @@ func (m *promptSearch) update() {
 			text = text[:end] + "…"
 		}
 		text = strings.ReplaceAll(render.Clean(text), "\n", " ↵ ")
+		text = highlightPrompt(text, m.terms)
 		m.rows = append(m.rows, menuRow(text, i == m.selected))
 	}
 	m.Window.Text = strings.Join(m.rows, "\n")
@@ -117,7 +132,7 @@ func (m *promptSearch) reveal(width, height int) {
 	}
 	row := 0
 	for _, line := range m.rows[:m.selected-m.start] {
-		row += len(wrap(line, max(1, width)))
+		row += len(wrapStyled(line, max(1, width)))
 	}
 	if row < m.Window.Scroll {
 		m.Window.Scroll = row
@@ -149,7 +164,7 @@ func (m *promptSearch) mouse(ev *tcell.EventMouse, w, h int) {
 	}
 	target, row := m.Window.Scroll+y-top-headers-1, 0
 	for i, line := range m.rows {
-		next := row + len(wrap(line, inner))
+		next := row + len(wrapStyled(line, inner))
 		if target >= row && target < next {
 			m.selected = m.start + i
 			m.update()
@@ -157,4 +172,49 @@ func (m *promptSearch) mouse(ev *tcell.EventMouse, w, h int) {
 		}
 		row = next
 	}
+}
+
+// highlightPrompt operates only on bounded, sanitized display text. Mapping the
+// folded byte offsets back to original rune boundaries handles changing UTF-8
+// widths (for example İ→i). Marking a union merges overlapping/repeated matches.
+func highlightPrompt(text string, terms []string) string {
+	if len(terms) == 0 {
+		return text
+	}
+	folded := strings.ToLower(text)
+	marked := make([]bool, len(folded))
+	for _, term := range terms {
+		for start := 0; start < len(folded); {
+			at := strings.Index(folded[start:], term)
+			if at < 0 {
+				break
+			}
+			at += start
+			for i := at; i < at+len(term); i++ {
+				marked[i] = true
+			}
+			_, size := utf8.DecodeRuneInString(folded[at:])
+			start = at + size
+		}
+	}
+	var out strings.Builder
+	offset, active := 0, false
+	for _, r := range text {
+		_, size := utf8.DecodeRuneInString(folded[offset:])
+		match := marked[offset]
+		if match != active {
+			if match {
+				out.WriteString("\x1b[1;4m")
+			} else {
+				out.WriteString("\x1b[0m")
+			}
+			active = match
+		}
+		out.WriteRune(r)
+		offset += size
+	}
+	if active {
+		out.WriteString("\x1b[0m")
+	}
+	return out.String()
 }

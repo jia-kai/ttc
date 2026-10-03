@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"scicode/internal/workspace"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ type sidebar struct {
 	overlay             bool
 	left, width, height int
 	focus               int
-	workspace           workspaceInfo
+	workspace           workspace.GitInfo
 	sessionName         string
 	workspaceHeight     int
 	texts               map[string]*rollingText // Visible identities only; reused across metadata refreshes.
@@ -172,10 +173,10 @@ func (b *sidebar) drawAt(s tcell.Screen, now time.Time) {
 		drawText("session-name", b.left+1, top, b.width-2, b.sessionName, style.Foreground(tcell.GetColor(render.BlueColor)))
 		top++
 	}
-	if b.workspace.cwd != "" {
+	if b.workspace.Cwd != "" {
 		drawText("workspace-header", b.left+1, top, b.width-2, "WORKSPACE", style.Foreground(tcell.GetColor(render.CyanColor)).Bold(true))
 		top++
-		for _, item := range [][2]string{{"cwd", b.workspace.cwd}, {"git", b.workspace.repo}, {"⎇", b.workspace.branch}} {
+		for _, item := range [][2]string{{"cwd", b.workspace.Cwd}, {"git", b.workspace.Repo}, {"⎇", b.workspace.Branch}} {
 			if item[1] == "" {
 				continue
 			}
@@ -252,9 +253,9 @@ func (b *sidebar) drawAt(s tcell.Screen, now time.Time) {
 
 func (b *sidebar) detail() string {
 	if b.sessionName == "" {
-		return b.workspace.detail()
+		return b.workspace.Detail()
 	}
-	return "Session:\n" + b.sessionName + "\n\n" + b.workspace.detail()
+	return "Session:\n" + b.sessionName + "\n\n" + b.workspace.Detail()
 }
 
 // mouse consumes sidebar clicks/wheels and returns a live job to inspect.

@@ -18,7 +18,7 @@ func (r *Runtime) History() (history.BranchTree, error) {
 	return r.Store.HistoryTree(r.ctx, id)
 }
 
-// RestoreBranch selects a complete main-tool boundary and restores journaled
+// RestoreBranch selects a complete main-tool boundary and restores saved
 // files without reexecuting tools. Command owns foreground exclusion and pauses
 // retention; this method cancels and joins live work before changing the cursor.
 // Redo can restore the previously selected branch without rerunning tools.
@@ -51,5 +51,5 @@ func (r *Runtime) RestoreBranch(entryID int64) error {
 	} else {
 		target.RedoTip = saved.RedoTip
 	}
-	return r.Workspace.Restore(r.ctx, id, "branch", target)
+	return r.Workspace.Restore(r.ctx, id, target)
 }

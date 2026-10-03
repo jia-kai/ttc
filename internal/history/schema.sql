@@ -1,9 +1,8 @@
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
-    path TEXT NOT NULL UNIQUE,
-    generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0)
+    path TEXT NOT NULL UNIQUE
 );
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY NOT NULL,
@@ -19,11 +18,9 @@ CREATE TABLE sessions (
     file_tip_id INTEGER REFERENCES file_changes(id) DEFERRABLE INITIALLY DEFERRED,
     redo_entry_id INTEGER REFERENCES entries(id),
     undo_floor_id INTEGER REFERENCES entries(id),
-    observed_generation INTEGER NOT NULL CHECK (observed_generation >= 0),
     last_activity_ms INTEGER NOT NULL,
     metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 );
-CREATE UNIQUE INDEX writable_lineage ON sessions(lineage_id) WHERE read_only = 0;
 CREATE INDEX session_list ON sessions(last_activity_ms DESC, id);
 CREATE INDEX session_lineage ON sessions(lineage_id);
 CREATE TABLE turns (
@@ -112,13 +109,6 @@ CREATE TABLE file_changes (
     created_ms INTEGER NOT NULL
 );
 CREATE INDEX change_session ON file_changes(session_id, id);
-CREATE TABLE fs_operation (
-    slot INTEGER PRIMARY KEY CHECK (slot = 1),
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    kind TEXT NOT NULL CHECK (kind IN ('apply','undo','redo','branch')),
-    manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
-    created_ms INTEGER NOT NULL
-);
 CREATE TABLE compactions (
     continuation_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id),
     predecessor_id TEXT NOT NULL UNIQUE REFERENCES sessions(id),

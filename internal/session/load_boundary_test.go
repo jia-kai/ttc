@@ -76,15 +76,11 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("load failed to join child")
 	}
-	loaded, err := r.Store.Session(target.ID)
+	loaded, err := r.Store.Session(r.Current())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var generation int64
-	if err := r.Store.DB.QueryRow("SELECT generation FROM workspaces WHERE id=?", loaded.WorkspaceID).Scan(&generation); err != nil {
-		t.Fatal(err)
-	}
-	if generation != 1 || loaded.Generation != generation || loaded.UndoFloor != loaded.EntryTip {
-		t.Fatal("load floor predates joined mutation", loaded, generation)
+	if loaded.ID == target.ID || loaded.UndoFloor != loaded.EntryTip {
+		t.Fatal("load did not create an independent undo boundary", loaded)
 	}
 }

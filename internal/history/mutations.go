@@ -8,38 +8,7 @@ import (
 	"time"
 )
 
-// Pending is the sole durable filesystem operation. Payload is owned by workspace.
-type Pending struct {
-	SessionID, Kind string
-	Manifest        json.RawMessage
-}
-
-// Prepare saves the complete journal before the first filesystem change.
-func (s *Store) Prepare(session, kind string, manifest any) error {
-	b, e := json.Marshal(manifest)
-	if e != nil {
-		return e
-	}
-	_, e = s.DB.Exec("INSERT INTO fs_operation(slot,session_id,kind,manifest_json,created_ms) VALUES(1,?,?,?,?)", session, kind, string(b), time.Now().UnixMilli())
-	return e
-}
-
-// PendingOperation returns nil if no operation requires recovery.
-func (s *Store) PendingOperation() (*Pending, error) {
-	var p Pending
-	var b string
-	e := s.DB.QueryRow("SELECT session_id,kind,manifest_json FROM fs_operation WHERE slot=1").Scan(&p.SessionID, &p.Kind, &b)
-	if errors.Is(e, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if e != nil {
-		return nil, e
-	}
-	p.Manifest = json.RawMessage(b)
-	return &p, nil
-}
-
-// CommitChange records an applied subset and advances the workspace generation atomically.
+// CommitChange records an applied subset and advances its session file tip atomically.
 func (s *Store) CommitChange(session, call string, paths any, reversible bool) (int64, error) {
 	b, e := json.Marshal(paths)
 	if e != nil {
@@ -62,10 +31,7 @@ func (s *Store) CommitChange(session, call string, paths any, reversible bool) (
 		if e != nil {
 			return e
 		}
-		if _, e = tx.Exec("UPDATE workspaces SET generation=generation+1 WHERE id=(SELECT workspace_id FROM sessions WHERE id=?)", session); e != nil {
-			return e
-		}
-		if _, e = tx.Exec(`UPDATE sessions SET file_tip_id=?,observed_generation=(SELECT generation FROM workspaces WHERE id=workspace_id) WHERE id=?`, id, session); e != nil {
+		if _, e = tx.Exec("UPDATE sessions SET file_tip_id=? WHERE id=?", id, session); e != nil {
 			return e
 		}
 		var actor, turn string
@@ -76,16 +42,9 @@ func (s *Store) CommitChange(session, call string, paths any, reversible bool) (
 		if _, e := appendTx(tx, session, turn, actor, "status", "", false, event, 0); e != nil {
 			return e
 		}
-		_, e = tx.Exec("DELETE FROM fs_operation WHERE slot=1 AND session_id=?", session)
-		return e
+		return nil
 	})
 	return id, e
-}
-
-// ClearOperation discards a journal only when no bytes were changed.
-func (s *Store) ClearOperation(session string) error {
-	_, e := s.DB.Exec("DELETE FROM fs_operation WHERE slot=1 AND session_id=?", session)
-	return e
 }
 
 // Change is an immutable link in shared file history.
@@ -139,14 +98,21 @@ func (s *Store) UndoTarget(session string) (RestoreTarget, error) {
 		if x.Kind == "message" && x.Actor == "main" && x.Role == "user" && x.TurnID != "" {
 			var start, tip sql.NullInt64
 			var trigger string
-			if e = s.DB.QueryRow("SELECT start_entry_id,start_file_tip_id,trigger FROM turns WHERE id=?", x.TurnID).Scan(&start, &tip, &trigger); e != nil {
-				return RestoreTarget{}, e
+			if e = s.DB.QueryRow("SELECT start_entry_id,start_file_tip_id,trigger FROM turns WHERE id=? AND session_id=?", x.TurnID, session).Scan(&start, &tip, &trigger); e != nil {
+				return RestoreTarget{}, fmt.Errorf("undo checkpoint ownership: %w", e)
 			}
 			if trigger != "user" && trigger != "steer" {
 				continue
 			}
 			if start.Int64 < v.UndoFloor {
 				return RestoreTarget{}, errors.New("undo would cross session boundary")
+			}
+			found := start.Int64 == 0
+			for _, entry := range entries {
+				found = found || entry.ID == start.Int64
+			}
+			if !found {
+				return RestoreTarget{}, errors.New("undo checkpoint is outside active ancestry")
 			}
 			return RestoreTarget{start.Int64, tip.Int64, v.EntryTip}, nil
 		}
@@ -179,13 +145,9 @@ func (s *Store) BranchTarget(session string, id int64) (RestoreTarget, error) {
 // CommitRestore advances both cursors only after complete filesystem restoration.
 func (s *Store) CommitRestore(session string, target RestoreTarget) error {
 	return s.transact(func(tx *sql.Tx) error {
-		if _, e := tx.Exec("UPDATE workspaces SET generation=generation+1 WHERE id=(SELECT workspace_id FROM sessions WHERE id=?)", session); e != nil {
+		if _, e := tx.Exec(`UPDATE sessions SET active_entry_id=?,file_tip_id=?,redo_entry_id=?,last_activity_ms=? WHERE id=?`, n(target.EntryTip), n(target.FileTip), n(target.RedoTip), time.Now().UnixMilli(), session); e != nil {
 			return e
 		}
-		if _, e := tx.Exec(`UPDATE sessions SET active_entry_id=?,file_tip_id=?,redo_entry_id=?,observed_generation=(SELECT generation FROM workspaces WHERE id=workspace_id),last_activity_ms=? WHERE id=?`, n(target.EntryTip), n(target.FileTip), n(target.RedoTip), time.Now().UnixMilli(), session); e != nil {
-			return e
-		}
-		_, e := tx.Exec("DELETE FROM fs_operation WHERE slot=1 AND session_id=?", session)
-		return e
+		return nil
 	})
 }

@@ -18,6 +18,7 @@ input and interactions. Explicit session changes/exit cancel them.
   unadmitted input stays in live state, not retained history. Each copied input
   gets a separate metadata marker with its source, original commit time,
   compaction time and age; repeated compaction preserves original identity/time.
+  Markers are historical context and survive manual loads; live runtime notices do not.
   Canonical marker instructions live in [prompt/retained-input.md](../prompt/retained-input.md).
 - Retain recent assistant/tool cycles after the latest human input, not complete
   user/model turns. Set the tail
@@ -88,5 +89,6 @@ input and interactions. Explicit session changes/exit cancel them.
   Start or load another usable session; reloading never clears failure. Close a
   failed child without invalidating main context.
 - Failed handoff never switches/freezes main history. Unused archives are disposable
-  with their lineage. Restart interrupts unfinished work and never revives jobs,
-  timers or pending clicks.
+  with their lineage. Startup leaves saved execution records untouched. Manual
+  loading copies balanced context without repairing work or restoring jobs, timers
+  or pending clicks.

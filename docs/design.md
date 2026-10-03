@@ -46,7 +46,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/provider`        | Models, streams, login and replay contracts         |
 | `internal/provider/openai` | Subscription transport and device-code login        |
 | `internal/tool`            | Registry, codecs, dispatch and tool implementations |
-| `internal/workspace`       | Serialized edits, restore and filesystem journal    |
+| `internal/workspace`       | Runtime-local serialized edits and restore    |
 | `internal/history`         | SQLite branches, artifacts and exports              |
 | `internal/context`         | Request projection and budgets                      |
 | `internal/tui`             | Composer, windows, sidebar and login rendering      |
@@ -104,7 +104,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 - Commit provider-ordered tool intents before dispatch and terminal results once
   in observed completion order. Canonical input reconstructs results in call
   order. Deltas/progress update live UI objects without allocating history events.
-- Human-turn admission and complete file apply/journal/history commits share the
+- Human-turn admission and complete local file apply/history commits share the
   workspace gate. Save input and its file checkpoint before releasing it. Edits
   use the current main inference turn and latest human undo owner at commit;
   preserve launch attribution separately. Notification wakes create no human
@@ -149,11 +149,11 @@ This defines committed ordering, not repeatable worker completion order.
   and joins the batch, settling unstarted calls where storage permits.
 - Interrupted streams execute no calls. History/UI preserve completion order;
   actor input preserves original call order.
-- One workspace queue serializes complete read/validate/write/record operations
-  and undo/redo; one writer serializes database commits. Never hold SQL while
-  waiting on models, processes, users or filesystem operations. Data-root and
-  workspace process locks prevent another TTC instance bypassing this queue;
-  shells/external editors remain outside it.
+- Each runtime's workspace queue serializes complete read/validate/write/record
+  operations and undo/redo across its actors. SQLite immediate transactions
+  serialize short history commits across instances. Never hold SQL while waiting
+  on models, users, filesystem operations or worker joins. Instances share data
+  and workspaces without lifetime locks; workspace conflicts are the user's responsibility.
 
 ## Provider and model abstraction
 
@@ -174,7 +174,8 @@ type LoginUI interface {
 
 - `Stream` stops on cancellation or callback error. OpenAI uses device-code login:
   show URL/code/expiry, poll at prescribed intervals, handle slowdown/expiry and
-  save credentials atomically as 0600. No server browser, callback listener or
+  save credentials atomically as 0600. A cancelable file lock covers credential
+  reread/refresh/save across instances, never model requests or device authorization. No server browser, callback listener or
   API-key fallback. Secrets/codes never enter history or logs. Refresh is
   serialized; exit cancels login. `--import-codex-auth` explicitly copies credentials
   without modifying their source or switching billing mode.
@@ -320,19 +321,18 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   parent directories; moves are delete/create. Reject symlinks, special files and
   multiply linked regular files. Outside-workspace effects are marked non-undoable;
   shell writes are never checkpointed. Refuse restoration if affected paths differ
-  from expected snapshots. Workspace locks cannot stop external-writer races.
-- Session loading does not restore files. A monotonic workspace generation detects
-  another TTC session's edits and places an undo boundary at the loaded tip;
-  only new work is undoable. Active branching/undo/redo updates observed generation.
-- SQLite cannot atomically write files. Journal durable before/after blobs and an
-  operation manifest, apply same-directory temporaries/atomic per-file renames and
-  fsync files/directories. Multi-file patches are not atomic; record their actual
-  applied subset before advancing tips. Failed restoration retains its old cursor
-  and blocks new mutations.
-- Startup resolves the one pending operation only when disk matches recorded
-  before/after states: finish an apply's actual subset or an unambiguous restore.
-  Otherwise report conflicting paths and keep mutations blocked. Never rerun
-  shell/model work; no generic workflow recovery engine.
+  from expected snapshots. Other runtimes, shells and editors are independent writers.
+- Loading writable history snapshots its selected ancestry through the last
+  balanced main tool exchange into an independent session, sharing immutable
+  lineage assets. It preserves source records and historical retained-input
+  markers, hides old live runtime messages from model input, and establishes an
+  undo boundary at the imported tip. Archived
+  predecessors remain read-only. No files, tools or live handles are restored.
+- File writes use same-directory temporary files and atomic per-file renames.
+  Multi-file edits/restores and their SQL commits are independent: partial edits
+  record their applied subset when possible; failed restores keep the old cursor.
+  Startup never settles unfinished requests, repairs files or replays operations.
+  A crash may leave files ahead of saved history; manual loading uses saved context.
 
 ## Minimal SQLite schema
 
@@ -340,12 +340,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   busy timeout. The canonical [schema](../internal/history/schema.sql) owns table
   definitions. Entry/change/request IDs are monotonic; other IDs are opaque text.
   Times are UTC Unix milliseconds; typed codecs validate versioned JSON.
-- Incompatible or nonempty unversioned schemas reset data-root contents except
-  the held process-lock inode: close SQLite first, propagate deletion errors and
-  discard history, assets, caches and credentials. No migrations. New empty DBs
-  initialize; compatible schemas and I/O/corruption errors never trigger reset.
+- A short startup lock serializes connection/WAL setup; it is released before
+  session work. Empty databases initialize in one immediate transaction.
+  Incompatible or nonempty unversioned schemas fail explicitly; no migrations,
+  automatic resets or credential deletion. Select a new data directory for
+  incompatible history.
 - Private `model-choices.json` stores provider model/variant choices independently,
-  capped at 64 KiB with invalid input rejected. Save before queueing selection.
+  capped at 64 KiB with invalid input rejected. A short file lock serializes
+  read-modify-write saves across instances. Save before queueing selection.
   Preference failure rejects it; later SQLite switch failure keeps the active
   model and already accepted startup preference.
 - Blank identity/name/selection stays in memory. Startup/new/clear insert nothing;
@@ -359,22 +361,23 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   never a hidden instruction. Child execution remains memory-only.
 - `file_changes.paths_json` is a versioned ordered list of paths, before/after
   absence/type/mode/hash/blob state and actual applied flags. Non-undoable effects
-  include reasons/paths. Journal manifests add operation IDs, old/target cursors,
-  expected generation and per-path progress; no separate path/state tables.
+  include reasons/paths. No filesystem-operation journal or recovery state.
 - Validate same-lineage references, acyclic parents, source IDs and file-tip
   agreement. Compaction copies source IDs/shared change references without reapply.
   Resolve retained checkpoints through source IDs in the continuation; if removed,
   use its summary baseline. Freeze predecessor and insert continuation in one
-  transaction, respecting `writable_lineage`.
+  transaction. Manual copies can have independent writable siblings in the same lineage;
+  active request completions follow their own compaction successor chain.
 - Use keyset pagination, indexed tool lookup and recursive ancestry/change CTEs.
   Export the latest saved tool record at/before its cut. Persist compact final
   request metadata/usage/response IDs and linked retry notices, not full duplicated
   prompts. Session lists/inspectors require no full transcript scan.
 - Artifacts are private, lineage-owned and referenced by relative paths/hashes;
   deduplicate only within the lineage. No global blob or durable job/timer/inbox
-  table. Cleanup retains required predecessors, uses deferred foreign-key checks
-  for row deletion and a retry marker for interrupted filesystem cleanup. Pending
-  `fs_operation` protects its lineage; credentials/generations are outside retention.
+  table. Cleanup expires whole lineages after thirty inactive days and atomically
+  rechecks activity before deletion. Loaded sessions refresh activity hourly;
+  copies protect their shared ancestry/assets. Asset deletion is best effort with
+  no restart repair. Credentials and preferences remain outside retention.
 
 ## Validation
 
@@ -474,8 +477,12 @@ The concrete boundaries above are TTC decisions, informed by:
 - Up/Down recalls original main user/steer messages across saved sessions, capped
   at 1000 entries/8 MiB. Exclude file snapshots, runtime notices and continuation
   copies. Current submissions, including commands, share the caps. Ctrl-R searches
-  case-insensitive substrings, newest first, with 256-character queries and 128
-  visible result rows. Enter fills input; Esc preserves draft.
+  whitespace-separated case-insensitive substrings with AND semantics, in any
+  order, newest first. Queries have at most 256 characters; render at most 128
+  visible result rows with 512-byte previews. Fold full prompts once on opening;
+  filter with deduplicated terms, longest first and early rejection. Highlight
+  all occurrences in sanitized previews, merging overlaps and preserving Unicode
+  positions. Enter recalls the exact prompt; Esc preserves draft.
 - Slash completion is local. One joined/debounced directory worker scans at most
   10,000 entries/256 matches, not a recursive index. Accept only matching draft/
   cursor/generation results; snapshot selected attachments asynchronously. Paste
@@ -486,11 +493,12 @@ The concrete boundaries above are TTC decisions, informed by:
 - `/sessions`/Ctrl-X L queries at most 100 workspace-filtered metadata rows, not
   transcripts. Group local activity dates: Today, Yesterday, six prior weekdays,
   then ISO dates. Headers cannot select; click selects, Enter uses idle `/load`.
-- `/load` and `--session` preflight archives and a writable active branch before
-  canceling work or changing target metadata. Reassemble coding instructions at
-  least one hour old without inference or clearing redo; new requests use the
-  refreshed template. Failure leaves the prior runtime usable; read-only history
-  stays immutable. Project/live context refreshes per request.
+- `/load` and `--session` preflight archives and copy writable history before
+  activation. Failed preparation leaves the prior runtime usable; read-only
+  history stays immutable. Every coding request uses current system instructions.
+  Initial runtime context includes cwd, repository presence and branch; Git
+  metadata is sampled outside drawing with a two-second bound. Project/live
+  context refreshes per request. Explicit loads never restore source live state.
 - Events carry generation to reject stale publications after session changes or
   same-session restore. Metering updates after responses and tool batches. Loads
   replay without an acknowledgment window; new/clear, undo/redo and export use

@@ -104,7 +104,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			return e
 		}
 		m, _ := json.Marshal(old.Model)
-		_, e = tx.Exec(`INSERT INTO sessions(id,workspace_id,lineage_id,predecessor_id,name,name_source,model_json,observed_generation,last_activity_ms,metadata_json) SELECT ?,workspace_id,lineage_id,id,?,'continuation',?,observed_generation,last_activity_ms,metadata_json FROM sessions WHERE id=?`, id, fmt.Sprintf("%s-cont-%d", rootName, ordinal), string(m), session)
+		_, e = tx.Exec(`INSERT INTO sessions(id,workspace_id,lineage_id,predecessor_id,name,name_source,model_json,last_activity_ms,metadata_json) SELECT ?,workspace_id,lineage_id,id,?,'continuation',?,last_activity_ms,metadata_json FROM sessions WHERE id=?`, id, fmt.Sprintf("%s-cont-%d", rootName, ordinal), string(m), session)
 		if e != nil {
 			return e
 		}
@@ -180,7 +180,18 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 				}
 			}
 		}
-		if _, e = tx.Exec("UPDATE sessions SET file_tip_id=?,undo_floor_id=? WHERE id=?", n(old.FileTip), summaryID, id); e != nil {
+		floor := summaryID
+		// The exact old floor can be summarized while earlier human inputs are
+		// copied separately. Keep every imported checkpoint behind the boundary.
+		for _, entry := range entries {
+			if entry.ID > old.UndoFloor {
+				break
+			}
+			if mapped, ok := mapping[entry.ID]; ok {
+				floor = mapped
+			}
+		}
+		if _, e = tx.Exec("UPDATE sessions SET file_tip_id=?,undo_floor_id=? WHERE id=?", n(old.FileTip), floor, id); e != nil {
 			return e
 		}
 		retainedTurns := map[string]bool{}
@@ -201,7 +212,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			if !ok || selected[start] {
 				tip = baseline
 			}
-			if _, e = tx.Exec("UPDATE turns SET session_id=?,start_entry_id=?,start_file_tip_id=? WHERE id=?", id, checkpoint, n(tip), turn); e != nil {
+			if _, e = tx.Exec("UPDATE turns SET session_id=?,start_entry_id=?,start_file_tip_id=? WHERE id=? AND session_id=?", id, checkpoint, n(tip), turn, session); e != nil {
 				return e
 			}
 		}

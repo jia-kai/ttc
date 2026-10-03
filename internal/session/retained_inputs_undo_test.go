@@ -100,13 +100,6 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 			t.Fatal("four admitted checkpoints did not survive", count)
 		}
 	}
-	continuation := r.Current()
-	if _, err := r.Command("/clear"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Command("/load " + continuation); err != nil {
-		t.Fatal(err)
-	}
 	assertFile := func(want string) {
 		t.Helper()
 		got, err := os.ReadFile(filepath.Join(r.Workspace.Root, "result.txt"))

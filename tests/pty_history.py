@@ -132,7 +132,7 @@ def main():
         inspect_draft('unfinished draft', 2)
         send(b'\x12')
         expect('Prompt history search')
-        send(b'alpha\r')
+        send(b'alpha older\r')  # Terms match independently, regardless of order.
         inspect_draft(older, 3)
         send(b'\x12unlikely-no-match')
         expect('No matching prompts')

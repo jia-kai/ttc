@@ -115,8 +115,8 @@ def main():
                 else:
                     message = last['role'] + ': ' + ''.join(part.get('text', '') for part in last['content'])
                 if 'event_type' in response:
-                    assert last['role'] == 'user'
-                    assert json.loads(message.removeprefix('user: '))['type'] == response['event_type']
+                    assert last['role'] == 'user', message
+                    assert json.loads(message.removeprefix('user: '))['type'] == response['event_type'], message
                 else:
                     assert message.startswith(response['prefix']), (message, response['prefix'])
                 self.send_response(200)

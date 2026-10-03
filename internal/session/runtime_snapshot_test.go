@@ -247,7 +247,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	var snapshots int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='developer'").Scan(&snapshots); err != nil || snapshots != 2 {
+	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='developer' AND source_id IS NULL").Scan(&snapshots); err != nil || snapshots != 2 {
 		t.Fatal("reload did not force fresh context", snapshots, err)
 	}
 }

@@ -2,6 +2,7 @@ package history
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"scicode/internal/filelock"
 	"scicode/internal/provider"
 	"strings"
 	"unicode"
@@ -92,6 +94,11 @@ func (s *Store) SaveSelection(selection provider.Selection) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := filelock.Acquire(context.Background(), filepath.Join(s.Root, "model-choices.lock"))
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	choices, err := s.readModelChoices()
 	if err != nil {
 		return err
@@ -110,7 +117,7 @@ func (s *Store) SaveSelection(selection provider.Selection) error {
 	return nil
 }
 
-// readModelChoices requires Store.mu, so read-modify-write saves cannot race.
+// readModelChoices reads an atomically replaced file; writes hold model-choices.lock.
 func (s *Store) readModelChoices() (modelChoices, error) {
 	path := filepath.Join(s.Root, "model-choices.json")
 	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)

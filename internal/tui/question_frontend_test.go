@@ -71,7 +71,6 @@ func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(c
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { w.Close() })
 	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
 	catalog, err := skills.Discover(context.Background(), w.Root, "")
 	if err != nil {

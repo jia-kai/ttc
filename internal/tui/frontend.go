@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"scicode/internal/workspace"
 	"strconv"
 	"strings"
 	"time"
@@ -249,9 +250,9 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		}
 	}
 	modal := modalState{}
-	var workspaceUpdates <-chan workspaceInfo
+	var workspaceUpdates <-chan workspace.GitInfo
 	if screen != nil {
-		sidebar.workspace = workspaceInfo{cwd: f.Runtime.Workspace.Root}
+		sidebar.workspace = workspace.GitInfo{Cwd: f.Runtime.Workspace.Root}
 		monitor := newWorkspaceMonitor(ctx, f.Runtime.Workspace.Root)
 		defer monitor.close()
 		workspaceUpdates = monitor.updates
@@ -2052,7 +2053,7 @@ func drawWindow(s tcell.Screen, window *Window) {
 	header := window.HeaderLines(innerWidth, max(0, height-3))
 	view := window.Lines(innerWidth, bodyHeight)
 	for i, text := range append(header, view...) {
-		if window.Markdown && i >= len(header) {
+		if (window.Markdown || window.Styled) && i >= len(header) {
 			putStyled(s, left+1, top+1+i, innerWidth, text, style)
 		} else {
 			put(s, left+1, top+1+i, innerWidth, text, style)

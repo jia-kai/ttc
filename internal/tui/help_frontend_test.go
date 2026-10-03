@@ -185,7 +185,6 @@ func TestPlainBusyHelpPrintsBeforeActiveResponseFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { w.Close() })
 	catalog, err := skills.Discover(context.Background(), w.Root, "")
 	if err != nil {
 		t.Fatal(err)

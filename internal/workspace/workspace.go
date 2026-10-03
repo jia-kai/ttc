@@ -1,4 +1,4 @@
-// Package workspace serializes and journals all file-tool mutations and restoration.
+// Package workspace serializes file-tool edits and restoration within one runtime.
 package workspace
 
 import (
@@ -16,10 +16,8 @@ import (
 	"sync"
 	"syscall"
 
-	"scicode/internal/history"
-	"scicode/internal/scratch"
-
 	"golang.org/x/sys/unix"
+	"scicode/internal/history"
 )
 
 // MaxFileBytes bounds each mutation's original and resulting file contents.
@@ -43,15 +41,6 @@ type PathChange struct {
 	CreatedDirs []string `json:"created_dirs,omitempty"`
 }
 
-// Manifest is the versioned filesystem journal payload.
-type Manifest struct {
-	Version    int                   `json:"version"`
-	CallID     string                `json:"call_id,omitempty"`
-	Changes    []PathChange          `json:"changes"`
-	Reversible bool                  `json:"reversible"`
-	Target     history.RestoreTarget `json:"target"`
-}
-
 // Mutation requests complete bytes or deletion. An optional Transform runs under the queue lock.
 type Mutation struct {
 	Source     string // Optional source file read under the mutation lock (for moves).
@@ -70,52 +59,32 @@ type Result struct {
 	Changes    []PathChange
 }
 
-// Manager owns a workspace lock and one shared mutation mutex for all actors.
+// Manager owns the local mutation queue shared by one runtime's actors.
 type Manager struct {
-	Root    string
-	Store   *history.Store
-	mu      sync.Mutex
-	lock    *os.File
-	blocked bool
+	Root  string
+	Store *history.Store
+	mu    sync.Mutex
 }
 
-// Open locks the workspace independently of the selected data root and recovers its journal.
+// Open resolves the workspace without locking it or recovering filesystem changes.
 func Open(root string, store *history.Store) (*Manager, error) {
-	root, e := filepath.Abs(root)
-	if e != nil {
-		return nil, e
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
 	}
-	root, e = filepath.EvalSymlinks(root)
-	if e != nil {
-		return nil, e
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
 	}
-	sum := sha256.Sum256([]byte(root))
-	lockDir, e := scratch.Verify()
-	if e != nil {
-		return nil, fmt.Errorf("verify workspace lock directory: %w", e)
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
 	}
-	f, e := os.OpenFile(filepath.Join(lockDir, "workspace-"+hex.EncodeToString(sum[:])+".lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if e != nil {
-		return nil, e
+	if !info.IsDir() {
+		return nil, errors.New("workspace must be a directory")
 	}
-	if e = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); e != nil {
-		f.Close()
-		return nil, errors.New("workspace already in use")
-	}
-	m := &Manager{Root: root, Store: store, lock: f}
-	if e = m.Recover(); e != nil {
-		m.Close()
-		return nil, e
-	}
-	if e = store.RecoverCalls(); e != nil {
-		m.Close()
-		return nil, e
-	}
-	return m, nil
+	return &Manager{Root: root, Store: store}, nil
 }
-
-// Close releases the workspace lock after all mutations have joined.
-func (m *Manager) Close() error { unix.Flock(int(m.lock.Fd()), unix.LOCK_UN); return m.lock.Close() }
 
 // Path resolves a path without granting symlink mutation access.
 func (m *Manager) Path(path string) string {
@@ -267,7 +236,8 @@ func apply(path string, s State) error {
 	return history.AtomicFile(path, data, os.FileMode(s.Mode))
 }
 
-// Apply serializes read, validation, journaling, filesystem writes, and history commit.
+// Apply serializes read, validation, filesystem writes and history commit locally.
+// Filesystem effects and the history transaction are independent; neither is recovered.
 func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutation) (Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -278,16 +248,14 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 	if metadata.CompactionError != "" {
 		return Result{}, fmt.Errorf("session unusable after compaction: %s", metadata.CompactionError)
 	}
-	if m.blocked {
-		return Result{}, errors.New("filesystem journal requires recovery")
-	}
 	if len(ops) == 0 {
 		return Result{}, errors.New("empty mutation")
 	}
 	if e := ctx.Err(); e != nil {
 		return Result{}, e
 	}
-	manifest := Manifest{Version: 1, CallID: call, Reversible: true}
+	reversible := true
+	var changes []PathChange
 	seen := map[string]bool{}
 	for _, op := range ops {
 		path := m.Path(op.Path)
@@ -342,16 +310,13 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 		}
 		rel, e := filepath.Rel(m.Root, path)
 		if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			manifest.Reversible = false
+			reversible = false
 		}
-		manifest.Changes = append(manifest.Changes, PathChange{Path: path, Before: before, After: after, CreatedDirs: missingDirs(path)})
-	}
-	if e := m.Store.Prepare(session, "apply", manifest); e != nil {
-		return Result{}, e
+		changes = append(changes, PathChange{Path: path, Before: before, After: after, CreatedDirs: missingDirs(path)})
 	}
 	var failure error
-	for i := range manifest.Changes {
-		c := &manifest.Changes[i]
+	for i := range changes {
+		c := &changes[i]
 		if e := ctx.Err(); e != nil {
 			failure = e
 			break
@@ -370,28 +335,23 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 		c.Applied = true
 	}
 	applied := 0
-	for _, c := range manifest.Changes {
+	for _, c := range changes {
 		if c.Applied {
 			applied++
 		}
 	}
-	for _, c := range manifest.Changes {
+	for _, c := range changes {
 		if !c.Applied {
 			c.After = State{}
 			cleanupDirs([]PathChange{c})
 		}
 	}
 	if applied == 0 {
-		if e := m.Store.ClearOperation(session); e != nil {
-			m.blocked = true
-			return Result{}, e
-		}
 		return Result{}, failure
 	}
-	id, e := m.Store.CommitChange(session, call, manifest.Changes, manifest.Reversible)
-	r := Result{id, manifest.Reversible, manifest.Changes}
+	id, e := m.Store.CommitChange(session, call, changes, reversible)
+	r := Result{id, reversible, changes}
 	if e != nil {
-		m.blocked = true
 		return r, fmt.Errorf("record file mutation: %w", e)
 	}
 	if failure != nil {
@@ -400,13 +360,11 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 	return r, nil
 }
 
-// Restore preflights all affected paths before journaling a branch/undo/redo change.
-func (m *Manager) Restore(ctx context.Context, session, kind string, target history.RestoreTarget) error {
+// Restore checks affected paths and applies saved bytes without executing tools.
+// A partial failure leaves the cursor unchanged; no automatic repair is attempted.
+func (m *Manager) Restore(ctx context.Context, session string, target history.RestoreTarget) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.blocked {
-		return errors.New("filesystem journal requires recovery")
-	}
 	v, e := m.Store.Session(session)
 	if e != nil {
 		return e
@@ -484,7 +442,7 @@ func (m *Manager) Restore(ctx context.Context, session, kind string, target hist
 			return e
 		}
 	}
-	manifest := Manifest{Version: 1, Target: target, Reversible: true}
+	var paths []PathChange
 	keys := make([]string, 0, len(changes))
 	for p := range changes {
 		keys = append(keys, p)
@@ -495,25 +453,18 @@ func (m *Manager) Restore(ctx context.Context, session, kind string, target hist
 		if e = current(p, c.Before); e != nil {
 			return e
 		}
-		manifest.Changes = append(manifest.Changes, *c)
+		paths = append(paths, *c)
 	}
 	if e = ctx.Err(); e != nil {
 		return e
 	}
-	if e = m.Store.Prepare(session, kind, manifest); e != nil {
-		return e
-	}
-	for _, c := range manifest.Changes {
+	for _, c := range paths {
 		if e = apply(c.Path, c.After); e != nil {
-			m.blocked = true
 			return e
 		}
 	}
-	cleanupDirs(manifest.Changes)
-	if e = m.Store.CommitRestore(session, target); e != nil {
-		m.blocked = true
-	}
-	return e
+	cleanupDirs(paths)
+	return m.Store.CommitRestore(session, target)
 }
 func cleanupDirs(changes []PathChange) {
 	var dirs []string
@@ -528,59 +479,6 @@ func cleanupDirs(changes []PathChange) {
 	}
 }
 
-// Recover resolves only an unambiguous before/after journal, never executing tools.
-func (m *Manager) Recover() error {
-	p, e := m.Store.PendingOperation()
-	if e != nil || p == nil {
-		return e
-	}
-	var pendingWorkspace string
-	if e = m.Store.DB.QueryRow("SELECT w.path FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE s.id=?", p.SessionID).Scan(&pendingWorkspace); e != nil {
-		return e
-	}
-	if pendingWorkspace != m.Root {
-		return errors.New("pending filesystem operation belongs to another workspace; recover there first")
-	}
-	var manifest Manifest
-	if e = json.Unmarshal(p.Manifest, &manifest); e != nil {
-		return e
-	}
-	if manifest.Version != 1 {
-		return errors.New("unsupported filesystem manifest version")
-	}
-	for i := range manifest.Changes {
-		c := &manifest.Changes[i]
-		if current(c.Path, c.After) == nil {
-			c.Applied = true
-		} else if current(c.Path, c.Before) == nil {
-			c.Applied = false
-		} else {
-			return fmt.Errorf("conflicting pending operation: %s", c.Path)
-		}
-	}
-	if p.Kind == "apply" {
-		any := false
-		for _, c := range manifest.Changes {
-			any = any || c.Applied
-		}
-		if !any {
-			return m.Store.ClearOperation(p.SessionID)
-		}
-		_, e = m.Store.CommitChange(p.SessionID, manifest.CallID, manifest.Changes, manifest.Reversible)
-		return e
-	}
-	// Finish an interrupted restore only when every path still matches a recorded state.
-	for _, c := range manifest.Changes {
-		if !c.Applied {
-			if e = apply(c.Path, c.After); e != nil {
-				return e
-			}
-		}
-	}
-	cleanupDirs(manifest.Changes)
-	return m.Store.CommitRestore(p.SessionID, manifest.Target)
-}
-
 // Admit serializes a context/turn checkpoint with complete file mutations. The
 // callback must not call Apply or Restore, which own the same gate.
 func (m *Manager) Admit(ctx context.Context, fn func() error) error {
@@ -588,9 +486,6 @@ func (m *Manager) Admit(ctx context.Context, fn func() error) error {
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	if m.blocked {
-		return errors.New("filesystem journal requires recovery")
 	}
 	return fn()
 }

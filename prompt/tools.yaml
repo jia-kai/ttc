@@ -76,15 +76,17 @@ read:
     Continue with next_offset. Paths may be absolute or relative to cwd.
 shell:
   description: >-
-    Run command with /bin/sh and set -eu; strict=false disables errexit/nounset.
-    pipefail is not enabled. workdir defaults to cwd. Ordinary commands have
-    closed stdin. Foreground calls wait, with timeout_ms=120000 by default;
-    background=true returns a job_id immediately and has no default timeout.
-    timeout_ms=0 disables the timeout. wake_on_exit defaults to true, delivering
-    background completion notifications. Inspect exit_code: a nonzero command
-    exit is a job result, not a tool error. Output contains short stdout/stderr
-    tails; use job_read for more. protocol=lsp with background=true connects
-    stdin/stdout to lsp_query. Use tmux for work that must survive TTC exit.
+    Run command with /bin/sh and set -eu; strict=false disables
+    errexit/nounset. pipefail is not enabled. workdir defaults to cwd. Ordinary
+    commands have closed stdin. Foreground calls wait with timeout_ms=20000 by
+    default; their timeout cannot be disabled (explicit values must be 1–86400000
+    ms). background=true returns a job_id immediately and has no default
+    timeout; optionally set timeout_ms=1–86400000, or 0 for no timeout.
+    wake_on_exit defaults to true, delivering background completion
+    notifications. Inspect exit_code: a nonzero command exit is a job result, not
+    a tool error. Output contains short stdout/stderr tails; use job_read for
+    more. protocol=lsp with background=true connects stdin/stdout to lsp_query.
+    Use tmux for work that must survive TTC exit.
   notes:
     descendant_pipes: >
       Descendants kept output pipes open after the shell exited. Run the

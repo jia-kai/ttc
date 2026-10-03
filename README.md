@@ -120,7 +120,22 @@ Start TTC in your project directory, or select the workspace explicitly:
 
 Use `/help` for the keyboard and command guide. Up/Down recall prompts across
 sessions and restarts. Ctrl-R searches the most recent 1000 prompts (at most
-8 MiB), newest matches first; Enter fills the input and Esc cancels.
+8 MiB), newest matches first. Every whitespace-separated term must match a
+case-insensitive substring, in any order; matches are highlighted. Enter fills
+the input and Esc cancels.
+
+Multiple TTC instances can share the default data directory and the same
+workspace. Each starts an independent conversation; workspace conflicts are
+your responsibility. `/load ID` or `--session ID` copies writable history into a
+new session at its last complete tool exchange, with only new work undoable.
+Archived predecessors open read-only. Loading never restores files or live jobs.
+TTC does not repair interrupted work; files can be ahead of saved history after
+a crash. Incompatible history schemas are rejected; use a new `--data-dir`.
+
+The first model request includes cwd, whether Git inspection found a repository,
+and its branch (`detached` when HEAD has no branch). Git is optional.
+Foreground shell commands default to a 20-second timeout and cannot disable it.
+Background commands have no default timeout; they can set an explicit deadline.
 
 Background jobs, subagents, and timers belong to the active runtime. Compaction
 preserves them; switching sessions or exiting cancels them. Use tmux for work

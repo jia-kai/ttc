@@ -30,7 +30,6 @@ func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { w.Close() })
 	model := provider.ScriptModel()
 	selection := provider.Selection{Provider: "script", Model: model, Variant: "none"}
 	catalog, e := skills.Discover(context.Background(), w.Root, "")

@@ -127,7 +127,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+
 	models := menuModels()
 	selection := provider.Selection{Provider: "script", Model: models[0], Variant: "low"}
 	catalog, err := skills.Discover(context.Background(), w.Root, "")

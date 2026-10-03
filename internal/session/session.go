@@ -606,16 +606,12 @@ func (r *Runtime) Command(text string) (string, error) {
 				return "", errors.New("session belongs to another workspace")
 			}
 		}
-		// Reject broken targets before changing their metadata or canceling the
-		// current runtime. Load rechecks archives after live workers have joined.
-		if e = r.Store.ValidateArchive(v.ID); e != nil {
-			return "", e
-		}
-		selection := r.CurrentSelection()
-		promptEntry, e := RefreshInstructions(r.Store, v)
+		// Prepare an independent snapshot before canceling the current runtime.
+		v, e = r.Store.Load(arg)
 		if e != nil {
 			return "", e
 		}
+		selection := r.CurrentSelection()
 		var switchEntry int64
 		switchText := ""
 		if v.ReadOnly {
@@ -631,24 +627,12 @@ func (r *Runtime) Command(text string) (string, error) {
 		r.Jobs.Close()
 		r.timers.close()
 		r.clearImages()
-		e = r.Workspace.Admit(r.ctx, func() error {
-			var err error
-			v, err = r.Store.Load(arg)
-			return err
-		})
-		if e != nil {
-			r.resetTransient()
-			return "", e
-		}
 		r.mu.Lock()
 		r.current = v.ID
 		r.persisted = true
 		r.selection = selection
 		r.mu.Unlock()
 		r.resetTransient()
-		if promptEntry != 0 {
-			r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
-		}
 
 		if switchEntry != 0 {
 			r.emit(Event{Kind: "status", Text: switchText, EntryID: switchEntry, SessionID: v.ID})
@@ -677,7 +661,7 @@ func (r *Runtime) Command(text string) (string, error) {
 		if e != nil {
 			return "", e
 		}
-		e = r.Workspace.Restore(r.ctx, r.Current(), strings.TrimPrefix(parts[0], "/"), target)
+		e = r.Workspace.Restore(r.ctx, r.Current(), target)
 		return strings.TrimPrefix(parts[0], "/") + " completed", e
 	case "/branch":
 		id, err := strconv.ParseInt(arg, 10, 64)

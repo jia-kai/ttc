@@ -10,6 +10,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+// wrapStyled preserves trusted SGR and makes each wrapped row self-contained.
+func wrapStyled(text string, width int) []string {
+	return styledRows(ansi.Hardwrap(strings.ReplaceAll(text, "\t", "    "), max(1, width), true))
+}
+
 // styledRows makes each viewport row self-contained, preserving SGR across wraps.
 func styledRows(text string) []string {
 	parser := ansi.NewParser()

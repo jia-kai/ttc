@@ -51,8 +51,8 @@ func TestSessionPickerReloadPreservesEditedDraft(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Retained composer draft")
 	assertNoCommandWindow(t, u.wait(t, "Original research"))
-	if u.runtime.Current() != first {
-		t.Fatal("picker submitted draft instead of reloading")
+	if u.runtime.Current() == first {
+		t.Fatal("picker did not create an independent session")
 	}
 	var turns int
 	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM turns").Scan(&turns); err != nil || turns != 1 {
@@ -110,8 +110,8 @@ func TestSessionPickerLoadsSelectedSession(t *testing.T) {
 	u.key(tcell.KeyDown)
 	u.key(tcell.KeyEnter)
 	frame := u.wait(t, "First session evidence")
-	if u.runtime.Current() != first {
-		t.Fatal("picker did not reload selected session")
+	if u.runtime.Current() == first {
+		t.Fatal("picker did not create an independent loaded session")
 	}
 	assertNoCommandWindow(t, frame)
 }

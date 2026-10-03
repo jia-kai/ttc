@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"scicode/internal/workspace"
 	"strings"
 	"testing"
 	"time"
@@ -141,7 +142,7 @@ func TestSidebarSharedRollingTextShowsAllOverflowingFields(t *testing.T) {
 	s.SetSize(120, 60)
 	b := newSidebar()
 	b.sessionName = strings.Repeat("Session ", 6) + "session-tail"
-	b.workspace = workspaceInfo{cwd: "/" + strings.Repeat("project/", 6) + "cwd-tail", repo: "/" + strings.Repeat("repository/", 6) + "repo-tail", branch: strings.Repeat("research-", 6) + "branch-tail"}
+	b.workspace = workspace.GitInfo{Cwd: "/" + strings.Repeat("project/", 6) + "cwd-tail", Repo: "/" + strings.Repeat("repository/", 6) + "repo-tail", Branch: strings.Repeat("research-", 6) + "branch-tail"}
 	usage := session.ContextUsage{Model: strings.Repeat("Model ", 6) + "model-tail", Limit: 10000}
 	timers := []session.TimerView{{ID: "timer-id", Name: strings.Repeat("Timer ", 6) + "timer-tail", NextAt: "soon"}}
 	b.update(usage, nil, timers)
@@ -438,7 +439,7 @@ func TestSidebarTinyPanes(t *testing.T) {
 		for _, height := range []int{1, 2, 3, 8, 20} {
 			s.SetSize(width, height)
 			b := newSidebar()
-			b.workspace = workspaceInfo{cwd: "/research/project", repo: "/research", branch: "main"}
+			b.workspace = workspace.GitInfo{Cwd: "/research/project", Repo: "/research", Branch: "main"}
 			b.overlay = true
 			b.bounds(width, height, false)
 			b.draw(s)

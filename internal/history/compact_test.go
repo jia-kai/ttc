@@ -3,12 +3,213 @@ package history
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	ctxmgr "scicode/internal/context"
 	"scicode/internal/provider"
 )
+
+func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *testing.T) {
+	s, original, firstTurn, _ := historyFixture(t)
+	if err := s.FinishTurn(firstTurn, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	queue := provider.Message{Role: "user", Content: "queued with snapshot", InputSource: "queue", Images: []provider.Image{{Path: "plot.png", DataURL: "data:image/png;base64,snapshot"}}}
+	turn, queued, err := s.AdmitTurn(original.ID, "user", original.Model, &queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := s.AdmitRequest(original.ID, turn, "main", original.Model, nil, nil, nil,
+		provider.Message{Role: "user", Content: "first steer"}, provider.Message{Role: "user", Content: "second steer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail, err := s.Append(original.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "balanced completed suffix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishTurn(turn, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := s.ArchiveTranscript(original.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := append([]int64{original.EntryTip, queued}, admitted.SteerEntries...)
+	source, err := s.Continue(original.ID, "summary", archive, tail, ids, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := s.Messages(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Load(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := s.Load(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Messages(loaded.ID); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatal("load lost historical input markers or snapshots", got, want, err)
+	}
+	originalInputs := map[int64]provider.Message{}
+	entries, err := s.Branch(source.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Role == "user" && entry.Visible {
+			var message provider.Message
+			if err := json.Unmarshal(entry.Content, &message); err != nil {
+				t.Fatal(err)
+			}
+			originalInputs[entry.EventSeq()] = message
+		}
+	}
+	for cut := range 3 {
+		entries, err := s.Branch(loaded.ID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = nil
+		for _, entry := range entries {
+			if entry.Role == "user" && entry.Visible {
+				ids = append(ids, entry.ID)
+			}
+		}
+		archive, err := s.ArchiveTranscript(loaded.ID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		boundary := loaded.UndoFloor
+		if cut == 2 {
+			boundary = loaded.EntryTip + 1 // Summarize the exact imported floor too.
+		}
+		loaded, err = s.Continue(loaded.ID, "copy summary", archive, boundary, ids, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.UndoTarget(loaded.ID); err == nil {
+			t.Fatal("compaction made imported history undoable")
+		}
+		messages, err := s.Messages(loaded.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		markers := 0
+		for i, message := range messages {
+			if message.Role == "developer" && strings.Contains(message.Content, `"type":"retained_input"`) {
+				markers++
+				if message.Runtime || i+1 >= len(messages) || messages[i+1].Role != "user" {
+					t.Fatal("unpaired or live input marker", message)
+				}
+			}
+		}
+		if markers != 4 {
+			t.Fatal("lost or duplicated input markers", markers)
+		}
+		entries, err = s.Branch(loaded.ID, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.Role == "user" && entry.Visible {
+				var message provider.Message
+				if err := json.Unmarshal(entry.Content, &message); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(message, originalInputs[entry.EventSeq()]) {
+					t.Fatal("lost original input identity, timestamp or snapshot", message)
+				}
+				if entry.ID < loaded.UndoFloor {
+					if _, err := s.BranchTarget(loaded.ID, entry.ID); err == nil {
+						t.Fatal("compaction made imported checkpoint restorable", entry)
+					}
+				} else if entry.ID != loaded.UndoFloor {
+					t.Fatal("imported checkpoint escaped the undo floor", entry, loaded.UndoFloor)
+				}
+			}
+		}
+	}
+	if after, err := s.Session(source.ID); err != nil || !reflect.DeepEqual(source, after) {
+		t.Fatal("compaction changed source session", after, source, err)
+	}
+	if got, err := s.Messages(sibling.ID); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatal("compaction changed sibling", got, err)
+	}
+	for _, id := range []string{firstTurn, turn} {
+		var owner string
+		if err := s.DB.QueryRow("SELECT session_id FROM turns WHERE id=?", id).Scan(&owner); err != nil || owner != source.ID {
+			t.Fatal("loaded compaction stole source turn", owner, err)
+		}
+	}
+	// Moving source checkpoints to newer physical IDs must not make imported
+	// work undoable in the independently compacted copy.
+	entries, err = s.Branch(source.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = nil
+	for _, entry := range entries {
+		if entry.Role == "user" && entry.Visible {
+			ids = append(ids, entry.ID)
+		}
+	}
+	archive, err = s.ArchiveTranscript(source.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Continue(source.ID, "independent source summary", archive, source.EntryTip+1, ids, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UndoTarget(loaded.ID); err == nil {
+		t.Fatal("source compaction made imported work undoable")
+	}
+	entries, err = s.Branch(loaded.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Role == "user" && entry.Visible {
+			target, err := s.BranchSelectionTarget(loaded.ID, entry.ID)
+			if entry.ID < loaded.UndoFloor && err == nil {
+				t.Fatal("source compaction made imported input selectable", entry)
+			}
+			if entry.ID == loaded.UndoFloor && (err != nil || target.EntryTip != loaded.UndoFloor || target.FileTip != loaded.FileTip) {
+				t.Fatal("inclusive imported baseline is no longer selectable", target, err)
+			}
+		}
+	}
+}
+
+func TestUndoRejectsForeignOrUnselectedCheckpoint(t *testing.T) {
+	for _, fault := range []string{"foreign owner", "unselected checkpoint"} {
+		t.Run(fault, func(t *testing.T) {
+			s, source, turn, _ := historyFixture(t)
+			loaded, err := s.Load(source.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fault == "foreign owner" {
+				if _, err := s.DB.Exec("UPDATE turns SET session_id=? WHERE id=?", loaded.ID, turn); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := s.DB.Exec("UPDATE turns SET start_entry_id=? WHERE id=?", loaded.EntryTip, turn); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.UndoTarget(source.ID); err == nil {
+				t.Fatal("invalid checkpoint accepted", fault)
+			}
+		})
+	}
+}
 
 func TestMessagesUsesOriginalHumanInputMetadata(t *testing.T) {
 	s, session, initialTurn, _ := historyFixture(t)

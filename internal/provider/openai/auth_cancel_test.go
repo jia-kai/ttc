@@ -24,6 +24,9 @@ func TestAuthenticationWaitCanBeCanceledDuringAnotherRefresh(t *testing.T) {
 			})
 			a.credentials.Tokens.Access = "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1}`)) + ".signature"
 			a.credentials.Tokens.Refresh = "synthetic-refresh"
+			if err := a.save(*a.credentials); err != nil {
+				t.Fatal(err)
+			}
 			owner := make(chan error, 1)
 			go func() { _, err := a.auth(context.Background()); owner <- err }()
 			<-entered
@@ -70,6 +73,9 @@ func TestCanceledOwnRefreshPreservesCancellation(t *testing.T) {
 			a := adapterFixture(t, func(http.ResponseWriter, *http.Request) { t.Error("unexpected HTTP handler") })
 			a.credentials.Tokens.Access = "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1}`)) + ".signature"
 			a.credentials.Tokens.Refresh = "synthetic-refresh"
+			if err := a.save(*a.credentials); err != nil {
+				t.Fatal(err)
+			}
 			a.Client.Transport = retryTransport(func(req *http.Request) (*http.Response, error) {
 				if stage == "transport" {
 					<-req.Context().Done()
@@ -109,6 +115,9 @@ func TestRefreshFailuresPreserveRecoverability(t *testing.T) {
 			a := adapterFixture(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(test.status) })
 			a.credentials.Tokens.Access = "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1}`)) + ".signature"
 			a.credentials.Tokens.Refresh = "synthetic-refresh"
+			if err := a.save(*a.credentials); err != nil {
+				t.Fatal(err)
+			}
 			if test.status == 0 {
 				a.Client.Transport = retryTransport(func(*http.Request) (*http.Response, error) {
 					return nil, errors.New("private transport diagnostic")
@@ -140,6 +149,9 @@ func TestRefreshRetriesNotifyUIBeforeResponse(t *testing.T) {
 	})
 	a.credentials.Tokens.Access = "header." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1}`)) + ".signature"
 	a.credentials.Tokens.Refresh = "synthetic-refresh"
+	if err := a.save(*a.credentials); err != nil {
+		t.Fatal(err)
+	}
 	err := a.Stream(context.Background(), provider.Request{ConversationID: "test", Selection: provider.Selection{Provider: "openai", Model: provider.ScriptModel()}, MaxAttempts: 2}, func(ev provider.StreamEvent) error {
 		if ev.Kind == "retry" {
 			retries++

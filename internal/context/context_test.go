@@ -194,7 +194,7 @@ func TestInputMarkerSourceAndOriginalAge(t *testing.T) {
 	for _, source := range []string{"", "normal", "queue", "steer", "task", "btw"} {
 		message := provider.Message{Role: "user", Content: "unchanged", InputSource: source, InputTimeMS: at.UnixMilli() - 98765}
 		marker, err := InputMarker(message, at)
-		if err != nil || marker.Role != "developer" || !marker.Runtime || !strings.HasPrefix(marker.Content, prompts.RetainedInput+"\n") {
+		if err != nil || marker.Role != "developer" || marker.Runtime || !strings.HasPrefix(marker.Content, prompts.RetainedInput+"\n") {
 			t.Fatal(marker, err)
 		}
 		var metadata struct {

@@ -1,4 +1,4 @@
-// Package history stores immutable conversation trees and filesystem journals.
+// Package history stores immutable conversation trees and file-tool snapshots.
 package history
 
 import (
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"scicode/internal/filelock"
 	"scicode/internal/provider"
 	"scicode/internal/render"
 
@@ -30,25 +32,23 @@ import (
 //go:embed schema.sql
 var schema string
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 // Store serializes commits; callers must close it after stopping runtime workers.
 type Store struct {
-	DB    *sql.DB
-	Root  string
-	Reset bool // True when Open discarded incompatible history, assets and credentials.
-	mu    sync.Mutex
-	lock  *os.File
+	DB   *sql.DB
+	Root string
+	mu   sync.Mutex
 }
 
 // Session identifies the selected history/file tips. Zero tips mean an empty tree.
 type Session struct {
-	CompactionError                                   string // Nonempty permanently disables inference in this context; history remains inspectable.
-	ID, WorkspaceID, LineageID, Name                  string
-	ReadOnly                                          bool
-	EntryTip, FileTip, RedoTip, UndoFloor, Generation int64
-	Model                                             provider.Selection
-	LastActivityMS                                    int64 // Unix milliseconds; date grouping uses the frontend local timezone.
+	CompactionError                       string // Nonempty permanently disables inference in this context; history remains inspectable.
+	ID, WorkspaceID, LineageID, Name      string
+	ReadOnly                              bool
+	EntryTip, FileTip, RedoTip, UndoFloor int64
+	Model                                 provider.Selection
+	LastActivityMS                        int64 // Unix milliseconds; date grouping uses the frontend local timezone.
 }
 
 // Entry is one immutable node in chronological history.
@@ -79,10 +79,8 @@ func DataRoot() (string, error) {
 	return filepath.Join(h, ".local/share/ttc"), e
 }
 
-// Open obtains the process lock and marks uncertain requests interrupted.
-// An incompatible schema rebuilds the data root, deleting history, assets and
-// credentials while retaining the held lock inode. I/O/corruption errors do not reset it.
-// Finalize filesystem recovery before calling RecoverCalls to close uncertain tools.
+// Open opens shared history without recovering work or changing existing records.
+// Empty databases initialize atomically; incompatible schemas are rejected.
 func Open(root string) (*Store, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -91,87 +89,46 @@ func Open(root string) (*Store, error) {
 	if err = PrivateDir(root); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(root, "process.lock"), os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
+	// SQLite's initial transition into WAL can return BUSY without invoking its
+	// busy handler. Serialize only connection/schema setup, never session work.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	lock, err := filelock.Acquire(ctx, filepath.Join(root, "history-init.lock"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize shared history: %w", err)
 	}
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		f.Close()
-		if err != nil {
-			return nil, fmt.Errorf("stat data-root lock: %w", err)
-		}
-		return nil, errors.New("data-root lock must be a regular file")
-	}
-	if err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("data root already in use: %w", err)
-	}
+	defer lock.Close()
 	db, err := openDatabase(root)
 	if err != nil {
-		f.Close()
 		return nil, err
 	}
-	s := &Store{DB: db, Root: root, lock: f}
-	fail := func(err error) (*Store, error) { s.Close(); return nil, err }
-	var version int
-	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return fail(err)
-	}
-	unversioned := false
-	if version == 0 {
-		if err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%')").Scan(&unversioned); err != nil {
-			return fail(err)
+	s := &Store{DB: db, Root: root}
+	err = s.transact(func(tx *sql.Tx) error {
+		var version int
+		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+			return err
 		}
-	}
-	if version != schemaVersion && (version != 0 || unversioned) {
-		if err = db.Close(); err != nil {
-			return fail(fmt.Errorf("close incompatible history: %w", err))
+		if version == schemaVersion {
+			return nil
 		}
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			return fail(fmt.Errorf("read incompatible data root: %w", err))
+		var nonempty bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%')").Scan(&nonempty); err != nil {
+			return err
 		}
-		for _, entry := range entries {
-			if entry.Name() == "process.lock" {
-				continue
-			}
-			if err = os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
-				return fail(fmt.Errorf("discard incompatible data %s: %w", entry.Name(), err))
-			}
+		if version != 0 || nonempty {
+			return fmt.Errorf("incompatible history schema %d (require %d); select a new --data-dir", version, schemaVersion)
 		}
-		db, err = openDatabase(root)
-		if err != nil {
-			return fail(err)
-		}
-		s.DB, s.Reset = db, true
-		version = 0
-	}
-	if version == 0 {
-		tx, e := db.Begin()
-		if e != nil {
-			return fail(e)
-		}
-		if _, e = tx.Exec(schema); e != nil {
-			tx.Rollback()
-			return fail(e)
-		}
-		if e = tx.Commit(); e != nil {
-			return fail(e)
-		}
-	}
-	if err = os.Chmod(filepath.Join(root, "history.sqlite"), 0600); err != nil {
-		return fail(err)
-	}
-	// Results for uncertain calls are committed without executing the old call.
-	_, err = db.Exec(`UPDATE turns SET status='interrupted',finished_ms=? WHERE status='running'; UPDATE model_requests SET status='interrupted' WHERE status='running'`, time.Now().UnixMilli())
+		_, err := tx.Exec(schema)
+		return err
+	})
 	if err != nil {
-		return fail(err)
+		db.Close()
+		return nil, err
 	}
 	return s, nil
 }
 
-// openDatabase configures one connection; its caller already holds process.lock.
+// openDatabase uses immediate transactions to serialize short commits across processes.
 func openDatabase(root string) (*sql.DB, error) {
 	path := filepath.Join(root, "history.sqlite")
 	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
@@ -183,12 +140,24 @@ func openDatabase(root string) (*sql.DB, error) {
 			return nil, fmt.Errorf("stat history.sqlite%s: %w", suffix, err)
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
+	if err != nil {
+		return nil, err
+	}
+	err = f.Chmod(0600)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	uri := url.URL{Scheme: "file", Path: path, RawQuery: "_txlock=immediate"}
+	db, err := sql.Open("sqlite", uri.String())
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000"} {
+	for _, q := range []string{"PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL"} {
 		if _, err = db.Exec(q); err != nil {
 			db.Close()
 			return nil, err
@@ -212,17 +181,8 @@ func PrivateDir(p string) error {
 	return nil
 }
 
-// Close releases the database and process lock.
-func (s *Store) Close() error {
-	err := s.DB.Close()
-	if s.lock != nil {
-		unix.Flock(int(s.lock.Fd()), unix.LOCK_UN)
-		if e := s.lock.Close(); err == nil {
-			err = e
-		}
-	}
-	return err
-}
+// Close closes history after the runtime workers have stopped.
+func (s *Store) Close() error { return s.DB.Close() }
 func n(v int64) any {
 	if v == 0 {
 		return nil
@@ -270,11 +230,10 @@ func (s *Store) StartSession(id, path string, model provider.Selection, message 
 		if _, e := tx.Exec("INSERT INTO workspaces(id,path) VALUES(?,?) ON CONFLICT(path) DO NOTHING", wid, path); e != nil {
 			return e
 		}
-		var gen int64
-		if e := tx.QueryRow("SELECT id,generation FROM workspaces WHERE path=?", path).Scan(&wid, &gen); e != nil {
+		if e := tx.QueryRow("SELECT id FROM workspaces WHERE path=?", path).Scan(&wid); e != nil {
 			return e
 		}
-		_, e := tx.Exec(`INSERT INTO sessions(id,workspace_id,lineage_id,name,name_source,model_json,observed_generation,last_activity_ms,metadata_json) VALUES(?,?,?,'New session','default',?,?,?,'{}')`, id, wid, id, string(m), gen, time.Now().UnixMilli())
+		_, e := tx.Exec(`INSERT INTO sessions(id,workspace_id,lineage_id,name,name_source,model_json,last_activity_ms,metadata_json) VALUES(?,?,?,'New session','default',?,?,'{}')`, id, wid, id, string(m), time.Now().UnixMilli())
 		if e != nil {
 			return e
 		}
@@ -317,30 +276,12 @@ func (s *Store) RenameSession(id, name string) error {
 func (s *Store) Session(id string) (Session, error) {
 	var v Session
 	var model string
-	e := s.DB.QueryRow(`SELECT id,workspace_id,lineage_id,name,read_only,coalesce(active_entry_id,0),coalesce(file_tip_id,0),coalesce(redo_entry_id,0),coalesce(undo_floor_id,0),observed_generation,model_json,last_activity_ms,coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?`, id).Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &v.Generation, &model, &v.LastActivityMS, &v.CompactionError)
+	e := s.DB.QueryRow(`SELECT id,workspace_id,lineage_id,name,read_only,coalesce(active_entry_id,0),coalesce(file_tip_id,0),coalesce(redo_entry_id,0),coalesce(undo_floor_id,0),model_json,last_activity_ms,coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?`, id).Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &model, &v.LastActivityMS, &v.CompactionError)
 	if e != nil {
 		return v, e
 	}
 	e = json.Unmarshal([]byte(model), &v.Model)
 	return v, e
-}
-
-// Load sets an undo floor when another session has changed this workspace.
-func (s *Store) Load(id string) (Session, error) {
-	if err := s.ValidateArchive(id); err != nil {
-		return Session{}, err
-	}
-	e := s.transact(func(tx *sql.Tx) error {
-		_, e := tx.Exec(`UPDATE sessions SET undo_floor_id=active_entry_id,redo_entry_id=NULL,observed_generation=(SELECT generation FROM workspaces WHERE id=workspace_id) WHERE id=? AND observed_generation!=(SELECT generation FROM workspaces WHERE id=workspace_id)`, id)
-		return e
-	})
-	if e != nil {
-		return Session{}, e
-	}
-	if _, err := s.DB.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", time.Now().UnixMilli(), id); err != nil {
-		return Session{}, err
-	}
-	return s.Session(id)
 }
 
 // Sessions returns up to 100 sessions belonging to the absolute workspace path, newest activity
@@ -350,7 +291,7 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("session listing requires an absolute workspace path")
 	}
-	rows, err := s.DB.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.observed_generation,s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
+	rows, err := s.DB.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +300,7 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 	for rows.Next() {
 		var v Session
 		var model string
-		if err := rows.Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &v.Generation, &model, &v.LastActivityMS, &v.CompactionError); err != nil {
+		if err := rows.Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &model, &v.LastActivityMS, &v.CompactionError); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(model), &v.Model); err != nil {
@@ -422,9 +363,6 @@ func (s *Store) FinishTurn(id, status string) error {
 	return s.transact(func(tx *sql.Tx) error {
 		var session, actor string
 		if err := tx.QueryRow("SELECT session_id,actor_id FROM turns WHERE id=?", id).Scan(&session, &actor); err != nil {
-			return err
-		}
-		if err := tx.QueryRow("SELECT id FROM sessions WHERE lineage_id=(SELECT lineage_id FROM sessions WHERE id=?) AND read_only=0", session).Scan(&session); err != nil {
 			return err
 		}
 		result, err := tx.Exec("UPDATE turns SET status=?,finished_ms=? WHERE id=? AND status='running'", status, time.Now().UnixMilli(), id)
@@ -634,8 +572,10 @@ func (s *Store) FinishRequest(id int64, status string, attempts any) error {
 		if err := tx.QueryRow("SELECT session_id,coalesce(turn_id,''),actor_id FROM model_requests WHERE id=?", id).Scan(&session, &turn, &actor); err != nil {
 			return err
 		}
-		// A main continuation routes active requests into its writable successor.
-		if err := tx.QueryRow("SELECT id FROM sessions WHERE lineage_id=(SELECT lineage_id FROM sessions WHERE id=?) AND read_only=0", session).Scan(&session); err != nil {
+		if err := tx.QueryRow(`WITH RECURSIVE successors AS (
+            SELECT id,read_only FROM sessions WHERE id=?
+            UNION ALL SELECT s.id,s.read_only FROM sessions s JOIN successors p ON s.predecessor_id=p.id
+        ) SELECT id FROM successors WHERE read_only=0`, session).Scan(&session); err != nil {
 			return err
 		}
 		if _, err := tx.Exec("UPDATE model_requests SET status=?,attempts_json=? WHERE id=?", status, string(b), id); err != nil {

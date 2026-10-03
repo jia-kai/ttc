@@ -44,7 +44,7 @@ func TestBranchRestoreMixedActorsSiblingFilesAndShellConflict(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return w.Restore(context.Background(), saved.ID, "branch", target)
+		return w.Restore(context.Background(), saved.ID, target)
 	}
 	if err = restore(saved.EntryTip); err != nil {
 		t.Fatal(err)

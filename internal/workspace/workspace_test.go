@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"scicode/internal/history"
 	"scicode/internal/provider"
-	"scicode/internal/scratch"
 	"strings"
 	"sync"
 	"testing"
@@ -35,9 +34,6 @@ func TestMutationReadsRejectShellGrownFile(t *testing.T) {
 
 func fixture(t *testing.T) (*Manager, history.Session, string, int64) {
 	t.Helper()
-	if _, e := scratch.Verify(); e != nil {
-		t.Fatal(e)
-	}
 	s, e := history.Open(filepath.Join(t.TempDir(), "data"))
 	if e != nil {
 		t.Fatal(e)
@@ -48,7 +44,6 @@ func fixture(t *testing.T) (*Manager, history.Session, string, int64) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(func() { w.Close() })
 	model := provider.Selection{Model: provider.ScriptModel()}
 	id := history.NewID("session")
 	turn, _, e := s.StartSession(id, root, model, provider.Message{Role: "user", Content: "edit"})
@@ -103,11 +98,11 @@ func TestSerializedEditsUndoRedoAndExternalConflict(t *testing.T) {
 		t.Fatal(e)
 	}
 	os.WriteFile(filepath.Join(w.Root, "x"), []byte("external"), 0644)
-	if e = w.Restore(ctx, v.ID, "undo", target); e == nil {
+	if e = w.Restore(ctx, v.ID, target); e == nil {
 		t.Fatal("overwrote external change")
 	}
 	os.WriteFile(filepath.Join(w.Root, "x"), data, 0644)
-	if e = w.Restore(ctx, v.ID, "undo", target); e != nil {
+	if e = w.Restore(ctx, v.ID, target); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = os.Stat(filepath.Join(w.Root, "x")); !os.IsNotExist(e) {
@@ -117,7 +112,7 @@ func TestSerializedEditsUndoRedoAndExternalConflict(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = w.Restore(ctx, v.ID, "redo", redo); e != nil {
+	if e = w.Restore(ctx, v.ID, redo); e != nil {
 		t.Fatal(e)
 	}
 	after, _ := os.ReadFile(filepath.Join(w.Root, "x"))
@@ -142,107 +137,6 @@ func TestSymlinksHardlinksAndPreflightAtomicity(t *testing.T) {
 		t.Fatal("accepted hardlink")
 	}
 }
-func TestJournalRecoveryAfterAppliedBytes(t *testing.T) {
-	w, v, turn, req := fixture(t)
-	id := intent(t, w, v, turn, req)
-	blob, e := w.Store.Artifact(v.ID, "snapshots", []byte("new"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	state := State{Exists: true, Mode: 0644, Hash: hash([]byte("new")), Blob: blob}
-	manifest := Manifest{Version: 1, CallID: id, Reversible: true, Changes: []PathChange{{Path: filepath.Join(w.Root, "x"), After: state}}}
-	if e = w.Store.Prepare(v.ID, "apply", manifest); e != nil {
-		t.Fatal(e)
-	}
-	if e = apply(filepath.Join(w.Root, "x"), state); e != nil {
-		t.Fatal(e)
-	}
-	if e = w.Recover(); e != nil {
-		t.Fatal(e)
-	}
-	pending, e := w.Store.PendingOperation()
-	if e != nil || pending != nil {
-		t.Fatal(pending, e)
-	}
-	changes, e := w.Store.Session(v.ID)
-	if e != nil || changes.FileTip == 0 {
-		t.Fatal(changes, e)
-	}
-}
-
-func TestRestartJournalThenCallRecoveryPreservesRedoTip(t *testing.T) {
-	if _, e := scratch.Verify(); e != nil {
-		t.Fatal(e)
-	}
-	root, data := t.TempDir(), filepath.Join(t.TempDir(), "data")
-	store, e := history.Open(data)
-	if e != nil {
-		t.Fatal(e)
-	}
-	model := provider.Selection{Model: provider.ScriptModel()}
-	id := history.NewID("session")
-	turn, _, e := store.StartSession(id, root, model, provider.Message{Role: "user", Content: "write"})
-	if e != nil {
-		t.Fatal(e)
-	}
-	v, e := store.Session(id)
-	if e != nil {
-		t.Fatal(e)
-	}
-	req, e := store.StartRequest(v.ID, turn, "main", "coding", model)
-	if e != nil {
-		t.Fatal(e)
-	}
-	_, ids, e := store.Assistant(v.ID, turn, "main", req, provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"x","content":"restored"}`)}}})
-	if e != nil {
-		t.Fatal(e)
-	}
-	blob, e := store.Artifact(v.ID, "snapshots", []byte("restored"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	state := State{Exists: true, Mode: 0644, Hash: hash([]byte("restored")), Blob: blob}
-	manifest := Manifest{Version: 1, CallID: ids[0], Reversible: true, Changes: []PathChange{{Path: filepath.Join(root, "x"), After: state}}}
-	if e = store.Prepare(v.ID, "apply", manifest); e != nil {
-		t.Fatal(e)
-	}
-	if e = apply(filepath.Join(root, "x"), state); e != nil {
-		t.Fatal(e)
-	}
-	store.Close()
-	store, e = history.Open(data)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer store.Close()
-	w, e := Open(root, store)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer w.Close()
-	target, e := store.UndoTarget(v.ID)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = w.Restore(context.Background(), v.ID, "undo", target); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = os.Stat(filepath.Join(root, "x")); !os.IsNotExist(e) {
-		t.Fatal("undo failed")
-	}
-	redo, e := store.BranchTarget(v.ID, target.RedoTip)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = w.Restore(context.Background(), v.ID, "redo", redo); e != nil {
-		t.Fatal(e)
-	}
-	b, e := os.ReadFile(filepath.Join(root, "x"))
-	if e != nil || string(b) != "restored" {
-		t.Fatal(string(b), e)
-	}
-}
-
 func TestOutsideWorkspaceEditIsExplicitlyNonUndoable(t *testing.T) {
 	w, v, turn, req := fixture(t)
 	outside := filepath.Join(t.TempDir(), "outside")
@@ -257,7 +151,7 @@ func TestOutsideWorkspaceEditIsExplicitlyNonUndoable(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = w.Restore(context.Background(), v.ID, "undo", target); e == nil {
+	if e = w.Restore(context.Background(), v.ID, target); e == nil {
 		t.Fatal("outside edit was undoable")
 	}
 	data, e := os.ReadFile(outside)

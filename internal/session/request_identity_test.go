@@ -44,7 +44,7 @@ func TestRequestIdentityAcrossToolBoundariesChildrenTurnsAndSessionChanges(t *te
 	if err := r.Run(&provider.Message{Role: "user", Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) != 7 || ids[0] != original || ids[3] != original || ids[4] != original || ids[5] != next || ids[6] != original || next == original {
+	if len(ids) != 7 || ids[0] != original || ids[3] != original || ids[4] != original || ids[5] != next || ids[6] != r.Current() || r.Current() == original || next == original {
 		t.Fatal("incorrect main conversation identities", ids)
 	}
 	if ids[1] != ids[2] || !strings.HasPrefix(ids[1], "main/child_") || ids[1] == original || ids[1] == next {

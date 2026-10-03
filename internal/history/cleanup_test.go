@@ -45,9 +45,6 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Prepare(v.ID, "apply", map[string]string{"path": "result.txt"}); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := s.CommitChange(v.ID, calls[0], []string{"result.txt"}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +107,9 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if choice, err := s.LastSelection("script"); err != nil || choice == nil {
 		t.Fatal("model preferences removed", choice, err)
 	}
-	var generation int64
-	if err := s.DB.QueryRow("SELECT generation FROM workspaces WHERE id=?", v.WorkspaceID).Scan(&generation); err != nil || generation != 1 {
-		t.Fatal("workspace generation removed", generation, err)
+	var workspace string
+	if err := s.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", v.WorkspaceID).Scan(&workspace); err != nil {
+		t.Fatal(err)
 	}
 	rows, err := s.DB.Query("PRAGMA foreign_key_check")
 	if err != nil {
@@ -124,26 +121,18 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	}
 }
 
-func TestCleanupProtectsLoadedAndPendingLineages(t *testing.T) {
+func TestCleanupProtectsLoadedLineage(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	if err := s.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	next := retainedContinuation(t, s, v)
+	retainedContinuation(t, s, v)
 	now := time.Now()
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	if removed, err := s.Cleanup(context.Background(), now, v.ID); err != nil || removed != 0 {
 		t.Fatal("loaded predecessor did not protect descendants", removed, err)
 	}
-	if err := s.Prepare(next.ID, "apply", map[string]string{"pending": "operation"}); err != nil {
-		t.Fatal(err)
-	}
-	if removed, err := s.Cleanup(context.Background(), now, ""); err != nil || removed != 0 {
-		t.Fatal("pending journal did not protect lineage", removed, err)
-	}
-	if err := s.ClearOperation(next.ID); err != nil {
-		t.Fatal(err)
-	}
+	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	if removed, err := s.Cleanup(context.Background(), now, "unsaved-session"); err != nil || removed != 1 {
 		t.Fatal(removed, err)
 	}
@@ -165,39 +154,7 @@ func TestCleanupUsesLatestActivityAcrossContinuations(t *testing.T) {
 	}
 }
 
-func TestCleanupRetriesInterruptedAssetDeletion(t *testing.T) {
-	s, v, _, _ := historyFixture(t)
-	path, err := s.Artifact(v.ID, "snapshots", []byte("snapshot"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if err := os.Chmod(filepath.Dir(path), 0500); err != nil {
-		t.Fatal(err)
-	}
-	if removed, err := s.Cleanup(context.Background(), now, ""); err == nil || removed != 0 || !strings.Contains(err.Error(), "retry marker retained") {
-		t.Fatal("unsafe asset directory error hidden", removed, err)
-	}
-	marker := filepath.Join(s.Root, ".retention", v.LineageID)
-	if st, err := os.Stat(marker); err != nil || st.Mode().Perm() != 0600 {
-		t.Fatal("deletion marker missing", st, err)
-	}
-	if _, err := s.Session(v.ID); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatal("SQL deletion was not committed", err)
-	}
-	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if removed, err := s.Cleanup(context.Background(), now, ""); err != nil || removed != 1 {
-		t.Fatal("asset retry failed", removed, err)
-	}
-	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
-		t.Fatal("completed marker survived", err)
-	}
-}
-
-func TestCleanupSQLRollbackAndRecentMarkerProtection(t *testing.T) {
+func TestCleanupSQLRollbackAndRecentActivityProtection(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
 	now := time.Now()
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
@@ -215,7 +172,7 @@ func TestCleanupSQLRollbackAndRecentMarkerProtection(t *testing.T) {
 	}
 	ageLineage(t, s, v.LineageID, now)
 	if removed, err := s.Cleanup(context.Background(), now, ""); err != nil || removed != 0 {
-		t.Fatal("retry marker deleted recently used history", removed, err)
+		t.Fatal("cleanup deleted recently used history", removed, err)
 	}
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	if removed, err := s.Cleanup(context.Background(), now, ""); err != nil || removed != 1 {
@@ -224,7 +181,7 @@ func TestCleanupSQLRollbackAndRecentMarkerProtection(t *testing.T) {
 }
 
 func TestCleanupNeverFollowsManagedSymlinks(t *testing.T) {
-	for _, location := range []string{"lineages", ".retention", "lineage", "nested"} {
+	for _, location := range []string{"lineages", "lineage", "nested"} {
 		t.Run(location, func(t *testing.T) {
 			s, v, _, _ := historyFixture(t)
 			outside := t.TempDir()
@@ -251,7 +208,7 @@ func TestCleanupNeverFollowsManagedSymlinks(t *testing.T) {
 			now := time.Now()
 			ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 			removed, err := s.Cleanup(context.Background(), now, "")
-			if location == "lineages" || location == ".retention" {
+			if location == "lineages" {
 				if err == nil || removed != 0 {
 					t.Fatal("followed managed parent symlink", removed, err)
 				}
@@ -265,27 +222,15 @@ func TestCleanupNeverFollowsManagedSymlinks(t *testing.T) {
 	}
 }
 
-func TestCleanupRejectsInvalidMarkersAndHonorsCancellation(t *testing.T) {
+func TestCleanupHonorsCancellation(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
-	if err := PrivateDir(filepath.Join(s.Root, ".retention")); err != nil {
-		t.Fatal(err)
-	}
-	marker := filepath.Join(s.Root, ".retention", v.LineageID)
-	if err := os.Symlink(filepath.Join(s.Root, "history.sqlite"), marker); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if _, err := s.Cleanup(context.Background(), now, ""); err == nil || !strings.Contains(err.Error(), "regular file") {
-		t.Fatal("invalid deletion marker accepted", err)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.Cleanup(ctx, now, ""); !errors.Is(err, context.Canceled) {
-		t.Fatal("cancellation ignored", err)
+	if _, err := s.Cleanup(ctx, time.Now(), ""); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 	if _, err := s.Session(v.ID); err != nil {
-		t.Fatal("invalid marker damaged history", err)
+		t.Fatal(err)
 	}
 }
 

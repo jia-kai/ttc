@@ -9,7 +9,8 @@ import (
 )
 
 // InputMarker describes the following retained human message without changing
-// it. Commit and compaction timestamps are Unix milliseconds; age is elapsed
+// it. The marker is historical context, not live runtime state, so manual loads
+// preserve it. Commit and compaction timestamps are Unix milliseconds; age is elapsed
 // milliseconds measured from the original commit, including after recompaction.
 // Missing/nonpositive times, future commit times, invalid sources and nonhuman
 // messages are errors. Native replay state remains the caller's responsibility.
@@ -39,7 +40,7 @@ func InputMarker(message provider.Message, compactedAt time.Time) (provider.Mess
 	if err != nil {
 		return provider.Message{}, fmt.Errorf("encode retained input metadata: %w", err)
 	}
-	return provider.Message{Role: "developer", Runtime: true, Content: prompts.RetainedInput + "\n" + string(encoded)}, nil
+	return provider.Message{Role: "developer", Content: prompts.RetainedInput + "\n" + string(encoded)}, nil
 }
 
 // RetainedInputMessages interleaves metadata markers with the exact original
