@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,6 +13,46 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"scicode/internal/provider"
 )
+
+func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
+	p := &provider.Script{Responses: []provider.ScriptResponse{
+		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start background shell","label":"shell helper"}`)}}},
+		{Calls: []provider.ToolCall{{ID: "background", Name: "shell", Arguments: []byte(`{"command":"while [ ! -e release ]; do sleep 0.01; done; cat release; cat diagnostic >&2; sleep 30","background":true,"wake_on_exit":false}`)}}},
+		{Text: "Child started shell"}, {Text: "Parent finished"},
+	}}
+	u := newQuestionTestUI(t, p)
+	u.screen.SetSize(180, 60)
+	u.screen.PostEventWait(tcell.NewEventResize(180, 60))
+	u.typeText("start child")
+	u.key(tcell.KeyEnter)
+	frame := u.wait(t, "Turn complete")
+	live := u.runtime.Jobs.Live()
+	if len(live) != 1 || live[0].Kind != "shell" || !strings.HasPrefix(live[0].Owner, "main/child_") || live[0].Stdout != "" || live[0].Stderr != "" {
+		t.Fatal("expected a quiet, child-owned shell", live)
+	}
+	row := -1
+	for y, text := range strings.Split(frame, "\n") {
+		if strings.Contains(text, "● shell") {
+			row = y
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatal("shell missing from sidebar", frame)
+	}
+	u.screen.PostEventWait(tcell.NewEventMouse(150, row, tcell.Button1, 0))
+	u.wait(t, "[Sub shell helper] Running job")
+	u.wait(t, "Command:")
+	u.wait(t, live[0].ID)
+	if err := os.WriteFile(filepath.Join(u.runtime.Workspace.Root, "diagnostic"), []byte("child-stderr\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(u.runtime.Workspace.Root, "release"), []byte("child-stdout\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	u.wait(t, "child-stdout")
+	u.wait(t, "child-stderr")
+}
 
 type namedPendingProvider struct {
 	provider.Script

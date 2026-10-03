@@ -11,14 +11,16 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	contextbuild "scicode/internal/context"
 	"scicode/internal/provider"
 )
 
 func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedRuntime(t, r, strings.Repeat("Old coding facts. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Old coding facts. ", 700))
 	before := r.Current()
 	hidden := strings.Repeat("UI_ONLY_CHILD_DIAGNOSTIC ", 10000)
 	if _, err := r.Store.Append(before, "", "main/child_fixture", "message", "assistant", false, provider.Message{Role: "assistant", Content: hidden}); err != nil {
@@ -59,10 +61,10 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 			seedRuntime(t, r, "Research arrays.")
 			payload := "[" + strings.Repeat("0,", 7000) + "0]"
 			messages := []provider.Message{
-				{Role: "user", Content: "Inspect this array."},
+				{Role: "user", Content: "Inspect this array.", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 				{Role: "assistant", Calls: []provider.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
 				{Role: "tool", CallID: "array", Content: payload},
-				{Role: "user", Content: "Continue."},
+				{Role: "user", Content: "Continue.", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 			}
 			calls := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
@@ -95,10 +97,70 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 	}
 }
 
+func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
+	for _, actor := range []string{"main", "child", "btw"} {
+		t.Run(actor, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			compactionBudget(t, r)
+			seedRuntime(t, r, "Earlier research.")
+			payload := strings.Repeat("large recent tool output ", 100)
+			messages := []provider.Message{
+				{Role: "user", Content: "Earlier task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+				{Role: "assistant", Content: "Earlier result"},
+				{Role: "user", Content: "Continue the current task", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
+				{Role: "assistant", Calls: []provider.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}}},
+				{Role: "tool", CallID: "read", Content: payload},
+			}
+			requests := 0
+			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+				requests++
+				if !req.NoTools || !strings.Contains(req.Messages[0].Content, payload) || !strings.Contains(req.Messages[0].Content, `{"path":"fixture.txt"}`) {
+					t.Fatal("summary lost the complete oversized cycle")
+				}
+				return emit(provider.StreamEvent{Kind: "text", Text: "Recent output was inspected; continue the task."})
+			}}
+			var result []provider.Message
+			var err error
+			if actor == "main" {
+				for _, message := range messages {
+					if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role, true, message); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err = r.Command("/compact"); err == nil {
+					result, err = r.Store.Messages(r.Current())
+				}
+			} else {
+				id := "main/" + actor
+				turn, e := r.Store.BeginChildTurn(r.Current(), id, r.CurrentSelection())
+				if e != nil {
+					t.Fatal(e)
+				}
+				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{})
+			}
+			if err != nil || requests != 1 || r.checkContext() != nil {
+				t.Fatal("oversized cycle prevented handoff", err, requests)
+			}
+			foundInstruction := false
+			for _, message := range result {
+				if message.Content == messages[2].Content {
+					foundInstruction = true
+				}
+				if len(message.Calls) > 0 || message.Role == "tool" || message.Content == payload {
+					t.Fatal("oversized cycle survived the hard maximum")
+				}
+			}
+			if !foundInstruction {
+				t.Fatal("human instruction was not retained")
+			}
+		})
+	}
+}
+
 func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedRuntime(t, r, strings.Repeat("Actual model history. ", 10000))
+	seedCompactionHistory(t, r, strings.Repeat("Actual model history. ", 10000))
 	before := r.Current()
 	if _, err := r.Store.Append(before, "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
@@ -154,7 +216,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 		t.Run(fmt.Sprint(fatal), func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
-			seedRuntime(t, r, strings.Repeat("Previous research notes. ", 700))
+			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
 			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue the research."}); err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +258,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedRuntime(t, r, strings.Repeat("Earlier notes. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Earlier notes. ", 700))
 	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +269,7 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 		// A user may steer while the summarizer is running. Admission must not
 		// repeatedly compact a handoff that still cannot fit that instruction.
 		r.orderMu.Lock()
-		r.steers = append(r.steers, provider.Message{Role: "user", Content: strings.Repeat("pending research instruction ", 3000)})
+		r.steers = append(r.steers, contextbuild.Input{Text: strings.Repeat("pending research instruction ", 3000)})
 		r.orderMu.Unlock()
 		return emit(provider.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
@@ -244,9 +306,9 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 				t.Fatal(err)
 			}
 			messages := []provider.Message{
-				{Role: "user", Content: strings.Repeat("Old child research notes. ", 350)},
-				{Role: "assistant", Content: "Earlier findings"},
-				{Role: "user", Content: "Read the fixture"},
+				{Role: "user", Content: "Earlier child task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+				{Role: "assistant", Content: strings.Repeat("Old child research notes. ", 350)},
+				{Role: "user", Content: "Read the fixture", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 				{Role: "assistant", Calls: []provider.ToolCall{{ID: "read_fixture", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.go"}`)}}, State: &provider.ReplayState{Provider: "script", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"private":"replay"}`)}}},
 				{Role: "tool", CallID: "read_fixture", Content: `{"content":"package fixture"}`},
 			}
@@ -262,9 +324,9 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			expected := 4
+			expected := 7
 			if aside {
-				expected = 5
+				expected = 8
 			}
 			if cursor.project != "" || cursor.snapshot != "" || len(result) != expected || !strings.HasPrefix(result[0].Content, "Useful child handoff.") {
 				t.Fatal("incorrect retained child projection", cursor, result)

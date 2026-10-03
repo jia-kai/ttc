@@ -130,7 +130,7 @@ func (a *Adapter) Models(ctx context.Context) ([]provider.ModelSpec, error) {
 		for _, mode := range m.Modalities {
 			images = images || mode == "image"
 		}
-		budget := provider.Budget{ContextLimit: capacity, OutputAllowance: 4096, EstimationMargin: 4096, RecentTokensTarget: 16000, NextTurnInputReserve: 4096, SummaryOutputAllowance: 2048}
+		budget := provider.Budget{ContextLimit: capacity, OutputAllowance: 4096, EstimationMargin: 4096, RecentTokensMin: 4096, RecentTokensMax: 16000, NextTurnInputReserve: 4096, SummaryOutputAllowance: 2048}
 		if e = budget.Validate(); e != nil {
 			continue
 		}

@@ -119,12 +119,15 @@ Markdown/math; input remains anchored while responses stream.
 - **Shell completion:** persist bounded output and update UI. Default
   `wake_on_exit=true` notifies at a boundary or starts idle work; false is UI-only.
   Foreground results never duplicate completion notices.
-- **Question:** suspend only caller, keep composer/jobs usable. Tabs use Left/Right,
+- **Question:** main only, one pending round; children finish useful work, report
+  material information gaps to main and stop. Keep composer/jobs usable. Tabs use Left/Right,
   final Submit sends all answers. Choose exactly one option or Other/free text;
   Up/Down focuses, Enter selects/advances, Space selects without advancing.
   Recommendation focuses without selection. Preserve drafts across tabs/types;
-  Esc leaves editing then dismisses without answering. `/questions` reopens.
-  Composer Enter queues work. Never restore pending forms on restart.
+  Esc leaves editing then dismisses without answering. Only explicit `/questions`
+  reopening clears dismissal. The next normal message returns `{dismissed:true}`
+  and redirects main at its settled request boundary; local commands leave the
+  round pending. Never restore pending forms on restart.
 - **Wakeup:** deliver ahead of queued prompts at a boundary or while idle. Coalesce
   repeats to one outstanding latest immutable firing at/before cutoff, with its
   cumulative count/sequence. Ack only that firing; later arrivals remain pending.
@@ -211,8 +214,8 @@ Markdown/math; input remains anchored while responses stream.
 - Reject restoration conflicts. Journal partial writes/restores before advancing
   cursors. Loading another session never restores files; changed workspace generation
   establishes a tip boundary so only new work is undoable, older history inspectable.
-- Compaction keeps retained complete turns undoable; active-turn cuts establish
-  earlier edits as baseline. See [design](design.md#serialized-edits-and-shared-undo).
+- Compaction keeps retained checkpoints undoable; summarized edits establish
+  the baseline. See [design](design.md#serialized-edits-and-shared-undo).
 
 ## `@` attachments
 
@@ -247,11 +250,13 @@ Markdown/math; input remains anchored while responses stream.
   scroll indicators and borders; assistant heading aligns left, content indents two.
 - Sidebar independently collapses/scrolls context, jobs/children and timers. Display
   latest parent frozen model/input breakdown/reserves with estimates labeled;
-  reported usage and all-agent totals stay separate. Refresh copied metadata without
+  reported usage and all-agent totals stay separate. Totals survive compaction and
+  session changes; only restart or `/new` clears them. Refresh copied metadata without
   capture/history scans. Below 100 columns, Ctrl+X S opens overlay; Tab focuses,
   arrows/pages scroll and Left/Right collapse. Show session/cwd/Git root/branch;
-  left-clip paths with full inspection, refreshing Git outside draw loop. Live tools/
-  agents have states/titles; new child labels are 1–4 words, ≤64 single-line characters.
+  roll overflowing text horizontally, with full path inspection and Git refresh
+  outside drawing. Live tools/agents have states/titles; new child labels are
+  1–4 words, ≤64 single-line characters.
 - Up/Down recalls human input across sessions/restarts and restores draft past
   newest. Ctrl-R searches newest-first bounded prompt history; Enter fills input,
   Esc cancels. Alt+Up/Down focuses conversation; dialogs own their arrows.

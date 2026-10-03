@@ -11,6 +11,31 @@ import (
 	"scicode/internal/render"
 )
 
+func TestQuietChildShellInspectionIncludesLiveMetadata(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	const actor = "main/child_quiet"
+	const command = "sleep 30"
+	id, err := r.Jobs.Start(actor, command, r.Workspace.Root, 0, false, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := r.JobDetail(id, "")
+	for _, want := range []string{command, id, actor, "running"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("job inspection missing %q: %s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "unavailable") || strings.Contains(detail, "Strict:") {
+		t.Fatal("inspection invented unavailable shell arguments", detail)
+	}
+	if _, err := r.Jobs.Stop("main", id); err != nil {
+		t.Fatal(err)
+	}
+	if detail := r.JobDetail(id, ""); !strings.Contains(detail, "cancelled") {
+		t.Fatal("inspection did not refresh job status", detail)
+	}
+}
+
 func TestInspectionTailDoesNotReduceCapture(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	for _, kind := range []string{"shell", "subagent"} {

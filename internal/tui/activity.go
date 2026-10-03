@@ -7,28 +7,41 @@ import (
 	"scicode/internal/session"
 )
 
-// turnActivity belongs to the frontend. It tracks current main-agent waits,
-// never historical messages or background helper activity.
+type questionActivity struct {
+	id        string
+	started   time.Time
+	dismissed bool
+}
+
+// turnActivity tracks main-agent waits and user-dismissed live questions. Other
+// helper activity and historical messages never affect the foreground phase.
 type turnActivity struct {
-	questions               map[string]time.Time
+	question                questionActivity
 	retryStarted, retryEnds time.Time
 }
 
-func (a *turnActivity) observe(event session.Event, now time.Time) {
-	if event.Kind == "question_closed" && event.Question != nil {
-		delete(a.questions, event.Question.ID)
+func questionStatus(form session.QuestionForm) string {
+	if form.Dismissed {
+		return "What would you like to do instead? · " + form.ID
+	}
+	return "Waiting for answer · " + form.ID
+}
+
+// syncQuestion uses live state rather than publication-time event snapshots.
+func (a *turnActivity) syncQuestion(form *session.QuestionForm, now time.Time) {
+	if form == nil {
+		a.question = questionActivity{}
 		return
 	}
+	if a.question.id != form.ID {
+		a.question = questionActivity{id: form.ID, started: now}
+	}
+	a.question.dismissed = form.Dismissed
+}
+
+func (a *turnActivity) observe(event session.Event, now time.Time) {
 	if event.Actor != "" && event.Actor != "main" {
 		return
-	}
-	if event.Kind == "question" && event.Question != nil && event.Question.Actor == "main" {
-		if a.questions == nil {
-			a.questions = map[string]time.Time{}
-		}
-		if _, exists := a.questions[event.Question.ID]; !exists {
-			a.questions[event.Question.ID] = now
-		}
 	}
 	if event.Retry != nil {
 		a.retryStarted = now
@@ -42,10 +55,11 @@ func (a *turnActivity) observe(event session.Event, now time.Time) {
 
 func (a *turnActivity) indicator(now, started time.Time) string {
 	label, since := "Working", started
-	for _, at := range a.questions {
-		if label != "Waiting for answer" || at.Before(since) {
-			label, since = "Waiting for answer", at
+	if q := a.question; q.id != "" {
+		if q.dismissed {
+			return "What would you like to do instead?"
 		}
+		label, since = "Waiting for answer", q.started
 	}
 	if label == "Working" && now.Before(a.retryEnds) {
 		label, since = "Retrying", a.retryStarted

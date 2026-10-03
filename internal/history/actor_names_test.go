@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"testing"
+	"time"
 
 	"scicode/internal/provider"
 )
@@ -23,7 +24,7 @@ func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, "summary", archive, retained, 0)
+	continued, err := s.Continue(session.ID, "summary", archive, retained, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

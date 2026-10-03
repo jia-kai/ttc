@@ -195,7 +195,7 @@ func (d *questionDialog) values() ([]session.Answer, int) {
 
 func (d *questionDialog) update() {
 	d.Window.Title = "Questions"
-	d.Window.Hint = "←/→ tabs · Esc dismisses"
+	d.Window.HideHint = true
 	var tabs []string
 	for i := range d.form.Questions {
 		label := fmt.Sprintf("%d", i+1)
@@ -216,7 +216,6 @@ func (d *questionDialog) update() {
 		rows = append(rows, "Error: "+d.errorText, "")
 	}
 	if d.tab == len(d.answers) {
-		rows = append(rows, "Review answers. Left returns to a question.", "")
 		for i, a := range d.answers {
 			q := d.form.Questions[i]
 			answer := "Unanswered"
@@ -225,15 +224,13 @@ func (d *questionDialog) update() {
 			} else if !a.useCustom && a.selected >= 0 {
 				answer = q.Options[a.selected].Label
 			}
-			rows = append(rows, q.Prompt+"\n  "+answer, "")
+			rows = append(rows, fmt.Sprintf("%d. %s\n   %s", i+1, strings.ReplaceAll(q.Prompt, "\n", "\n   "), strings.ReplaceAll(answer, "\n", "\n   ")), "")
 		}
 		d.focusRow = len(rows)
-		rows = append(rows, "> [ Submit answers ] · Enter")
+		rows = append(rows, "> [ Submit answers ]", "", "Review answers · Enter submits · ← returns to a question", "←/→ tabs · Esc dismisses")
 	} else {
 		q, a := d.form.Questions[d.tab], d.answers[d.tab]
 		rows = append(rows, q.Prompt, "")
-		hint := "Up/Down choose · Enter selects and advances · Space selects"
-		rows = append(rows, hint, "")
 		for i, o := range q.Options {
 			mark := "( )"
 			if a.selected == i && !a.useCustom {
@@ -267,8 +264,11 @@ func (d *questionDialog) update() {
 			}
 			rows = append(rows, "", "Text: "+text)
 		}
+		rows = append(rows, "")
 		if a.editing {
-			rows = append(rows, "Enter finishes text · Shift+Enter newline · ←/→ switches tabs")
+			rows = append(rows, "Enter finishes text · Shift+Enter newline · Esc leaves text entry", "←/→ tabs")
+		} else {
+			rows = append(rows, "Up/Down choose · Enter selects and advances · Space selects", "←/→ tabs · Esc dismisses")
 		}
 	}
 	d.Window.Text = strings.Join(rows, "\n")

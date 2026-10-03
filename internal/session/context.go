@@ -181,7 +181,8 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 	}
 	// Continuations drop opaque provider replay, so budget their canonical form.
 	messages = canonicalCompaction(messages)
-	retention, e := contextbuild.Retain(messages, selection.Model.Budget.RecentTokensTarget)
+	compactedAt := time.Now()
+	retention, e := contextbuild.Retain(messages, selection.Model.Budget.RecentTokensMin, selection.Model.Budget.RecentTokensMax)
 	if e != nil {
 		return "", e
 	}
@@ -194,13 +195,13 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 	}
 	visible := 0
 	retainFrom := entries[len(entries)-1].ID + 1
-	promptFrom := int64(0)
+	inputIDs := make([]int64, 0, len(retention.Inputs))
 	for _, v := range entries {
 		if !v.Visible {
 			continue
 		}
-		if visible == retention.User {
-			promptFrom = v.ID
+		if len(inputIDs) < len(retention.Inputs) && visible == retention.Inputs[len(inputIDs)] {
+			inputIDs = append(inputIDs, v.ID)
 		}
 		if visible == retention.Start {
 			retainFrom = v.ID
@@ -208,8 +209,12 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		}
 		visible++
 	}
-	if visible < retention.Start || retention.User >= 0 && promptFrom == 0 {
+	if visible < retention.Start || len(inputIDs) != len(retention.Inputs) {
 		return "", errors.New("no safe compaction cut")
+	}
+	retainedInputs, e := contextbuild.RetainedInputMessages(messages, retention.Inputs, compactedAt)
+	if e != nil {
+		return "", e
 	}
 	archive, e := r.Store.ArchiveTranscript(r.Current(), entries[len(entries)-1].ID)
 	if e != nil {
@@ -238,6 +243,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		return "", e
 	}
 	assembled := []provider.Message{{Role: "assistant", Content: text}}
+	assembled = append(assembled, retainedInputs...)
 	visible = 0
 	for _, entry := range currentEntries {
 		if !entry.Visible {
@@ -249,7 +255,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		message := currentMessages[visible]
 		message.State = nil
 		visible++
-		if entry.ID == promptFrom || entry.ID >= retainFrom {
+		if entry.ID >= retainFrom {
 			assembled = append(assembled, message)
 		}
 	}
@@ -267,13 +273,13 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		if e != nil {
 			return e
 		}
-		pending := append(append([]provider.Message(nil), r.notifications...), r.steers...)
+		pending := append(append([]provider.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
 		if e = compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, pending, contextMessage); e != nil {
 			return e
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		v, e := r.Store.Continue(r.current, text, archive, retainFrom, promptFrom)
+		v, e := r.Store.Continue(r.current, text, archive, retainFrom, inputIDs, compactedAt)
 		if e != nil {
 			return e
 		}

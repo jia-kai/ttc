@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	contextbuild "scicode/internal/context"
 	"scicode/internal/history"
 	"scicode/internal/prompts"
 	"scicode/internal/tool"
-	"sort"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -25,11 +25,12 @@ type Question struct {
 // MaxAnswerBytes bounds each custom answer's UTF-8 source bytes.
 const MaxAnswerBytes = 16 << 10
 
-// QuestionForm is a snapshot of a pending runtime-only round, in question order.
+// QuestionForm is a snapshot of a pending main-agent round, in question order.
 type QuestionForm struct {
-	ID, Actor string
+	ID        string
 	Questions []Question
 	EntryID   int64 // Persisted tool intent, available for exact inspection.
+	Dismissed bool  // Hidden by the user; remains reopenable until the next human input.
 }
 
 // Option is an answer ID with a human-readable label.
@@ -45,16 +46,19 @@ type Answer struct {
 	Values []string `json:"values"`
 	Source string   `json:"source"`
 }
+type questionReply struct {
+	Answers   []Answer `json:"answers,omitempty"`
+	Dismissed bool     `json:"dismissed,omitempty"`
+}
+
 type questionForm struct {
 	view     QuestionForm
-	reply    chan []Answer
-	order    uint64
-	answered bool
+	reply    chan questionReply
+	resolved bool
 }
 type questions struct {
-	mu    sync.Mutex
-	forms map[string]questionForm
-	next  uint64
+	mu      sync.Mutex
+	pending *questionForm
 }
 
 func (r *Runtime) addQuestionTool() {
@@ -87,21 +91,28 @@ func (r *Runtime) addQuestionTool() {
 		}
 		return nil
 	}, func(ctx context.Context, x tool.Execution, a args) (any, error) {
+		if x.Actor != "main" {
+			return nil, errors.New("question is available only to the main agent")
+		}
 		id := history.NewID("form")
 		var entry int64
 		if err := r.Store.DB.QueryRowContext(ctx, "SELECT id FROM entries WHERE kind='tool_call' AND json_extract(content_json,'$.call_id')=? ORDER BY id DESC LIMIT 1", x.CallID).Scan(&entry); err != nil {
 			return nil, fmt.Errorf("question intent: %w", err)
 		}
-		view := QuestionForm{ID: id, Actor: x.Actor, Questions: a.Questions, EntryID: entry}
-		form := questionForm{view: view, reply: make(chan []Answer, 1)}
+		view := QuestionForm{ID: id, Questions: a.Questions, EntryID: entry}
+		form := &questionForm{view: view, reply: make(chan questionReply, 1)}
 		r.questions.mu.Lock()
-		r.questions.next++
-		form.order = r.questions.next
-		r.questions.forms[id] = form
+		if r.questions.pending != nil {
+			r.questions.mu.Unlock()
+			return nil, errors.New("a main question is already pending")
+		}
+		r.questions.pending = form
 		r.questions.mu.Unlock()
 		defer func() {
 			r.questions.mu.Lock()
-			delete(r.questions.forms, id)
+			if r.questions.pending == form {
+				r.questions.pending = nil
+			}
 			r.questions.mu.Unlock()
 			r.emit(Event{Kind: "question_closed", Question: &QuestionForm{ID: id}})
 		}()
@@ -109,8 +120,8 @@ func (r *Runtime) addQuestionTool() {
 		eventView := cloneQuestionForm(view)
 		r.emit(Event{Kind: "question", Actor: x.Actor, Question: &eventView, EntryID: entry, Text: fmt.Sprintf("Waiting for answer · %s\n%s\n/answer %s [{\"id\":\"QUESTION_ID\",\"values\":[\"text\"],\"source\":\"custom\"}]", id, b, id)})
 		select {
-		case answers := <-form.reply:
-			return map[string]any{"answers": answers}, nil
+		case reply := <-form.reply:
+			return reply, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -121,12 +132,12 @@ func (r *Runtime) addQuestionTool() {
 func (r *Runtime) AnswerQuestion(id string, answers []Answer) error {
 	r.questions.mu.Lock()
 	defer r.questions.mu.Unlock()
-	form, ok := r.questions.forms[id]
-	if !ok {
+	form := r.questions.pending
+	if form == nil || form.view.ID != id {
 		return errors.New("question not found")
 	}
-	if form.answered {
-		return errors.New("question already answered")
+	if form.resolved {
+		return errors.New("question already resolved")
 	}
 	if len(answers) != len(form.view.Questions) {
 		return errors.New("answer count must match questions")
@@ -156,33 +167,72 @@ func (r *Runtime) AnswerQuestion(id string, answers []Answer) error {
 	for i := range owned {
 		owned[i].Values = append([]string(nil), owned[i].Values...)
 	}
-	select {
-	case form.reply <- owned:
-		form.answered = true
-		r.questions.forms[id] = form
-		return nil
-	default:
-		return errors.New("question already answered")
-	}
+	form.resolved = true
+	form.reply <- questionReply{Answers: owned}
+	return nil
 }
 
-// PendingQuestions returns unanswered forms in arrival order. Snapshots own their
-// slices so a frontend cannot change the runtime's validation inputs.
-func (r *Runtime) PendingQuestions() []QuestionForm {
+// DismissQuestion hides a pending form without completing its tool call. It may
+// be reopened or answered until RedirectDismissedQuestion accepts human input.
+func (r *Runtime) DismissQuestion(id string) error {
+	return r.setQuestionDismissed(id, true)
+}
+
+// ReopenQuestion restores a dismissed form to its waiting-for-answer state.
+func (r *Runtime) ReopenQuestion(id string) error {
+	return r.setQuestionDismissed(id, false)
+}
+
+func (r *Runtime) setQuestionDismissed(id string, dismissed bool) error {
 	r.questions.mu.Lock()
 	defer r.questions.mu.Unlock()
-	var forms []questionForm
-	for _, form := range r.questions.forms {
-		if !form.answered {
-			forms = append(forms, form)
-		}
+	form := r.questions.pending
+	if form == nil || form.view.ID != id || form.resolved {
+		return errors.New("pending question not found")
 	}
-	sort.Slice(forms, func(i, j int) bool { return forms[i].order < forms[j].order })
-	views := make([]QuestionForm, 0, len(forms))
-	for _, form := range forms {
-		views = append(views, cloneQuestionForm(form.view))
+	// UI-originated setters must not publish into the event queue that the UI
+	// itself drains. Frontends reconcile their presentation from PendingQuestion.
+	form.view.Dismissed = dismissed
+	return nil
+}
+
+// RedirectDismissedQuestion queues human input at the next main model boundary
+// and completes the dismissed form with {dismissed:true}. It returns
+// true when it accepted the message; false leaves ordinary queuing to the caller.
+// Local commands must not call this method. The publication gate makes input
+// available before a resumed main request can consume the dismissal results.
+func (r *Runtime) RedirectDismissedQuestion(input contextbuild.Input) (bool, error) {
+	r.orderMu.Lock()
+	defer r.orderMu.Unlock()
+	r.questions.mu.Lock()
+	defer r.questions.mu.Unlock()
+	form := r.questions.pending
+	if form == nil || !form.view.Dismissed || form.resolved {
+		return false, nil
 	}
-	return views
+	if err := validateSteeringInput(input); err != nil {
+		return false, err
+	}
+	if err := r.checkContext(); err != nil {
+		return false, err
+	}
+	r.steers = append(r.steers, input)
+	form.resolved = true
+	form.reply <- questionReply{Dismissed: true}
+	return true, nil
+}
+
+// PendingQuestion returns nil when no unanswered form remains. The snapshot owns
+// its slices so a frontend cannot change the runtime's validation inputs.
+func (r *Runtime) PendingQuestion() *QuestionForm {
+	r.questions.mu.Lock()
+	defer r.questions.mu.Unlock()
+	form := r.questions.pending
+	if form == nil || form.resolved {
+		return nil
+	}
+	view := cloneQuestionForm(form.view)
+	return &view
 }
 
 func cloneQuestionForm(view QuestionForm) QuestionForm {

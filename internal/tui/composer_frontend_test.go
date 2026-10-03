@@ -129,8 +129,8 @@ func TestComposerPasteDefersQuestionOpening(t *testing.T) {
 	u.wait(t, "Choose a method?")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "> A↵⇥B")
-	if forms := u.runtime.PendingQuestions(); len(forms) != 1 {
-		t.Fatal("paste answered pending question", forms)
+	if u.runtime.PendingQuestion() == nil {
+		t.Fatal("paste answered pending question")
 	}
 }
 
@@ -157,11 +157,11 @@ func TestQuestionPasteRemainderDoesNotEnterComposerAfterClosure(t *testing.T) {
 	u.screen.PostEventWait(tcell.NewEventPaste(true))
 	u.typeText("A")
 	u.wait(t, "Other")
-	forms := u.runtime.PendingQuestions()
-	if len(forms) != 1 {
-		t.Fatal(forms)
+	form := u.runtime.PendingQuestion()
+	if form == nil {
+		t.Fatal("question not pending")
 	}
-	if err := u.runtime.AnswerQuestion(forms[0].ID, []session.Answer{
+	if err := u.runtime.AnswerQuestion(form.ID, []session.Answer{
 		{ID: "choice", Values: []string{"a"}, Source: "option"},
 		{ID: "notes", Values: []string{"confirmed"}, Source: "custom"},
 	}); err != nil {

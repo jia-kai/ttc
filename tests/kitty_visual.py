@@ -119,7 +119,8 @@ def main():
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 last_text = remote('get-text', '--extent', 'screen')
-                if 'WORKSPACE' not in last_text and 'Context usage' not in last_text and '\n> ' not in last_text:
+                if ('Copy mode · updates paused · Esc returns' in last_text
+                        and 'WORKSPACE' not in last_text and 'Context usage' not in last_text and '\n> ' not in last_text):
                     return last_text
                 time.sleep(0.05)
             raise AssertionError('fullscreen left sidebar/composer')
@@ -195,11 +196,16 @@ def main():
         capture('running-agent')
         (demo_root / 'project/child.ready').touch()
         wait('● shell')
-        wait('Running jobs · 1')
+        wait('Running jobs · 2')  # The background shell and managed LSP are both live.
         wait('Timers · 1')
         wait('WORKSPACE')
         wait('demo')
         capture('live-sidebar')
+        send('/help\r')
+        wait('TTC help')
+        capture('busy-help')
+        key('esc')
+        wait('Working')
         mouse(100, 2)
         wait('Working directory:')
         wait('Branch:')
@@ -212,22 +218,38 @@ def main():
         capture('sidebar-collapsed')
         key('ctrl+x'); key('f')
         text = wait_fullscreen()
-        assert 'Working' in text
+        assert 'Copy mode · updates paused · Esc returns' in text, text
         capture('fullscreen-working')
         key('ctrl+x'); key('f')
+        wait('Working')  # Normal status returns; copy mode does not stop the agent.
         mouse(100, context_row)
         remote('resize-os-window', '--width', '80', '--height', '20', '--unit', 'cells')
         key('ctrl+x'); key('s')
-        wait('Context usage')
-        mouse(70, 10, 65)  # Wheel down in the context list, independent of jobs/timers.
+        sidebar_text = wait('Context usage')
+        narrow_context_row = next(i for i, row in enumerate(sidebar_text.splitlines(), 1) if 'Context usage' in row)
+        # Small panes expose only a few context rows; scroll within that list
+        # until its tool breakdown is visible rather than assuming one notch.
+        for _ in range(12):
+            if 'Tool results' in remote('get-text', '--extent', 'screen'):
+                break
+            mouse(70, narrow_context_row + 1, 65)
+            time.sleep(0.1)
         wait('Tool results')
         capture('sidebar-narrow-scroll')
         key('esc')
         remote('resize-os-window', '--width', '120', '--height', '38', '--unit', 'cells')
         demo_root = Path(json.loads((root / 'demo.json').read_text())['root'])
         (demo_root / 'project/visual.ready').touch()
-        wait('Yes (Recommended)')
+        question_text = wait('Yes (Recommended)')
+        assert question_text.index('Finish the Markdown report?') < question_text.index('Yes (Recommended)')
+        assert question_text.index('Other · free-text input') < question_text.index('Up/Down choose')
+        assert question_text.index('Up/Down choose') < question_text.index('←/→ tabs · Esc dismisses')
         capture('question')
+        key('esc')
+        wait('What would you like to do instead?')
+        capture('question-dismissed')
+        send('/questions\r')
+        wait('Yes (Recommended)')
         key('enter')
         wait('Any notes for the report?')
         key('down')
@@ -238,7 +260,10 @@ def main():
         key('right')
         wait('Which evidence should be retained?')
         key('enter')
-        wait('Submit answers')
+        review_text = wait('Submit answers')
+        for item in ('1. Finish the Markdown report?', '2. Any notes for the report?', '3. Which evidence should be retained?'):
+            assert item in review_text, review_text
+        assert review_text.index('Submit answers') < review_text.index('Enter submits')
         capture('submit')
         key('enter')
         wait('Turn complete')
@@ -300,6 +325,9 @@ def main():
         key('end')
         capture('system-prompt-end')
         key('esc')
+        send('/rename Long session title for scrolling TAIL-SEEN\r')
+        wait('TAIL-SEEN')  # A local rename emits no transcript title; this is the scrolling sidebar tail.
+        capture('sidebar-title-tail')
         key('ctrl+c')
         terminal.wait(timeout=10)
         if terminal.returncode != 0:

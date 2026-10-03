@@ -225,11 +225,6 @@ func TestImagePendingSurvivesCompactionButNeverReplay(t *testing.T) {
 	r.Provider = &provider.Script{Responses: []provider.ScriptResponse{{Text: "Preserve the displayed image and pending click."}}}
 	r.EnableImageClicks(true)
 	v := showTestImage(t, r, "pending", "main", true)
-	selection := r.CurrentSelection()
-	selection.Model.Budget.RecentTokensTarget = 1500
-	r.mu.Lock()
-	r.selection = selection
-	r.mu.Unlock()
 	for _, text := range []string{strings.Repeat("old research ", 700), "recent question"} {
 		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: text}); err != nil {
 			t.Fatal(err)

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"github.com/mattn/go-runewidth"
 )
 
 func TestWorkspaceGitParentsNestedWorktreeAndHead(t *testing.T) {
@@ -94,13 +93,15 @@ func TestSidebarWorkspaceLongUnicodePathsAndClick(t *testing.T) {
 	s.SetSize(80, 20)
 	b.overlay = true
 	b.bounds(80, 20, false)
-	b.draw(s)
+	at := time.Now()
+	b.drawAt(s, at)
 	if b.workspaceHeight != 5 {
 		t.Fatal(b.workspaceHeight)
 	}
-	clipped := leftClip(path, 20)
-	if runewidth.StringWidth(clipped) > 20 || !strings.HasSuffix(clipped, "project") {
-		t.Fatal(clipped)
+	text := b.texts["workspace:cwd"]
+	b.drawAt(s, at.Add(time.Duration(4+text.cells-(b.width-6))*250*time.Millisecond))
+	if got := sidebarScreenText(s, b.left+5, 1, b.width-6); !strings.HasSuffix(got, "project") {
+		t.Fatal("workspace path tail never visible", got)
 	}
 	consumed, action := b.mouse(tcell.NewEventMouse(b.left+3, 1, tcell.Button1, 0))
 	if !consumed || !action.workspace || !strings.Contains(b.workspace.detail(), path) {

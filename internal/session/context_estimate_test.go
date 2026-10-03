@@ -68,7 +68,7 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedRuntime(t, r, strings.Repeat("Earlier notes. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Earlier notes. ", 700))
 	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}

@@ -35,7 +35,7 @@ type Snapshot struct {
 	Status     string `json:"status"`
 	Stdout     string `json:"stdout"`
 	Stderr     string `json:"stderr"`
-	StartedAt  string `json:"started_at"`
+	StartedAt  string `json:"started_at"` // UTC RFC3339Nano launch time.
 	FinishedAt string `json:"finished_at,omitempty"`
 	ExitCode   *int   `json:"exit_code,omitempty"`
 	Signal     string `json:"signal,omitempty"`
@@ -43,6 +43,7 @@ type Snapshot struct {
 }
 type job struct {
 	view             Snapshot
+	startedAt        time.Time // Immutable launch time; ordering never depends on capture updates.
 	cmd              *exec.Cmd
 	cancel           context.CancelFunc
 	done             chan struct{}
@@ -115,7 +116,8 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 		return e
 	}
 	cmd.WaitDelay = time.Second
-	j := &job{view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	startedAt := time.Now().UTC()
+	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	cmd.Stdout = j.stdout
 	cmd.Stderr = j.stderr
 	var input io.WriteCloser
@@ -439,7 +441,8 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 		return "", errors.New("runtime ended")
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
-	j := &job{view: Snapshot{ID: history.NewID("job"), Kind: kind, Owner: owner, Label: label, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339)}, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	startedAt := time.Now().UTC()
+	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: kind, Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano)}, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
 	launch := j.view
@@ -497,6 +500,7 @@ func (m *Manager) Close() {
 
 // Live returns running job metadata without copying stdout/stderr capture tails.
 // Unlike recorded history, these handles belong to this active manager only.
+// Results are oldest-started first, with job ID breaking equal launch times.
 func (m *Manager) Live() []Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -506,7 +510,13 @@ func (m *Manager) Live() []Snapshot {
 			out = append(out, j.view)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt < out[j].StartedAt })
+	sort.Slice(out, func(i, j int) bool {
+		a, b := m.jobs[out[i].ID].startedAt, m.jobs[out[j].ID].startedAt
+		if a.Equal(b) {
+			return out[i].ID < out[j].ID
+		}
+		return a.Before(b)
+	})
 	return out
 }
 

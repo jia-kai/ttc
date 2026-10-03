@@ -11,7 +11,7 @@ import (
 
 func questionFixture() session.QuestionForm {
 	options := []session.Option{{ID: "a", Label: "First"}, {ID: "b", Label: "Second", Description: "Useful explanation"}}
-	return session.QuestionForm{ID: "form", Actor: "main", Questions: []session.Question{
+	return session.QuestionForm{ID: "form", Questions: []session.Question{
 		{ID: "method", Prompt: "Which method?", Options: options, RecommendedOptionID: "b"},
 		{ID: "notes", Prompt: "Any notes?", Options: options},
 		{ID: "checks", Prompt: "Which check?", Options: options},
@@ -105,7 +105,7 @@ func TestCustomChoiceDraftAndTextEditing(t *testing.T) {
 }
 
 func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
-	d := newQuestionDialog(session.QuestionForm{ID: "form", Actor: "main", Questions: []session.Question{{ID: "text", Prompt: "Describe the result."}}})
+	d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Describe the result."}}})
 	if !d.answers[0].editing {
 		t.Fatal("text-only form requires unnecessary choice")
 	}
@@ -133,7 +133,7 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 }
 
 func TestQuestionPasteDoesNotNavigateOrSubmit(t *testing.T) {
-	d := newQuestionDialog(session.QuestionForm{ID: "form", Actor: "main", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
+	d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
 	d.pasting = true
 	for _, event := range []*tcell.EventKey{tcell.NewEventKey(tcell.KeyRune, 'a', 0), tcell.NewEventKey(tcell.KeyTab, 0, 0), tcell.NewEventKey(tcell.KeyEnter, 0, 0), tcell.NewEventKey(tcell.KeyRune, 'b', 0), tcell.NewEventKey(tcell.KeyRight, 0, 0), tcell.NewEventKey(tcell.KeyEscape, 0, 0)} {
 		if values, dismissed := d.key(event, 8); values != nil || dismissed || d.tab != 0 {
@@ -142,5 +142,62 @@ func TestQuestionPasteDoesNotNavigateOrSubmit(t *testing.T) {
 	}
 	if text := string(d.answers[0].custom); text != "a\t\nb" {
 		t.Fatal(text)
+	}
+}
+
+func TestQuestionContentPrecedesControlHints(t *testing.T) {
+	d := newQuestionDialog(questionFixture())
+	assertOrder := func(parts ...string) {
+		t.Helper()
+		end := 0
+		for _, part := range parts {
+			index := strings.Index(d.Window.Text[end:], part)
+			if index < 0 {
+				t.Fatalf("missing or misplaced %q:\n%s", part, d.Window.Text)
+			}
+			end += index + len(part)
+		}
+	}
+	assertOrder("Which method?", "( ) First", "( ) Second (Recommended)", "Useful explanation", "Other · free-text input", "Up/Down choose", "←/→ tabs · Esc dismisses")
+	if !d.Window.HideHint {
+		t.Fatal("question controls should not precede content in the title bar")
+	}
+
+	d.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 8)
+	for _, r := range "custom\nanswer" {
+		d.insert(r)
+	}
+	d.update()
+	assertOrder("Which method?", "Other · free-text input", "Text: custom\nanswer▏", "Enter finishes text", "←/→ tabs")
+	if strings.Contains(d.Window.Text, "Up/Down choose") {
+		t.Fatal("selection hints shown while editing text", d.Window.Text)
+	}
+
+	d.tab = len(d.answers)
+	d.update()
+	assertOrder("1. Which method?\n   custom\n   answer", "2. Any notes?\n   Unanswered", "3. Which check?\n   Unanswered", "> [ Submit answers ]", "Enter submits", "←/→ tabs · Esc dismisses")
+	if d.rows[d.focusRow] != "> [ Submit answers ]" {
+		t.Fatal("review focus moved from Submit to the footer", d.focusRow, d.rows)
+	}
+}
+
+func TestQuestionTitleHasNoControlHints(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(100, 30)
+	d := newQuestionDialog(questionFixture())
+	drawWindow(s, &d.Window)
+	left, top, width, _ := windowBounds(100, 30)
+	var title strings.Builder
+	for x := left; x < left+width; x++ {
+		r, _, _, _ := s.GetContent(x, top)
+		title.WriteRune(r)
+	}
+	if !strings.Contains(title.String(), "Questions") || strings.Contains(title.String(), "Esc") || strings.Contains(title.String(), "tabs") {
+		t.Fatal(title.String())
 	}
 }

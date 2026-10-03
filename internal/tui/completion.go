@@ -42,6 +42,8 @@ type completionMenu struct {
 }
 
 var slashCommands = []completionItem{
+	{value: "/cancel-queue", description: "Restore newest unsent queued prompt"},
+	{value: "/cancel-steer", description: "Restore newest pending steering instruction"},
 	{value: "/btw", description: "Parallel read-only side question"},
 	{value: "/background", description: "Move foreground shells to background"},
 	{value: "/editor", description: "Edit input in an external editor"},

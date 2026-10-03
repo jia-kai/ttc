@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"scicode/internal/jobs"
@@ -22,6 +23,342 @@ func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 	}
 	if strings.Contains(text, "Cache writes") {
 		t.Fatal("removed sidebar counter still visible", text)
+	}
+}
+
+func sidebarScreenText(s tcell.Screen, x, y, width int) string {
+	var text strings.Builder
+	for col := 0; col < width; {
+		r, combining, _, cells := s.GetContent(x+col, y)
+		text.WriteRune(r)
+		for _, mark := range combining {
+			text.WriteRune(mark)
+		}
+		col += max(1, cells)
+	}
+	return text.String()
+}
+
+func TestSidebarJobMarqueeRefreshPrefixAndClickIdentity(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 24)
+	b := newSidebar()
+	js := []jobs.Snapshot{
+		{ID: "shell-id", Kind: "shell", Label: "abcdefghijklmnopqrstuvwxyz-tail"},
+		{ID: "agent-id", Kind: "subagent", Label: "ABCDEFGHIJKLMNOPQRSTUVWXYZ-tail"},
+		{ID: "short-id", Kind: "shell", Label: "short"},
+	}
+	b.update(session.ContextUsage{}, js, nil)
+	b.bounds(120, 24, false)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.drawAt(s, at)
+	section := &b.sections[1]
+	for i, prefix := range []string{"● shell · ", "● agent · "} {
+		got := sidebarScreenText(s, b.left+1, section.top+1+i, b.width-2)
+		want := prefix + js[i].Label[:b.width-2-len([]rune(prefix))]
+		if got != want {
+			t.Fatalf("initial row %d: %q, want %q", i, got, want)
+		}
+	}
+	cached := b.texts["job:shell-id"]
+	js[0].Stdout = "new output"
+	b.update(session.ContextUsage{}, js, nil)
+	b.drawAt(s, at.Add(1250*time.Millisecond))
+	if b.texts["job:shell-id"] != cached {
+		t.Fatal("metadata refresh reset animation")
+	}
+	for i, prefix := range []string{"● shell · ", "● agent · "} {
+		got := sidebarScreenText(s, b.left+1, section.top+1+i, b.width-2)
+		want := prefix + js[i].Label[1:1+b.width-2-len([]rune(prefix))]
+		if got != want {
+			t.Fatalf("moving row %d: %q, want %q", i, got, want)
+		}
+		if _, action := b.mouse(tcell.NewEventMouse(b.left+20, section.top+1+i, tcell.Button1, 0)); action.jobID != js[i].ID {
+			t.Fatal("animation changed click target", action)
+		}
+	}
+	if got := sidebarScreenText(s, b.left+1, section.top+3, b.width-2); !strings.HasPrefix(got, "● shell · short ") {
+		t.Fatal("fitting label moved", got)
+	}
+	width := b.width - 2 - len([]rune(sidebarJobPrefix(b.jobs[0], at)))
+	end := at.Add(time.Duration(4+cached.cells-width) * 250 * time.Millisecond)
+	b.drawAt(s, end)
+	if got := sidebarScreenText(s, b.left+1, section.top+1, b.width-2); !strings.HasSuffix(got, "-tail") {
+		t.Fatal("end of label inaccessible", got)
+	}
+	if rollingTextOffset(end.Sub(at)+500*time.Millisecond, cached.cells-width) != cached.cells-width {
+		t.Fatal("label end does not pause")
+	}
+}
+
+func TestRollingTextUnicodeCells(t *testing.T) {
+	if text := newRollingText("path with  spaces\nnext\tvalue\x00").text; text != "path with  spaces next    value" {
+		t.Fatal("single-line sanitization changed readable spacing or retained controls", text)
+	}
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(10, 1)
+	l := &rollingText{text: "界e\u0301界末"}
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	l.draw(s, 0, 0, 4, at, tcell.StyleDefault)
+	if r, _, _, width := s.GetContent(0, 0); r != '界' || width != 2 {
+		t.Fatal("CJK glyph split", r, width)
+	}
+	if r, combining, _, _ := s.GetContent(2, 0); r != 'e' || len(combining) != 1 || combining[0] != '\u0301' {
+		t.Fatal("combining cluster split", r, combining)
+	}
+	s.Clear()
+	l.draw(s, 0, 0, 4, at.Add(1250*time.Millisecond), tcell.StyleDefault)
+	if got := sidebarScreenText(s, 0, 0, 4); got != " e\u0301界" {
+		t.Fatalf("partial wide glyph not clipped safely: %q", got)
+	}
+	s.Clear()
+	l.draw(s, 0, 0, 1, at, tcell.StyleDefault)
+	if r, _, _, _ := s.GetContent(0, 0); r != ' ' {
+		t.Fatal("wide glyph drawn in one cell", r)
+	}
+	s.Clear()
+	emoji := &rollingText{text: "👩‍💻abc"}
+	emoji.draw(s, 0, 0, 3, at, tcell.StyleDefault)
+	if r, combining, _, width := s.GetContent(0, 0); r != '👩' || string(combining) != "‍💻" || width != 2 {
+		t.Fatal("emoji cluster split", r, combining, width)
+	}
+}
+
+func TestSidebarSharedRollingTextShowsAllOverflowingFields(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 60)
+	b := newSidebar()
+	b.sessionName = strings.Repeat("Session ", 6) + "session-tail"
+	b.workspace = workspaceInfo{cwd: "/" + strings.Repeat("project/", 6) + "cwd-tail", repo: "/" + strings.Repeat("repository/", 6) + "repo-tail", branch: strings.Repeat("research-", 6) + "branch-tail"}
+	usage := session.ContextUsage{Model: strings.Repeat("Model ", 6) + "model-tail", Limit: 10000}
+	timers := []session.TimerView{{ID: "timer-id", Name: strings.Repeat("Timer ", 6) + "timer-tail", NextAt: "soon"}}
+	b.update(usage, nil, timers)
+	b.bounds(120, 60, false)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.drawAt(s, at)
+	for _, item := range []struct {
+		key, tail string
+		x, y, w   int
+	}{
+		{"session-name", "session-tail", b.left + 1, 1, b.width - 2},
+		{"workspace:cwd", "cwd-tail", b.left + 5, 3, b.width - 6},
+		{"workspace:git", "repo-tail", b.left + 5, 4, b.width - 6},
+		{"workspace:⎇", "branch-tail", b.left + 5, 5, b.width - 6},
+		{"context:0", "model-tail", b.left + 1, b.sections[0].top + 1, b.width - 2},
+		{"timer:timer-id", "timer-tail", b.left + 1, b.sections[2].top + 1, b.width - 2 - len([]rune(" · soon"))},
+	} {
+		text := b.texts[item.key]
+		if text == nil || text.cells <= item.w {
+			t.Fatal("overflow field did not use the shared widget", item.key)
+		}
+		b.drawAt(s, at.Add(time.Duration(4+text.cells-item.w)*250*time.Millisecond))
+		if got := sidebarScreenText(s, item.x, item.y, item.w); !strings.HasSuffix(got, item.tail) {
+			t.Fatal("text tail not visible", item.key, got)
+		}
+	}
+	// A changing timer countdown is separate from its title's animation epoch.
+	cached := b.texts["timer:timer-id"]
+	timers[0].NextAt = "later"
+	b.update(usage, nil, timers)
+	b.drawAt(s, at.Add(2*time.Second))
+	if b.texts["timer:timer-id"] != cached {
+		t.Fatal("timer metadata refresh reset its title animation")
+	}
+	b.sessionName = "Renamed"
+	b.drawAt(s, at.Add(3*time.Second))
+	if got := sidebarScreenText(s, b.left+1, 1, b.width-2); !strings.HasPrefix(got, "Renamed ") {
+		t.Fatal("replacement text retained old offset", got)
+	}
+}
+
+func TestSidebarMarqueeKeepsElapsedPrefixAndNarrowClickTarget(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 15)
+	b := newSidebar()
+	b.update(session.ContextUsage{}, []jobs.Snapshot{{ID: "job", Kind: "shell", StartedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano), Label: strings.Repeat("abc", 20)}}, nil)
+	b.bounds(120, 15, false)
+	at := time.Now()
+	b.drawAt(s, at)
+	prefix := sidebarJobPrefix(b.jobs[0], at)
+	if !strings.Contains(prefix, " · 1m") {
+		t.Fatal("elapsed time missing from fixed prefix", prefix)
+	}
+	b.drawAt(s, at.Add(2*time.Second))
+	if got := sidebarScreenText(s, b.left+1, b.sections[1].top+1, b.width-2); !strings.HasPrefix(got, sidebarJobPrefix(b.jobs[0], at.Add(2*time.Second))) {
+		t.Fatal("elapsed prefix scrolled", got)
+	}
+	b.overlay = true
+	s.SetSize(12, 15)
+	b.bounds(12, 15, false)
+	b.drawAt(s, at.Add(3*time.Second))
+	if _, action := b.mouse(tcell.NewEventMouse(b.left+1, b.sections[1].top+1, tcell.Button1, 0)); action.jobID != "job" {
+		t.Fatal("prefix-only narrow row lost click identity", action)
+	}
+}
+
+func TestSidebarMarqueeOnlyIndexesVisibleLabels(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 6)
+	b := newSidebar()
+	js := []jobs.Snapshot{{ID: "one", Kind: "shell", Label: strings.Repeat("x", 1000)}, {ID: "two", Kind: "shell", Label: strings.Repeat("y", 1000)}}
+	b.update(session.ContextUsage{}, js, nil)
+	at := time.Now()
+	b.bounds(120, 6, true)
+	b.drawAt(s, at)
+	if len(b.texts) != 0 {
+		t.Fatal("fullscreen hidden labels indexed")
+	}
+	b.bounds(120, 6, false)
+	b.drawAt(s, at)
+	if b.texts["job:one"] == nil || b.texts["job:one"].glyphs == nil || b.texts["job:two"] != nil {
+		t.Fatal("indexing was not limited to visible rows")
+	}
+	b.overlay = true
+	s.SetSize(10, 6)
+	b.bounds(10, 6, false)
+	b.drawAt(s, at.Add(time.Second))
+	if b.texts["job:two"] != nil {
+		t.Fatal("narrow pane indexed invisible label")
+	}
+	b.update(session.ContextUsage{}, js[:1], nil)
+	b.drawAt(s, at.Add(2*time.Second))
+	if b.texts["job:two"] != nil {
+		t.Fatal("completed job cache retained")
+	}
+}
+
+func TestSidebarVisibleCachesReleasedWhenHiddenOrCompleted(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 24)
+	for _, mode := range []string{"narrow", "fullscreen", "completed"} {
+		t.Run(mode, func(t *testing.T) {
+			b := newSidebar()
+			b.update(session.ContextUsage{}, []jobs.Snapshot{{ID: "visible", Kind: "shell", Label: strings.Repeat("界", 1000)}}, nil)
+			b.bounds(120, 24, false)
+			b.draw(s)
+			if text := b.texts["job:visible"]; text == nil || len(text.glyphs) == 0 {
+				t.Fatal("visible job was not indexed")
+			}
+			switch mode {
+			case "narrow":
+				b.bounds(80, 24, false)
+			case "fullscreen":
+				b.bounds(120, 24, true)
+			case "completed":
+				b.update(session.ContextUsage{}, nil, nil)
+			}
+			b.draw(s)
+			if b.texts["job:visible"] != nil {
+				t.Fatal("invisible job retained its grapheme cache")
+			}
+			if mode != "completed" && len(b.texts) != 0 {
+				t.Fatal("hidden sidebar retained text caches")
+			}
+		})
+	}
+}
+
+func TestSidebarMetadataCopyIsLazyAndReusesStorage(t *testing.T) {
+	b := newSidebar()
+	malformed := strings.Repeat("not-a-timestamp\x00", 100)
+	js := []jobs.Snapshot{{ID: "oldest", Kind: "shell", StartedAt: malformed, Label: "raw\x00\nlabel"}, {ID: "newest", Kind: "subagent", StartedAt: malformed, Label: "other"}}
+	timers := []session.TimerView{{ID: "timer", Name: "raw\x00\ntimer", NextAt: malformed}}
+	b.update(session.ContextUsage{}, js, timers)
+	jobStorage, timerStorage := &b.jobs[0], &b.timers[0]
+	if allocations := testing.AllocsPerRun(100, func() { b.update(session.ContextUsage{}, js, timers) }); allocations != 0 {
+		t.Fatalf("metadata refresh derived labels or allocated replacement slices: %g allocations", allocations)
+	}
+	if &b.jobs[0] != jobStorage || &b.timers[0] != timerStorage {
+		t.Fatal("metadata storage was not reused")
+	}
+	js[0].Label = "mutated"
+	timers[0].Name = "mutated"
+	if b.jobs[0].Label != "raw\x00\nlabel" || b.jobs[1].ID != "newest" || b.timers[0].Name != "raw\x00\ntimer" {
+		t.Fatal("metadata was cleaned, reordered, or retained caller slice storage")
+	}
+	if len(b.sections[1].rows) != 0 || len(b.sections[2].rows) != 0 || len(b.texts) != 0 {
+		t.Fatal("metadata refresh eagerly derived rows or text widgets")
+	}
+	b.update(session.ContextUsage{}, js[:1], nil)
+	if jobStorage.ID != "oldest" || b.jobs[:cap(b.jobs)][1].ID != "" || timerStorage.ID != "" {
+		t.Fatal("removed metadata retained in reused slice storage")
+	}
+}
+
+func TestSidebarDerivedWorkBoundedByVisibleRows(t *testing.T) {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(120, 6)
+	b := newSidebar()
+	js := make([]jobs.Snapshot, 2000)
+	timers := make([]session.TimerView, len(js))
+	for i := range js {
+		js[i] = jobs.Snapshot{ID: fmt.Sprint(i), Kind: "shell", Label: "raw\x00\nlabel", StartedAt: "invalid timestamp"}
+		timers[i] = session.TimerView{ID: fmt.Sprint(i), Name: "raw\x00\ntimer", NextAt: "invalid timestamp"}
+	}
+	b.bounds(120, 6, false)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	allocations := func(count int) float64 {
+		b.update(session.ContextUsage{}, js[:count], timers[:count])
+		b.drawAt(s, at)
+		return testing.AllocsPerRun(20, func() { b.drawAt(s, at) })
+	}
+	one, many := allocations(1), allocations(len(js))
+	if many > one+10 {
+		t.Fatalf("offscreen metadata increased derived work: one=%g, many=%g allocations", one, many)
+	}
+	if b.texts["job:0"] == nil || b.texts["job:1"] != nil || b.texts["timer:1"] != nil {
+		t.Fatal("offscreen malformed metadata created widgets")
+	}
+	b.sections[1].collapsed = true
+	b.sections[2].collapsed = true
+	b.drawAt(s, at)
+	for key := range b.texts {
+		if strings.HasPrefix(key, "job:") || strings.HasPrefix(key, "timer:") {
+			t.Fatal("collapsed metadata created widgets", key)
+		}
+	}
+}
+
+func TestSidebarCountdownAndElapsedUseDrawTime(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	job := jobs.Snapshot{Kind: "subagent", StartedAt: at.Add(-time.Minute).Format(time.RFC3339Nano)}
+	timer := session.TimerView{NextAt: at.Add(30 * time.Second).Format(time.RFC3339Nano)}
+	if got := sidebarJobPrefix(job, at); got != "● agent · 1m00s · " {
+		t.Fatal("elapsed prefix does not use draw time", got)
+	}
+	if got := sidebarTimerSuffix(timer, at); got != " · in 30s" {
+		t.Fatal("countdown does not use draw time", got)
+	}
+	if got := sidebarTimerSuffix(timer, at.Add(time.Minute)); got != " · in 0s" {
+		t.Fatal("expired countdown was not clamped", got)
 	}
 }
 

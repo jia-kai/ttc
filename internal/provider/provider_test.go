@@ -23,6 +23,17 @@ func TestResolveRejectsUnknownAndInvalidBudgets(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestBudgetRejectsInvalidRecentCycleBounds(t *testing.T) {
+	for _, bounds := range [][2]int{{-1, 100}, {0, 0}, {101, 100}} {
+		budget := ScriptModel().Budget
+		budget.RecentTokensMin, budget.RecentTokensMax = bounds[0], bounds[1]
+		if err := budget.Validate(); err == nil {
+			t.Fatal("accepted invalid retention bounds", bounds)
+		}
+	}
+}
+
 func TestScriptCancellationAndExhaustion(t *testing.T) {
 	s := &Script{Responses: []ScriptResponse{{Text: "hello"}}}
 	ctx, cancel := context.WithCancel(context.Background())

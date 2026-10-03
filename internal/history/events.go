@@ -95,6 +95,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 			if m.Role != "user" || m.Runtime {
 				return errors.New("steering must be a human user message")
 			}
+			m.InputSource = "steer"
 			checkpoint := NewID("steer")
 			now := time.Now().UnixMilli()
 			_, err := tx.Exec(`INSERT INTO turns(id,session_id,actor_id,trigger,start_entry_id,start_file_tip_id,status,model_json,started_ms,finished_ms) SELECT ?,id,'main','steer',active_entry_id,file_tip_id,'completed',?,?,? FROM sessions WHERE id=?`, checkpoint, string(data), now, now, session)

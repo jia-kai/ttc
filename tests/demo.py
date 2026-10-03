@@ -324,7 +324,7 @@ def main():
             os.write(master, b'\x1b[B\x1b[B\rLooks good.\r\x1b[C')
             expect('Which evidence')
             os.write(master, b'\r')  # Select Data and advance to Submit.
-            expect('Review answers.')
+            expect('Submit answers')
             os.write(master, b'\r')
         else:
             expect('Waiting for answer')

@@ -231,7 +231,9 @@ See [design.md](design.md) for conflict checks and crash recovery.
 - Retain at most four coding-child contexts, including idle children. Close an
   unused child with `job_stop(child_id=...)` to free its slot. At most four
   coding children and `/btw` asides run concurrently. Children cannot spawn
-  children or assign follow-ups. Their inspectors accept no steering.
+  children, assign follow-ups or use `question`. When material information is
+  missing, they finish useful work, report gaps to main and stop; they do not
+  start user dialogs. Their inspectors accept no steering.
 - Persistent children retain their conversation, model and tool policy across
   successful assignments; an idle follow-up may change the reasoning variant.
   New children receive the task, project instructions and tools, not the parent
@@ -457,6 +459,7 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 ### `question`
 
+- Main agent only; children report material information gaps in their answers.
 - Input: `{questions:[{id:string, prompt:string,
   options?:[{id:string,label:string,description?:string}],
   recommended_option_id?:string}]}`. There must be 1–3
@@ -477,17 +480,20 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   always changes tabs, including during text editing. Only Enter on Submit sends
   the round. Missing answers return focus to the first unanswered question.
 - Esc leaves custom editing first, then dismisses without answering. `/questions`
-  reopens the oldest pending round; `/questions FORM_ID` selects one. Other forms
-  remain pending while a dialog or inspector is open. Ctrl+C exits and cancels
-  work. Plain mode accepts `/answer FORM_ID JSON_ARRAY`.
+  reopens the pending round with its drafts; an optional `FORM_ID` must match it.
+  The next normal user message settles a dismissed call and redirects the main
+  agent at its next settled request boundary. Local commands leave it pending.
+  Only explicit reopening clears dismissal. Ctrl+C exits and cancels work.
+  Plain mode accepts `/answer FORM_ID JSON_ARRAY`.
 - Result: `{answers:[{id:string, values:string[], source:"option"|
   "custom"}]}` in question order. Each values array contains exactly one value.
   Option answers contain one option ID; custom answers contain one nonblank
   UTF-8 string, at most 16 KiB, with
   whitespace otherwise preserved. Duplicate submissions are rejected.
-  User cancellation returns
-  error code `cancelled`. Pending questions are memory-only; explicit session
-  switch or app exit cancels them. Compaction waits for foreground questions.
+  Redirected dismissals return `{dismissed:true}` without `answers`.
+  Turn interruption returns error code `cancelled`. Pending questions are
+  memory-only; explicit session switches or exit cancel them. Compaction waits
+  for foreground questions.
 
 ### `skill`
 

@@ -18,6 +18,7 @@ func resultJobID(result json.RawMessage) string {
 const inspectionTailBytes = 8 << 10
 
 // JobDetail expands the output tail to at most 8 KiB of each retained stream.
+// An empty detail starts with current job metadata, including its command or label.
 // Final records save this text; live inspectors may refresh it without growing history.
 func (r *Runtime) JobDetail(id, detail string) string {
 	if id == "" {
@@ -26,6 +27,17 @@ func (r *Runtime) JobDetail(id, detail string) string {
 	job, err := r.Jobs.View("main", id)
 	if err != nil {
 		return detail + "\nOutput unavailable: " + render.Inline(err.Error())
+	}
+	if detail == "" {
+		key := "label"
+		if job.Kind == "shell" || job.Kind == "lsp" {
+			key = "command"
+		}
+		args, _ := json.Marshal(map[string]string{key: job.Label})
+		result, _ := json.Marshal(job)
+		// This is live job metadata, not the original shell arguments; don't
+		// infer tool defaults such as strict mode from the retained snapshot.
+		detail = render.Tool("job", args, result).Detail
 	}
 	streams := []string{"stdout", "stderr"}
 	if job.Kind == "lsp" {

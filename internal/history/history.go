@@ -522,11 +522,17 @@ func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 }
 
 // Messages projects only model-visible canonical messages, resolving tool references.
+// Main human inputs carry their original admission timestamp and source, including
+// across continuations; runtime notices and immutable stored entries are unchanged.
 func (s *Store) Messages(session string) ([]provider.Message, error) {
 	return messagesWith(s.DB, session)
 }
 func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 	entries, e := branchWith(q, session, 0)
+	if e != nil {
+		return nil, e
+	}
+	metadata, e := inputMetadataWith(q, entries)
 	if e != nil {
 		return nil, e
 	}
@@ -550,6 +556,10 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 		} else {
 			var m provider.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
+				return nil, e
+			}
+			m, e = enrichInput(metadata, v, m)
+			if e != nil {
 				return nil, e
 			}
 			out = append(out, m)

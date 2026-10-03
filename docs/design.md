@@ -77,9 +77,10 @@ One Go module uses direct construction and small interfaces at their consumers:
   Discovery reads metadata; the skill tool loads the selected body on demand.
 - One session loop owns live state; bounded worker channels and contexts define
   lifetimes. Interrupting a turn leaves independent jobs alive. Questions suspend
-  only their caller. Parent/child requests may overlap with no cycle limit.
+  the main agent only; children finish useful work, report material gaps and stop
+  without user dialogs. Parent/child requests may overlap with no cycle limit.
 - At most four child/asides run concurrently and four coding contexts are
-  retained, including persistent idle ones. Children cannot spawn children.
+  retained, including persistent idle ones. Children lack `subagent` and `question`.
   Each assignment explicitly chooses persistence, has fresh turn/job IDs and
   returns up to 8 KiB of its final answer plus an immutable message reference.
   Success retains context only when requested; otherwise close and join owned
@@ -190,7 +191,8 @@ type LoginUI interface {
 | `max_output_tokens`        | Endpoint ceiling, or zero when unpublished   |
 | `output_allowance`         | Coding output reserve; cap where supported   |
 | `estimation_margin`        | Estimation/wire-overhead reserve             |
-| `recent_tokens_target`     | Desired recent history after compaction      |
+| `recent_tokens_min`        | Soft minimum for recent model/tool cycles    |
+| `recent_tokens_max`        | Hard maximum for recent model/tool cycles    |
 | `next_turn_input_reserve`  | Free capacity for new input after compaction |
 | `summary_output_allowance` | Summary reserve; cap where supported         |
 
@@ -205,7 +207,7 @@ type LoginUI interface {
 ```text
 fixed_input + summary_and_archive_links + retained_history + O + M
     + next_turn_input_reserve < C
-retained_history <= recent_tokens_target (except mandatory partial-turn tail)
+recent_cycle_tail <= recent_tokens_max
 ```
 
 - [Compaction](compaction.md) defines shared main/child retention, archives,
@@ -243,9 +245,11 @@ retained_history <= recent_tokens_target (except mandatory partial-turn tail)
 - Copy counters under the runtime mutex. Match reported input to its producing
   request ID; percentage/numerical context usage includes reserves, with estimated
   components labeled separately. Handoff refreshes occupancy immediately while
-  prior reported usage stays visible. Compaction preserves totals; explicit
-  activation clears them. Mixed-model totals imply neither cost nor subscription
-  allowance; pricing requires each producing model/tier.
+  prior reported usage stays visible. All-agent run totals are process memory,
+  preserved across compaction and session changes (including `/clear`); only
+  `/new` or restart clears them. Never rebuild totals from history. Parent context
+  usage still clears on explicit session changes. Mixed-model totals imply neither
+  cost nor subscription allowance; pricing requires each producing model/tier.
 
 ## Inspectable request messages
 
@@ -426,7 +430,7 @@ The concrete boundaries above are TTC decisions, informed by:
 - Fullscreen uses a frozen transcript snapshot with shared immutable sources and
   independent indices/anchors. Background work still updates the live view;
   periodic status/asset redraws and automatic dialogs pause. Keep keyboard scroll/
-  resize, all columns and a bottom working indicator; hide sidebar, scrollbar and
+  resize, all columns and a copy-mode footer; hide sidebar, scrollbar and
   idle composer. Typing reveals an overlay. Disable/ignore mouse events for terminal
   copy. Every exit restores mouse reporting and the live source-reading anchor.
 

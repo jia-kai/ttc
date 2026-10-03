@@ -1,6 +1,7 @@
 package tui
 
 import (
+	contextbuild "scicode/internal/context"
 	"scicode/internal/provider"
 	"scicode/internal/render"
 	"strings"
@@ -105,7 +106,7 @@ func TestHumanBackgroundSystemColorAndQueueRows(t *testing.T) {
 	defer s.Fini()
 	s.SetSize(60, 12)
 	lines := []line{{text: "user instructions", id: 1, human: true}, {text: "System prompt · inspect", id: 2, system: true}}
-	queue := []provider.Message{{Content: "first queued\nsecond part"}, {Content: strings.Repeat("long queued ", 20)}}
+	queue := []contextbuild.Input{{Text: "first queued\nsecond part"}, {Text: strings.Repeat("long queued ", 20)}}
 	view := transcriptOf(lines)
 	draw(s, view, newSidebar(), false, nil, nil, -1, newComposer("draft"), 0, queue, nil, "Working · 0s", nil, provider.Selection{})
 	_, _, style, _ := s.GetContent(1, 0)

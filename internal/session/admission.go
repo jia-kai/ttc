@@ -91,7 +91,8 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection provider
 			return e
 		}
 		messages = append(messages, r.notifications...)
-		messages = append(messages, r.steers...)
+		steers := r.steeringMessagesLocked()
+		messages = append(messages, steers...)
 		messages = r.contextMessages(selection, messages)
 		if cm != nil {
 			messages = append(messages, *cm)
@@ -103,7 +104,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection provider
 		if !contextbuild.Fits(selection, systemTemplate, defs, messages, false) {
 			return errNeedsCompaction
 		}
-		admitted, e = r.Store.AdmitRequest(r.Current(), turn, "main", selection, cm, r.notifications, nil, r.steers...)
+		admitted, e = r.Store.AdmitRequest(r.Current(), turn, "main", selection, cm, r.notifications, nil, steers...)
 		if e != nil {
 			return e
 		}

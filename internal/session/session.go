@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	contextbuild "scicode/internal/context"
 	"scicode/internal/history"
 	"scicode/internal/jobs"
 	"scicode/internal/provider"
@@ -34,12 +35,13 @@ type Event struct {
 	Detail     string          // Bounded detail for a transient tool update; final detail is loaded from history.
 	Human      bool            // True only for a submitted human instruction.
 	Image      *ImageSnapshot  // Immutable image_show snapshot, not a live interaction handle.
-	Question   *QuestionForm   // Snapshot for question/question_closed events; never persisted as a live handle.
+	Question   *QuestionForm   // Snapshot for question lifecycle events; never persisted as a live handle.
 	Retry      *provider.Retry // Foreground retry backoff metadata; nil for background session naming.
 }
 
 // Runtime owns exactly one main session, and joins transient work before switching it.
-// Run and Command are called serially by the frontend; Interrupt and RequestModel are concurrent-safe.
+// Run, RunInput, and Command are called serially by the frontend;
+// Interrupt and RequestModel are concurrent-safe.
 type Runtime struct {
 	Store             *history.Store
 	Workspace         *workspace.Manager
@@ -70,15 +72,15 @@ type Runtime struct {
 	generation        uint64 // Advances on explicit transient resets, never compaction.
 	activeCancel      context.CancelFunc
 	notifications     []provider.Message
-	steers            []provider.Message // Transient human input, admitted only at a model boundary.
-	activeTurn        string             // Main inference turn, distinct from steering undo checkpoints.
+	steers            []contextbuild.Input // Original transient human inputs, admitted only at a model boundary.
+	activeTurn        string               // Main inference turn, distinct from steering undo checkpoints.
 	AutoName          bool
 	timers            *wakeups
 	questions         questions
 	images            imageInteractions
 	usage             ContextUsage
 	reported          *ReportedUsage     // Protected by mu; cleared with the main session's transient state.
-	totals            UsageTotals        // All inference usage in this activation, protected by mu.
+	totals            UsageTotals        // All inference usage since construction or /new, protected by mu.
 	mainContext       contextCursor      // Owned by serial Run/Command; reset on explicit session changes.
 	mainPrefix        []provider.Message // Latest balanced main request input, immutable after publication under mu.
 	prefixSelection   provider.Selection
@@ -115,7 +117,6 @@ func (r *Runtime) resetTransient() {
 	r.fatalCompaction = ""
 	r.usage = ContextUsage{}
 	r.reported = nil
-	r.totals = UsageTotals{}
 	r.mainContext = contextCursor{}
 	r.mainPrefix = nil
 	r.prefixTurn = ""
@@ -165,7 +166,7 @@ func (r *Runtime) resetTransient() {
 	r.addWakeupTools()
 	r.addImageTool()
 	r.questions.mu.Lock()
-	r.questions.forms = map[string]questionForm{}
+	r.questions.pending = nil
 	r.questions.mu.Unlock()
 	r.addQuestionTool()
 	r.addSubagentTool()
@@ -245,6 +246,10 @@ func (r *Runtime) HasNotifications() bool {
 
 // Run executes one user or notification turn through complete tool/result cycles.
 func (r *Runtime) Run(message *provider.Message) (err error) {
+	return r.run(message, nil)
+}
+
+func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err error) {
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
 	if e := r.checkContext(); e != nil {
@@ -257,7 +262,7 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); r.activeCancel = nil; r.activeTurn = ""; r.mu.Unlock() }()
 	trigger := "async"
-	if message != nil {
+	if message != nil || input != nil {
 		trigger = "user"
 	}
 	if event, e := r.ApplyModel(""); e != nil {
@@ -276,6 +281,18 @@ func (r *Runtime) Run(message *provider.Message) (err error) {
 	var firstEntry int64
 	var e error
 	e = r.Workspace.Admit(ctx, func() error {
+		if input != nil {
+			input.mu.Lock()
+			defer input.mu.Unlock()
+			if !input.pending || input.generation != r.Generation() {
+				return errInputCancelled
+			}
+			m := input.input.Message()
+			message = &m
+			// Hold the ticket through the commit: a losing cancellation must
+			// not interrupt this turn or restore an already admitted input.
+			defer input.clearLocked()
+		}
 		if persisted {
 			turn, firstEntry, e = r.Store.AdmitTurn(id, trigger, selection, message)
 			return e
@@ -521,11 +538,16 @@ func turnDuration(elapsed time.Duration) string {
 	return text.String()
 }
 
-// Command executes idle-only history/lifecycle operations. Compaction requests a model summary.
+// Command returns help during any turn; other commands serialize with history
+// and lifecycle operations. Compaction requests a model summary.
 func (r *Runtime) Command(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "/help" {
+		return helpMarkdown, nil
+	}
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
-	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	parts := strings.SplitN(text, " ", 2)
 	switch parts[0] {
 	case "/new", "/clear", "/load", "/undo", "/redo", "/branch":
 		if r.retentionStop != nil {
@@ -562,6 +584,11 @@ func (r *Runtime) Command(text string) (string, error) {
 		r.mu.Lock()
 		r.current = history.NewID("session")
 		r.persisted = false
+		if parts[0] == "/new" {
+			// Workers have joined, so no response from the old run can arrive
+			// after its counters are cleared. Other session changes keep totals.
+			r.totals = UsageTotals{}
+		}
 		r.mu.Unlock()
 		r.resetTransient()
 		return "New session · " + r.Current(), nil
@@ -698,8 +725,6 @@ func (r *Runtime) Command(text string) (string, error) {
 		return string(b), nil
 	case "/compact":
 		return r.compact(arg)
-	case "/help":
-		return helpMarkdown, nil
 	default:
 		return "", fmt.Errorf("unknown command %s", parts[0])
 	}

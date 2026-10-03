@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	contextbuild "scicode/internal/context"
 	"scicode/internal/provider"
 )
 
@@ -17,7 +18,7 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
 		requests++
 		if requests == 1 {
-			if err := r.Steer(provider.Message{Role: "user", Content: "Steer: revise after first write"}); err != nil {
+			if err := r.Steer(contextbuild.Input{Text: "Steer: revise after first write"}); err != nil {
 				return err
 			}
 			for _, m := range req.Messages {
@@ -49,8 +50,8 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 	if err := r.Run(&provider.Message{Role: "user", Content: "Write the result"}); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 3 || len(r.PendingSteers()) != 0 {
-		t.Fatal(requests, r.PendingSteers())
+	if count, _ := r.SteeringPreview(0); requests != 3 || count != 0 {
+		t.Fatal(requests, count)
 	}
 	var human, steer int
 	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='user'").Scan(&human); err != nil {
@@ -85,7 +86,7 @@ func TestSteeringRejectedAdmissionRetainsInputAndCheckpoint(t *testing.T) {
 	r.activeTurn = "test-running"
 	_, r.activeCancel = context.WithCancel(r.ctx)
 	r.mu.Unlock()
-	if err := r.Steer(provider.Message{Role: "user", Content: "Queued human steer"}); err != nil {
+	if err := r.Steer(contextbuild.Input{Text: "Queued human steer"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_steer_request BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'rejected request'); END`); err != nil {
@@ -98,14 +99,15 @@ func TestSteeringRejectedAdmissionRetainsInputAndCheckpoint(t *testing.T) {
 	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil {
 		t.Fatal(err)
 	}
-	if checkpoints != 0 || len(r.PendingSteers()) != 1 {
-		t.Fatal("admission failure consumed steering", checkpoints, r.PendingSteers())
+	if count, _ := r.SteeringPreview(0); checkpoints != 0 || count != 1 {
+		t.Fatal("admission failure consumed steering", checkpoints, count)
 	}
 	if _, err := r.Store.DB.Exec("DROP TRIGGER reject_steer_request"); err != nil {
 		t.Fatal(err)
 	}
 	admitted, _, err := r.admitMain(context.Background(), "", r.selection)
-	if err != nil || len(admitted.SteerEntries) != 1 || len(r.PendingSteers()) != 0 {
+	count, _ := r.SteeringPreview(0)
+	if err != nil || len(admitted.SteerEntries) != 1 || count != 0 {
 		t.Fatal(admitted, err)
 	}
 }

@@ -312,7 +312,8 @@ func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 
 func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	r.selection.Model.Budget.RecentTokensTarget = 200
+	r.selection.Model.Budget.RecentTokensMin = 0
+	r.selection.Model.Budget.RecentTokensMax = 200
 	if err := os.WriteFile(filepath.Join(r.Workspace.Root, "AGENTS.md"), []byte("Retain units."), 0600); err != nil {
 		t.Fatal(err)
 	}

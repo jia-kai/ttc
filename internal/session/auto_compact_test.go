@@ -23,15 +23,26 @@ func compactionBudget(t *testing.T, r *Runtime) {
 	u := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []provider.Message{*message})
 	b := &r.selection.Model.Budget
 	b.ContextLimit = u.Input + u.Reserved + 2000
-	b.RecentTokensTarget = 700
+	b.RecentTokensMin = 0
+	b.RecentTokensMax = 700
 	b.NextTurnInputReserve = 512
 	b.SummaryOutputAllowance = 512
+}
+
+// seedCompactionHistory puts large completed model output in the prefix, rather
+// than a human instruction that the bounded-input retention policy must copy.
+func seedCompactionHistory(t *testing.T, r *Runtime, content string) {
+	t.Helper()
+	seedRuntime(t, r, "Earlier research task")
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: content}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedRuntime(t, r, strings.Repeat("Previous research notes. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
 	before, generation := r.Current(), r.Generation()
 	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false)
 	if err != nil {
@@ -145,7 +156,7 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 				}
 			}
 			if !found[prompt] || !found["Model reasoning 2"] || !found["Model reasoning 3"] || found["Model reasoning 1"] || len(pending) != 0 {
-				t.Fatal("incorrect mandatory retained messages", found, pending)
+				t.Fatal("incorrect retained recent cycles", found, pending)
 			}
 		}
 		if step == 5 {
@@ -169,7 +180,8 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 			next.Model.ID = "smaller-context"
 			u := estimateUsage(req.Selection, req.System, req.Tools, req.Messages)
 			next.Model.Budget.ContextLimit = u.Input + u.Reserved + 100
-			next.Model.Budget.RecentTokensTarget = 1
+			next.Model.Budget.RecentTokensMin = 0
+			next.Model.Budget.RecentTokensMax = 700
 			next.Model.Budget.NextTurnInputReserve = 1
 			next.Model.Budget.SummaryOutputAllowance = 512
 			if err := r.RequestModel(next); err != nil {
@@ -194,6 +206,29 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 		t.Fatal(step, summaries)
 	}
 	continuation := r.Current()
+	var sourcePrompt, prefixTip int64
+	if err := r.Store.DB.QueryRow(`SELECT id FROM entries WHERE session_id=? AND role='user' AND model_visible=1 ORDER BY id LIMIT 1`, before).Scan(&sourcePrompt); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Store.DB.QueryRow(`SELECT id FROM file_changes WHERE session_id=? ORDER BY id LIMIT 1`, before).Scan(&prefixTip); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := r.Store.Branch(continuation, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPrompt := false
+	for _, entry := range entries {
+		if entry.Source == sourcePrompt {
+			foundPrompt = true
+			if entry.FileTip != prefixTip {
+				t.Fatal("separately retained prompt was not rebased to summarized edits", entry.FileTip, prefixTip)
+			}
+		}
+	}
+	if !foundPrompt {
+		t.Fatal("original instruction was not copied separately")
+	}
 	if _, err := r.Command("/new"); err != nil {
 		t.Fatal(err)
 	}
@@ -214,12 +249,89 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 	}
 }
 
+func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		for _, cycles := range []int{0, 1, 2} {
+			t.Run(fmt.Sprintf("automatic=%v/cycles=%d", automatic, cycles), func(t *testing.T) {
+				r, _ := runtimeFixture(t, nil)
+				compactionBudget(t, r)
+				seedCompactionHistory(t, r, strings.Repeat("Earlier completed research. ", 700))
+				before := r.Current()
+				newest := []provider.Message{{Role: "user", Content: "Continue with the sidebar widget."}}
+				for i := range cycles {
+					id := fmt.Sprintf("read-%d", i)
+					newest = append(newest,
+						provider.Message{Role: "developer", Runtime: true, Content: "Current runtime metadata"},
+						provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: id, Name: "read", Arguments: []byte(`{"path":"fixture.go"}`)}}},
+						provider.Message{Role: "tool", CallID: id, Content: strings.Repeat("Recent tool result. ", 20)})
+				}
+				for _, message := range newest {
+					if _, err := r.Store.Append(before, "", "main", "message", message.Role, true, message); err != nil {
+						t.Fatal(err)
+					}
+				}
+				summaries, coding := 0, 0
+				r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+					if req.NoTools {
+						summaries++
+						if !strings.Contains(req.Messages[0].Content, "Earlier completed research.") {
+							t.Fatal("summary omitted the older prefix")
+						}
+						return emit(provider.StreamEvent{Kind: "text", Text: "Earlier research completed."})
+					}
+					coding++
+					if r.Current() == before || !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
+						t.Fatal("coding request did not follow a fitting handoff")
+					}
+					return emit(provider.StreamEvent{Kind: "text", Text: "Continued."})
+				}}
+				var err error
+				if automatic {
+					err = r.Run(nil)
+				} else {
+					_, err = r.Command("/compact")
+				}
+				if err != nil || summaries != 1 || coding != map[bool]int{false: 0, true: 1}[automatic] || r.Current() == before {
+					t.Fatal("compaction failed or retried", err, summaries, coding)
+				}
+				retained := newest[:1]
+				if cycles > 0 {
+					retained = append(append([]provider.Message(nil), retained...), newest[2:]...)
+				}
+				messages, err := r.Store.Messages(r.Current())
+				if err != nil || len(messages) < len(retained)+1 {
+					t.Fatal("retained history missing", err)
+				}
+				start := -1
+				for i, message := range messages {
+					if message.Role == "user" && message.Content == newest[0].Content {
+						start = i
+						break
+					}
+				}
+				if start < 0 || start+len(retained) > len(messages) {
+					t.Fatal("newest input and recent cycles missing")
+				}
+				copied := append([]provider.Message(nil), messages[start:start+len(retained)]...)
+				for i := range copied {
+					copied[i].InputSource, copied[i].InputTimeMS = "", 0
+				}
+				got, _ := json.Marshal(copied)
+				want, _ := json.Marshal(retained)
+				if string(got) != string(want) || r.checkContext() != nil {
+					t.Fatal("newest turn changed or context was invalidated", string(got))
+				}
+			})
+		}
+	}
+}
+
 func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 	for _, reason := range []string{"summary", "oversized", "cancel", "commit", "tail"} {
 		t.Run(reason, func(t *testing.T) {
 			r, events := runtimeFixture(t, nil)
 			compactionBudget(t, r)
-			seedRuntime(t, r, strings.Repeat("Previous research notes. ", 700))
+			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
 			before := r.Current()
 			attempts := 0
 			r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {

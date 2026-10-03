@@ -40,7 +40,7 @@ def main():
         {'prefix': 'user: Background', 'calls': [
             {'id': 'shell_1', 'name': 'shell', 'arguments': {'command': 'sleep 0.3; printf background-complete', 'background': True}}]},
         {'prefix': 'tool: ', 'text': 'Background job launched.'},
-        {'prefix': 'user: {"type":"job_exit"', 'text': 'Background completion observed.'},
+        {'event_type': 'job_exit', 'text': 'Background completion observed.'},
         {'prefix': 'user: Long job', 'calls': [
             {'id': 'shell_2', 'name': 'shell', 'arguments': {'command': 'sleep 30', 'background': True, 'wake_on_exit': False}}]},
         {'prefix': 'tool: ', 'text': 'Long job started.'},
@@ -114,7 +114,11 @@ def main():
                     assert json.loads(last['output'])['ok'] is True
                 else:
                     message = last['role'] + ': ' + ''.join(part.get('text', '') for part in last['content'])
-                assert message.startswith(response['prefix']), (message, response['prefix'])
+                if 'event_type' in response:
+                    assert last['role'] == 'user'
+                    assert json.loads(message.removeprefix('user: '))['type'] == response['event_type']
+                else:
+                    assert message.startswith(response['prefix']), (message, response['prefix'])
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/event-stream')
                 self.end_headers()

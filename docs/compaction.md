@@ -12,12 +12,21 @@ input and interactions. Explicit session changes/exit cancel them.
   capacity. Compact before oversized admission. Native replay estimates count
   model-visible occupancy, not encrypted transport JSON; reported usage is separate.
   Provider context-length rejection fails directly, without compaction/retry.
-- Retain complete recent user turns up to `recent_tokens_target`. If the active
-  turn alone exceeds it, retain its initiating user/task message and last two
-  assistant messages with complete tool results. Cut only after a completed cycle;
-  never split pairs or discard unresolved calls. Mandatory retention may exceed
-  its target, but the next request must fit capacity and next-turn headroom.
-  Without a safe prefix, fail explicitly.
+- Preserve up to two latest admitted normal/queued prompts combined and up to
+  two committed steers independently, in chronological order with exact text and
+  attachments. Child task/aside inputs count with normal/queued prompts. Pending
+  unadmitted input stays in live state, not retained history. Each copied input
+  gets a separate metadata marker with its source, original commit time,
+  compaction time and age; repeated compaction preserves original identity/time.
+  Canonical marker instructions live in [prompt/retained-input.md](../prompt/retained-input.md).
+- Retain recent assistant/tool cycles after the latest human input, not complete
+  user/model turns. Set the tail
+  target to `min(recent_tokens_max, max(recent_tokens_min, last_two_cycle_tokens))`
+  and keep the longest suffix within it at a complete cycle boundary. A large
+  cycle can enter the summary. Never split tool pairs; unresolved calls block compaction.
+  Subscription defaults are 4096–16000 estimated tokens, excluding the retained
+  inputs. The complete replacement must fit capacity and next-turn headroom.
+  Without older model work or an unretained human input to summarize, fail explicitly.
 
 ## Summary and archives
 
@@ -26,8 +35,10 @@ input and interactions. Explicit session changes/exit cancel them.
   constraints, decisions, results, open work and lookup details. Raw arguments/
   results enter the summary request; UI activity/expanded tool views do not.
 - No chunks, regeneration or mandatory heading schema. Reject empty summaries,
-  tool calls and over-budget input/output. Canonical summary instructions and
-  templates live in [prompt/compaction.yaml](../prompt/compaction.yaml).
+  tool calls, oversized summary requests and summaries over 1 MiB. The complete
+  replacement must fit capacity/headroom; subscription output allowance is a
+  reserve, not a generation cap. Canonical summary instructions and templates
+  live in [prompt/compaction.yaml](../prompt/compaction.yaml).
 - Immutable private files belong to the main lineage:
 
 ```text

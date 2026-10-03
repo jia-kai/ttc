@@ -94,7 +94,7 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("capacity", "four child contexts/tasks are retained; close an idle child with job_stop(child_id=...) or wait for an aside")
 			}
-			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" })}
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "question" })}
 			r.children[child.id] = child
 		}
 		child.selection = selection
@@ -178,13 +178,21 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Aside instructions · inspect", EntryID: id})
 		messages = append(messages, instruction)
 	}
-	question := provider.Message{Role: "user", Content: prompt}
-	messages = append(messages, question)
+	question := provider.Message{Role: "user", Content: prompt, InputSource: "task"}
+	if task.aside {
+		question.InputSource = "btw"
+	}
 	entry, err := r.Store.Append(r.Current(), turn, actor, "message", "user", false, question)
+	if err == nil {
+		var committed history.Entry
+		committed, err = r.Store.Entry(entry)
+		question.InputTimeMS = committed.CreatedMS
+	}
 	r.routeMu.RUnlock()
 	if err != nil {
 		return err
 	}
+	messages = append(messages, question)
 	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry})
 	defs := task.tools.Definitions()
 	cursor := task.cursor

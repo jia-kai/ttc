@@ -59,12 +59,16 @@ patch:
     header moves that file. Read affected files first.
 question:
   description: >-
-    Ask 1–3 single-choice questions and wait for the user's submitted answers.
+    Main agent only. Ask 1–3 single-choice questions and wait for the user's
+    submitted answers.
     Give each question a unique id and prompt. Provide 2–5 options with unique
     id, label and optional description, or omit options for free-text only.
     Free-text answers are also available alongside options. An optional
     recommended_option_id identifies your preferred existing option; it is not
     an automatic answer. Each answer contains one selected option or custom text.
+    The user may dismiss the form and send a different instruction; then the
+    tool returns dismissed=true without answers, and the instruction redirects
+    the main agent.
 read:
   description: >-
     Read UTF-8 text from path or list its directory entries. offset is a 1-based

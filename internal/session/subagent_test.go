@@ -91,7 +91,8 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 
 func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	r.selection.Model.Budget.RecentTokensTarget = 256
+	r.selection.Model.Budget.RecentTokensMin = 0
+	r.selection.Model.Budget.RecentTokensMax = 256
 	frozen := r.selection
 	started, release := make(chan struct{}), make(chan struct{})
 	childCycle := 0

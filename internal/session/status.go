@@ -14,19 +14,22 @@ type TokenPart struct {
 }
 
 // ContextUsage describes the latest parent request's frozen model and reserves.
-// Admission and compaction handoffs refresh it; explicit session changes clear it.
+// Admission and compaction handoffs refresh parent context fields; explicit
+// session changes clear those fields but preserve the independent run totals.
 type ContextUsage struct {
 	Model                  string
 	RequestID              int64 // Identity of the estimated parent request; zero before it starts.
 	Limit, Input, Reserved int
 	Parts                  []TokenPart
 	Reported               *ReportedUsage // Latest successful parent response, independent of the current estimate.
-	Totals                 UsageTotals    // Cumulative endpoint usage since this session was activated, including all agents.
+	Totals                 UsageTotals    // In-memory endpoint usage since process start or /new, including all agents.
 }
 
 // UsageTotals accumulates each inference response once, including children,
-// asides, naming and compaction. Missing usage cannot be inferred. Optional
-// counters are unavailable if any reported response omitted that counter.
+// asides, naming and compaction. Totals survive compaction and session changes;
+// only /new or constructing a new runtime clears them. History never restores
+// them. Missing usage cannot be inferred. Optional counters are unavailable if
+// any reported response omitted that counter.
 // Cached reads and cache writes are input subsets; reasoning is an output subset.
 type UsageTotals struct {
 	Requests, ReportedRequests int

@@ -5,9 +5,10 @@ workflows on headless servers. If you agree with the following, then TTC may
 be helpful to you:
 
 * Agents should be collaborative tools instead of owning the full project.
-* A fully terminal-based workflow is productive. Agents should live in tmux as
-  normal processes instead of having their own background session management
-  or a lifespan longer than their TUIs.
+* A minimalistic, fully terminal-based workflow is productive. Agents should
+  live in tmux as normal processes instead of having their own background
+  session management or a lifespan longer than their TUIs. No need for
+  complications like a server-client agent architecture.
 * Agents should not try to decide the "safety" of a tool call, impose
   permissions, or set up half-working sandboxes. The user is responsible for
   setting up a properly isolated environment.

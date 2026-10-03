@@ -16,6 +16,7 @@ import (
 	"scicode/internal/render"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGeneratedIDsAreCompactOpaqueAndURLSafe(t *testing.T) {
@@ -314,7 +315,7 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	if e = s.SaveSelection(latest); e != nil {
 		t.Fatal(e)
 	}
-	continuation, e := s.Continue(v.ID, "summary", archive, retained, 0)
+	continuation, e := s.Continue(v.ID, "summary", archive, retained, nil, time.Now())
 	if e != nil {
 		t.Fatal(e)
 	}

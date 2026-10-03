@@ -60,7 +60,8 @@
   the larger maximum. The sidebar shows the latest parent request's resolved budget.
 - Endpoint usage distinguishes zero from unavailable. Preserve cache writes
   separately. Run totals add every finished parent/child/aside/naming/compaction
-  response once since activation, including cache reads on later requests.
+  response once since process start or `/new`, including cache reads on later
+  requests. Session changes and compaction retain these in-memory totals.
   Ordinary input is input minus reads/writes; reasoning is already included in
   output. Missing usage appears as coverage, not estimated zero.
 - Cost requires each producing model/tier's rates: ordinary input × input rate +

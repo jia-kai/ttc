@@ -2,12 +2,12 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
 	"scicode/internal/tool"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -142,6 +142,91 @@ func questionScript() []provider.ScriptResponse {
 	return []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"choice","prompt":"Choose a method?","recommended_option_id":"b","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]},{"id":"notes","prompt":"Add notes?"}]}`)}}}, {Text: "Done answering."}}
 }
 
+func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
+	for _, modifier := range []tcell.ModMask{0, tcell.ModAlt} {
+		t.Run(fmt.Sprint(modifier), func(t *testing.T) {
+			responses := questionScript()
+			responses[1] = provider.ScriptResponse{Prefix: "user: Do something else", Text: "Redirect received."}
+			u := newQuestionTestUI(t, &provider.Script{Responses: responses})
+			u.typeText("ask")
+			u.key(tcell.KeyEnter)
+			u.wait(t, "Choose a method?")
+			u.key(tcell.KeyEscape)
+			frame := u.wait(t, "What would you like to do instead?")
+			if strings.Contains(frame, "Waiting for answer") {
+				t.Fatal("stale question wait after dismissal", frame)
+			}
+			form := u.runtime.PendingQuestion()
+			if form == nil || !form.Dismissed {
+				t.Fatal(form)
+			}
+			// Local inspection must leave the form reopenable and not resume inference.
+			u.typeText("/jobs")
+			u.key(tcell.KeyEnter)
+			u.wait(t, "jobs · Esc closes")
+			if u.runtime.PendingQuestion() == nil {
+				t.Fatal("local command settled the question")
+			}
+			u.key(tcell.KeyEscape)
+			u.typeText("Do something else")
+			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, modifier))
+			u.wait(t, "Redirect received.")
+			u.wait(t, "Turn complete")
+			messages, err := u.runtime.Store.Messages(u.runtime.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			redirects, resultAt, inputAt := 0, -1, -1
+			for i, m := range messages {
+				if m.Role == "tool" && m.CallID == "q" {
+					var result struct {
+						Dismissed bool            `json:"dismissed"`
+						Answers   json.RawMessage `json:"answers"`
+					}
+					if err := json.Unmarshal([]byte(m.Content), &result); err != nil || !result.Dismissed || len(result.Answers) != 0 {
+						t.Fatal("wrong question result", m.Content, err)
+					}
+					resultAt = i
+				}
+				if m.Role == "user" && !m.Runtime && m.Content == "Do something else" {
+					redirects++
+					inputAt = i
+				}
+			}
+			if redirects != 1 || resultAt < 0 || inputAt <= resultAt || u.runtime.PendingQuestion() != nil {
+				t.Fatal("redirect lost/duplicated or out of order", messages)
+			}
+		})
+	}
+}
+
+func TestDismissedQuestionReopensWithDraftAndCanStillBeAnswered(t *testing.T) {
+	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u.typeText("ask")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Choose a method?")
+	u.key(tcell.KeyEnd)
+	u.key(tcell.KeyEnter)
+	u.typeText("saved draft")
+	u.key(tcell.KeyEscape) // Leaves custom text editing.
+	u.key(tcell.KeyEscape) // Dismisses the dialog, without completing its call.
+	u.wait(t, "What would you like to do instead?")
+	u.typeText("/questions")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Text: saved draft")
+	form := u.runtime.PendingQuestion()
+	if form == nil || form.Dismissed {
+		t.Fatal("reopening did not restore the pending form", form)
+	}
+	if err := u.runtime.AnswerQuestion(form.ID, []session.Answer{{ID: "choice", Values: []string{"saved draft"}, Source: "custom"}, {ID: "notes", Values: []string{"notes"}, Source: "custom"}}); err != nil {
+		t.Fatal(err)
+	}
+	u.wait(t, "Turn complete")
+	if count, _ := u.runtime.SteeringPreview(0); count != 0 {
+		t.Fatal("reopening queued a redirect")
+	}
+}
+
 func TestQuestionArrivingDuringModelPickerOpensAfterPickerCloses(t *testing.T) {
 	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
@@ -167,7 +252,7 @@ func TestQuestionArrivingDuringModelPickerOpensAfterPickerCloses(t *testing.T) {
 	u.wait(t, "RE│")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "Second (Recommended)")
-	if len(u.runtime.PendingQuestions()) != 1 {
+	if u.runtime.PendingQuestion() == nil {
 		t.Fatal("opening the deferred dialog changed pending state")
 	}
 }
@@ -219,98 +304,57 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 	}
 }
 
-type concurrentQuestionProvider struct {
-	provider.Script
-	mu    sync.Mutex
-	steps map[string]int
-}
-
-func (p *concurrentQuestionProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-	actor := "main"
-	if strings.Contains(req.System, "\nYou are an isolated child agent.") {
-		actor = req.Messages[0].Content
-	}
-	p.mu.Lock()
-	step := p.steps[actor]
-	p.steps[actor]++
-	p.mu.Unlock()
-	if actor == "main" && step == 0 {
-		for _, id := range []string{"A", "B"} {
-			call := provider.ToolCall{ID: id, Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"` + id + `","label":"` + id + `","background":true}`)}
-			if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if actor != "main" && step == 0 {
-		call := provider.ToolCall{ID: "question", Name: "question", Arguments: []byte(`{"questions":[{"id":"answer","prompt":"Question ` + actor + `?"}]}`)}
-		return emit(provider.StreamEvent{Kind: "call", Call: &call})
-	}
-	return emit(provider.StreamEvent{Kind: "text", Text: actor + " finished."})
-}
-
-func TestConcurrentQuestionClosurePreservesOtherActiveForm(t *testing.T) {
-	u := newQuestionTestUI(t, &concurrentQuestionProvider{steps: map[string]int{}})
+func TestQuestionFrontendSequentialRoundsPreserveNextDraft(t *testing.T) {
+	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{
+		{Calls: []provider.ToolCall{
+			{ID: "qa", Name: "question", Arguments: []byte(`{"questions":[{"id":"answer","prompt":"Alpha?"}]}`)},
+			{ID: "qb", Name: "question", Arguments: []byte(`{"questions":[{"id":"answer","prompt":"Beta?"}]}`)},
+		}},
+		{Text: "Finished answering."},
+	}})
 	u.typeText("ask both")
 	u.key(tcell.KeyEnter)
-	deadline := time.Now().Add(3 * time.Second)
-	forms := u.runtime.PendingQuestions()
-	for len(forms) != 2 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-		forms = u.runtime.PendingQuestions()
+	u.wait(t, "Alpha?")
+	first := u.runtime.PendingQuestion()
+	if first == nil || first.Questions[0].Prompt != "Alpha?" {
+		t.Fatal("first round not pending", first)
 	}
-	if len(forms) != 2 {
-		t.Fatal(forms)
-	}
-	for range 2 {
-		select {
-		case <-u.questionEvents:
-		case <-time.After(3 * time.Second):
-			t.Fatal("question not emitted")
-		}
-	}
-	// The two exposed left-margin characters survive the modal overlay. This
-	// event follows both question events, so its frame is a UI delivery barrier.
-	u.runtime.Emit(session.Event{Kind: "status", Text: "◇◇ both question events delivered", Generation: u.runtime.Generation()})
-	u.wait(t, "◇◇")
-	u.key(tcell.KeyEscape)
-	u.key(tcell.KeyEscape)
-	u.typeText("/questions " + forms[1].ID)
-	u.key(tcell.KeyEnter)
-	u.wait(t, forms[1].Questions[0].Prompt)
-	if err := u.runtime.AnswerQuestion(forms[0].ID, []session.Answer{{ID: "answer", Values: []string{"first answered"}, Source: "custom"}}); err != nil {
-		t.Fatal(err)
-	}
-	// Joining the first child's completion ensures its close event is queued.
-	for _, job := range u.runtime.Jobs.List("main", true) {
-		if job.Owner == forms[0].Actor {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			_, err := u.runtime.Jobs.Wait(ctx, "main", job.ID, nil)
-			cancel()
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	u.typeText("other stays active")
-	u.wait(t, "Text: other stays active")
+	u.typeText("first answered")
 	u.key(tcell.KeyRight)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)
-	deadline = time.Now().Add(3 * time.Second)
-	for len(u.runtime.PendingQuestions()) > 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	u.wait(t, "Beta?")
+	second := u.runtime.PendingQuestion()
+	if second == nil || second.ID == first.ID || second.Questions[0].Prompt != "Beta?" {
+		t.Fatal("second round not pending", second)
 	}
-	if len(u.runtime.PendingQuestions()) != 0 {
-		t.Fatal("closing first form dismissed second")
+	u.typeText("next draft")
+	u.wait(t, "Text: next draft")
+	// Late initial publication and closure for the previous round must not
+	// clear the current dialog or replace its retained draft.
+	u.runtime.Emit(session.Event{Kind: "question", Question: first, SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.runtime.Emit(session.Event{Kind: "question_closed", Question: first, SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.runtime.Emit(session.Event{Kind: "status", Text: "◆◆ previous round closed", SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	if frame := u.wait(t, "◆◆"); !strings.Contains(frame, "Text: next draft") {
+		t.Fatal("previous round closure lost the next draft", frame)
 	}
-	u.key(tcell.KeyCtrlC)
-	select {
-	case <-u.done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("exit blocked")
+	u.key(tcell.KeyRight)
+	u.wait(t, "Submit answers")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn complete")
+	if u.runtime.PendingQuestion() != nil {
+		t.Fatal("answered round still pending")
 	}
+	messages, err := u.runtime.Store.Messages(u.runtime.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if message.Role == "tool" && message.CallID == "qb" && strings.Contains(message.Content, "next draft") {
+			return
+		}
+	}
+	t.Fatal("second answer lost", messages)
 }
 
 func TestComposerCtrlDScrollsDownWithoutExiting(t *testing.T) {
@@ -361,7 +405,7 @@ func TestQuestionFrontendDismissReopenAndCtrlCExitsForm(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("exit deadlocked pending question")
 	}
-	if len(u.runtime.PendingQuestions()) != 0 {
+	if u.runtime.PendingQuestion() != nil {
 		t.Fatal("pending form survived exit")
 	}
 	var raw string

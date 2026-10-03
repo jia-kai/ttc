@@ -15,14 +15,15 @@ type Budget struct {
 	MaxOutputTokens        int `json:"max_output_tokens"`
 	OutputAllowance        int `json:"output_allowance"`
 	EstimationMargin       int `json:"estimation_margin"`
-	RecentTokensTarget     int `json:"recent_tokens_target"`
+	RecentTokensMin        int `json:"recent_tokens_min"` // Soft minimum for the recent model/tool tail, excluding independently retained human inputs.
+	RecentTokensMax        int `json:"recent_tokens_max"` // Hard maximum for that tail; oversized complete cycles are summarized.
 	NextTurnInputReserve   int `json:"next_turn_input_reserve"`
 	SummaryOutputAllowance int `json:"summary_output_allowance"`
 }
 
 // Validate rejects budgets that cannot leave room for instructions and output.
 func (b Budget) Validate() error {
-	if b.ContextLimit <= 0 || b.MaxOutputTokens < 0 || b.OutputAllowance <= 0 || b.SummaryOutputAllowance <= 0 || b.EstimationMargin < 0 || b.RecentTokensTarget < 0 || b.NextTurnInputReserve < 0 {
+	if b.ContextLimit <= 0 || b.MaxOutputTokens < 0 || b.OutputAllowance <= 0 || b.SummaryOutputAllowance <= 0 || b.EstimationMargin < 0 || b.RecentTokensMin < 0 || b.RecentTokensMax <= 0 || b.RecentTokensMin > b.RecentTokensMax || b.NextTurnInputReserve < 0 {
 		return fmt.Errorf("invalid model token budget")
 	}
 	if (b.MaxOutputTokens > 0 && (b.OutputAllowance > b.MaxOutputTokens || b.SummaryOutputAllowance > b.MaxOutputTokens)) || b.OutputAllowance+b.EstimationMargin+b.NextTurnInputReserve+b.SummaryOutputAllowance >= b.ContextLimit {
@@ -142,17 +143,19 @@ func ReplayTokens(state *ReplayState) int {
 // Message is canonical history. State preserves provider-native replay data;
 // Content and Calls remain usable when a different provider/model is selected.
 type Message struct {
-	EventSeq  int64        `json:"event_seq,omitempty"`  // Source identity of an injected runtime event, never a provider wire field.
-	RequestID int64        `json:"request_id,omitempty"` // Durable producing request for audit/inspection.
-	Runtime   bool         `json:"runtime,omitempty"`    // Injected job/timer notices, rather than human instructions.
-	Role      string       `json:"role"`
-	Phase     string       `json:"phase,omitempty"` // Adapter-supplied assistant phase, retained if native state is compacted.
-	Content   string       `json:"content,omitempty"`
-	UserText  *string      `json:"user_text,omitempty"` // Authored human text before attachment expansion; nil uses Content for display.
-	Calls     []ToolCall   `json:"calls,omitempty"`
-	CallID    string       `json:"call_id,omitempty"`
-	Images    []Image      `json:"images,omitempty"`
-	State     *ReplayState `json:"state,omitempty"`
+	EventSeq    int64        `json:"event_seq,omitempty"`     // Source identity of an injected runtime event, never a provider wire field.
+	RequestID   int64        `json:"request_id,omitempty"`    // Durable producing request for audit/inspection.
+	Runtime     bool         `json:"runtime,omitempty"`       // Injected job/timer notices, rather than human instructions.
+	InputSource string       `json:"input_source,omitempty"`  // Human input source: normal (empty defaults to normal), queue, steer, task or btw.
+	InputTimeMS int64        `json:"input_time_ms,omitempty"` // Original human-input commit time, in Unix milliseconds; never refreshed by compaction.
+	Role        string       `json:"role"`
+	Phase       string       `json:"phase,omitempty"` // Adapter-supplied assistant phase, retained if native state is compacted.
+	Content     string       `json:"content,omitempty"`
+	UserText    *string      `json:"user_text,omitempty"` // Authored human text before attachment expansion; nil uses Content for display.
+	Calls       []ToolCall   `json:"calls,omitempty"`
+	CallID      string       `json:"call_id,omitempty"`
+	Images      []Image      `json:"images,omitempty"`
+	State       *ReplayState `json:"state,omitempty"`
 }
 
 // DisplayText returns authored human text when attachment expansion is present.

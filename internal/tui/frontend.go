@@ -47,6 +47,7 @@ type line struct {
 	markdown            bool
 	brief               bool // One clipped row; the complete saved result remains inspectable.
 	callID              string
+	questionID          string // Tagged question-status identity, retained when closed for inspection.
 	jobID               string
 	detail              string
 	complete            bool
@@ -151,7 +152,8 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			waitForTurn(done, f.Events)
 		}
 	}()
-	queue := []provider.Message{}
+	queue := []contextbuild.Input{}
+	var pendingInput *session.InputAdmission
 	queueGeneration := f.Runtime.Generation()
 	view := newTranscript()
 	seenPrompts := map[string]int64{}
@@ -268,12 +270,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	f.Runtime.EnableImageClicks(g != nil)
 	defer f.Runtime.EnableImageClicks(false)
-	questionDialogs := map[string]*questionDialog{}
+	var retainedQuestion *questionDialog
 	viewChord := false
 	draft := newComposer("")
 	var pasteQuestion *questionDialog
 	pasteIntoComposer := false
-	deferredQuestions := map[string]bool{}
+	deferredQuestionID := ""
 	var pendingBTW []session.Event
 	attachments := []contextbuild.Attachment{}
 	completer := newPathCompleter(ctx)
@@ -568,11 +570,18 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		focused = len(view.lines) - 1
 		view.followTail = true
 	}
-	start := func(message *provider.Message) {
+	start := func(input *session.InputAdmission) {
 		busy = true
 		started = time.Now()
 		activity = turnActivity{}
-		go func() { done <- operationResult{err: f.Runtime.Run(message)} }()
+		pendingInput = input
+		go func() {
+			if input == nil {
+				done <- operationResult{err: f.Runtime.Run(nil)}
+			} else {
+				done <- operationResult{err: f.Runtime.RunInput(input)}
+			}
+		}()
 	}
 	openModelMenu := func() {
 		esc, viewChord = false, false
@@ -594,30 +603,83 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		modal.question = nil
 		modal.window = &modal.menu.Window
 	}
-	openQuestions := func(id string) {
-		esc, viewChord = false, false
-		forms := f.Runtime.PendingQuestions()
-		for _, form := range forms {
-			if id != "" && form.ID != id {
-				continue
+	questionRow := -1 // Only the singleton's live status row needs reconciliation.
+	syncQuestionState := func(form *session.QuestionForm) {
+		activity.syncQuestion(form, time.Now())
+		if questionRow >= len(view.lines) || questionRow >= 0 && view.lines[questionRow].questionID == "" {
+			questionRow = -1
+		}
+		if questionRow >= 0 {
+			item := view.lines[questionRow]
+			label := "Question closed · " + item.questionID
+			live := form != nil && form.ID == item.questionID
+			if live {
+				label = questionStatus(*form)
 			}
-			if f.Plain {
-				data, _ := json.MarshalIndent(form.Questions, "", "  ")
-				add("Pending question · "+form.ID+"\n"+string(data), form.EntryID)
-				return
+			if item.text != label {
+				item.text = label
+				view.replace(questionRow, item)
+				if f.Plain {
+					fmt.Fprintln(f.Output, label)
+				}
 			}
+			if !live {
+				questionRow = -1
+			}
+		}
+		if form != nil && questionRow < 0 {
+			view.append(attribute(line{text: questionStatus(*form), id: form.EntryID, system: true, questionID: form.ID}, "main"))
+			questionRow = len(view.lines) - 1
+		}
+		if retainedQuestion != nil && (form == nil || form.ID != retainedQuestion.form.ID) {
+			retainedQuestion = nil
+		}
+		if modal.question != nil && (form == nil || form.ID != modal.question.form.ID || form.Dismissed) {
 			modal.clear()
-			modal.question = questionDialogs[form.ID]
-			if modal.question == nil {
-				modal.question = newQuestionDialog(form)
-				questionDialogs[form.ID] = modal.question
-			}
-			modal.menu = nil
-			modal.window = &modal.question.Window
-			attributeWindow(modal.window, form.Actor)
+		}
+		if form == nil || form.ID != deferredQuestionID || form.Dismissed {
+			deferredQuestionID = ""
+		}
+	}
+	// Automatic presentation never changes dismissal. Only an explicit user
+	// reopen may restore a hidden form; delayed initial events cannot do so.
+	showQuestion := func(form *session.QuestionForm) {
+		esc, viewChord = false, false
+		deferredQuestionID = ""
+		if f.Plain {
+			data, _ := json.MarshalIndent(form.Questions, "", "  ")
+			add("Pending question · "+form.ID+"\n"+string(data), form.EntryID)
 			return
 		}
-		add("No pending question", 0)
+		if retainedQuestion == nil || retainedQuestion.form.ID != form.ID {
+			retainedQuestion = newQuestionDialog(*form)
+		}
+		retainedQuestion.form = *form
+		modal.clear()
+		modal.generation = f.Runtime.Generation()
+		modal.question = retainedQuestion
+		modal.window = &retainedQuestion.Window
+	}
+	openQuestions := func(id string) {
+		esc, viewChord = false, false
+		form := f.Runtime.PendingQuestion()
+		if form == nil {
+			add("No pending question", 0)
+			return
+		}
+		if id != "" && form.ID != id {
+			add("Error: pending question not found · "+id, 0)
+			return
+		}
+		if err := f.Runtime.ReopenQuestion(form.ID); err != nil {
+			add("Reopen failed: "+err.Error(), 0)
+			return
+		}
+		form = f.Runtime.PendingQuestion()
+		syncQuestionState(form)
+		if form != nil {
+			showQuestion(form)
+		}
 	}
 	openSessionMenu := func() {
 		esc, viewChord = false, false
@@ -680,9 +742,17 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	for {
 		if generation := f.Runtime.Generation(); generation != queueGeneration {
 			queue = nil
+			pendingInput = nil
 			queueGeneration = generation
 			activity = turnActivity{}
+			retainedQuestion = nil
+			deferredQuestionID = ""
+			questionRow = -1
+			if modal.question != nil {
+				modal.clear()
+			}
 		}
+		syncQuestionState(f.Runtime.PendingQuestion())
 		if !f.Plain && !fullscreen && !editing && !draft.pasting && modal.empty() && len(pendingBTW) > 0 {
 			event := pendingBTW[0]
 			pendingBTW = pendingBTW[1:]
@@ -691,13 +761,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				modal.window = &Window{Title: "/btw · read-only answer", Text: event.Text, Markdown: true}
 			}
 		}
-		if !fullscreen && !editing && !draft.pasting && modal.empty() {
-			for _, form := range f.Runtime.PendingQuestions() {
-				if deferredQuestions[form.ID] {
-					delete(deferredQuestions, form.ID)
-					openQuestions(form.ID)
-					break
-				}
+		if deferredQuestionID != "" && !fullscreen && !editing && !draft.pasting && modal.empty() {
+			id := deferredQuestionID
+			deferredQuestionID = ""
+			if form := f.Runtime.PendingQuestion(); form != nil && form.ID == id && !form.Dismissed {
+				showQuestion(form)
 			}
 		}
 		if !busy {
@@ -710,9 +778,10 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if f.Runtime.HasNotifications() {
 				start(nil)
 			} else if len(queue) > 0 {
-				m := queue[0]
+				input := f.Runtime.PrepareInput(queue[0])
+				queue[0] = contextbuild.Input{}
 				queue = queue[1:]
-				start(&m)
+				start(input)
 			} else if eof {
 				return nil
 			}
@@ -772,7 +841,9 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				width, height := windowContentSize(w, h, modal.window)
 				modal.question.reveal(width, height)
 			}
-			if !commandBusy {
+			width, height := screen.Size()
+			sidebar.bounds(width, height, fullscreen)
+			if !commandBusy && sidebar.width > 0 {
 				sidebar.update(f.Runtime.UsageSnapshot(), f.Runtime.Jobs.Live(), f.Runtime.LiveTimers())
 			}
 			if renderer != nil {
@@ -801,10 +872,14 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if fullscreen {
 				drawFocus = copyFocused
 			}
-			steers := f.Runtime.PendingSteers()
+			previewLimit := max(0, height-4)
+			if fullscreen {
+				previewLimit = 0
+			}
+			steerCount, steers := f.Runtime.SteeringPreview(previewLimit)
 			indicator := ""
 			if busy {
-				indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C exit", activity.indicator(time.Now(), started), len(queue)+len(steers))
+				indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C exit", activity.indicator(time.Now(), started), len(queue)+steerCount)
 			}
 			if err := draw(screen, displayView(), sidebar, fullscreen, modal.preview, renderer, drawFocus, draft, len(attachments), queue, steers, indicator, modal.window, f.Runtime.CurrentSelection()); err != nil {
 				return err
@@ -907,24 +982,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if result.err != nil {
 				add("Error: "+result.err.Error(), 0)
 			} else if result.command != "" {
-				pending := map[string]bool{}
-				for _, form := range f.Runtime.PendingQuestions() {
-					pending[form.ID] = true
-				}
-				for id := range questionDialogs {
-					if !pending[id] {
-						delete(questionDialogs, id)
-					}
-				}
-				if modal.question != nil && !pending[modal.question.form.ID] {
-					modal.clear()
-				}
 				replay()
 				if f.Plain {
 					add(result.text, 0)
 				} else {
 					switch result.command {
-					case "/help", "/jobs", "/timers", "/compact":
+					case "/jobs", "/timers", "/compact":
 						if modal.empty() {
 							modal.window = &Window{Title: "Command result", Text: result.text, Markdown: result.markdown}
 						}
@@ -967,7 +1030,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					pendingBTW = append(pendingBTW, event)
 				}
 			case "usage":
-				sidebar.update(f.Runtime.UsageSnapshot(), f.Runtime.Jobs.Live(), f.Runtime.LiveTimers())
 				continue
 			case "session_name":
 				saved, err := f.Runtime.CurrentSession()
@@ -1058,39 +1120,28 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 				}
 			case "question":
-				if f.Plain {
-					addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
-				} else {
-					if event.Question == nil {
-						return fmt.Errorf("question event is missing its form")
-					}
-					label := "Waiting for answer · " + event.Question.ID
-					addActor(line{text: label, id: event.EntryID, system: true}, event.Question.Actor)
+				if event.Question == nil {
+					return fmt.Errorf("question event is missing its form")
 				}
-				// An active question keeps focus. Dismissing it must not reopen
-				// another form; successful submission already advances pending forms.
-				if !f.Plain && event.Question != nil && modal.question == nil {
+				form := f.Runtime.PendingQuestion()
+				syncQuestionState(form)
+				if form == nil || form.ID != event.Question.ID {
+					break // Ignore stale publication; tool intents remain inspectable.
+				}
+				if f.Plain {
+					fmt.Fprintln(f.Output, render.Clean(event.Text))
+				}
+				if !f.Plain && !form.Dismissed && modal.question == nil {
 					if !modal.empty() || draft.pasting || fullscreen || editing {
-						deferredQuestions[event.Question.ID] = true
+						deferredQuestionID = form.ID
 					} else {
-						openQuestions(event.Question.ID)
+						showQuestion(form)
 					}
 				}
 			case "question_closed":
-				if event.Question != nil {
-					delete(deferredQuestions, event.Question.ID)
-					delete(questionDialogs, event.Question.ID)
-					if modal.question != nil && modal.question.form.ID == event.Question.ID {
-						modal.clear()
-						if forms := f.Runtime.PendingQuestions(); len(forms) > 0 {
-							if draft.pasting {
-								deferredQuestions[forms[0].ID] = true
-							} else {
-								openQuestions("")
-							}
-						}
-					}
-				}
+				// Runtime state may already contain the next round. A delayed
+				// closure must not clear that round's activity or dialog.
+				syncQuestionState(f.Runtime.PendingQuestion())
 			case "system_prompt":
 				if showPrompt(event.EntryID) {
 					addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
@@ -1118,7 +1169,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				draft.pasting = ev.Start()
 				if ev.Start() {
 					esc, viewChord = false, false
-					clear(deferredQuestions)
 					pasteQuestion = modal.question
 					pasteIntoComposer = pasteQuestion == nil && modal.menu == nil && modal.commands == nil && modal.preview == nil
 				}
@@ -1135,15 +1185,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				}
 				if !ev.Start() {
 					pasteQuestion, pasteIntoComposer = nil, false
-					if modal.empty() {
-						for _, form := range f.Runtime.PendingQuestions() {
-							if deferredQuestions[form.ID] {
-								openQuestions(form.ID)
-								break
-							}
-						}
-					}
-					clear(deferredQuestions)
 				}
 			case *tcell.EventResize:
 				screen.Sync()
@@ -1182,9 +1223,15 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 					if ev.Buttons()&tcell.WheelUp != 0 {
 						modal.window.Scroll = max(0, modal.window.Scroll-3)
+						if modal.question != nil {
+							modal.question.manualScroll = true
+						}
 					}
 					if ev.Buttons()&tcell.WheelDown != 0 {
 						modal.window.Scroll += 3
+						if modal.question != nil {
+							modal.question.manualScroll = true
+						}
 					}
 					continue
 				}
@@ -1259,19 +1306,22 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					_, height := windowContentSize(w, h, modal.window)
 					answers, dismissed := modal.question.key(ev, height)
 					if dismissed {
-						modal.clear()
-						esc = false
+						if err := f.Runtime.DismissQuestion(modal.question.form.ID); err != nil {
+							modal.question.errorText = err.Error()
+							modal.question.update()
+						} else {
+							modal.clear()
+							syncQuestionState(f.Runtime.PendingQuestion())
+							esc = false
+						}
 					}
 					if answers != nil {
 						if err := f.Runtime.AnswerQuestion(modal.question.form.ID, answers); err != nil {
 							modal.question.errorText = err.Error()
 							modal.question.update()
 						} else {
-							delete(questionDialogs, modal.question.form.ID)
+							retainedQuestion = nil
 							modal.clear()
-							if len(f.Runtime.PendingQuestions()) > 0 {
-								openQuestions("")
-							}
 						}
 					}
 					continue
@@ -1578,8 +1628,49 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			eof = true
 			continue
 		}
+		if text == "/cancel-queue" || text == "/cancel-steer" {
+			var restored contextbuild.Input
+			var err error
+			if text == "/cancel-queue" {
+				if len(queue) == 0 {
+					if pendingInput == nil {
+						err = errors.New("no queued prompt to cancel")
+					} else {
+						restored, err = pendingInput.Cancel()
+					}
+				} else {
+					last := len(queue) - 1
+					restored = queue[last]
+					queue[last] = contextbuild.Input{}
+					queue = queue[:last]
+				}
+			} else {
+				restored, err = f.Runtime.CancelSteer()
+			}
+			if err != nil {
+				add("Error: "+err.Error(), 0)
+			} else {
+				recallInput(restored.Text)
+				attachments = restored.Attachments
+				add("Cancelled pending input · restored to composer", 0)
+			}
+			continue
+		}
 		if text == "/editor" {
 			startEditor()
+			continue
+		}
+		if text == "/help" {
+			result, err := f.Runtime.Command(text)
+			if err != nil {
+				add("Error: "+err.Error(), 0)
+			} else if f.Plain {
+				fmt.Fprintln(f.Output, result)
+			} else {
+				modal.clear()
+				modal.generation = f.Runtime.Generation()
+				modal.window = &Window{Title: "Command result", Text: result, Markdown: true}
+			}
 			continue
 		}
 		if text == "/jobs" || text == "/timers" {
@@ -1709,7 +1800,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			// Lifecycle commands join callbacks; keep draining their UI events while they wait.
 			go func() {
 				result, err := f.Runtime.Command(text)
-				markdown := text == "/help" || text == "/compact" || strings.HasPrefix(text, "/compact ")
+				markdown := text == "/compact" || strings.HasPrefix(text, "/compact ")
 				if json.Valid([]byte(result)) {
 					result = render.Fence(result, "json")
 					markdown = true
@@ -1718,9 +1809,17 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			}()
 			continue
 		}
-		message := contextbuild.Message(submit, attachments)
+		pending := contextbuild.Input{Text: submit, Attachments: attachments}
+		if redirected, err := f.Runtime.RedirectDismissedQuestion(pending); err != nil {
+			draft.set(submit)
+			add("Redirect failed: "+err.Error(), 0)
+			continue
+		} else if redirected {
+			attachments = nil
+			continue
+		}
 		if steering {
-			if err := f.Runtime.Steer(message); err != nil {
+			if err := f.Runtime.Steer(pending); err != nil {
 				draft.set(submit)
 				add("Steering failed: "+err.Error(), 0)
 			} else {
@@ -1729,7 +1828,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			continue
 		}
 		attachments = nil
-		queue = append(queue, message)
+		pending.Source = "normal"
+		if busy || len(queue) > 0 {
+			pending.Source = "queue"
+		}
+		queue = append(queue, pending)
 		if busy {
 			add(fmt.Sprintf("Queued input · %d unsent", len(queue)), 0)
 		}
@@ -1752,7 +1855,7 @@ func put(s tcell.Screen, x, y, width int, text string, style tcell.Style) {
 		width -= cells
 	}
 }
-func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue, steers []provider.Message, indicator string, window *Window, selection provider.Selection) error {
+func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue []contextbuild.Input, steers []string, indicator string, window *Window, selection provider.Selection) error {
 	s.Clear()
 	w, h := s.Size()
 	paneWidth := sidebar.bounds(w, h, fullscreen)
@@ -1828,16 +1931,16 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 		put(s, 0, height, w, status, style.Foreground(tcell.GetColor(render.CyanColor)))
 		for i := range queuedLines {
 			label := "Queued · "
-			var message provider.Message
+			var source string
 			if i < len(steers) {
 				label = "Steer · "
-				message = steers[i]
+				source = steers[i]
 			} else {
-				message = queue[i-len(steers)]
+				source = queue[i-len(steers)].Text
 			}
-			text := label + strings.Join(strings.Fields(render.Clean(message.DisplayText())), " ")
+			text := pendingInputPreview(label, source, w)
 			put(s, 0, height+1+i, w, strings.Repeat(" ", max(0, w)), style.Background(tcell.GetColor(render.HumanColor)))
-			put(s, 0, height+1+i, w, text, style.Background(tcell.GetColor(render.HumanColor)))
+			putStyled(s, 0, height+1+i, w, text, style.Background(tcell.GetColor(render.HumanColor)))
 		}
 	}
 	if !fullscreen || draft.text != "" {
@@ -1921,11 +2024,14 @@ func drawWindowFrame(s tcell.Screen, window *Window) {
 	s.SetContent(left+width-1, top, '┐', nil, style)
 	s.SetContent(left, top+height-1, '└', nil, style)
 	s.SetContent(left+width-1, top+height-1, '┘', nil, style)
-	hint := window.Hint
-	if hint == "" {
-		hint = "Esc closes"
+	title := render.Clean(window.Title)
+	if !window.HideHint {
+		hint := window.Hint
+		if hint == "" {
+			hint = "Esc closes"
+		}
+		title += render.Clean(" · " + hint)
 	}
-	title := render.Clean(window.Title + " · " + hint)
 	if window.subagentName != "" {
 		title = render.SubagentBadge(window.actor, window.subagentName, max(1, (width-2)/2), true) + " " + title
 	}

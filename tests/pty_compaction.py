@@ -87,9 +87,12 @@ def main():
             assert db.execute("SELECT count(*) FROM model_requests WHERE purpose='compaction'").fetchone()[0] == 1
             assert db.execute("SELECT count(*) FROM turns WHERE status='completed'").fetchone()[0] == 4
             contexts = [json.loads(row[0]) for row in db.execute(
-                "SELECT content_json FROM entries WHERE session_id=? AND role='developer'", (current,))]
+                "SELECT content_json FROM entries WHERE session_id=? AND role='developer' "
+                "AND json_valid(json_extract(content_json,'$.content')) "
+                "AND json_extract(content_json,'$.content') LIKE '{%'", (current,))]
             project_context = next(json.loads(message['content'])['project'] for message in contexts
-                                   if 'project' in json.loads(message['content']))
+                                   if json.loads(message['content']).get('type') == 'runtime_context'
+                                   and 'project' in json.loads(message['content']))
             assert any(item['path'] == str(project / 'AGENTS.md') for item in project_context['instructions'])
             assert any(item['name'] == 'fixture' and item['path'] == str(skill)
                        for item in project_context['available_skills'])

@@ -78,8 +78,9 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	r.selection.Model.Budget.RecentTokensTarget = 256
-	seedRuntime(t, r, strings.Repeat("Earlier research context. ", 100))
+	r.selection.Model.Budget.RecentTokensMin = 0
+	r.selection.Model.Budget.RecentTokensMax = 256
+	seedCompactionHistory(t, r, strings.Repeat("Earlier research context. ", 100))
 	started, release := make(chan struct{}), make(chan struct{})
 	const answer = "The audit found one actionable issue."
 	mainCalls, delivered := 0, 0

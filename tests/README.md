@@ -12,13 +12,16 @@ make demo
 ```
 
 Type `Run demo` and press Enter. The question dialog has three question tabs
-and a final Submit tab. Select recommended **Yes** with Enter to advance,
+and a final Submit tab. Prompts and options form one block, with controls below;
+the review numbers questions to match their tabs. Select recommended **Yes** with Enter to advance,
 choose **Other**, and enter `Looks good.`. Press Enter to finish text, then
 Right to the checks. Select **Data** with Enter to advance to **Submit**, and
 press Enter again to send the complete round. Each question is single-choice;
 Space selects without advancing.
 Left/Right preserves answers while switching tabs; nothing submits until the
-final button. Esc dismisses; `/questions` reopens the pending dialog.
+final button. Esc dismisses; `/questions` reopens the pending dialog. Sending a
+normal message instead completes dismissed calls with `dismissed:true` and
+redirects the agent; local commands leave them pending.
 
 The fixture exercises all 20
 implemented tool types: file read/search,

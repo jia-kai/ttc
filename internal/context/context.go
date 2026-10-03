@@ -51,20 +51,26 @@ func Fits(selection provider.Selection, system string, tools []provider.ToolDefi
 	return n < b.ContextLimit
 }
 
-// Retention describes the suffix to copy after a summary. User is -1 for whole
-// turns, or the initiating human message index to copy before a partial turn.
+// Retention describes independently selected human inputs and the recent
+// model/tool tail to copy after a summary, not complete user/model turns.
 type Retention struct {
-	Start int // First retained suffix index; len(messages) retains only User.
-	User  int
+	Start  int   // First retained suffix index; len(messages) retains only Inputs.
+	Inputs []int // Sorted human-message indices before Start: at most two non-steers and two steers.
 }
 
-// Retain keeps whole recent user turns within target tokens. When the newest
-// turn exceeds target, it preserves its initiating user message and cuts only
-// at completed tool cycles. The last two assistant messages and their tool
-// results are mandatory, even above the desired target; callers check capacity.
-// Unresolved calls fail; mandatory user text is never truncated to fit target.
-func Retain(messages []provider.Message, target int) (Retention, error) {
+// Retain targets the tokens in the latest two assistant/tool cycles after the
+// latest human instruction, clamped to [minTokens, maxTokens]. It keeps the
+// longest suffix within that target starting at a complete cycle boundary;
+// oversized cycles enter the summary rather than exceeding maxTokens. The last
+// two normal/queued inputs combined and last two steers are retained separately,
+// outside the tail budget; task/btw inputs count with normal/queued inputs.
+// Runtime notices are not human inputs. Unresolved calls fail, and callers check
+// capacity/headroom for the complete replacement input.
+func Retain(messages []provider.Message, minTokens, maxTokens int) (Retention, error) {
 	fail := func(reason string) (Retention, error) { return Retention{}, errors.New(reason) }
+	if minTokens < 0 || maxTokens <= 0 || minTokens > maxTokens {
+		return fail("invalid recent-cycle token bounds")
+	}
 	if len(messages) == 0 {
 		return fail("nothing to compact")
 	}
@@ -93,54 +99,71 @@ func Retain(messages []provider.Message, target int) (Retention, error) {
 	if len(pending) != 0 {
 		return fail("unresolved tool calls prevent compaction")
 	}
-	cut := len(messages)
 	latestUser := -1
+	inputs := make([]int, 0, 4)
+	normal, steers := 0, 0
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != "user" || messages[i].Runtime {
-			continue
+		if messages[i].Role == "user" && !messages[i].Runtime {
+			if latestUser < 0 {
+				latestUser = i
+			}
+			source, err := inputSource(messages[i])
+			if err != nil {
+				return Retention{}, fmt.Errorf("human input %d: %w", i, err)
+			}
+			if source == "steer" {
+				if steers < 2 {
+					inputs = append(inputs, i)
+					steers++
+				}
+			} else if normal < 2 {
+				inputs = append(inputs, i)
+				normal++
+			}
 		}
-		if latestUser < 0 {
-			latestUser = i
+	}
+	if latestUser < 0 {
+		return fail("no human input to retain")
+	}
+	sort.Ints(inputs)
+	threshold, cycles := len(messages), 0
+	for i := len(messages) - 1; i > latestUser; i-- {
+		if messages[i].Role == "assistant" {
+			threshold = i
+			cycles++
+			if cycles == 2 {
+				break
+			}
 		}
-		if suffix[i] > target {
+	}
+	target := min(maxTokens, max(minTokens, suffix[threshold]))
+	cut := len(messages)
+	for i := latestUser + 1; i < len(messages); i++ {
+		if messages[i].Role == "assistant" && safe[i] && suffix[i] <= target {
+			cut = i
 			break
 		}
-		cut = i
 	}
-	if cut == 0 {
-		return fail("nothing to compact")
+	// Selected inputs and runtime metadata alone are not a useful summary prefix.
+	// An unselected older human input does make progress, even without model work.
+	for i, message := range messages[:cut] {
+		selected := sort.SearchInts(inputs, i)
+		if !message.Runtime && (message.Role == "assistant" || message.Role == "user" && (selected == len(inputs) || inputs[selected] != i)) {
+			return Retention{Start: cut, Inputs: inputs}, nil
+		}
 	}
-	if cut == len(messages) {
-		if latestUser < 0 {
-			return fail("no initiating user message to retain")
-		}
-		userTokens := suffix[latestUser] - suffix[latestUser+1]
-		mandatory := len(messages)
-		assistants := 0
-		for i := len(messages) - 1; i > latestUser; i-- {
-			if messages[i].Role == "assistant" {
-				mandatory = i
-				assistants++
-				if assistants == 2 {
-					break
-				}
-			}
-		}
-		// No completed older model work exists to summarize in this turn.
-		if assistants == 0 || mandatory <= latestUser+1 || !safe[mandatory] {
-			return fail("no completed older model cycle can be compacted")
-		}
-		for i := latestUser + 2; i <= mandatory; i++ {
-			if safe[i] && suffix[i]+userTokens <= target {
-				return Retention{Start: i, User: latestUser}, nil
-			}
-		}
-		return Retention{Start: mandatory, User: latestUser}, nil
+	return fail("no unretained human input or completed older model cycle can be compacted")
+}
+
+func inputSource(message provider.Message) (string, error) {
+	switch message.InputSource {
+	case "":
+		return "normal", nil
+	case "normal", "queue", "steer", "task", "btw":
+		return message.InputSource, nil
+	default:
+		return "", fmt.Errorf("invalid human input source %q", message.InputSource)
 	}
-	if !safe[cut] {
-		return fail("no safe user-turn compaction cut")
-	}
-	return Retention{Start: cut, User: -1}, nil
 }
 
 // Attachment is a snapshot made before queuing user input; bytes do not change on disk edits.
@@ -293,22 +316,40 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, images bool
 	return a, nil
 }
 
-// Message combines submitted text and immutable attachments without silently dropping any.
-func Message(text string, attachments []Attachment) provider.Message {
-	m := provider.Message{Role: "user", Content: text}
-	if len(attachments) > 0 {
-		m.UserText = &text
+// Input retains the authored text and attachment snapshots of unadmitted input.
+// Its attachments are immutable and must not be changed by callers after queuing.
+type Input struct {
+	Text        string
+	Source      string // Admission source, passed unchanged to the model-facing message.
+	Attachments []Attachment
+}
+
+// Message constructs the model-facing message without rereading attachment paths.
+func (i Input) Message() provider.Message {
+	if len(i.Attachments) == 0 {
+		return provider.Message{Role: "user", Content: i.Text, InputSource: i.Source}
 	}
-	for _, a := range attachments {
+	text := i.Text
+	m := provider.Message{Role: "user", UserText: &text, InputSource: i.Source}
+	var content strings.Builder
+	content.WriteString(text)
+	for _, a := range i.Attachments {
 		if a.Image != nil {
 			m.Images = append(m.Images, *a.Image)
-			m.Content += "\nImage attachment: " + a.Path
+			content.WriteString("\nImage attachment: ")
+			content.WriteString(a.Path)
 			continue
 		}
-		m.Content += fmt.Sprintf("\n\nAttachment (%s): %s\n%s", a.Kind, a.Path, a.Text)
+		content.WriteString("\n\nAttachment (")
+		content.WriteString(a.Kind)
+		content.WriteString("): ")
+		content.WriteString(a.Path)
+		content.WriteString("\n")
+		content.WriteString(a.Text)
 		if a.Truncated {
-			m.Content += "\n[attachment truncated]"
+			content.WriteString("\n[attachment truncated]")
 		}
 	}
+	m.Content = content.String()
 	return m
 }

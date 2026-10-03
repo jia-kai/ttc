@@ -36,7 +36,7 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			target, err := r.Store.Continue(targetID, "Research handoff", archive, retained, 0)
+			target, err := r.Store.Continue(targetID, "Research handoff", archive, retained, nil, time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,10 +68,10 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 				t.Fatal(err)
 			}
 			<-entered
-			// A background child's pending form and a main image click are live
+			// A pending main question and image click are live
 			// state; a rejected session switch must not discard either handle.
 			r.questions.mu.Lock()
-			r.questions.forms["question"] = questionForm{view: QuestionForm{ID: "question", Actor: "main/child", Questions: []Question{{ID: "answer", Prompt: "Choose?"}}}, reply: make(chan []Answer, 1)}
+			r.questions.pending = &questionForm{view: QuestionForm{ID: "question", Questions: []Question{{ID: "answer", Prompt: "Choose?"}}}, reply: make(chan questionReply, 1)}
 			r.questions.mu.Unlock()
 			r.images.mu.Lock()
 			r.images.pending["click"] = pendingImage{view: ImageSnapshot{ID: "click", Actor: "main", Width: 8, Height: 8}, reply: make(chan provider.Message, 1)}
@@ -81,8 +81,8 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if _, err := r.Command("/load " + target.ID); err == nil || !strings.Contains(err.Error(), "compaction archive") {
 				t.Fatal("broken archive accepted", err)
 			}
-			if r.Current() != current || r.Jobs != jobs || r.Generation() != generation || len(r.Jobs.Live()) != 1 || len(r.PendingQuestions()) != 1 || !r.ImageClickPending("click") {
-				t.Fatal("failed load changed active runtime", r.Current(), r.Generation(), r.Jobs.Live(), r.PendingQuestions(), r.ImageClickPending("click"))
+			if r.Current() != current || r.Jobs != jobs || r.Generation() != generation || len(r.Jobs.Live()) != 1 || r.PendingQuestion() == nil || !r.ImageClickPending("click") {
+				t.Fatal("failed load changed active runtime", r.Current(), r.Generation(), r.Jobs.Live(), r.PendingQuestion(), r.ImageClickPending("click"))
 			}
 			after, err := r.Store.Session(target.ID)
 			if err != nil || after.EntryTip != target.EntryTip || after.Model.Model.ID != selection.Model.ID {

@@ -31,7 +31,7 @@ func retainedContinuation(t *testing.T, s *Store, v Session) Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(v.ID, "Saved research handoff.", archive, saved.EntryTip, 0)
+	next, err := s.Continue(v.ID, "Saved research handoff.", archive, saved.EntryTip, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

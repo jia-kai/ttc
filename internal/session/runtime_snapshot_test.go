@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	contextbuild "scicode/internal/context"
 	"scicode/internal/jobs"
 	"scicode/internal/provider"
 	"scicode/internal/tool"
@@ -52,7 +53,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := r.notifications[0].EventSeq
-	r.steers = []provider.Message{{Role: "user", Content: "Also inspect units."}}
+	r.steers = []contextbuild.Input{{Text: "Also inspect units."}}
 	cursor := r.mainContext
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)

@@ -144,7 +144,7 @@ inspected:
 			t.Fatal("aside mutated files", err)
 		}
 	}
-	if r.HasNotifications() || len(r.PendingQuestions()) != 0 {
+	if r.HasNotifications() || r.PendingQuestion() != nil {
 		t.Fatal("aside steered main or opened a question")
 	}
 	messages, err := r.Store.Messages(r.Current())

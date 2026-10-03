@@ -130,7 +130,6 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 	}
 	var usage *provider.Usage
 	defer func() {
-		r.recordUsage(usage)
 		status := "completed"
 		if err != nil {
 			status = "failed"
@@ -185,6 +184,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 		}
 		return nil
 	})
+	r.recordUsage(usage)
 	if failure := persist(provider.Message{Role: "assistant", Content: summary.String()}, "Compaction reply · inspect"); failure != nil {
 		err = errors.Join(err, failure)
 	}
@@ -211,7 +211,12 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 		return nil, cursor, errors.New("child compaction requires actor identity and tool registry")
 	}
 	canonical := canonicalCompaction(messages)
-	retention, err := contextbuild.Retain(canonical, task.selection.Model.Budget.RecentTokensTarget)
+	compactedAt := time.Now()
+	retention, err := contextbuild.Retain(canonical, task.selection.Model.Budget.RecentTokensMin, task.selection.Model.Budget.RecentTokensMax)
+	if err != nil {
+		return nil, cursor, err
+	}
+	retainedInputs, err := contextbuild.RetainedInputMessages(canonical, retention.Inputs, compactedAt)
 	if err != nil {
 		return nil, cursor, err
 	}
@@ -230,9 +235,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 	}
 	summary = compactionLinks(summary, archive, records)
 	result := []provider.Message{{Role: "assistant", Content: summary}}
-	if retention.User >= 0 {
-		result = append(result, canonical[retention.User])
-	}
+	result = append(result, retainedInputs...)
 	result = append(result, canonical[retention.Start:]...)
 	if task.aside {
 		present := false

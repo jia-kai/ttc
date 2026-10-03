@@ -17,6 +17,7 @@ type Window struct {
 	Header              string // Optional fixed header, used for question tabs above scrolling content.
 	HeaderFocus         string // Active header label shown alone when the whole header cannot fit.
 	Hint                string // Optional title-bar key hint; empty uses "Esc closes".
+	HideHint            bool   // Suppress title-bar hints when controls are described in the body.
 	Scroll              int
 	System              bool   // Distinct color for inspected system prompts/runtime messages.
 	Markdown            bool   // Render portable Markdown for messages, tool details and command results.

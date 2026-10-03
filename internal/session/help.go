@@ -6,9 +6,11 @@ const helpMarkdown = `# TTC help
 ## Send and stop
 
 - **Enter while idle** — Start a new turn.
-- **Enter while busy** — Queue a new turn until the current turn finishes.
+- **Enter while busy** — Queue a new turn, or redirect the current turn if you dismissed its question.
 - **Alt+Enter while busy** — Send an instruction to the current turn after the LLM response and foreground tool batch finish.
 - **Foreground shells** — Delay Alt+Enter delivery until they finish or move to the background.
+- **/cancel-queue** — Cancel the newest queued prompt, including while waiting for turn admission, and restore its text and attachment snapshots to the composer.
+- **/cancel-steer** — Do the same for the newest unadmitted steer. Both commands preserve older inputs, work busy or idle, and report empty lists.
 - **Ctrl+J / Shift+Enter** — Insert a newline.
 - **Paste** — Insert text without sending it.
 - **Esc, Esc in the composer** — Interrupt the current turn after closing any open view.
@@ -16,6 +18,7 @@ const helpMarkdown = `# TTC help
 
 ## Conversation and views
 
+- **/help** — Open this guide while busy or idle without interrupting work.
 - **Up** — Recall a previous prompt, including saved prompts from older sessions.
 - **Down** — Recall the next prompt or restore the draft.
 - **Ctrl+R** — Search recent prompts across sessions; Enter fills input, Esc cancels.
@@ -54,7 +57,8 @@ const helpMarkdown = `# TTC help
 
 These commands require an idle turn.
 
-- **Ctrl+X N**, **/new**, **/clear** — Start a new session.
+- **Ctrl+X N** or **/new** — Start a new session and clear all-agent run totals.
+- **/clear** — Start a new session without clearing run totals.
 - **Ctrl+X L** or **/sessions** — Open the session picker, grouped by date.
 - **/load ID** — Load a saved session.
 - **/rename TITLE** — Set a title of 1–60 characters; overrides automatic naming.
@@ -70,7 +74,7 @@ These commands require an idle turn.
 
 - **/compact [FOCUS]** — Summarize earlier context while idle, optionally focusing on a topic.
 - **Automatic compaction** — Summarize older context before a request exceeds its budget.
-- **Compaction during tools** — Keep the current instruction and last two model messages with their tool results.
+- **Compaction retention** — Preserve the last two admitted normal/queued prompts and last two committed steers, with original text/attachments and source/age markers. Recent complete model/tool cycles have a separate token cap; oversized cycles enter the summary.
 
 ## Jobs and questions
 
@@ -80,7 +84,8 @@ These commands require an idle turn.
 - **Ctrl+X J** or **/jobs** — Inspect jobs.
 - **Ctrl+X T** or **/timers** — Inspect timers.
 - **/btw QUESTION** — Ask a parallel read-only agent; its answer opens in a popup.
-- **Ctrl+X ?** or **/questions [FORM_ID]** — Reopen a pending question form.
+- **Esc in a question** — Leave text editing, then dismiss without answering. The next normal message redirects the turn; local commands leave the question pending.
+- **Ctrl+X ?** or **/questions [FORM_ID]** — Reopen the pending round with its drafts.
 - **/answer FORM_ID JSON_ARRAY** — Submit question answers in plain mode.
 
 ## Model and login
