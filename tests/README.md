@@ -79,7 +79,15 @@ python3 tests/pty_subagent.py       # mock HTTP: disposable child, low variant, 
 python3 tests/pty_subagent.py --offline # socket-free foreground disposal and UTF-8 answer limit
 python3 -m unittest discover -s tests -p test_scratch.py # scratch permissions
 make check                        # race tests and vet
+make rail-integration             # real filesystem sandbox and tmux lifecycle
 ```
+
+Rail integration additionally needs `bubblewrap`, `tmux`, and permission to
+create unprivileged user/PID/UTS namespaces. It checks mounts, denies, shared
+loopback networking, TTC startup, detach/reattach and concurrent creation, plus
+independent tmux bootstrap and containment of tmux client replacement commands.
+It uses private scratch fixtures
+and no credentials or external network access.
 
 The automated demo checks server-side request shapes, all tool types and their
 effects, isolated child context, edits, and exact Markdown source. The TUI

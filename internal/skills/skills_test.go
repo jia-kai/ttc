@@ -34,6 +34,17 @@ func TestEmbeddedAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestBundledTTCConfigSkill(t *testing.T) {
+	catalog, err := Discover(context.Background(), t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err := catalog.Load(context.Background(), "ttc-config")
+	if err != nil || skill.Source != "bundled" || skill.Description == "" || skill.Content == "" {
+		t.Fatalf("bundled configuration skill: %+v %v", skill, err)
+	}
+}
+
 func TestAncestorAndSingularSkills(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "repo", "nested")

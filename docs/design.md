@@ -17,9 +17,11 @@ the corresponding user and model behavior.
 | File snapshots and undo cursors               | Queued prompts, steers, questions and armed image clicks |
 | Attachments and compaction archives           | Child contexts and concurrency slots                     |
 
-- History records execution; loading never restarts jobs or timers. There is no
-  daemon, IPC service, process adoption or durable scheduler. Long-lived research
-  work belongs in user-managed tmux; detaching keeps TTC running.
+- History records execution; loading never restarts jobs or timers. The agent
+  runtime has no daemon, IPC service, process adoption or durable scheduler.
+  Long-lived research work belongs in tmux; detaching keeps TTC running. The
+  opt-in `rail` launcher has a separate ephemeral sandbox supervisor and tmux
+  socket registry; neither restores agent jobs or conversations.
 - Exit, `/new`, `/clear` and loading another main session cancel/join model work,
   children, shell/LSP process groups and timers. Inspecting a child stays inside
   the current runtime.
@@ -53,6 +55,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/jobs`            | Linux process groups and managed child tasks        |
 | `internal/capture`         | Shared bounded stream rings and cursors             |
 | `internal/scratch`         | Sticky root and verified private UID directory      |
+| `internal/rail`            | Workdir-scoped Bubblewrap mounts and tmux lifecycle  |
 | `internal/skills`          | Local/embedded discovery and precedence             |
 | `internal/render`          | Markdown, tool presentation and plain output        |
 | `internal/graphics`        | Kitty detection, protocol and passthrough           |

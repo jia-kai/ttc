@@ -70,8 +70,15 @@ func NewID(prefix string) string {
 	return prefix + "_" + base64.RawURLEncoding.EncodeToString(b[:])
 }
 
-// DataRoot resolves an absolute XDG root, falling back to the user's home.
+// DataRoot uses an explicit TTC_DATA_DIR when present, otherwise an absolute XDG
+// root or the user's home. Rail sets TTC_DATA_DIR to its shared data mount.
 func DataRoot() (string, error) {
+	if p := os.Getenv("TTC_DATA_DIR"); p != "" {
+		if !filepath.IsAbs(p) {
+			return "", errors.New("TTC_DATA_DIR must be absolute")
+		}
+		return filepath.Clean(p), nil
+	}
 	if p := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(p) {
 		return filepath.Join(p, "ttc"), nil
 	}

@@ -9,9 +9,9 @@ be helpful to you:
   live in tmux as normal processes instead of having their own background
   session management or a lifespan longer than their TUIs. No need for
   complications like a server-client agent architecture.
-* Agents should not try to decide the "safety" of a tool call, impose
-  permissions, or set up half-working sandboxes. The user is responsible for
-  setting up a properly isolated environment.
+* Agents should not decide the "safety" of individual tool calls or impose
+  permissions. Users choose their isolation boundary: run directly, use the
+  opt-in `ttc rail` filesystem wrapper, or provide an external container.
 * Agents should provide a small set of useful LLM-facing tools to make effective
   use of LLM capabilities.
 * Agents only need to run on Linux hosts.
@@ -20,7 +20,7 @@ Besides conventional tools like file editing, web access, and shell execution,
 TTC also supports the following:
 
 * Background jobs, subagents, and wakeup timers.
-* Built-in file-based-plan and tmux skills.
+* Built-in planning, tmux, LSP and TTC-configuration skills.
 * Image display and confirmed point coordinates delivered to the LLM as a later
   runtime message.
 * Inline and block math using MathJax.
@@ -118,6 +118,88 @@ Start TTC in your project directory, or select the workspace explicitly:
 /path/to/ttc --workdir /path/to/project
 ```
 
+### Filesystem guardrails with rail
+
+`ttc rail` starts an interactive shell in tmux, inside a Bubblewrap filesystem
+sandbox. Run `ttc` or other commands in its panes. There is one server per user
+and absolute, symlink-resolved workdir:
+
+```sh
+ttc rail                       # attach or create for cwd
+ttc rail --workdir /project     # attach or create for another workspace
+ttc rail --list                 # list live workdirs and tmux sessions
+```
+
+On Arch Linux, install `bubblewrap` and `tmux` with `sudo pacman -Syu --needed
+bubblewrap tmux`. Launch rail **without sudo**; the host must allow unprivileged
+user namespaces.
+
+Host executables/libraries and `/etc` are read-only. The workdir and TTC's
+existing data/cache directories are writable. Home, `/tmp` and `/run` are
+private. Existing Bash/Zsh startup files, Zsh/tmux config directories, TTC
+configuration, and ancestor AGENTS.md/skill directories are imported read-only.
+Configs that source other home files may need additional allows. The hostname is
+`{hostname}-ttc`, and the process namespace is private. **Networking is shared
+with the host:** host services, the LAN and the Internet remain accessible.
+
+Detach to keep an instance running; rerun `ttc rail` in that workdir to attach.
+Additional tmux sessions share its sandbox; attach uses tmux's usual session
+selection. Closing the last session terminates the sandbox. To stop explicitly,
+run `tmux kill-server` inside it. Runtime records live under
+`$XDG_RUNTIME_DIR/ttc/rail`.
+
+#### Rail configuration
+
+Rail reads `${XDG_CONFIG_HOME:-~/.config}/ttc/rail.json`, then
+`<workdir>/ttc-rail.json` (no ancestor search). Allow/deny lists combine;
+project allows replace global allows with the same destination. **Denies always
+win.** Config files must be regular files, not symlinks, so their named
+entrypoints can be mounted read-only inside the sandbox. Changes apply only
+after the instance is stopped and recreated, not on reattachment.
+
+A global config can authorize Docker without enabling it everywhere:
+
+```json
+{
+  "authorize_services": ["docker"],
+  "allow": ["~/tools"],
+  "deny": ["~/.ssh"]
+}
+```
+
+A project config might contain:
+
+```json
+{
+  "allow": [
+    {"source": "/datasets", "dest": "/data"},
+    {"source": "../results", "mode": "rw"},
+    "docker"
+  ],
+  "deny": ["./secrets", {"dest": "/data/private"}]
+}
+```
+
+`docker` is the only service name currently supported: it mounts
+`/var/run/docker.sock` read-write. Requests require `authorize_services:
+["docker"]` in the global config; projects cannot authorize themselves. Ordinary
+allows exposing the standard socket or its parent directory also require the
+enabled, authorized service, even if read-only. `deny: ["docker"]` disables that
+service. Custom `DOCKER_HOST` endpoints are not supported by the service
+shorthand.
+
+**Rail is write containment, not a complete security boundary.** The workspace,
+TTC credentials/history/cache, and any additional read-write allows remain
+modifiable. Read-only secrets can still be read and sent over the shared
+network. Docker access can grant control of the host and defeats filesystem
+isolation.
+
+The bundled `ttc-config` skill helps the agent configure supported rail,
+web-search and launch settings. Inside rail, read-only config changes must be
+made from the host; the skill does not bypass that boundary.
+
+### Interactive usage
+
 Use `/help` for the keyboard and command guide. Up/Down recall prompts across
 sessions and restarts. Ctrl-R searches the most recent 1000 prompts (at most
 8 MiB), newest matches first. Every whitespace-separated term must match a
@@ -151,6 +233,7 @@ requests:
 make test
 make check                    # race tests and vet
 make integration              # PTY workflows and automated demos; needs Python 3
+make rail-integration         # real Bubblewrap/tmux PTY regression; needs user namespaces
 make demo                     # interactive TUI, local mock server; needs Python 3
 ```
 

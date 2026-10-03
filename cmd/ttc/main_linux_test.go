@@ -93,7 +93,8 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		{"/quit\n", "second/fast", "high", true},
 	} {
 		cmd := exec.Command(executable, "-test.run=^TestStartupWithoutModelAndSwitchAcrossRestarts$")
-		cmd.Env = append(os.Environ(), "TTC_TEST_MODEL_DATA="+data, "TTC_TEST_MODEL_WORK="+work)
+		// An explicit --data-dir must override even an invalid environment default.
+		cmd.Env = append(os.Environ(), "TTC_TEST_MODEL_DATA="+data, "TTC_TEST_MODEL_WORK="+work, "TTC_DATA_DIR=relative")
 		if step.retryCatalog {
 			cmd.Env = append(cmd.Env, "TTC_TEST_MODEL_CATALOG_RETRY=1")
 		}
@@ -121,6 +122,27 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		if readErr != nil || closeErr != nil || got == nil || got.Model.ID != step.model || got.Variant != step.variant {
 			t.Fatalf("remembered=%+v read=%v close=%v", got, readErr, closeErr)
 		}
+	}
+}
+
+func TestMainHelpWithInvalidDataDefault(t *testing.T) {
+	if os.Getenv("TTC_TEST_MAIN_HELP") == "1" {
+		flag.CommandLine = flag.NewFlagSet("ttc", flag.ExitOnError)
+		os.Args = []string{"ttc", "--help"}
+		if err := run(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^TestMainHelpWithInvalidDataDefault$")
+	cmd.Env = append(os.Environ(), "TTC_TEST_MAIN_HELP=1", "TTC_DATA_DIR=relative", "XDG_CONFIG_HOME="+t.TempDir())
+	output, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "-data-dir") || strings.Contains(string(output), "TTC_DATA_DIR must") {
+		t.Fatalf("storage default blocked help: %v\n%s", err, output)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"scicode/internal/history"
 	"scicode/internal/provider"
 	"scicode/internal/provider/openai"
+	"scicode/internal/rail"
 	"scicode/internal/scratch"
 	"scicode/internal/session"
 	"scicode/internal/skills"
@@ -43,10 +44,20 @@ func main() {
 	}
 }
 func run() error {
-	rootDefault, e := history.DataRoot()
-	if e != nil {
-		return e
+	if rail.IsClientServer(os.Args[1:]) {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return rail.ServeClients(ctx)
 	}
+	if rail.IsSupervisor(os.Args[1:]) {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return rail.Serve(ctx)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "rail" {
+		return runRail(os.Args[2:])
+	}
+	rootDefault, dataDefaultErr := history.DataRoot()
 	searchPath, e := webSearchConfigPath()
 	if e != nil {
 		return e
@@ -74,6 +85,9 @@ func run() error {
 		}
 		fmt.Fprintln(os.Stdout, "MathJax ready:", path)
 		return nil
+	}
+	if e = dataDefaultError(flag.CommandLine, dataDefaultErr); e != nil {
+		return e
 	}
 	searchConfig, e := loadWebSearchConfig(*searchConfigFile)
 	if e != nil {

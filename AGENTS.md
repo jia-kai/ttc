@@ -26,6 +26,11 @@ specifications for remaining features. Linux hosts are the only supported platfo
   is unavailable.
 - Basic shell and edit tools are part of the agent workflow. Preserve clear
   command results and file-edit feedback so users can inspect what happened.
+- `ttc rail` is an opt-in Bubblewrap filesystem launcher, with one persistent
+  tmux server per canonical workdir and shared host networking. Its instance
+  registry/supervisor is separate from agent history and live runtime jobs.
+  Preserve deny precedence, read-only rail configs, global service authorization,
+  and fail-closed setup; Docker socket access is not a host security boundary.
 - Background subagents, commands, timers, and pending input are in-memory state
   of one active runtime. Compaction preserves it; explicit main-session changes
   and exit cancel it. Use tmux for long-running work. Keep live jobs/timers in

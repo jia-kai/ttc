@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: prompts build test check integration demo kitty-test
+.PHONY: prompts build test check integration rail-integration demo kitty-test
 prompts:
 	go run ./cmd/embed-prompts
 
@@ -25,6 +25,9 @@ integration: build
 
 demo: build
 	python3 tests/demo.py --interactive
+
+rail-integration: build
+	python3 tests/pty_rail.py
 
 kitty-test: build
 	python3 tests/kitty_visual.py
