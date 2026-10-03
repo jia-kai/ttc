@@ -325,11 +325,20 @@ def main():
         with sqlite3.connect(demo_root / 'data/history.sqlite') as db:
             prompt = db.execute("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='system_prompt' ORDER BY id LIMIT 1").fetchone()[0]
             shell = db.execute("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='shell' AND json_extract(c.result_json,'$.exit_code')=0 ORDER BY r.entry_id LIMIT 1").fetchone()[0]
+            job_read = db.execute("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read' ORDER BY r.entry_id LIMIT 1").fetchone()[0]
         send(f'/inspect {shell}\r')
         wait('Command:')
         capture('shell-details')
         key('end')
         capture('shell-output')
+        key('esc')
+        send(f'/inspect {job_read}\r')
+        wait('Parameters:')
+        key('end')
+        result_text = wait('Output:')
+        assert 'background evidence' in result_text, result_text
+        assert 'showing tail' not in result_text, result_text
+        capture('job-read-output')
         key('esc')
         send(f'/inspect {prompt}\r')
         wait('You are TTC')

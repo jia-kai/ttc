@@ -8,8 +8,73 @@ import (
 	"testing"
 
 	"scicode/internal/jobs"
+	"scicode/internal/provider"
 	"scicode/internal/render"
 )
+
+func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {
+	for _, arguments := range []string{
+		`{"stream":"stderr","grep":"selected"}`,
+		`{"stream":"stdout","cursor":"0","limit_bytes":12}`,
+		`{"stream":"stdout","grep":"absent"}`,
+	} {
+		t.Run(arguments, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			r.Emit = nil
+			seedRuntime(t, r, "Captured job history")
+			id, err := r.Jobs.StartTask("main", "shell", "captured fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) error {
+				if _, err := io.WriteString(stdout, "first-output\nunselected-current-tail\n"); err != nil {
+					return err
+				}
+				_, err := io.WriteString(stderr, "selected diagnostic\nother diagnostic\n")
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Jobs.Wait(context.Background(), "main", id, nil); err != nil {
+				t.Fatal(err)
+			}
+			var args map[string]any
+			if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+				t.Fatal(err)
+			}
+			args["job_id"] = id
+			encoded, err := json.Marshal(args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Provider = &provider.Script{Responses: []provider.ScriptResponse{
+				{Calls: []provider.ToolCall{{ID: "read-page", Name: "job_read", Arguments: encoded}}},
+				{Text: "Page read."},
+			}}
+			if err := r.Run(&provider.Message{Role: "user", Content: "Inspect a captured page"}); err != nil {
+				t.Fatal(err)
+			}
+			var entryID int64
+			var result string
+			if err := r.Store.DB.QueryRow("SELECT r.entry_id,c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read'").Scan(&entryID, &result); err != nil {
+				t.Fatal(err)
+			}
+			entry, err := r.Store.Entry(entryID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := render.Tool("job_read", encoded, json.RawMessage(result)).Detail
+			for _, reset := range []bool{false, true} {
+				if reset {
+					if _, err := r.Command("/clear"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got, err := r.Store.Inspect(entry)
+				if err != nil || got != want || strings.Contains(got, "unselected-current-tail") || strings.Contains(got, "showing tail") {
+					t.Fatal("inspector substituted live capture for requested page", got, err)
+				}
+			}
+		})
+	}
+}
 
 func TestQuietChildShellInspectionIncludesLiveMetadata(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)

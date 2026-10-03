@@ -7,7 +7,12 @@ import (
 	"scicode/internal/render"
 )
 
-func resultJobID(result json.RawMessage) string {
+// captureJobID identifies tools returning short job previews. Reads and controls
+// already carry their exact result; expanding them would change the inspected page.
+func captureJobID(name string, result json.RawMessage) string {
+	if name != "shell" && name != "subagent" {
+		return ""
+	}
 	var v struct {
 		ID string `json:"job_id"`
 	}

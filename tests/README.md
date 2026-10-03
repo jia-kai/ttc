@@ -93,7 +93,9 @@ foreground shells overlap and file writes retain their order with undo/redo.
 It also switches from Standard to a catalog-advertised Fast choice while that
 batch is running, checks that only the next request changes tier, and verifies
 the persisted switch and background completion presentations. Unit tests cover
-multiple live shell updates, expanded live inspection, and interruption.
+multiple live shell updates, expanded live inspection, and interruption. Job-read
+regressions check filtered/cursor-bounded results, completed-row clicks, paging,
+literal fenced output and inspection after reload; Kitty captures the returned page.
 
 For actual Kitty screenshots on headless Arch Linux:
 

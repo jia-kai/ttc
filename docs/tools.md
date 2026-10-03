@@ -48,8 +48,9 @@ question options, exact large integers and fenced long text. Original JSON is
 retained in records and export sidecars. Narrow panes truncate by terminal cell
 width without cutting generated ANSI styles; inspect the row for additional detail.
 Untrusted values are escaped, fenced safely, and stripped of terminal controls.
-Click metadata stays separate from Markdown. The inspector saves up to the last
-8 KiB per retained stream; `job_read` can page earlier ring contents.
+Click metadata stays separate from Markdown. Shell/child inspectors save up to
+the last 8 KiB per retained stream. `job_read` inspectors display the exact returned
+page, respecting its stream, cursor and filter, without adding current capture tails.
 Completed job states display as `done`; model JSON retains `completed`.
 Child rows and inspector titles use colored `[Sub name]` badges; names over 26
 characters display 23 characters plus `...` without changing the stored name.
@@ -313,7 +314,11 @@ Filesystem effects and history commits are independent; TTC does not repair cras
   independent of JSON's replacement of invalid UTF-8. `truncated` describes
   retained loss, rather than whether another page exists. A running job always
   returns a next cursor; a finished stream at EOF returns null. Captured bytes
-  disappear when the runtime ends and are never revived from history.
+  disappear when the runtime ends and are never revived from history. Saved
+  `job_read` results remain inspectable after reload; their output is fenced literal
+  text, with large inspector records paged independently of the capture cursor.
+  Paging preserves split code delimiters; fence-row metadata over 64 KiB switches
+  to explicitly labeled plain-text display rather than accumulating unbounded hints.
 
 ### `job_stop`
 

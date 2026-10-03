@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,89 @@ import (
 	"scicode/internal/render"
 	"scicode/internal/tool"
 )
+
+func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T) {
+	for _, large := range []bool{false, true} {
+		t.Run(fmt.Sprintf("paged=%v", large), func(t *testing.T) {
+			p := &provider.Script{Responses: []provider.ScriptResponse{{Text: "Ready."}, {}, {Text: "Page captured."}}}
+			u := newQuestionTestUI(t, p)
+			u.typeText("Initialize capture history")
+			u.key(tcell.KeyEnter)
+			u.wait(t, "Turn complete")
+			output := "OUTPUT-FIRST\n"
+			if large {
+				output += strings.Repeat("captured fixture\n", 1200)
+			}
+			output += "```\n$x^2$\nOUTPUT-LAST\n"
+			job, err := u.runtime.Jobs.StartTask("main", "shell", "inspector fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) error {
+				if _, err := io.WriteString(stdout, output); err != nil {
+					return err
+				}
+				_, err := io.WriteString(stderr, "UNREQUESTED-STDERR\n")
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := u.runtime.Jobs.Wait(context.Background(), "main", job, nil); err != nil {
+				t.Fatal(err)
+			}
+			args, err := json.Marshal(map[string]any{"job_id": job, "limit_bytes": 22000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Responses[1] = provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "page", Name: "job_read", Arguments: args}}}
+			u.typeText("Read the captured output")
+			u.key(tcell.KeyEnter)
+			u.wait(t, "Page captured.")
+			frame := u.wait(t, "Turn complete")
+			var result int64
+			if err := u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read'").Scan(&result); err != nil {
+				t.Fatal(err)
+			}
+			click := func(frame string) {
+				t.Helper()
+				for y, row := range strings.Split(frame, "\n") {
+					if strings.Contains(row, "job_read") {
+						u.screen.PostEventWait(tcell.NewEventMouse(3, y, tcell.Button1, 0))
+						return
+					}
+				}
+				t.Fatal("completed job_read row disappeared", frame)
+			}
+			check := func() {
+				t.Helper()
+				frame := u.wait(t, "OUTPUT-FIRST")
+				if !strings.Contains(frame, "Output:") || strings.Contains(frame, "UNREQUESTED-STDERR") {
+					t.Fatal("job_read inspector did not display its requested result", frame)
+				}
+				if large {
+					u.typeText("]")
+					u.wait(t, "page 2/2")
+				}
+				u.key(tcell.KeyEnd)
+				frame = u.wait(t, "OUTPUT-LAST")
+				if !strings.Contains(frame, "$x^2$") || strings.Contains(frame, "UNREQUESTED-STDERR") {
+					t.Fatal("paging changed literal captured output", frame)
+				}
+				u.key(tcell.KeyEscape)
+				u.wait(t, "Turn complete")
+			}
+			click(frame)
+			check()
+			u.typeText(fmt.Sprintf("/inspect %d", result))
+			u.key(tcell.KeyEnter)
+			check()
+			// Reload closes the capture manager. Inspection must use the durable
+			// output page, not a job handle or a fresh unrelated capture tail.
+			u.typeText("/load " + u.runtime.Current())
+			u.key(tcell.KeyEnter)
+			frame = u.wait(t, "No request yet")
+			click(frame)
+			check()
+		})
+	}
+}
 
 func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
 	p := &provider.Script{Responses: []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "stream", Name: "shell", Arguments: []byte(`{"command":"printf 'hello'"}`)}}}, {Text: "finished"}}}
