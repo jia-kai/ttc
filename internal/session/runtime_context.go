@@ -45,21 +45,22 @@ type stateChange struct {
 	FiredCount int    `json:"fired_count,omitempty"` // Total timer firings observed; a repeat can remain live after firing.
 }
 type runtimeContext struct {
-	Type       string           `json:"type"`
-	Actor      string           `json:"actor"`
-	Changes    []stateChange    `json:"changes_since_previous_request"`
-	Cwd        string           `json:"cwd"`
-	IsRepo     bool             `json:"is_repo"`
-	Branch     string           `json:"branch,omitempty"` // "detached" when HEAD has no branch.
-	Scratch    string           `json:"scratch_directory"`
-	Date       string           `json:"date_utc"`
-	Model      string           `json:"model"`
-	ImageInput bool             `json:"image_input"`
-	ImageClick bool             `json:"image_click"`
-	Children   []tool.ChildView `json:"children"`
-	Jobs       []jobs.Snapshot  `json:"live_jobs"`
-	Timers     []TimerView      `json:"live_timers"`
-	Project    *projectContext  `json:"project,omitempty"` // Absent when unchanged; empty lists explicitly clear it.
+	Type        string                    `json:"type"`
+	Actor       string                    `json:"actor"`
+	Changes     []stateChange             `json:"changes_since_previous_request"`
+	Cwd         string                    `json:"cwd"`
+	IsRepo      bool                      `json:"is_repo"`
+	Branch      string                    `json:"branch,omitempty"` // "detached" when HEAD has no branch.
+	Scratch     string                    `json:"scratch_directory"`
+	Date        string                    `json:"date_utc"`
+	Model       string                    `json:"model"`
+	ImageInput  bool                      `json:"image_input"`
+	BinaryFiles []provider.BinaryFileType `json:"binary_files"` // Effective native read formats for this frozen selection.
+	ImageClick  bool                      `json:"image_click"`
+	Children    []tool.ChildView          `json:"children"`
+	Jobs        []jobs.Snapshot           `json:"live_jobs"`
+	Timers      []TimerView               `json:"live_timers"`
+	Project     *projectContext           `json:"project,omitempty"` // Absent when unchanged; empty lists explicitly clear it.
 }
 
 // runtimeContext returns nil when this actor's last admitted state is unchanged.
@@ -108,6 +109,7 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 	r.images.mu.Unlock()
 	v := runtimeContext{Type: "runtime_context", Actor: actor, Changes: []stateChange{}, Cwd: r.Workspace.Root, Scratch: path, Date: time.Now().UTC().Format("2006-01-02"), Model: selection.Provider + "/" + selection.Model.ID + "/" + selection.Variant, ImageInput: selection.Model.Images, ImageClick: clicks, Children: r.committedChildren(actor), Jobs: []jobs.Snapshot{}, Timers: []TimerView{}}
 	v.IsRepo, v.Branch = next.git.Repo != "", next.git.Branch
+	v.BinaryFiles = selection.Model.BinaryFileTypes()
 	if next.project != previous.project {
 		v.Project = &project
 	}

@@ -60,7 +60,7 @@ func TestReadDoesNotValidateTheNextPage(t *testing.T) {
 			if err := os.WriteFile(path, []byte("ok\n"+following), 0600); err != nil {
 				t.Fatal(err)
 			}
-			page, err := readPage(context.Background(), path, 1, 1)
+			page, err := readPage(context.Background(), path, 1, 1, nil)
 			if err != nil {
 				t.Fatalf("first page failed due to second-page content: %v", err)
 			}
@@ -72,7 +72,7 @@ func TestReadDoesNotValidateTheNextPage(t *testing.T) {
 			if err := json.Unmarshal(b, &result); err != nil || result.Content != "ok\n" || result.Next != 2 {
 				t.Fatalf("wrong first page: %s, %v", b, err)
 			}
-			if _, err := readPage(context.Background(), path, 2, 1); err == nil {
+			if _, err := readPage(context.Background(), path, 2, 1, nil); err == nil {
 				t.Fatal("invalid second-page content unexpectedly succeeded")
 			}
 		})
@@ -81,7 +81,7 @@ func TestReadDoesNotValidateTheNextPage(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ok\n"+strings.Repeat("x", 40001)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	page, err := readPage(context.Background(), path, 1, 200)
+	page, err := readPage(context.Background(), path, 1, 200, nil)
 	if err != nil {
 		t.Fatalf("valid partial page discarded instead of returning next_offset: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDirectoryReadCancellationBoundsAndSortedPagination(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := readPage(ctx, dir, 1, 200); !errors.Is(err, context.Canceled) {
+	if _, err := readPage(ctx, dir, 1, 200, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled directory read returned %v", err)
 	}
 	for _, name := range []string{"z", "a", "m"} {
@@ -107,7 +107,7 @@ func TestDirectoryReadCancellationBoundsAndSortedPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	page, err := readPage(context.Background(), dir, 2, 1)
+	page, err := readPage(context.Background(), dir, 2, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,13 +124,13 @@ func TestDirectoryReadCancellationBoundsAndSortedPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := readPage(context.Background(), dir, 1, 1); err != nil {
+	if _, err := readPage(context.Background(), dir, 1, 1, nil); err != nil {
 		t.Fatalf("directory at the limit rejected: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "overflow"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = readPage(context.Background(), dir, 1, 1)
+	_, err = readPage(context.Background(), dir, 1, 1, nil)
 	var failure *Error
 	if !errors.As(err, &failure) || failure.Code != "directory_too_large" || !strings.Contains(failure.Message, "glob") {
 		t.Fatalf("oversized directory must give bounded-search recovery guidance: %v", err)
@@ -186,7 +186,7 @@ func TestReadUsesOpenedDescriptorWhenPathIsReplaced(t *testing.T) {
 			}
 			// A path reopen would now block. Both branches must consume the
 			// descriptor that was validated, irrespective of later replacements.
-			page, err := readOpenedPage(context.Background(), f, path, 1, 1)
+			page, err := readOpenedPage(context.Background(), f, path, 1, 1, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -212,7 +212,7 @@ func TestReadSymlinksAndRejectsFIFOWithoutBlocking(t *testing.T) {
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPage(context.Background(), link, 1, 1); err != nil {
+	if _, err := readPage(context.Background(), link, 1, 1, nil); err != nil {
 		t.Fatalf("ordinary symlink reads must remain supported: %v", err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -223,7 +223,7 @@ func TestReadSymlinksAndRejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := readPage(ctx, link, 1, 1)
+	_, err := readPage(ctx, link, 1, 1, nil)
 	var failure *Error
 	if !errors.As(err, &failure) || failure.Code != "unsupported_content" {
 		t.Fatalf("FIFO must be rejected from its descriptor: %v", err)

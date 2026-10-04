@@ -16,7 +16,7 @@ type Budget struct {
 	OutputAllowance        int `json:"output_allowance"`
 	EstimationMargin       int `json:"estimation_margin"`
 	RecentTokensMin        int `json:"recent_tokens_min"` // Soft minimum for the recent model/tool tail, excluding independently retained human inputs.
-	RecentTokensMax        int `json:"recent_tokens_max"` // Hard maximum for that tail; oversized complete cycles are summarized.
+	RecentTokensMax        int `json:"recent_tokens_max"` // Tail target cap; oversized cycles are summarized except unconsumed binary tool results.
 	NextTurnInputReserve   int `json:"next_turn_input_reserve"`
 	SummaryOutputAllowance int `json:"summary_output_allowance"`
 }
@@ -43,6 +43,7 @@ type ModelSpec struct {
 	VariantDescriptions map[string]string `json:"variant_descriptions,omitempty"` // Provider explanations keyed by variant ID.
 	DefaultVariant      string            `json:"default_variant"`
 	Images              bool              `json:"images"`
+	BinaryFiles         []BinaryFileType  `json:"binary_files"`       // Declared document formats; image formats are gated by Images.
 	SupportsReasoning   bool              `json:"supports_reasoning"` // Variants are explicit reasoning efforts, including "none" when listed.
 	Budget              Budget            `json:"budget"`
 	Revision            string            `json:"revision"`
@@ -106,14 +107,16 @@ type ToolStart struct {
 	Name string `json:"name"`
 }
 
-// Image is either a queued human attachment's data URL or a file-backed tool
-// image. Tool images persist only an absolute Path and SHA256. Original encoded
+// BinaryFile is either an inline attachment's data URL or a file-backed
+// attachment. File references persist an absolute Path and SHA256. Original encoded
 // bytes live in a disposable filesystem cache; a cache miss verifies the source
 // without resizing, recompression or substituting changed contents.
-type Image struct {
-	Path    string `json:"path"`
-	DataURL string `json:"data_url,omitempty"`
-	SHA256  string `json:"sha256,omitempty"` // Lowercase hex SHA-256 of original encoded bytes; mutually exclusive with DataURL.
+type BinaryFile struct {
+	Path     string `json:"path"`
+	DataURL  string `json:"data_url,omitempty"`
+	SHA256   string `json:"sha256,omitempty"`    // Lowercase hex SHA-256 of original encoded bytes; mutually exclusive with DataURL.
+	MIMEType string `json:"mime_type,omitempty"` // Required for file-backed documents; images may derive it from original bytes.
+	Bytes    int    `json:"bytes"`               // Original byte size, before base64 encoding. Zero allows deriving an image or inline attachment's size.
 }
 
 // ReplayState is an immutable, versioned adapter-owned response payload. Model
@@ -158,7 +161,7 @@ type Message struct {
 	UserText    *string      `json:"user_text,omitempty"` // Authored human text before attachment expansion; nil uses Content for display.
 	Calls       []ToolCall   `json:"calls,omitempty"`
 	CallID      string       `json:"call_id,omitempty"`
-	Images      []Image      `json:"images,omitempty"`
+	Files       []BinaryFile `json:"files,omitempty"`
 	State       *ReplayState `json:"state,omitempty"`
 }
 

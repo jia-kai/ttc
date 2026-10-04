@@ -117,11 +117,13 @@ func estimateUsage(selection provider.Selection, system string, defs []provider.
 		for _, c := range m.Calls {
 			counts[i] += 16 + contextbuild.Estimate(c.Name) + contextbuild.Estimate(string(c.Arguments))
 		}
-		counts[5] += 4096 * len(m.Images)
+		for _, file := range m.Files {
+			counts[5] += file.EstimatedTokens()
+		}
 	}
 	b := selection.Model.Budget
 	u := ContextUsage{Model: selection.Model.ID + " · " + selection.Variant, Limit: b.ContextLimit, Reserved: b.OutputAllowance + b.EstimationMargin}
-	for i, name := range []string{"Instructions", "Tool definitions", "Conversation", "Tool results", "Provider state", "Images"} {
+	for i, name := range []string{"Instructions", "Tool definitions", "Conversation", "Tool results", "Provider state", "Binary files"} {
 		u.Parts = append(u.Parts, TokenPart{name, counts[i]})
 		u.Input += counts[i]
 	}

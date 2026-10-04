@@ -24,7 +24,7 @@ type InspectionPage struct {
 	Title, Text                       string
 	Offset, Total, Limit              int
 	Supported, Markdown, JSON, System bool
-	LargeEnvelope                     bool // Avoid loading omitted image/replay data even when displayed text is short.
+	LargeEnvelope                     bool // Avoid loading omitted attachment/replay data even when displayed text is short.
 }
 
 // InspectPage reads a bounded slice of saved Markdown/message text in SQLite,
@@ -46,8 +46,8 @@ func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (I
   CASE WHEN e.kind='tool_result' THEN json_extract(r.markdown_json,'$.detail')
    WHEN e.kind='tool_call' THEN c.call_json
    WHEN e.kind IN ('message','summary') THEN coalesce(json_extract(e.content_json,'$.content'),'') ||
-    coalesce((SELECT char(10,10) || group_concat('Image snapshot: ' || substr(coalesce(json_extract(value,'$.path'),'unnamed image'),1,192),char(10))
-     FROM (SELECT value FROM json_each(e.content_json,'$.images') LIMIT 16)),'')
+    coalesce((SELECT char(10,10) || group_concat('Binary snapshot: ' || substr(coalesce(json_extract(value,'$.path'),'unnamed file'),1,192),char(10))
+     FROM (SELECT value FROM json_each(e.content_json,'$.files') LIMIT 16)),'')
    WHEN json_extract(e.content_json,'$.type')='job_completion' THEN json_extract(e.content_json,'$.markdown.detail')
    WHEN json_extract(e.content_json,'$.type')='request_message'
      AND json_extract(e.content_json,'$.purpose')='compaction'

@@ -75,7 +75,7 @@ func TestCancelSteerRestoresNewestOriginalInput(t *testing.T) {
 	latest := contextbuild.Input{Text: "  original\n\tλ text  ", Attachments: []contextbuild.Attachment{
 		{Path: "/snapshot/text", Kind: "text", Text: "saved contents", Truncated: true},
 		{Path: "/snapshot/directory", Kind: "directory", Text: "a\nb"},
-		{Path: "/snapshot/image", Kind: "image", Image: &provider.Image{Path: "/snapshot/image", DataURL: "data:image/png;base64,c25hcHNob3Q="}},
+		{Path: "/snapshot/image", Kind: "image", Image: &provider.BinaryFile{Path: "/snapshot/image", DataURL: "data:image/png;base64,c25hcHNob3Q="}},
 	}}
 	for _, input := range []contextbuild.Input{older, latest} {
 		if err := r.Steer(input); err != nil {

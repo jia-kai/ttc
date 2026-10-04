@@ -90,8 +90,12 @@ func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("math installation blocked thumbnail rendering")
 	}
-	cachePath := filepath.Join(root, "cache", "ttc", "assets", "render-"+key+".blob")
-	if _, err := os.Stat(cachePath); err != nil {
+	cacheRoot := filepath.Join(root, "cache", "ttc", "assets")
+	ref, err := os.ReadFile(filepath.Join(cacheRoot, "render-"+key+".ref"))
+	if err != nil || len(ref) != 64 {
+		t.Fatal("renderer did not save its content-addressed recipe reference", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheRoot, "blob-"+string(ref)+".blob")); err != nil {
 		t.Fatal("renderer did not use shared XDG cache", err)
 	}
 	start := time.Now()

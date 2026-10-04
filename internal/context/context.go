@@ -20,7 +20,8 @@ import (
 func Estimate(text string) int { return (len(text) + 2) / 3 }
 
 // Tokens includes messages, calls and adapter-estimated native replay occupancy.
-// Unannotated replay uses a conservative transport estimate; images reserve 4096 tokens each.
+// Unannotated replay uses a conservative transport estimate; binary files use
+// format-dependent reserves, not their base64 transport size.
 func Tokens(messages []provider.Message) int {
 	n := 0
 	for _, m := range messages {
@@ -32,7 +33,9 @@ func Tokens(messages []provider.Message) int {
 		for _, c := range m.Calls {
 			n += 16 + Estimate(string(c.Arguments)) + Estimate(c.Name)
 		}
-		n += 4096 * len(m.Images)
+		for _, file := range m.Files {
+			n += file.EstimatedTokens()
+		}
 	}
 	return n
 }
@@ -61,7 +64,10 @@ type Retention struct {
 // Retain targets the tokens in the latest two assistant/tool cycles after the
 // latest human instruction, clamped to [minTokens, maxTokens]. It keeps the
 // longest suffix within that target starting at a complete cycle boundary;
-// oversized cycles enter the summary rather than exceeding maxTokens. The last
+// oversized cycles enter the summary rather than exceeding maxTokens, except
+// the latest cycle with binary tool results not yet followed by an assistant
+// response. That cycle must remain intact, even above the tail target; callers
+// reject compaction if it cannot fit the complete request. The last
 // two normal/queued inputs combined and last two steers are retained separately,
 // outside the tail budget; task/btw inputs count with normal/queued inputs.
 // Runtime notices are not human inputs. Unresolved calls fail, and callers check
@@ -144,6 +150,36 @@ func Retain(messages []provider.Message, minTokens, maxTokens int) (Retention, e
 			break
 		}
 	}
+	// A metadata-only summary cannot substitute for a native attachment that
+	// the coding model has never seen. A later assistant response establishes
+	// consumption; human/runtime messages alone do not.
+	latestAssistant := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			latestAssistant = i
+			break
+		}
+	}
+	if latestAssistant >= 0 {
+		for _, message := range messages[latestAssistant+1:] {
+			if message.Role == "tool" && len(message.Files) > 0 {
+				// Overlapping calls can leave the latest assistant inside an
+				// earlier cycle. Preserve all calls needed to pair its results.
+				start := latestAssistant
+				for start >= 0 && (messages[start].Role != "assistant" || !safe[start]) {
+					start--
+				}
+				if start < 0 {
+					return fail("unread binary result has no complete assistant cycle to retain")
+				}
+				cut = min(cut, start)
+				break
+			}
+		}
+	}
+	// Inputs already inside a protected cycle are retained by the suffix, not
+	// copied a second time as independently selected human instructions.
+	inputs = inputs[:sort.SearchInts(inputs, cut)]
 	// Selected inputs and runtime metadata alone are not a useful summary prefix.
 	// An unselected older human input does make progress, even without model work.
 	for i, message := range messages[:cut] {
@@ -168,11 +204,11 @@ func inputSource(message provider.Message) (string, error) {
 
 // Attachment is a snapshot made before queuing user input; bytes do not change on disk edits.
 type Attachment struct {
-	Path      string          `json:"path"`
-	Kind      string          `json:"kind"`
-	Text      string          `json:"text,omitempty"`
-	Image     *provider.Image `json:"image,omitempty"`
-	Truncated bool            `json:"truncated"`
+	Path      string               `json:"path"`
+	Kind      string               `json:"kind"`
+	Text      string               `json:"text,omitempty"`
+	Image     *provider.BinaryFile `json:"image,omitempty"`
+	Truncated bool                 `json:"truncated"`
 }
 
 // Snapshot rejects unsupported content and never follows directory symlinks.
@@ -298,7 +334,7 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, images bool
 			return a, errors.New("selected model does not support image attachments")
 		}
 		a.Kind = "image"
-		a.Image = &provider.Image{Path: path, DataURL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(b)}
+		a.Image = &provider.BinaryFile{Path: path, DataURL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(b), MIMEType: mime, Bytes: len(b)}
 		return a, nil
 	}
 	if !utf8.Valid(b) || strings.ContainsRune(string(b), 0) {
@@ -335,7 +371,7 @@ func (i Input) Message() provider.Message {
 	content.WriteString(text)
 	for _, a := range i.Attachments {
 		if a.Image != nil {
-			m.Images = append(m.Images, *a.Image)
+			m.Files = append(m.Files, *a.Image)
 			content.WriteString("\nImage attachment: ")
 			content.WriteString(a.Path)
 			continue

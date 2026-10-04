@@ -99,6 +99,9 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 		{"model", func() { selection.Model.ID = "other-model" }},
 		{"variant", func() { selection.Variant = "fast" }},
 		{"image input", func() { selection.Model.Images = !selection.Model.Images }},
+		{"binary formats", func() {
+			selection.Model.BinaryFiles = []provider.BinaryFileType{{MIMEType: "application/pdf", Extensions: []string{".pdf"}, Kind: "document", MaxBytes: 32 << 20}}
+		}},
 		{"image click", func() {
 			r.images.mu.Lock()
 			r.images.enabled = !r.images.enabled

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -135,7 +136,7 @@ func (a *Adapter) Models(ctx context.Context) ([]provider.ModelSpec, error) {
 		if e = budget.Validate(); e != nil {
 			continue
 		}
-		model := provider.ModelSpec{ID: m.Slug, Name: m.Name, Variants: variants, VariantDescriptions: descriptions, DefaultVariant: m.Default, Images: images, SupportsReasoning: len(m.Levels) > 0, Budget: budget, Revision: resp.Header.Get("ETag")}
+		model := provider.ModelSpec{ID: m.Slug, Name: m.Name, Variants: variants, VariantDescriptions: descriptions, DefaultVariant: m.Default, Images: images, BinaryFiles: documentFileTypes(), SupportsReasoning: len(m.Levels) > 0, Budget: budget, Revision: resp.Header.Get("ETag")}
 		if _, e := provider.Resolve("openai", []provider.ModelSpec{model}, model.ID, ""); e != nil {
 			return nil, fmt.Errorf("invalid subscription model metadata: %w", e)
 		}
@@ -174,18 +175,73 @@ func headers(req *http.Request, t Tokens) {
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 }
 
-// imagePart degrades only unavailable original bytes, not invalid references,
+// binaryPart degrades only unavailable original bytes, not invalid references,
 // cancellation or cache failures. Canonical messages remain unchanged.
-func imagePart(ctx context.Context, im provider.Image, textKind string) (map[string]any, error) {
-	url, err := im.URL(ctx)
+func binaryPart(ctx context.Context, file provider.BinaryFile, model provider.ModelSpec, textKind string) (map[string]any, error) {
+	url, err := file.URL(ctx)
 	if err != nil {
-		var unavailable *provider.UnavailableImageError
+		var unavailable *provider.UnavailableBinaryFileError
 		if errors.As(err, &unavailable) {
+			if file.MIMEType != "" {
+				if _, err := supportedBinaryType(model, file.MIMEType, file.Bytes); err != nil {
+					return nil, err
+				}
+			} else if !model.Images {
+				return nil, errors.New("model does not support images")
+			}
 			return map[string]any{"type": textKind, "text": unavailable.Error()}, nil
 		}
 		return nil, err
 	}
-	return map[string]any{"type": "input_image", "image_url": url}, nil
+	header, encoded, _ := strings.Cut(url, ",")
+	mt := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+	// URL already validated base64; determine exact original size without decoding again.
+	size := len(encoded)/4*3 - (len(encoded) - len(strings.TrimRight(encoded, "=")))
+	format, err := supportedBinaryType(model, mt, size)
+	if err != nil {
+		return nil, err
+	}
+	if format.Kind == "image" {
+		return map[string]any{"type": "input_image", "image_url": url}, nil
+	}
+	name := filepath.Base(file.Path)
+	if file.Path == "" || name == "." || name == string(filepath.Separator) {
+		return nil, errors.New("document attachment requires a filename")
+	}
+	// Content-detected documents may be extensionless or have a misleading
+	// suffix. Supply a parser-consistent transport filename without changing
+	// the canonical local source path.
+	ext := strings.ToLower(filepath.Ext(name))
+	matched := false
+	for _, candidate := range format.Extensions {
+		if ext == "."+strings.ToLower(strings.TrimPrefix(candidate, ".")) {
+			matched = true
+			break
+		}
+	}
+	if !matched && len(format.Extensions) > 0 {
+		name += "." + strings.TrimPrefix(format.Extensions[0], ".")
+	}
+	return map[string]any{"type": "input_file", "filename": name, "file_data": url}, nil
+}
+
+func supportedBinaryType(model provider.ModelSpec, mt string, size int) (provider.BinaryFileType, error) {
+	for _, format := range model.BinaryFileTypes() {
+		if format.MIMEType != mt {
+			continue
+		}
+		if format.Kind != "image" && format.Kind != "document" || format.MaxBytes <= 0 {
+			return provider.BinaryFileType{}, errors.New("invalid model binary format metadata")
+		}
+		if size > format.MaxBytes {
+			return provider.BinaryFileType{}, fmt.Errorf("binary file %s exceeds model limit of %d bytes", mt, format.MaxBytes)
+		}
+		return format, nil
+	}
+	if strings.HasPrefix(mt, "image/") {
+		return provider.BinaryFileType{}, errors.New("model does not support images in this format")
+	}
+	return provider.BinaryFileType{}, fmt.Errorf("model does not support binary file MIME type %q", mt)
 }
 
 func wire(ctx context.Context, req provider.Request) ([]byte, error) {
@@ -200,12 +256,23 @@ func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 	}
 	input := []any{}
 	for _, m := range provider.ContextFor(req.Selection, req.Messages) {
-		if len(m.Images) > 0 && !req.Selection.Model.Images {
-			return nil, errors.New("model does not support images")
+		for _, file := range m.Files {
+			mt := file.MIMEType
+			if file.DataURL != "" {
+				header, _, _ := strings.Cut(file.DataURL, ",")
+				mt = strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+			}
+			if mt != "" {
+				if _, err := supportedBinaryType(req.Selection.Model, mt, file.Bytes); err != nil {
+					return nil, err
+				}
+			} else if !req.Selection.Model.Images {
+				return nil, errors.New("model does not support images")
+			}
 		}
 		if m.State != nil {
-			if len(m.Images) > 0 {
-				return nil, errors.New("OpenAI replay state does not support canonical images")
+			if len(m.Files) > 0 {
+				return nil, errors.New("OpenAI replay state does not support canonical binary files")
 			}
 			items, err := replayItems(m)
 			if err != nil {
@@ -216,12 +283,12 @@ func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 		}
 		if m.Role == "tool" {
 			var output any = m.Content
-			if len(m.Images) > 0 {
+			if len(m.Files) > 0 {
 				parts := []any{map[string]any{"type": "input_text", "text": m.Content}}
-				for _, im := range m.Images {
-					part, err := imagePart(ctx, im, "input_text")
+				for _, im := range m.Files {
+					part, err := binaryPart(ctx, im, req.Selection.Model, "input_text")
 					if err != nil {
-						return nil, fmt.Errorf("tool output %q image: %w", m.CallID, err)
+						return nil, fmt.Errorf("tool output %q binary file: %w", m.CallID, err)
 					}
 					parts = append(parts, part)
 				}
@@ -230,7 +297,7 @@ func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 			input = append(input, map[string]any{"type": "function_call_output", "call_id": m.CallID, "output": output})
 			continue
 		}
-		if m.Content != "" || len(m.Images) > 0 {
+		if m.Content != "" || len(m.Files) > 0 {
 			content := []any{}
 			kind := "input_text"
 			if m.Role == "assistant" {
@@ -239,10 +306,10 @@ func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 			if m.Content != "" {
 				content = append(content, map[string]any{"type": kind, "text": m.Content})
 			}
-			for _, im := range m.Images {
-				part, err := imagePart(ctx, im, kind)
+			for _, im := range m.Files {
+				part, err := binaryPart(ctx, im, req.Selection.Model, kind)
 				if err != nil {
-					return nil, fmt.Errorf("%s message image: %w", m.Role, err)
+					return nil, fmt.Errorf("%s message binary file: %w", m.Role, err)
 				}
 				content = append(content, part)
 			}

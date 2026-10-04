@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"image"
+	"image/color"
 	"image/png"
 	"io"
 	"os"
@@ -24,6 +26,25 @@ func TestRendererCaptureBoundsCopyFastPaths(t *testing.T) {
 	_, err := io.Copy(&b, struct{ io.Reader }{strings.NewReader(strings.Repeat("x", 4096))})
 	if err == nil || b.buffer.Len() != 32 {
 		t.Fatal("renderer capture escaped its budget", b.buffer.Len(), err)
+	}
+}
+
+func TestPNGEncodingPreservesMaterializedFastPaths(t *testing.T) {
+	ctx := context.Background()
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 16, 16))
+	paletted := image.NewPaletted(nrgba.Bounds(), color.Palette{color.Black, color.White})
+	for _, m := range []image.Image{nrgba, paletted} {
+		if encodingImage(ctx, m) != m {
+			t.Fatal("materialized image lost PNG's concrete-image fast path")
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(contextWriter{ctx: ctx, writer: &b}, encodingImage(ctx, paletted)); err != nil {
+		t.Fatal(err)
+	}
+	// IHDR color type 3 denotes an indexed image, not expanded RGBA pixels.
+	if b.Len() < 26 || b.Bytes()[25] != 3 {
+		t.Fatal("paletted render lost indexed encoding")
 	}
 }
 
@@ -81,8 +102,11 @@ func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("duplicate render", calls)
 	}
-	p := filepath.Join(c.Root, "render-"+Key("same")+".blob")
-	st, _ := os.Stat(p)
+	p := filepath.Join(c.Root, "render-"+Key("same")+".ref")
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if st.Mode().Perm() != 0600 {
 		t.Fatal(st.Mode())
 	}
@@ -105,9 +129,6 @@ func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 	entries, _ := os.ReadDir(c.Root)
 	var total int64
 	for _, v := range entries {
-		if !strings.HasSuffix(v.Name(), ".blob") {
-			continue
-		}
 		st, _ := v.Info()
 		total += st.Size()
 	}
@@ -122,7 +143,10 @@ func TestCacheHitRejectsOversizedFileBeforeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := Key("oversized")
-	f, err := os.Create(filepath.Join(c.Root, "render-"+key+".blob"))
+	if err := os.WriteFile(filepath.Join(c.Root, "render-"+key+".ref"), []byte(key), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(c.Root, "blob-"+key+".blob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +160,6 @@ func TestCacheHitRejectsOversizedFileBeforeRead(t *testing.T) {
 }
 
 func TestCacheSharesOriginalBudgetAndRecreatesExpiredRender(t *testing.T) {
-
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	c, err := Default()
 	if err != nil {
@@ -155,12 +178,16 @@ func TestCacheSharesOriginalBudgetAndRecreatesExpiredRender(t *testing.T) {
 	if _, err = c.Get(ctx, key, create); err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(c.Root, "render-"+key+".blob")
-	st, err := os.Stat(p)
+	p := filepath.Join(c.Root, "render-"+key+".ref")
+	sha, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Limit = st.Size()
+	st, err := os.Stat(filepath.Join(c.Root, "blob-"+string(sha)+".blob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Limit = st.Size() + 64 // Blob and recipe metadata share the hard cap.
 	old := time.Now().Add(-31 * 24 * time.Hour)
 	if err = os.Chtimes(p, old, old); err != nil {
 		t.Fatal(err)
@@ -168,7 +195,8 @@ func TestCacheSharesOriginalBudgetAndRecreatesExpiredRender(t *testing.T) {
 	if _, err = c.Get(ctx, key, create); err != nil || calls != 2 {
 		t.Fatal("expired render reused", calls, err)
 	}
-	if err = c.Cache.Put(ctx, "original", key, make([]byte, st.Size())); err != nil {
+	data := make([]byte, c.Limit)
+	if err = c.Cache.Put(ctx, "original", Key(string(data)), data); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(p); !os.IsNotExist(err) {
@@ -193,7 +221,7 @@ func TestRenderCallbackDoesNotHoldFilesystemLockAndWaitIsCancelable(t *testing.T
 	}()
 	<-started
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	err = c.Cache.Put(ctx, "original", Key("parallel"), []byte("bytes"))
+	err = c.Cache.Put(ctx, "original", Key("bytes"), []byte("bytes"))
 	cancel()
 	if err != nil {
 		close(release)
@@ -209,6 +237,69 @@ func TestRenderCallbackDoesNotHoldFilesystemLockAndWaitIsCancelable(t *testing.T
 	}
 	if err = <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+type cancelingImage struct {
+	image.Image
+	cancel      context.CancelFunc
+	cancelAfter int
+	calls       int
+}
+
+func (m *cancelingImage) At(x, y int) color.Color {
+	m.calls++
+	if m.calls == m.cancelAfter {
+		m.cancel()
+	}
+	return m.Image.At(x, y)
+}
+
+func TestPNGEncodingStopsPixelAccessOnCancellation(t *testing.T) {
+	for _, phase := range []string{"opacity", "encoding"} {
+		t.Run(phase, func(t *testing.T) {
+			c, err := New(filepath.Join(t.TempDir(), "cache"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			pixels := image.NewNRGBA(image.Rect(0, 0, 512, 512))
+			m := &cancelingImage{Image: pixels, cancel: cancel, cancelAfter: 2}
+			if phase == "opacity" {
+				// Opaque pixels would otherwise require a full canvas scan
+				// before the first PNG write can observe cancellation.
+				for i := 3; i < len(pixels.Pix); i += 4 {
+					pixels.Pix[i] = 255
+				}
+				m.cancelAfter = 1
+			}
+			key := Key("cancel during PNG", phase)
+			_, err = c.Get(ctx, key, func(context.Context) (image.Image, error) { return m, nil })
+			if !errors.Is(err, context.Canceled) {
+				t.Fatal("encoding ignored cancellation", err)
+			}
+			if m.calls != m.cancelAfter {
+				t.Fatal("encoding kept accessing renderer pixels after cancellation", m.calls)
+			}
+			if _, err := os.Stat(filepath.Join(c.Root, "render-"+key+".ref")); !os.IsNotExist(err) {
+				t.Fatal("canceled encoding was cached", err)
+			}
+			// No detached encoder owns the gate after the canceled call.
+			if _, err := c.Get(context.Background(), key, func(context.Context) (image.Image, error) { return pixels, nil }); err != nil {
+				t.Fatal("canceled encoding failed to release render gate", err)
+			}
+		})
+	}
+}
+
+func TestPNGContextWriterRejectsCanceledWrites(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	w := contextWriter{ctx: ctx, writer: &out}
+	if n, err := w.Write([]byte("partial PNG")); n != 0 || !errors.Is(err, context.Canceled) || out.Len() != 0 {
+		t.Fatal("canceled writer accepted bytes", n, err, out.Len())
 	}
 }
 

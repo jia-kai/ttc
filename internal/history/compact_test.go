@@ -16,7 +16,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err := s.FinishTurn(firstTurn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	queue := provider.Message{Role: "user", Content: "queued with snapshot", InputSource: "queue", Images: []provider.Image{{Path: "plot.png", DataURL: "data:image/png;base64,snapshot"}}}
+	queue := provider.Message{Role: "user", Content: "queued with snapshot", InputSource: "queue", Files: []provider.BinaryFile{{Path: "plot.png", DataURL: "data:image/png;base64,snapshot"}}}
 	turn, queued, err := s.AdmitTurn(original.ID, "user", original.Model, &queue)
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +283,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		t.Fatal(err)
 	}
 	authored := "original user text"
-	queue := provider.Message{Role: "user", Content: "expanded immutable input", UserText: &authored, InputSource: "queue", Images: []provider.Image{{DataURL: "data:image/png;base64,eA=="}}}
+	queue := provider.Message{Role: "user", Content: "expanded immutable input", UserText: &authored, InputSource: "queue", Files: []provider.BinaryFile{{DataURL: "data:image/png;base64,eA=="}}}
 	turn, queued, err := s.AdmitTurn(session.ID, "user", session.Model, &queue)
 	if err != nil {
 		t.Fatal(err)

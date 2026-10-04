@@ -16,8 +16,7 @@ import (
 	"time"
 )
 
-func key(n int) string                         { return fmt.Sprintf("%064x", n) }
-func path(c *Cache, kind string, n int) string { return filepath.Join(c.Root, kind+"-"+key(n)+".blob") }
+func key(n int) string { return digest([]byte(fmt.Sprintf("key %d", n))) }
 func openCache(t *testing.T) *Cache {
 	t.Helper()
 	c, err := New(filepath.Join(t.TempDir(), "cache"))
@@ -26,15 +25,22 @@ func openCache(t *testing.T) *Cache {
 	}
 	return c
 }
-func put(t *testing.T, c *Cache, kind string, n int, data string) {
+func put(t *testing.T, c *Cache, kind, k string, data []byte) {
 	t.Helper()
-	if err := c.Put(context.Background(), kind, key(n), []byte(data)); err != nil {
+	if err := c.Put(context.Background(), kind, k, data); err != nil {
 		t.Fatal(err)
 	}
 }
-func miss(t *testing.T, c *Cache, kind string, n int) {
+func hit(t *testing.T, c *Cache, kind, k string, data []byte) {
 	t.Helper()
-	if _, err := c.Get(context.Background(), kind, key(n)); !errors.Is(err, ErrMiss) {
+	got, err := c.Get(context.Background(), kind, k)
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("hit %s %s: %q, %v", kind, k, got, err)
+	}
+}
+func miss(t *testing.T, c *Cache, kind, k string) {
+	t.Helper()
+	if _, err := c.Get(context.Background(), kind, k); !errors.Is(err, ErrMiss) {
 		t.Fatal("expected miss", err)
 	}
 }
@@ -45,7 +51,7 @@ func age(t *testing.T, p string, d time.Duration) {
 		t.Fatal(err)
 	}
 }
-func blobBytes(t *testing.T, c *Cache) int64 {
+func totalBytes(t *testing.T, c *Cache) int64 {
 	t.Helper()
 	entries, err := os.ReadDir(c.Root)
 	if err != nil {
@@ -53,16 +59,24 @@ func blobBytes(t *testing.T, c *Cache) int64 {
 	}
 	var total int64
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".blob") {
-			continue
-		}
 		st, err := e.Info()
+		if os.IsNotExist(err) {
+			continue
+		} // Concurrent rename/removal.
 		if err != nil {
 			t.Fatal(err)
 		}
 		total += st.Size()
 	}
 	return total
+}
+func stat(t *testing.T, c *Cache, name string) os.FileInfo {
+	t.Helper()
+	st, err := os.Stat(filepath.Join(c.Root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }
 
 func TestDefaultPrivacyAndValidation(t *testing.T) {
@@ -78,8 +92,10 @@ func TestDefaultPrivacyAndValidation(t *testing.T) {
 	if err != nil || again != c {
 		t.Fatal("default was reopened", err)
 	}
-	put(t, c, "original", 1, "bytes")
-	for p, mode := range map[string]os.FileMode{c.Root: 0700, filepath.Join(c.Root, ".lock"): 0600, path(c, "original", 1): 0600} {
+	data := []byte("bytes")
+	put(t, c, "original", digest(data), data)
+	put(t, c, "render", key(1), data)
+	for p, mode := range map[string]os.FileMode{c.Root: 0700, filepath.Join(c.Root, ".lock"): 0600, filepath.Join(c.Root, blobName(digest(data))): 0600, filepath.Join(c.Root, refName(key(1))): 0600} {
 		st, err := os.Stat(p)
 		if err != nil || st.Mode().Perm() != mode {
 			t.Fatal("private permissions", p, st, err)
@@ -100,6 +116,9 @@ func TestDefaultPrivacyAndValidation(t *testing.T) {
 			t.Fatal("accepted invalid name", tc)
 		}
 	}
+	if err := c.Put(context.Background(), "original", key(1), data); err == nil {
+		t.Fatal("accepted non-content original key")
+	}
 	link := filepath.Join(t.TempDir(), "symlink")
 	if err := os.Symlink(c.Root, link); err != nil {
 		t.Fatal(err)
@@ -109,104 +128,236 @@ func TestDefaultPrivacyAndValidation(t *testing.T) {
 	}
 }
 
-func TestMixedBudgetTouchTTLAndSelfEviction(t *testing.T) {
+func TestSharedContentAddressAndDuplicatePutNeverRewrites(t *testing.T) {
 	c := openCache(t)
-	c.Limit = 8
-	put(t, c, "original", 1, "aaaa")
-	put(t, c, "render", 1, "bbbb") // Same key, separate namespace.
-	age(t, path(c, "original", 1), 2*time.Hour)
-	age(t, path(c, "render", 1), time.Hour)
-	b, err := c.Get(context.Background(), "original", key(1))
-	if err != nil || string(b) != "aaaa" {
-		t.Fatal(string(b), err)
+	data := []byte("identical binary bytes")
+	sha := digest(data)
+	put(t, c, "original", sha, data)
+	before := stat(t, c, blobName(sha))
+	age(t, filepath.Join(c.Root, blobName(sha)), time.Hour)
+	for n := range 3 {
+		put(t, c, "render", key(n), data)
 	}
-	put(t, c, "render", 2, "cccc")
-	miss(t, c, "render", 1)
-	if b, err = c.Get(context.Background(), "original", key(1)); err != nil || string(b) != "aaaa" {
-		t.Fatal("hit did not touch LRU", err)
+	put(t, c, "original", sha, data)
+	refBefore := stat(t, c, refName(key(0)))
+	put(t, c, "render", key(0), data)
+	after := stat(t, c, blobName(sha))
+	if !os.SameFile(before, after) || !os.SameFile(refBefore, stat(t, c, refName(key(0)))) {
+		t.Fatal("duplicate Put rewrote blob/reference")
 	}
-	if total := blobBytes(t, c); total != 8 {
-		t.Fatal(total)
+	if time.Since(after.ModTime()) > time.Minute {
+		t.Fatal("duplicate Put did not touch blob")
 	}
-	age(t, path(c, "original", 1), 31*24*time.Hour)
-	miss(t, c, "original", 1) // Requested TTL is enforced even after a recent prune.
-	age(t, path(c, "render", 2), 31*24*time.Hour)
+	if totalBytes(t, c) != int64(len(data)+3*64) {
+		t.Fatal("content not physically deduplicated", totalBytes(t, c))
+	}
+	hit(t, c, "original", sha, data)
+	for n := range 3 {
+		hit(t, c, "render", key(n), data)
+	}
+}
+
+func TestSharedBudgetIncludesMetadataAndTTL(t *testing.T) {
+	c := openCache(t)
+	c.Limit = 132 // Two four-byte blobs and two 64-byte recipe references.
+	a, b, d := []byte("aaaa"), []byte("bbbb"), []byte("cccc")
+	put(t, c, "original", digest(a), a)
+	put(t, c, "render", key(1), b)
+	age(t, filepath.Join(c.Root, blobName(digest(a))), 2*time.Hour)
+	age(t, filepath.Join(c.Root, blobName(digest(b))), time.Hour)
+	age(t, filepath.Join(c.Root, refName(key(1))), time.Hour)
+	hit(t, c, "original", digest(a), a)
+	put(t, c, "render", key(2), d)
+	miss(t, c, "render", key(1))
+	miss(t, c, "original", digest(b))
+	hit(t, c, "original", digest(a), a)
+	if total := totalBytes(t, c); total > c.Limit {
+		t.Fatal("metadata escaped budget", total)
+	}
+	age(t, filepath.Join(c.Root, blobName(digest(d))), 31*24*time.Hour)
+	miss(t, c, "render", key(2)) // Expired blob removes even recently touched references.
+	if _, err := os.Stat(filepath.Join(c.Root, refName(key(2)))); !os.IsNotExist(err) {
+		t.Fatal("expired blob retained reference", err)
+	}
+	age(t, filepath.Join(c.Root, blobName(digest(a))), 31*24*time.Hour)
 	c.lastPrune.Store(0)
-	miss(t, c, "render", 999) // A missing read also opportunistically prunes idle blobs.
-	miss(t, c, "render", 2)
-	put(t, c, "original", 3, "123456789") // Too large for this configured budget.
-	miss(t, c, "original", 3)
-	if total := blobBytes(t, c); total != 0 {
-		t.Fatal("self eviction", total)
+	miss(t, c, "render", key(999))
+	miss(t, c, "original", digest(a))
+	if totalBytes(t, c) != 0 {
+		t.Fatal("TTL did not remove all data")
 	}
+	c.Limit = 3
+	put(t, c, "original", digest(a), a)
+	miss(t, c, "original", digest(a))
+	c.Limit = 67 // Blob fits, blob + recipe does not.
+	put(t, c, "render", key(1), a)
+	miss(t, c, "render", key(1))
+}
+
+func TestDuplicatePutSkipsScanButStillPrunesPeriodically(t *testing.T) {
+	for _, kind := range []string{"original", "render"} {
+		t.Run(kind, func(t *testing.T) {
+			c := openCache(t)
+			data := []byte("duplicate")
+			k := digest(data)
+			if kind == "render" {
+				k = key(1)
+			}
+			put(t, c, kind, k, data)
+			before := stat(t, c, blobName(digest(data)))
+			age(t, filepath.Join(c.Root, blobName(digest(data))), time.Hour)
+			if kind == "render" {
+				age(t, filepath.Join(c.Root, refName(k)), time.Hour)
+			}
+			// An unrelated interrupted stage reveals whether a full scan ran.
+			stage := filepath.Join(c.Root, ".stage-interrupted")
+			if err := os.WriteFile(stage, []byte("old staging"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			recent := time.Now().Add(-time.Second).UnixNano()
+			c.lastPrune.Store(recent)
+			put(t, c, kind, k, data)
+			if c.lastPrune.Load() != recent {
+				t.Fatal("duplicate Put scanned the directory")
+			}
+			if _, err := os.Stat(stage); err != nil {
+				t.Fatal("duplicate Put scanned unrelated files", err)
+			}
+			after := stat(t, c, blobName(digest(data)))
+			if !os.SameFile(before, after) || time.Since(after.ModTime()) > time.Minute {
+				t.Fatal("duplicate Put failed to touch the existing blob")
+			}
+			if kind == "render" && time.Since(stat(t, c, refName(k)).ModTime()) > time.Minute {
+				t.Fatal("duplicate Put failed to touch the recipe")
+			}
+			c.lastPrune.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+			put(t, c, kind, k, data)
+			if _, err := os.Stat(stage); !os.IsNotExist(err) {
+				t.Fatal("duplicate Put skipped periodic pruning", err)
+			}
+		})
+	}
+}
+
+func TestRetentionPolicyChangesForceDuplicatePutScan(t *testing.T) {
+	for _, policy := range []string{"limit", "ttl"} {
+		for _, kind := range []string{"original", "render"} {
+			t.Run(policy+"/"+kind, func(t *testing.T) {
+				c := openCache(t)
+				a, b := []byte("keep"), []byte("evict")
+				k := digest(a)
+				if kind == "render" {
+					k = key(1)
+				}
+				put(t, c, kind, k, a)
+				put(t, c, "original", digest(b), b)
+				age(t, filepath.Join(c.Root, blobName(digest(b))), 2*time.Hour)
+				if policy == "limit" {
+					c.Limit = int64(len(a))
+					if kind == "render" {
+						c.Limit += 64
+					}
+				} else {
+					c.TTL = time.Hour
+				}
+				put(t, c, kind, k, a)
+				if _, err := os.Stat(filepath.Join(c.Root, blobName(digest(b)))); !os.IsNotExist(err) {
+					t.Fatal("policy change did not force eviction", err)
+				}
+				hit(t, c, kind, k, a)
+				if totalBytes(t, c) > c.Limit {
+					t.Fatal("duplicate Put exceeded changed budget")
+				}
+			})
+		}
+	}
+}
+
+func TestGrowingPutScansEvenAfterRecentPrune(t *testing.T) {
+	c := openCache(t)
+	c.Limit = 68
+	data := []byte("data")
+	put(t, c, "render", key(1), data)
+	stage := filepath.Join(c.Root, ".stage-interrupted")
+	if err := os.WriteFile(stage, []byte("orphan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Sharing the blob still grows recipe metadata and must reserve capacity.
+	put(t, c, "render", key(2), data)
+	if _, err := os.Stat(stage); !os.IsNotExist(err) {
+		t.Fatal("growing write skipped pruning", err)
+	}
+	if totalBytes(t, c) != c.Limit {
+		t.Fatal("growing write exceeded metadata budget", totalBytes(t, c))
+	}
+	miss(t, c, "render", key(1))
+	hit(t, c, "render", key(2), data)
+}
+
+func TestRecipeIdleTTLIsIndependentOfSharedBlob(t *testing.T) {
+	c := openCache(t)
+	data := []byte("shared")
+	for n := range 2 {
+		put(t, c, "render", key(n), data)
+	}
+	age(t, filepath.Join(c.Root, refName(key(0))), 31*24*time.Hour)
+	hit(t, c, "render", key(1), data)
+	miss(t, c, "render", key(0))
+	hit(t, c, "original", digest(data), data)
 }
 
 func TestReplacementAndExplicitPrune(t *testing.T) {
 	c := openCache(t)
-	c.Limit = 8
-	put(t, c, "original", 1, "1234")
-	put(t, c, "render", 2, "5678")
-	put(t, c, "original", 1, "abcd") // Replacing does not double-count the target.
-	if total := blobBytes(t, c); total != 8 {
-		t.Fatal(total)
-	}
-	if _, err := c.Get(context.Background(), "render", key(2)); err != nil {
-		t.Fatal("replacement needlessly evicted", err)
+	c.Limit = 136
+	a, b := []byte("1234"), []byte("5678")
+	put(t, c, "render", key(1), a)
+	put(t, c, "render", key(2), a)
+	put(t, c, "render", key(1), b)
+	hit(t, c, "render", key(1), b)
+	hit(t, c, "render", key(2), a)
+	if totalBytes(t, c) != 136 {
+		t.Fatal("wrong replacement accounting", totalBytes(t, c))
 	}
 	c.Limit = 3
 	if err := c.Prune(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if total := blobBytes(t, c); total > c.Limit {
-		t.Fatal(total)
+	if totalBytes(t, c) > c.Limit {
+		t.Fatal("prune exceeded capacity")
 	}
+	miss(t, c, "render", key(1))
+	miss(t, c, "render", key(2))
 }
 
-func TestReplacementHardCapIncludesStaging(t *testing.T) {
+func TestHardCapIncludesStagingAndDuplicatePutDoesNotStage(t *testing.T) {
 	c := openCache(t)
-	data := bytes.Repeat([]byte("x"), 8<<20)
-	c.Limit = int64(len(data))
-	if err := c.Put(context.Background(), "original", key(1), data); err != nil {
-		t.Fatal(err)
-	}
+	data := bytes.Repeat([]byte("x"), 2<<20)
+	c.Limit = int64(len(data) + 128)
+	put(t, c, "original", digest(data), data)
+	before := stat(t, c, blobName(digest(data)))
 	done := make(chan error, 1)
 	go func() {
-		for range 5 {
-			if err := c.Put(context.Background(), "original", key(1), data); err != nil {
+		for n := range 5 {
+			if err := c.Put(context.Background(), "render", key(n), data); err != nil {
 				done <- err
 				return
 			}
 		}
-		done <- nil
+		// This stages a different blob, forcing eviction of the shared old one.
+		other := bytes.Repeat([]byte("y"), len(data))
+		done <- c.Put(context.Background(), "render", key(99), other)
 	}()
-	var peak int64
 	for {
-		entries, err := os.ReadDir(c.Root)
-		if err != nil {
-			t.Fatal(err)
+		if total := totalBytes(t, c); total > c.Limit {
+			t.Fatal("staging or metadata exceeded hard cap", total, c.Limit)
 		}
-		var total int64
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".blob") && !strings.HasPrefix(e.Name(), ".blob-") {
-				continue
-			}
-			st, err := e.Info()
-			if os.IsNotExist(err) { // The writer can rename/remove between list and stat.
-				continue
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			total += st.Size()
-		}
-		peak = max(peak, total)
 		select {
 		case err := <-done:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if peak > c.Limit {
-				t.Fatal("replacement staging exceeded hard cap", peak, c.Limit)
+			if _, err := os.Stat(filepath.Join(c.Root, blobName(digest(data)))); !os.IsNotExist(err) {
+				t.Fatal("old content not evicted", err, before)
 			}
 			return
 		default:
@@ -215,39 +366,66 @@ func TestReplacementHardCapIncludesStaging(t *testing.T) {
 	}
 }
 
-func TestOrphanStagingIsDiscardedBeforePublicationAndPruning(t *testing.T) {
+func TestOrphanStagingAndOldFormatAreDiscarded(t *testing.T) {
 	c := openCache(t)
 	c.Limit = 8
-	orphan := filepath.Join(c.Root, ".blob-interrupted")
-	if err := os.WriteFile(orphan, []byte("12345678"), 0600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{".stage-interrupted", ".blob-interrupted", "original-" + key(1) + ".blob", "render-" + key(1) + ".blob", "unknown"} {
+		if err := os.WriteFile(filepath.Join(c.Root, name), []byte("12345678"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	put(t, c, "original", 1, "abcdefgh")
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatal("publication retained orphan staging", err)
-	}
-	if err := os.WriteFile(orphan, []byte("12345678"), 0600); err != nil {
-		t.Fatal(err)
+	data := []byte("abcdefgh")
+	put(t, c, "original", digest(data), data)
+	if totalBytes(t, c) != 8 {
+		t.Fatal("obsolete cache data retained")
 	}
 	if err := c.Prune(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatal("prune retained orphan staging", err)
+	hit(t, c, "original", digest(data), data)
+}
+
+func TestDanglingReferenceAndCorruption(t *testing.T) {
+	c := openCache(t)
+	data := []byte("valid")
+	put(t, c, "render", key(1), data)
+	if err := os.Remove(filepath.Join(c.Root, blobName(digest(data)))); err != nil {
+		t.Fatal(err)
 	}
-	if total := blobBytes(t, c); total != 8 {
-		t.Fatal("orphan cleanup removed valid blob", total)
+	// A Put repairs a reference whose blob was removed externally.
+	put(t, c, "render", key(1), data)
+	hit(t, c, "render", key(1), data)
+	if err := os.WriteFile(filepath.Join(c.Root, blobName(digest(data))), []byte("wrong"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"original", "render"} {
+		k := digest(data)
+		if kind == "render" {
+			k = key(1)
+		}
+		if _, err := c.Get(context.Background(), kind, k); err == nil || errors.Is(err, ErrMiss) {
+			t.Fatal("corrupt bytes were not a loud error", err)
+		}
+		if err := c.Put(context.Background(), kind, k, data); err == nil {
+			t.Fatal("duplicate Put silently repaired corrupt bytes")
+		}
+	}
+	if err := os.WriteFile(filepath.Join(c.Root, refName(key(1))), bytes.Repeat([]byte("q"), 64), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Prune(context.Background()); err == nil {
+		t.Fatal("corrupt reference accepted")
 	}
 }
 
 func TestMissingStorageIsNotCacheMiss(t *testing.T) {
 	c := openCache(t)
-	miss(t, c, "original", 1)
+	miss(t, c, "original", key(1))
 	if err := os.RemoveAll(c.Root); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Get(context.Background(), "original", key(1)); err == nil || errors.Is(err, ErrMiss) {
-		t.Fatal("missing cache storage was classified as a blob miss", err)
+		t.Fatal("missing storage classified as miss", err)
 	}
 }
 
@@ -276,68 +454,78 @@ func TestInitializationDoesNotWaitForHeldLock(t *testing.T) {
 		select {
 		case err := <-done:
 			if !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatal("first-use operation did not respect cancellation", err)
+				t.Fatal("first operation ignored cancellation", err)
 			}
 		case <-time.After(time.Second):
-			t.Fatal("initialization blocked on filesystem lock")
+			t.Fatal("initialization blocked on lock")
 		}
 	}
 }
 
 func TestCorruptAndUnsafeEntriesDoNotBlock(t *testing.T) {
-	for _, kind := range []string{"fifo", "symlink", "directory", "oversized", "hardlink"} {
-		t.Run(kind, func(t *testing.T) {
-			c := openCache(t)
-			p := path(c, "original", 1)
-			switch kind {
-			case "fifo":
-				if err := syscall.Mkfifo(p, 0600); err != nil {
-					t.Fatal(err)
+	for _, namespace := range []string{"blob", "reference", "obsolete"} {
+		for _, kind := range []string{"fifo", "symlink", "directory", "oversized", "hardlink"} {
+			t.Run(namespace+"/"+kind, func(t *testing.T) {
+				c := openCache(t)
+				name, readKind := blobName(key(1)), "original"
+				if namespace == "reference" {
+					name, readKind = refName(key(1)), "render"
 				}
-			case "directory":
-				if err := os.Mkdir(p, 0700); err != nil {
-					t.Fatal(err)
+				if namespace == "obsolete" {
+					name = "original-" + key(1) + ".blob"
 				}
-			case "symlink", "hardlink":
-				target := filepath.Join(t.TempDir(), "target")
-				if err := os.WriteFile(target, []byte("unsafe"), 0600); err != nil {
-					t.Fatal(err)
+				p := filepath.Join(c.Root, name)
+				switch kind {
+				case "fifo":
+					if err := syscall.Mkfifo(p, 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "directory":
+					if err := os.Mkdir(p, 0700); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink", "hardlink":
+					target := filepath.Join(t.TempDir(), "target")
+					if err := os.WriteFile(target, []byte("unsafe"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					var err error
+					if kind == "symlink" {
+						err = os.Symlink(target, p)
+					} else {
+						err = os.Link(target, p)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				case "oversized":
+					f, err := os.Create(p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := f.Truncate(MaxBytes + 1); err != nil {
+						t.Fatal(err)
+					}
+					f.Close()
 				}
-				var err error
-				if kind == "symlink" {
-					err = os.Symlink(target, p)
-				} else {
-					err = os.Link(target, p)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_, err := c.Get(ctx, readKind, key(1))
+				// Disposable obsolete regular bytes are removed, not imported.
+				if namespace == "obsolete" && kind == "oversized" {
+					if !errors.Is(err, ErrMiss) {
+						t.Fatal(err)
+					}
+					return
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
-			case "oversized":
-				f, err := os.Create(p)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = f.Truncate(MaxBytes + 1); err != nil {
-					t.Fatal(err)
-				}
-				f.Close()
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			done := make(chan error, 1)
-			go func() { _, err := c.Get(ctx, "original", key(1)); done <- err }()
-			select {
-			case err := <-done:
 				if err == nil || errors.Is(err, ErrMiss) {
-					t.Fatal("unsafe hit was accepted or treated as miss", err)
+					t.Fatal("unsafe entry accepted or treated as miss", err)
 				}
-			case <-ctx.Done():
-				t.Fatal("unsafe descriptor blocked")
-			}
-			if err := c.Prune(ctx); err == nil {
-				t.Fatal("prune accepted unsafe blob")
-			}
-		})
+				if err := c.Prune(ctx); err == nil {
+					t.Fatal("prune accepted unsafe entry")
+				}
+			})
+		}
 	}
 	c := openCache(t)
 	if err := c.Put(context.Background(), "original", key(1), make([]byte, MaxBytes+1)); err == nil {
@@ -346,28 +534,27 @@ func TestCorruptAndUnsafeEntriesDoNotBlock(t *testing.T) {
 }
 
 func TestUnsafeLockMetadataIsRejected(t *testing.T) {
-	for _, kind := range []string{"fifo", "symlink"} {
+	for _, kind := range []string{"fifo", "symlink", "hardlink"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
-			lock := filepath.Join(root, ".lock")
+			p := filepath.Join(root, ".lock")
 			var err error
 			if kind == "fifo" {
-				err = syscall.Mkfifo(lock, 0600)
+				err = syscall.Mkfifo(p, 0600)
+			} else if kind == "symlink" {
+				err = os.Symlink(filepath.Join(root, "missing"), p)
 			} else {
-				err = os.Symlink(filepath.Join(root, "missing"), lock)
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				err = os.Link(target, p)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			done := make(chan error, 1)
-			go func() { _, err := New(root); done <- err }()
-			select {
-			case err := <-done:
-				if err == nil {
-					t.Fatal("accepted unsafe lock metadata")
-				}
-			case <-time.After(time.Second):
-				t.Fatal("blocked on unsafe lock metadata")
+			if _, err := New(root); err == nil {
+				t.Fatal("accepted unsafe lock")
 			}
 		})
 	}
@@ -382,8 +569,7 @@ func TestCancellationWaitingForLockAndNoTemporaryFiles(t *testing.T) {
 	defer unlock()
 	for _, op := range []func(context.Context) error{
 		func(ctx context.Context) error { _, err := c.Get(ctx, "original", key(1)); return err },
-		func(ctx context.Context) error { return c.Put(ctx, "render", key(1), []byte("bytes")) },
-		c.Prune,
+		func(ctx context.Context) error { return c.Put(ctx, "render", key(1), []byte("bytes")) }, c.Prune,
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 		err := op(ctx)
@@ -398,23 +584,21 @@ func TestCancellationWaitingForLockAndNoTemporaryFiles(t *testing.T) {
 	}
 }
 
-func TestBoundedReadChecksCancellation(t *testing.T) {
+func TestBoundedReadChecksCancellationAndGrowth(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "bytes")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if err = f.Truncate(MaxBytes + 1); err != nil {
+	if err := f.Truncate(MaxBytes + 1); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err = readBounded(ctx, f, MaxBytes+1); !errors.Is(err, context.Canceled) {
+	if _, err := readBounded(ctx, f, MaxBytes+1, MaxBytes); !errors.Is(err, context.Canceled) {
 		t.Fatal("read ignored cancellation", err)
 	}
-	// The descriptor can grow after its initial stat; the reader still enforces
-	// the encoded limit independently of that metadata.
-	if _, err = readBounded(context.Background(), f, MaxBytes); err == nil {
+	if _, err := readBounded(context.Background(), f, MaxBytes, MaxBytes); err == nil {
 		t.Fatal("read accepted oversized descriptor")
 	}
 }
@@ -431,14 +615,13 @@ func TestBoundedReadAcceptsGrowthBeyondInitialSize(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readBounded(context.Background(), f, 1)
+	got, err := readBounded(context.Background(), f, 1, MaxBytes)
 	if err != nil || string(got) != "growing bytes" {
-		t.Fatal("initial size hint truncated a growing descriptor", string(got), err)
+		t.Fatal("size hint truncated growth", string(got), err)
 	}
 }
 
 func TestIndependentObjectsAndProcesses(t *testing.T) {
-	// The subprocess runs the same bounded writer as independently opened objects.
 	if root := os.Getenv("TTC_BLOBCACHE_TEST_ROOT"); root != "" {
 		c, err := New(root)
 		if err != nil {
@@ -446,7 +629,8 @@ func TestIndependentObjectsAndProcesses(t *testing.T) {
 		}
 		c.Limit = 128
 		for n := range 60 {
-			if err := c.Put(context.Background(), "original", key(n+1000), bytes.Repeat([]byte("z"), 16)); err != nil {
+			data := []byte(fmt.Sprintf("original %d", n))
+			if err := c.Put(context.Background(), "original", digest(data), data); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -482,7 +666,7 @@ func TestIndependentObjectsAndProcesses(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				total := blobBytes(t, object)
+				total := totalBytes(t, object)
 				unlock()
 				if total > object.Limit {
 					t.Error("exceeded hard budget", total)
@@ -494,15 +678,15 @@ func TestIndependentObjectsAndProcesses(t *testing.T) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatal(err, output.String())
 	}
-	if total := blobBytes(t, c); total > c.Limit {
-		t.Fatal(total)
+	if totalBytes(t, c) > c.Limit {
+		t.Fatal("budget exceeded")
 	}
 	entries, err := os.ReadDir(c.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".blob-") {
+		if strings.HasPrefix(e.Name(), ".stage-") {
 			t.Fatal("leaked temporary file", e.Name())
 		}
 	}

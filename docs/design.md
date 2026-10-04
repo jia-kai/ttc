@@ -219,7 +219,7 @@ type LoginUI interface {
   [Models](models.md) owns catalog/startup, selection, budget metadata and metering;
   [compaction](compaction.md) owns admission budgets, retention and failure policy.
   The frontend reloads after handoff without a popup, preserving input/interactions.
-- Estimate images, schemas and native replay once. `ReplayState` identifies its
+- Estimate binary files, schemas and native replay once. `ReplayState` identifies its
   provider, underlying model and codec; native items replace canonical assistant
   messages on the wire. Validate text/calls, phase, item IDs and encrypted reasoning.
   Estimate model-visible occupancy, excluding transport metadata; OpenAI uses a
@@ -361,9 +361,10 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   request metadata/usage/response IDs and linked retry notices, not full duplicated
   prompts. Session lists/inspectors require no full transcript scan.
 - Artifacts are private, lineage-owned and referenced by relative paths/hashes;
-  deduplicate only within the lineage. No global blob or durable job/timer/inbox
-  table. Enforce the [retention policy](requirement.md#data-retention) with an atomic
-  activity recheck before lineage deletion. Copies protect shared ancestry/assets.
+  deduplicate only within the lineage. No global durable blob table or durable
+  job/timer/inbox table. Enforce the [retention policy](requirement.md#data-retention)
+  with an atomic activity recheck before lineage deletion. Copies protect shared
+  ancestry/assets.
 
 ## Validation
 
@@ -418,22 +419,29 @@ The concrete boundaries above are TTC decisions, informed by:
   idle composer. Typing reveals an overlay. Disable/ignore mouse events for terminal
   copy. Every exit restores mouse reporting and the live source-reading anchor.
 
-### Image and math assets
+### Binary, image and math assets
 
-- LLM `read()` images are file references: absolute original path and SHA-256
-  checksum, with metadata but no image payload in the database. Successful reads
+- Providers announce binary formats and byte limits in model metadata; request
+  admission freezes them for tool execution. `read()` owns local classification,
+  bounded descriptor reads and format validation; adapters own native encoding.
+- LLM `read()` binary files are references: absolute original path and SHA-256
+  checksum, MIME type and byte size, but no payload in the database. Successful reads
   cache the exact validated original bytes under their checksum.
   Canonical tool messages retain references through history/load/compaction.
   The provider adapter uploads cached bytes without reopening the source. A miss
   verifies the source and repopulates the cache; unavailable originals become
   explicit outgoing text notices without modifying history or tool association.
   Invalid references, cancellation and cache errors still fail requests. Native
-  image tool outputs use backend-default detail, without client preprocessing.
+  image tool outputs use backend-default detail, without client preprocessing;
+  document inputs use native file parts, without local extraction/conversion.
 - Original `image_show` bytes are content-addressed private lineage artifacts.
   Disposable original uploads and derived PNGs share `$XDG_CACHE_HOME/ttc/assets`
-  (default `~/.cache/ttc/assets`), a 4 GiB hard total cap and 30-day idle retention.
-  Hits refresh access time; TTL/least-recently-used pruning may evict active images.
-  Original checksum keys and render-recipe keys occupy separate namespaces.
+  (default `~/.cache/ttc/assets`), a 4 GiB file-content cap including recipe
+  references/staging, excluding filesystem overhead, and 32 MiB per blob.
+  Cache operations enforce 30-day idle retention, not a daemon. Hits refresh idle
+  time; TTL/least-recently-used pruning may evict active blobs.
+  All bytes are SHA-256-addressed and deduplicated; render-recipe mappings refer
+  to these same blobs rather than storing a second payload.
   Render keys include source, parameters, cell size and backend/lock hash.
   Atomic publication and short-lived cancelable filesystem locks coordinate
   writes/access/pruning across instances. No blob payloads enter the database;

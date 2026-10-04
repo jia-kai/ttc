@@ -13,7 +13,7 @@ explicit session changes/exit cancel them.
   ```text
   fixed_input + summary_and_archive_links + retained_history + O + M
       + next_turn_input_reserve < C
-  recent_cycle_tail <= recent_tokens_max
+  recent_cycle_tail <= recent_tokens_max  (except unread binary-tool cycle)
   ```
 
   [Model budget metadata](models.md#budget-metadata) defines the fields and
@@ -38,7 +38,10 @@ explicit session changes/exit cancel them.
   ```
 
   Keep the longest suffix within that target at a complete cycle boundary.
-  Summarize oversized cycles; never split tool pairs. Unresolved calls block
+  Summarize oversized cycles; never split tool pairs. Exception: retain the newest
+  cycle with binary tool results until a later assistant response consumes them,
+  even beyond the tail target. Fail if that cycle cannot fit capacity/headroom;
+  human/runtime messages alone do not establish consumption. Unresolved calls block
   compaction. Subscription defaults: 4096–16000 estimated tokens, excluding
   independently retained inputs. The replacement must fit capacity/next-turn
   headroom. Fail if no older model work or unretained human input can be summarized.
@@ -48,7 +51,9 @@ explicit session changes/exit cancel them.
 - Freeze/archive a cut; summarize its canonical actor prefix once, without tools,
   using the actor's model and summary output allowance. The canonical
   [summary instructions](../prompt/compaction.yaml) define handoff content.
-  Include raw arguments/results, not UI activity or expanded tool views.
+  Include raw arguments/results, not UI activity or expanded tool views. Binary
+  attachments enter summary inference as metadata only, not original bytes;
+  summaries can preserve prior observations, not inspect unseen contents.
 - No chunking, regeneration or mandatory headings. Reject empty/tool-calling
   summaries, oversized summary requests and summaries over 1 MiB. Output reserves
   follow [model metadata](models.md#budget-metadata); input/link templates live in

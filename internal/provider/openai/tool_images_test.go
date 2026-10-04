@@ -23,7 +23,7 @@ import (
 	"ttc/internal/provider"
 )
 
-func originalFileImage(t *testing.T, name string, data []byte) provider.Image {
+func originalBinaryFile(t *testing.T, name string, data []byte) provider.BinaryFile {
 	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), name)
@@ -31,7 +31,7 @@ func originalFileImage(t *testing.T, name string, data []byte) provider.Image {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(data)
-	return provider.Image{Path: path, SHA256: hex.EncodeToString(sum[:])}
+	return provider.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:])}
 }
 
 func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
@@ -41,10 +41,10 @@ func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
 	}
 	for _, role := range []string{"user", "tool"} {
 		t.Run(role, func(t *testing.T) {
-			im := originalFileImage(t, "not-a-png-extension", data.Bytes())
+			im := originalBinaryFile(t, "not-a-png-extension", data.Bytes())
 			selection := provider.Selection{Provider: "openai", Model: provider.ScriptModel()}
 			selection.Model.Images = true
-			req := provider.Request{ConversationID: "file-images", Selection: selection, Messages: []provider.Message{{Role: role, CallID: "read-file", Content: "image", Images: []provider.Image{im}}}}
+			req := provider.Request{ConversationID: "file-images", Selection: selection, Messages: []provider.Message{{Role: role, CallID: "read-file", Content: "image", Files: []provider.BinaryFile{im}}}}
 			body, err := wire(context.Background(), req)
 			if err != nil {
 				t.Fatal(err)
@@ -64,7 +64,7 @@ func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
 			if !reflect.DeepEqual(decoded.Input[0][field], want) {
 				t.Fatal("file image was not resolved", string(body))
 			}
-			if req.Messages[0].Images[0].DataURL != "" {
+			if req.Messages[0].Files[0].DataURL != "" {
 				t.Fatal("transport payload mutated canonical image")
 			}
 			if err := os.WriteFile(im.Path, []byte("changed"), 0600); err != nil {
@@ -97,13 +97,13 @@ func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
 				}
 				part := parts[1].(map[string]any)
 				text, _ := part["text"].(string)
-				if part["type"] != "input_text" || !strings.Contains(text, "image unavailable") || !strings.Contains(text, im.Path) || !strings.Contains(text, im.SHA256) || !strings.Contains(text, reason) || part["image_url"] != nil {
+				if part["type"] != "input_text" || !strings.Contains(text, "binary file unavailable") || !strings.Contains(text, im.Path) || !strings.Contains(text, im.SHA256) || !strings.Contains(text, reason) || part["image_url"] != nil {
 					t.Fatal("missing explicit unavailable-image diagnostic", string(got))
 				}
 				if role == "tool" && decoded.Input[0]["call_id"] != "read-file" {
 					t.Fatal("unavailable image lost tool association", string(got))
 				}
-				if !reflect.DeepEqual(req.Messages[0].Images, []provider.Image{im}) || req.Messages[0].Content != "image" {
+				if !reflect.DeepEqual(req.Messages[0].Files, []provider.BinaryFile{im}) || req.Messages[0].Content != "image" {
 					t.Fatal("unavailable image mutated history", req.Messages[0])
 				}
 			}
@@ -116,7 +116,7 @@ func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
 	}
 }
 
-func TestUnavailableImageDoesNotDiscardOtherAttachments(t *testing.T) {
+func TestUnavailableBinaryFileDoesNotDiscardOtherAttachments(t *testing.T) {
 	var missingBytes, validBytes bytes.Buffer
 	if err := png.Encode(&missingBytes, image.NewNRGBA(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
@@ -124,14 +124,14 @@ func TestUnavailableImageDoesNotDiscardOtherAttachments(t *testing.T) {
 	if err := png.Encode(&validBytes, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
 		t.Fatal(err)
 	}
-	missing := originalFileImage(t, "missing.png", missingBytes.Bytes())
-	valid := originalFileImage(t, "valid.png", validBytes.Bytes())
+	missing := originalBinaryFile(t, "missing.png", missingBytes.Bytes())
+	valid := originalBinaryFile(t, "valid.png", validBytes.Bytes())
 	if err := os.Remove(missing.Path); err != nil {
 		t.Fatal(err)
 	}
 	selection := provider.Selection{Provider: "openai", Model: provider.ScriptModel()}
 	selection.Model.Images = true
-	m := provider.Message{Role: "tool", CallID: "read-both", Content: "Original metadata", Images: []provider.Image{missing, valid}}
+	m := provider.Message{Role: "tool", CallID: "read-both", Content: "Original metadata", Files: []provider.BinaryFile{missing, valid}}
 	body, err := wire(context.Background(), provider.Request{ConversationID: "mixed-availability", Selection: selection, Messages: []provider.Message{m}})
 	if err != nil {
 		t.Fatal(err)
@@ -155,9 +155,9 @@ func TestStreamImageReconstructionFailsBeforeAuth(t *testing.T) {
 	a := New("not-a-credential-file")
 	selection := provider.Selection{Provider: "openai", Model: provider.ScriptModel()}
 	selection.Model.Images = true
-	req := provider.Request{ConversationID: "image-tools", Selection: selection, Messages: []provider.Message{{Role: "tool", CallID: "read", Images: []provider.Image{{}}}}}
+	req := provider.Request{ConversationID: "image-tools", Selection: selection, Messages: []provider.Message{{Role: "tool", CallID: "read", Files: []provider.BinaryFile{{}}}}}
 	emit := func(provider.StreamEvent) error { t.Fatal("unexpected output"); return nil }
-	if err := a.Stream(context.Background(), req, emit); err == nil || !strings.Contains(err.Error(), "file image requires") {
+	if err := a.Stream(context.Background(), req, emit); err == nil || !strings.Contains(err.Error(), "file-backed binary requires") {
 		t.Fatal("invalid image reached authentication", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -189,9 +189,9 @@ func TestNativeImageToolOutputsPreserveBytesAndCallAssociation(t *testing.T) {
 	if err := gif.Encode(&gifBytes, frame, nil); err != nil {
 		t.Fatal(err)
 	}
-	images := []provider.Image{
-		originalFileImage(t, "wide.png", pngBytes.Bytes()),
-		originalFileImage(t, "static.gif", gifBytes.Bytes()),
+	images := []provider.BinaryFile{
+		originalBinaryFile(t, "wide.png", pngBytes.Bytes()),
+		originalBinaryFile(t, "static.gif", gifBytes.Bytes()),
 	}
 	urls := []string{
 		"data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes.Bytes()),
@@ -224,9 +224,9 @@ func TestNativeImageToolOutputsPreserveBytesAndCallAssociation(t *testing.T) {
 			messages := []provider.Message{
 				{Role: "user", Content: "Read the files."},
 				assistant,
-				{Role: "tool", CallID: "read-other-image", Content: "GIF snapshot", Images: images[1:]},
+				{Role: "tool", CallID: "read-other-image", Content: "GIF snapshot", Files: images[1:]},
 				{Role: "tool", CallID: "read-text", Content: "Original text output"},
-				{Role: "tool", CallID: "read-image", Content: metadata, Images: images},
+				{Role: "tool", CallID: "read-image", Content: metadata, Files: images},
 			}
 			body, err := wire(context.Background(), provider.Request{ConversationID: "image-tools", Selection: selection, Messages: messages})
 			if err != nil {
@@ -270,7 +270,7 @@ func TestToolOutputTextRepresentation(t *testing.T) {
 			selection.Model.Images = hasImage
 			m := provider.Message{Role: "tool", CallID: "call", Content: content}
 			if hasImage {
-				m.Images = []provider.Image{{DataURL: "data:image/png;base64,original"}}
+				m.Files = []provider.BinaryFile{{DataURL: "data:image/png;base64,b3JpZ2luYWw="}}
 			}
 			body, err := wire(context.Background(), provider.Request{ConversationID: "image-tools", Selection: selection, Messages: []provider.Message{m}})
 			if err != nil {
@@ -282,7 +282,7 @@ func TestToolOutputTextRepresentation(t *testing.T) {
 			}
 			var output any = content
 			if hasImage {
-				output = []any{map[string]any{"type": "input_text", "text": content}, map[string]any{"type": "input_image", "image_url": m.Images[0].DataURL}}
+				output = []any{map[string]any{"type": "input_text", "text": content}, map[string]any{"type": "input_image", "image_url": m.Files[0].DataURL}}
 			}
 			if len(request.Input) != 1 || !reflect.DeepEqual(request.Input[0]["output"], output) {
 				t.Fatalf("wrong tool text representation for %q (image=%t): %s", content, hasImage, body)
@@ -297,7 +297,7 @@ func TestImagesRejectedForNonvisionModelsBeforeReplay(t *testing.T) {
 			t.Run(role+"/"+stateModel, func(t *testing.T) {
 				selection := provider.Selection{Provider: "openai", Model: provider.ScriptModel()}
 				selection.Model.Images = false
-				m := provider.Message{Role: role, CallID: "call", Images: []provider.Image{{DataURL: "data:image/png;base64,original"}}}
+				m := provider.Message{Role: role, CallID: "call", Files: []provider.BinaryFile{{DataURL: "data:image/png;base64,b3JpZ2luYWw="}}}
 				if stateModel != "" {
 					m.State = &provider.ReplayState{Provider: "openai", Model: stateModel, Version: replayVersion, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning"}`)}}
 				}
@@ -313,11 +313,11 @@ func TestImagesRejectedForNonvisionModelsBeforeReplay(t *testing.T) {
 func TestReplayStateDoesNotSilentlyDiscardCanonicalImages(t *testing.T) {
 	selection := provider.Selection{Provider: "openai", Model: provider.ScriptModel()}
 	selection.Model.Images = true
-	m := provider.Message{Role: "assistant", Images: []provider.Image{{DataURL: "data:image/png;base64,original"}}}
+	m := provider.Message{Role: "assistant", Files: []provider.BinaryFile{{DataURL: "data:image/png;base64,b3JpZ2luYWw="}}}
 	if err := m.AppendState(selection, replayVersion, json.RawMessage(`{"type":"reasoning"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wire(context.Background(), provider.Request{ConversationID: "image-tools", Selection: selection, Messages: []provider.Message{m}}); err == nil || !strings.Contains(err.Error(), "replay state does not support canonical images") {
+	if _, err := wire(context.Background(), provider.Request{ConversationID: "image-tools", Selection: selection, Messages: []provider.Message{m}}); err == nil || !strings.Contains(err.Error(), "replay state does not support canonical binary files") {
 		t.Fatal("canonical image was lost during replay", err)
 	}
 }

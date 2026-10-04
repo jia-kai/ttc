@@ -10,7 +10,7 @@ import (
 )
 
 func TestIncompatibleSchemaIsRejectedWithoutDeletingData(t *testing.T) {
-	for _, version := range []int{0, 1, 3, 99} {
+	for _, version := range []int{0, 1, 3, 4, 99} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "data")
 			s, err := Open(root)

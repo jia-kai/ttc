@@ -133,7 +133,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 				}}).Message()
 				// One real image snapshot is enough to catch canonical-copy loss.
 				if text == "ordinary two" {
-					message.Images = []provider.Image{{Path: "original.png", DataURL: "data:image/png;base64,b3JpZ2luYWw="}}
+					message.Files = []provider.BinaryFile{{Path: "original.png", DataURL: "data:image/png;base64,b3JpZ2luYWw="}}
 				}
 				var turn string
 				var id int64

@@ -26,14 +26,16 @@ platform. See `docs/design.md` for module and persistence contracts.
 
 After significant coding work, ask separate, independent agents to review
 correctness, implementation efficiency (including algorithm complexity),
-documentation accuracy, and historical burden (obsolete paths, compatibility
-shims, redundant abstractions, and stale comments). Address their findings and
-run relevant checks before declaring the work complete. Documentation review
-must also check that final docs are concise, direct and easy to read. Shorten
-repetition and unnecessary detail without losing useful information, exact
-behavior, setup requirements or material limitations. Review requirements
-coverage too: compare the implementation with user requests and requirement
-documents, and flag missing functionality explicitly. Do not rewrite
+architecture and design (whether the abstractions are reasonable, concerns
+separated, whether there are duplicated functionalities that should be unified,
+etc.), documentation accuracy, and historical burden (obsolete paths,
+compatibility shims, redundant abstractions, and stale comments). Address their
+findings and run relevant checks before declaring the work complete.
+Documentation review must also check that final docs are concise, direct and
+easy to read. Shorten repetition and unnecessary detail without losing useful
+information, exact behavior, setup requirements or material limitations. Review
+requirements coverage too: compare the implementation with user requests and
+requirement documents, and flag missing functionality explicitly. Do not rewrite
 requirements documents to catalog completed features unless requested.
 
 ## Coding guidelines

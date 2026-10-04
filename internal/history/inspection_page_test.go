@@ -72,7 +72,7 @@ func TestInstructionInspectionPagesAndValidation(t *testing.T) {
 func TestInspectionTinyMessageOmitsLargeImageAndReplayEnvelopes(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	for _, message := range []provider.Message{
-		{Role: "user", Images: []provider.Image{{Path: "fixture.png", DataURL: "data:image/png;base64," + strings.Repeat("A", 8<<20)}}},
+		{Role: "user", Files: []provider.BinaryFile{{Path: "fixture.png", DataURL: "data:image/png;base64," + strings.Repeat("A", 8<<20)}}},
 		{Role: "assistant", Content: "Done.", State: &provider.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"opaque":"` + strings.Repeat("x", 8<<20) + `"}`)}}},
 	} {
 		id, err := s.Append(v.ID, turn, "main", "message", message.Role, true, message)
@@ -83,7 +83,7 @@ func TestInspectionTinyMessageOmitsLargeImageAndReplayEnvelopes(t *testing.T) {
 		if err != nil || !page.Supported || !page.LargeEnvelope || len(page.Text) > 100 || page.Total > page.Limit {
 			t.Fatal("short message loaded large canonical data", page, err)
 		}
-		if message.Role == "user" && !strings.Contains(page.Text, "Image snapshot: fixture.png") {
+		if message.Role == "user" && !strings.Contains(page.Text, "Binary snapshot: fixture.png") {
 			t.Fatal("image-only inspection lost snapshot metadata", page.Text)
 		}
 	}

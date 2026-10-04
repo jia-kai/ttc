@@ -131,6 +131,47 @@ func TestRetentionClampsTokenTargetAtCompleteCycleBoundaries(t *testing.T) {
 	}
 }
 
+func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
+	messages := []provider.Message{
+		{Role: "user", Content: "Earlier task"},
+		{Role: "assistant", Content: "Earlier observations"},
+		{Role: "user", Content: "Read a document"},
+		{Role: "assistant", Calls: []provider.ToolCall{{ID: "document"}}},
+		{Role: "tool", CallID: "document", Files: []provider.BinaryFile{{Path: "/document.pdf", MIMEType: "application/pdf", Bytes: 20 << 10}}},
+	}
+	for _, trailing := range [][]provider.Message{nil, {{Role: "user", Content: "Continue"}}, {{Role: "developer", Runtime: true, Content: "Live state"}}} {
+		input := append(append([]provider.Message(nil), messages...), trailing...)
+		retained, err := Retain(input, 0, 100)
+		if err != nil || retained.Start != 3 {
+			t.Fatal("unconsumed attachment was summarized", retained, err)
+		}
+		for _, i := range retained.Inputs {
+			if i >= retained.Start {
+				t.Fatal("protected suffix duplicates retained human input", retained)
+			}
+		}
+	}
+	consumed := append(messages, provider.Message{Role: "assistant", Content: "Document inspected"})
+	retained, err := Retain(consumed, 0, 100)
+	if err != nil || retained.Start <= 3 {
+		t.Fatal("consumed attachment remained pinned", retained, err)
+	}
+	// With nothing older to summarize, fail instead of dropping the unread file.
+	if _, err := Retain(messages[2:], 0, 100); err == nil {
+		t.Fatal("unconsumed attachment discarded to manufacture compaction progress")
+	}
+	// Overlapping calls require retaining the earlier safe boundary, not just
+	// the latest assistant message inside that still-open cycle.
+	overlapping := append(append([]provider.Message(nil), messages[:4]...),
+		provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "extra"}}},
+		messages[4],
+		provider.Message{Role: "tool", CallID: "extra", Content: "Extra result"})
+	retained, err = Retain(overlapping, 0, 100)
+	if err != nil || retained.Start != 3 {
+		t.Fatal("overlapping tool calls lost the unread original or its complete cycle", retained, err)
+	}
+}
+
 func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
 	messages := []provider.Message{
 		{Role: "user", Content: "old normal"},
@@ -254,7 +295,7 @@ func TestInputMarkerRejectsInvalidMetadata(t *testing.T) {
 func TestRetainedInputMessagesPreserveExactOriginals(t *testing.T) {
 	input := Input{Text: "original\n\nuser text", Source: "queue", Attachments: []Attachment{
 		{Path: "notes.txt", Kind: "text", Text: "snapshot\ntext", Truncated: true},
-		{Path: "image.png", Image: &provider.Image{Path: "image.png", DataURL: "data:image/png;base64,original"}},
+		{Path: "image.png", Image: &provider.BinaryFile{Path: "image.png", DataURL: "data:image/png;base64,original"}},
 	}}
 	original := input.Message()
 	original.InputTimeMS = 500
@@ -346,8 +387,8 @@ func TestNativeReplayIsCountedOnce(t *testing.T) {
 
 func TestAttachmentDisplayKeepsAuthoredTextAndExactModelInput(t *testing.T) {
 	for _, text := range []string{"Inspect the attached file.", "", "Attachment (text): this is authored text"} {
-		m := (Input{Text: text, Attachments: []Attachment{{Kind: "text", Path: "notes.txt", Text: "immutable snapshot", Truncated: true}, {Path: "field.png", Image: &provider.Image{Path: "field.png", DataURL: "data:image/png;base64,snapshot"}}}}).Message()
-		if m.DisplayText() != text || !strings.Contains(m.Content, "immutable snapshot") || !strings.Contains(m.Content, "[attachment truncated]") || len(m.Images) != 1 {
+		m := (Input{Text: text, Attachments: []Attachment{{Kind: "text", Path: "notes.txt", Text: "immutable snapshot", Truncated: true}, {Path: "field.png", Image: &provider.BinaryFile{Path: "field.png", DataURL: "data:image/png;base64,snapshot"}}}}).Message()
+		if m.DisplayText() != text || !strings.Contains(m.Content, "immutable snapshot") || !strings.Contains(m.Content, "[attachment truncated]") || len(m.Files) != 1 {
 			t.Fatal("presentation lost authored text or model attachments", m)
 		}
 		encoded, err := json.Marshal(m)

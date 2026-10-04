@@ -30,7 +30,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	image := contextbuild.Attachment{Path: "fixture.png", Kind: "image", Image: &provider.Image{Path: "fixture.png", DataURL: "data:image/png;base64,aW1tdXRhYmxl"}}
+	image := contextbuild.Attachment{Path: "fixture.png", Kind: "image", Image: &provider.BinaryFile{Path: "fixture.png", DataURL: "data:image/png;base64,aW1tdXRhYmxl"}}
 	inputs := []contextbuild.Input{
 		{Text: "First pending steer", Attachments: []contextbuild.Attachment{snapshot, image}},
 		{Text: "Second pending steer", Attachments: []contextbuild.Attachment{snapshot}},

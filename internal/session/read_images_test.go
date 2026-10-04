@@ -55,10 +55,14 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 	calls := []provider.ToolCall{{ID: "image-call", Name: "read", Arguments: json.RawMessage(`{"path":"source.png"}`)}}
 	turn, ids := batchIntents(t, r, "main", calls)
 	records, err := r.runToolBatch(context.Background(), turn, "main", r.Tools, calls, ids, nil)
-	if err != nil || len(records) != 1 || len(records[0].Images) != 1 {
+	if err != nil || len(records) != 1 || len(records[0].Files) != 1 {
 		t.Fatalf("read image failed: %+v, %v", records, err)
 	}
-	want := provider.Image{Path: path, SHA256: checksum}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := provider.BinaryFile{Path: path, SHA256: checksum, MIMEType: "image/png", Bytes: int(info.Size())}
 	check := func(session string) {
 		t.Helper()
 		messages, err := r.Store.Messages(session)
@@ -69,7 +73,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		for _, message := range messages {
 			if message.Role == "tool" && message.CallID == "image-call" {
 				found = true
-				if !reflect.DeepEqual(message.Images, []provider.Image{want}) || strings.Contains(message.Content, "data_url") {
+				if !reflect.DeepEqual(message.Files, []provider.BinaryFile{want}) || strings.Contains(message.Content, "data_url") {
 					t.Fatalf("history lost the image reference: %+v", message)
 				}
 			}
@@ -79,7 +83,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		}
 		withoutImages := append([]provider.Message(nil), messages...)
 		for i := range withoutImages {
-			withoutImages[i].Images = nil
+			withoutImages[i].Files = nil
 		}
 		if delta := contextbuild.Tokens(messages) - contextbuild.Tokens(withoutImages); delta != 4096 {
 			t.Fatal("image context estimate missing", delta)
@@ -142,10 +146,10 @@ func TestImageReadUsesProducingRequestVisionCapability(t *testing.T) {
 				t.Fatal(err)
 			}
 			if vision {
-				if len(records[0].Images) != 1 || !strings.Contains(string(records[0].Result), `"ok":true`) {
+				if len(records[0].Files) != 1 || !strings.Contains(string(records[0].Result), `"ok":true`) {
 					t.Fatalf("vision read used later picker state: %s", records[0].Result)
 				}
-			} else if len(records[0].Images) != 0 || !strings.Contains(string(records[0].Result), "unsupported_image_input") {
+			} else if len(records[0].Files) != 0 || !strings.Contains(string(records[0].Result), "unsupported_binary_input") {
 				t.Fatalf("nonvision read used later picker state: %s", records[0].Result)
 			}
 		})
@@ -180,10 +184,10 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 						t.Fatal(err)
 					}
 					if unavailable {
-						if !bytes.Contains(body, []byte("image unavailable")) || !bytes.Contains(body, []byte(path)) || !bytes.Contains(body, []byte(checksum)) || bytes.Contains(body, []byte("input_image")) {
+						if !bytes.Contains(body, []byte("binary file unavailable")) || !bytes.Contains(body, []byte(path)) || !bytes.Contains(body, []byte(checksum)) || bytes.Contains(body, []byte("input_image")) {
 							t.Fatal("request lost explicit unavailable-image notice", string(body))
 						}
-					} else if !bytes.Contains(body, []byte("input_image")) || bytes.Contains(body, []byte("image unavailable")) {
+					} else if !bytes.Contains(body, []byte("input_image")) || bytes.Contains(body, []byte("binary file unavailable")) {
 						t.Fatal("request lost cached image", string(body))
 					}
 					streamMockResponse(w, "image", step, nil, "Image received.")
@@ -229,12 +233,12 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			}
 			found := false
 			for _, message := range messages {
-				for _, im := range message.Images {
+				for _, im := range message.Files {
 					if im.Path == path && im.SHA256 == checksum && im.DataURL == "" {
 						found = true
 					}
 				}
-				if strings.Contains(message.Content, "image unavailable") {
+				if strings.Contains(message.Content, "binary file unavailable") {
 					t.Fatal("transport notice altered canonical history")
 				}
 			}

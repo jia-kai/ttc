@@ -79,7 +79,7 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := provider.Message{Role: "user", Images: []provider.Image{{Path: path, DataURL: "data:image/png;base64,exact-image-payload"}}}
+	message := provider.Message{Role: "user", Files: []provider.BinaryFile{{Path: path, DataURL: "data:image/png;base64,exact-image-payload"}}}
 	id, err := s.Append(v.ID, turn, "main", "message", "user", true, message)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 		t.Fatal("image absent from compaction Markdown", err)
 	}
 	exact, err := os.ReadFile(archive + ".jsonl")
-	if err != nil || !strings.Contains(string(exact), message.Images[0].DataURL) {
+	if err != nil || !strings.Contains(string(exact), message.Files[0].DataURL) {
 		t.Fatal("exact image absent from sidecar", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
@@ -77,7 +78,8 @@ func Read(path string) ([]byte, image.Image, error) {
 }
 
 // Cache serializes render creation while sharing disk storage and eviction with
-// original image bytes. Durable history snapshots are outside this cache.
+// all original binary files. Identical bytes share content-addressed blobs;
+// render keys identify recipe references. Durable history is outside this cache.
 type Cache struct {
 	*blobcache.Cache
 	gate chan struct{}
@@ -138,13 +140,54 @@ func (c *Cache) Get(ctx context.Context, key string, create func(context.Context
 		return nil, fmt.Errorf("render dimensions are invalid or exceed %d pixels", MaxPixels)
 	}
 	b := limitedBuffer{limit: MaxBytes}
-	if err = png.Encode(&b, m); err != nil {
+	if err = png.Encode(contextWriter{ctx: ctx, writer: &b}, encodingImage(ctx, m)); err != nil {
 		return nil, err
 	}
 	if err = c.Cache.Put(ctx, "render", key, b.buffer.Bytes()); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// Materialized standard images retain PNG's direct-buffer/indexed fast paths.
+// Custom images may perform renderer work in At, so stop those callbacks after
+// cancellation. The writer aborts output at the next write; stdlib compression
+// itself is not interruptible. Wrapping standard images would box each pixel
+// and prevent indexed encoding, adding substantial allocation on cache misses.
+func encodingImage(ctx context.Context, m image.Image) image.Image {
+	switch m.(type) {
+	case *image.NRGBA, *image.NRGBA64, *image.RGBA, *image.RGBA64,
+		*image.Gray, *image.Gray16, *image.Alpha, *image.Alpha16,
+		*image.Paletted, *image.YCbCr, *image.NYCbCrA, *image.CMYK:
+		return m
+	default:
+		return contextImage{Image: m, ctx: ctx}
+	}
+}
+
+// Returning transparent pixels prevents further renderer calls after cancellation.
+type contextImage struct {
+	image.Image
+	ctx context.Context
+}
+
+func (m contextImage) At(x, y int) color.Color {
+	if m.ctx.Err() != nil {
+		return color.NRGBA{}
+	}
+	return m.Image.At(x, y)
+}
+
+type contextWriter struct {
+	ctx    context.Context
+	writer io.Writer
+}
+
+func (w contextWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return w.writer.Write(p)
 }
 
 // Resize fits an image inside pixel bounds, preserving aspect ratio and transparency.

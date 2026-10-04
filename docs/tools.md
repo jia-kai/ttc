@@ -90,6 +90,11 @@ it never replaces or changes model-facing results.
   next_offset:integer|null, truncated:boolean}`. Entries are sorted by name.
   Enumeration is cancellable and capped at 10,000 entries; larger directories
   return `directory_too_large`. Use `glob` with a narrower pattern instead.
+- Native binary formats are announced by the selected provider in runtime
+  `binary_files`: MIME type, extensions, `image`/`document` kind and maximum bytes.
+  Tool execution uses the producing request's frozen catalog, not later picker
+  changes. Binary reads reject supplied `offset`/`limit`; text formats retain
+  ordinary line pagination. No implicit extraction, rendering or conversion.
 - Image result: `{kind:"image", path:string, sha256:string, mime_type:string,
   width:integer, height:integer, bytes:integer, truncated:false}`, accompanied
   by native image input associated with the tool call. Detect PNG/JPEG/non-animated
@@ -98,17 +103,31 @@ it never replaces or changes model-facing results.
   an explicit provider detail setting; backend preprocessing and limits apply.
   Report canvas dimensions, including for GIFs with offset or smaller frames;
   reject animated or incomplete GIF containers without flattening them.
-  Images require a vision-capable model and reject supplied `offset`/`limit`.
-  History and tool records store only the absolute local path, SHA-256 checksum
-  and metadata, never image payloads. Successful reads cache the original bytes
-  in the shared filesystem blob cache (4 GiB hard cap, 30-day idle retention).
-  Uploads use cached originals; a miss verifies the saved source and repopulates
-  the cache. If verification fails, only the unavailable attachment becomes an
-  explicit outgoing text notice containing its path, expected checksum and reason;
-  history and tool association remain unchanged. Changed bytes are never substituted.
-  Invalid references, cancellation and cache errors still fail. Retained references
-  survive loading and compaction. No graphics terminal is needed.
-- Other binary files return `unsupported_content`; missing paths return `not_found`.
+  Images require a vision-capable model.
+- Document result: `{kind:"document", path:string, sha256:string, mime_type:string,
+  bytes:integer, truncated:false}`, accompanied by native file input associated
+  with the tool call. Recognized document extensions select an announced MIME
+  type; PDF/RTF content signatures also identify extensionless files. Basic
+  header/container checks reject mislabeled or incomplete files; backend semantic
+  parsing still applies. Limit original files to 32 MiB or a lower announced limit.
+  ZIP-based documents allow at most 4096 entries and 2 MiB of central-directory
+  metadata; ZIP64 and multi-disk archives are rejected.
+- All successful binary reads cache exact original bytes in the shared
+  SHA-256-addressed filesystem cache, deduplicated across paths and formats.
+  Original and rendered blobs share a 4 GiB file-content cap, including recipe
+  references/staging but excluding filesystem overhead, with 32 MiB per blob.
+  Cache operations enforce 30-day idle retention and least-recently-used eviction;
+  no pruning daemon or active-blob pinning. Durable human image snapshots are
+  lineage assets outside this cache. History stores only absolute
+  source paths, checksums and metadata. Requests use cached originals; a miss
+  verifies the saved source and repopulates the cache. Unavailable originals
+  become explicit outgoing text notices with path, checksum and reason, without
+  changing history or tool association. Invalid references, cancellation and cache
+  errors fail; changed contents are never substituted. References survive history
+  loading and retained compaction, but summarized attachments are represented by
+  metadata/prior observations rather than their bytes. No graphics terminal is needed.
+- Unannounced recognized binary formats return `unsupported_binary_input`;
+  invalid content returns `unsupported_content`; missing paths return `not_found`.
   Reads follow symlinks and use one descriptor for validation and pagination;
   special files, including FIFOs, are rejected without blocking.
 

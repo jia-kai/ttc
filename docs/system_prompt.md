@@ -29,6 +29,7 @@
 | `date_utc`                       | Current UTC date                                           |
 | `model`                          | Frozen provider/model/variant for this request             |
 | `image_input`, `image_click`     | Model/frontend image capabilities                          |
+| `binary_files`                   | Native read formats: MIME, extensions, kind and byte limit |
 | `live_jobs`                      | Accessible running metadata, without captured output       |
 | `live_timers`                    | Scheduled timers, without reminder bodies                  |
 | `children`                       | Accessible running or idle children                        |

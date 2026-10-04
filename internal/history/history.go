@@ -32,7 +32,7 @@ import (
 //go:embed schema.sql
 var schema string
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // Store serializes commits; callers must close it after stopping runtime workers.
 type Store struct {
@@ -488,8 +488,8 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 		}
 		if v.Kind == "tool_result" {
 			var ref struct {
-				CallID string           `json:"call_id"`
-				Images []provider.Image `json:"images,omitempty"`
+				CallID string                `json:"call_id"`
+				Files  []provider.BinaryFile `json:"files,omitempty"`
 			}
 			if e = json.Unmarshal(v.Content, &ref); e != nil {
 				return nil, e
@@ -498,7 +498,7 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 			if e = q.QueryRow("SELECT result_json,provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&result, &pcid); e != nil {
 				return nil, e
 			}
-			out = append(out, provider.Message{Role: "tool", CallID: pcid, Content: result, Images: ref.Images})
+			out = append(out, provider.Message{Role: "tool", CallID: pcid, Content: result, Files: ref.Files})
 		} else {
 			var m provider.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
@@ -613,9 +613,9 @@ func (s *Store) CallIntent(session, turn, actor string, request int64, c provide
 	return id, e
 }
 
-// CallResult commits immutable JSON metadata, native image references and portable
-// presentation. File-backed images retain only their path/checksum for verified replay.
-func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, images []provider.Image, record any, md render.Markdown, visible bool) (int64, error) {
+// CallResult commits immutable JSON metadata, native binary references and portable
+// presentation. Original bytes remain in a disposable cache, not in history.
+func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, files []provider.BinaryFile, record any, md render.Markdown, visible bool) (int64, error) {
 	b, e := json.Marshal(record)
 	if e != nil {
 		return 0, e
@@ -631,9 +631,9 @@ func (s *Store) CallResult(session, turn, actor, call string, result json.RawMes
 			return e
 		}
 		ref, err := json.Marshal(struct {
-			CallID string           `json:"call_id"`
-			Images []provider.Image `json:"images,omitempty"`
-		}{call, images})
+			CallID string                `json:"call_id"`
+			Files  []provider.BinaryFile `json:"files,omitempty"`
+		}{call, files})
 		if err != nil {
 			return err
 		}

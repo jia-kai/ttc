@@ -102,11 +102,11 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 			message.Content = render.Fence(message.Content, "json")
 		}
 		text := render.Clean(message.Content)
-		for _, snapshot := range message.Images {
+		for _, snapshot := range message.Files {
 			path := strings.ReplaceAll(render.Clean(snapshot.Path), ">", "\\>")
-			link := "Image: [snapshot](<" + path + ">)"
+			link := "Binary file: [snapshot](<" + path + ">)"
 			// Dimensions are optional presentation metadata; the durable path and
-			// exact image payload remain available even if decoding is unavailable.
+			// exact reference remain available even if image decoding is unavailable.
 			if f, err := os.OpenFile(snapshot.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
 				if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
 					if config, _, err := image.DecodeConfig(io.LimitReader(f, 1<<20)); err == nil {

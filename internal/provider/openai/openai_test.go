@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,6 +106,11 @@ func TestCatalogPriorityVisibilityAndVariants(t *testing.T) {
 	}
 	if len(models) != 2 || models[0].ID != "first" || models[1].ID != "later" {
 		t.Fatalf("picker must preserve provider priority and exclude hidden models: %+v", models)
+	}
+	for _, model := range models {
+		if !reflect.DeepEqual(model.BinaryFiles, documentFileTypes()) {
+			t.Fatalf("model did not announce native document formats: %+v", model.BinaryFiles)
+		}
 	}
 	sel, err := provider.Resolve("openai", models, "first", "")
 	if err != nil || sel.Variant != "high" || sel.Model.VariantDescriptions["high"] != "Deeper reasoning" {

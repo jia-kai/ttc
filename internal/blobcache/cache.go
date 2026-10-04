@@ -1,9 +1,11 @@
-// Package blobcache stores disposable encoded image bytes in a shared filesystem
-// cache. Originals and renders share one idle TTL and least-recently-used budget.
+// Package blobcache stores disposable binary bytes in a shared filesystem
+// content-addressable cache. Recipe references and blobs share one idle TTL and
+// least-recently-used budget; durable history is outside this cache.
 package blobcache
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -19,19 +21,21 @@ import (
 	"ttc/internal/filelock"
 )
 
-// MaxBytes bounds each encoded blob, including reads of externally changed files.
+// MaxBytes bounds each binary blob, including reads of externally changed files.
 const MaxBytes = 32 << 20
 
-// ErrMiss identifies an absent or expired blob, not a cache-storage failure.
+// ErrMiss identifies an absent or expired entry, not a cache-storage failure.
 var ErrMiss = errors.New("blob cache miss")
 
 // Cache coordinates operations with short-lived cancelable filesystem locks.
 // Entries are never pinned. Configure Limit and TTL before concurrent use.
 type Cache struct {
-	Root      string        // Absolute directory containing private blob files and .lock.
-	Limit     int64         // Total blob/staging bytes; defaults to 4 GiB. Lock metadata is excluded.
-	TTL       time.Duration // Idle retention; defaults to 30 days.
-	lastPrune atomic.Int64
+	Root       string        // Absolute directory containing private blobs, recipe references and .lock.
+	Limit      int64         // Total file-content bytes, including references/staging; defaults to 4 GiB. The empty lock file and filesystem allocation overhead are excluded.
+	TTL        time.Duration // Idle retention of blobs and individual recipe references; defaults to 30 days.
+	lastPrune  atomic.Int64
+	pruneLimit atomic.Int64 // Policy used by the last successful scan.
+	pruneTTL   atomic.Int64
 }
 
 var defaults struct {
@@ -55,8 +59,6 @@ func Default() (*Cache, error) {
 		return c, nil
 	}
 	defaults.Unlock()
-	// Initialization performs no flock wait, and filesystem operations never
-	// hold the defaults mutex. Get/Put/Prune acquire the cancelable lock.
 	c, err := New(root)
 	if err != nil {
 		return nil, err
@@ -101,15 +103,19 @@ func New(root string) (*Cache, error) {
 	return &Cache{Root: root, Limit: 4 << 30, TTL: 30 * 24 * time.Hour}, nil
 }
 
-func blobName(kind, key string) (string, error) {
+func validKey(key string) bool { return len(key) == 64 && strings.Trim(key, "0123456789abcdef") == "" }
+func validate(kind, key string) error {
 	if kind != "original" && kind != "render" {
-		return "", fmt.Errorf("invalid blob kind %q", kind)
+		return fmt.Errorf("invalid blob kind %q", kind)
 	}
-	if len(key) != 64 || strings.Trim(key, "0123456789abcdef") != "" {
-		return "", fmt.Errorf("invalid blob key")
+	if !validKey(key) {
+		return fmt.Errorf("invalid blob key")
 	}
-	return kind + "-" + key + ".blob", nil
+	return nil
 }
+func digest(data []byte) string  { return fmt.Sprintf("%x", sha256.Sum256(data)) }
+func blobName(key string) string { return "blob-" + key + ".blob" }
+func refName(key string) string  { return "render-" + key + ".ref" }
 
 func regular(st os.FileInfo) error {
 	if !st.Mode().IsRegular() {
@@ -150,12 +156,67 @@ func (c *Cache) lock(ctx context.Context) (func(), error) {
 	return func() { _ = f.Close() }, nil
 }
 
-// Get returns bounded bytes and touches idle/LRU time. An absent or expired
-// entry returns an error matching ErrMiss; storage/unsafe/oversized files fail.
+func (c *Cache) open(name string) (*os.File, os.FileInfo, error) {
+	f, err := os.OpenFile(filepath.Join(c.Root, name), os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := f.Stat()
+	if err == nil {
+		err = regular(st)
+	}
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return f, st, nil
+}
+
+// load validates bytes against their content address, or validates a reference's
+// exact 64-byte digest. It never classifies corrupt contents as a cache miss.
+func (c *Cache) load(ctx context.Context, name, expected string) ([]byte, os.FileInfo, error) {
+	f, st, err := c.open(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	limit := int64(MaxBytes)
+	if expected == "" {
+		limit = 64
+	}
+	if st.Size() > limit {
+		return nil, nil, fmt.Errorf("%s exceeds %d bytes", name, limit)
+	}
+	b, err := readBounded(ctx, f, st.Size(), int(limit))
+	if err != nil {
+		return nil, nil, err
+	}
+	if expected == "" {
+		if !validKey(string(b)) {
+			return nil, nil, fmt.Errorf("corrupt cache reference %s", name)
+		}
+	} else if digest(b) != expected {
+		return nil, nil, fmt.Errorf("cache content checksum mismatch: %s", name)
+	}
+	return b, st, nil
+}
+
+func (c *Cache) touch(name string) error {
+	f, _, err := c.open(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	now := syscall.NsecToTimeval(time.Now().UnixNano())
+	return syscall.Futimes(int(f.Fd()), []syscall.Timeval{now, now})
+}
+
+// Get returns checksum-verified bytes and touches idle/LRU time. Original keys
+// are SHA256(bytes); render keys address recipe references. An absent or expired
+// entry matches ErrMiss; corrupt, unsafe and oversized files fail loudly.
 // Reads opportunistically prune the whole cache at most once per minute.
 func (c *Cache) Get(ctx context.Context, kind, key string) ([]byte, error) {
-	name, err := blobName(kind, key)
-	if err != nil {
+	if err := validate(kind, key); err != nil {
 		return nil, err
 	}
 	unlock, err := c.lock(ctx)
@@ -163,58 +224,71 @@ func (c *Cache) Get(ctx context.Context, kind, key string) ([]byte, error) {
 		return nil, err
 	}
 	defer unlock()
-	path := filepath.Join(c.Root, name)
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if pruneErr := c.maybePrune(ctx); pruneErr != nil {
-				return nil, pruneErr
-			}
-			return nil, fmt.Errorf("%w: %s", ErrMiss, path)
+	miss := func() ([]byte, error) {
+		if err := c.maybePrune(ctx); err != nil {
+			return nil, err
 		}
-		return nil, err
+		return nil, fmt.Errorf("%w: %s %s", ErrMiss, kind, key)
 	}
-	defer f.Close()
-	st, err := f.Stat()
+	ref := ""
+	if kind == "render" {
+		ref = refName(key)
+		b, st, err := c.load(ctx, ref, "")
+		if os.IsNotExist(err) {
+			return miss()
+		}
+		if err != nil {
+			return nil, err
+		}
+		if time.Since(st.ModTime()) > c.TTL {
+			if err := os.Remove(filepath.Join(c.Root, ref)); err != nil {
+				return nil, err
+			}
+			return miss()
+		}
+		key = string(b)
+	}
+	name := blobName(key)
+	b, st, err := c.load(ctx, name, key)
+	if os.IsNotExist(err) {
+		if ref != "" {
+			// A dangling reference is an ordinary eviction miss, but it and
+			// its peers must not occupy the metadata budget indefinitely.
+			if err := c.prune(ctx, c.Limit, "", ""); err != nil {
+				return nil, err
+			}
+		}
+		return miss()
+	}
 	if err != nil {
 		return nil, err
-	}
-	if err = regular(st); err != nil {
-		return nil, err
-	}
-	if st.Size() > MaxBytes {
-		return nil, fmt.Errorf("blob exceeds %d bytes", MaxBytes)
 	}
 	if time.Since(st.ModTime()) > c.TTL {
-		if err = os.Remove(path); err != nil {
+		// Remove all references to the expired blob, even after a recent prune.
+		if err := c.prune(ctx, c.Limit, "", ""); err != nil {
 			return nil, err
 		}
-		if err = c.maybePrune(ctx); err != nil {
+		return nil, fmt.Errorf("%w: expired %s", ErrMiss, name)
+	}
+	if err := c.touch(name); err != nil {
+		return nil, err
+	}
+	if ref != "" {
+		if err := c.touch(ref); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: expired %s", ErrMiss, path)
 	}
-	b, err := readBounded(ctx, f, st.Size())
-	if err != nil {
-		return nil, err
-	}
-	now := syscall.NsecToTimeval(time.Now().UnixNano())
-	if err = syscall.Futimes(int(f.Fd()), []syscall.Timeval{now, now}); err != nil {
-		return nil, err
-	}
-	if err = c.maybePrune(ctx); err != nil {
+	if err := c.maybePrune(ctx); err != nil {
 		return nil, err
 	}
 	return b, nil
 }
 
-func readBounded(ctx context.Context, f *os.File, size int64) ([]byte, error) {
+func readBounded(ctx context.Context, f *os.File, size int64, limit int) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Preallocate from the validated descriptor's size rather than repeatedly
-	// copying large uploads. Small formula blobs need no 64 KiB read buffer.
-	capacity := int(min(max(size, 0), MaxBytes))
+	capacity := int(min(max(size, 0), int64(limit)))
 	b := make([]byte, 0, capacity)
 	buf := make([]byte, min(max(capacity+1, 4<<10), 64<<10))
 	for {
@@ -222,8 +296,8 @@ func readBounded(ctx context.Context, f *os.File, size int64) ([]byte, error) {
 			return nil, err
 		}
 		n, err := f.Read(buf)
-		if len(b)+n > MaxBytes {
-			return nil, fmt.Errorf("blob exceeds %d bytes", MaxBytes)
+		if len(b)+n > limit {
+			return nil, fmt.Errorf("blob exceeds %d bytes", limit)
 		}
 		b = append(b, buf[:n]...)
 		if err == io.EOF {
@@ -235,36 +309,99 @@ func readBounded(ctx context.Context, f *os.File, size int64) ([]byte, error) {
 	}
 }
 
-// Put atomically publishes bytes after removing any old replacement and
-// TTL/LRU eviction makes room for staging. Cancellation may leave a replacement
-// absent, but never exposes partial bytes. A blob larger than Limit evicts
-// itself, returning success without persisting it.
-// The 32 MiB per-blob bound remains an error, independent of the total budget.
+// Put publishes one SHA256-addressed blob and, for renders, a 64-byte recipe
+// reference. Original keys must equal SHA256(data). Existing identical blobs
+// are verified and touched, never rewritten or staged, across both namespaces.
+// Eviction reserves room for metadata and staging before writing. Cancellation
+// can leave an old recipe absent or an unreferenced complete blob, never partial
+// published bytes. An entry larger than Limit is not retained (success).
 func (c *Cache) Put(ctx context.Context, kind, key string, data []byte) error {
-	name, err := blobName(kind, key)
-	if err != nil {
+	if err := validate(kind, key); err != nil {
 		return err
 	}
 	if len(data) > MaxBytes {
 		return fmt.Errorf("blob exceeds %d bytes", MaxBytes)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sha := digest(data)
+	if kind == "original" && key != sha {
+		return fmt.Errorf("original key does not match content SHA256")
 	}
 	unlock, err := c.lock(ctx)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	budget := c.Limit - int64(len(data))
-	if budget < 0 {
-		budget = 0
-	}
-	if err = c.prune(ctx, budget, name); err != nil {
+	name := blobName(sha)
+	_, _, err = c.load(ctx, name, sha)
+	exists := err == nil
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	path := filepath.Join(c.Root, name)
-	if int64(len(data)) > c.Limit {
-		return ctx.Err()
+	if exists {
+		if err := c.touch(name); err != nil {
+			return err
+		}
 	}
-	f, err := os.CreateTemp(c.Root, ".blob-*")
+	ref, sameRef := "", false
+	if kind == "render" {
+		ref = refName(key)
+		b, _, err := c.load(ctx, ref, "")
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil {
+			sameRef = string(b) == sha && exists
+			if sameRef {
+				if err := c.touch(ref); err != nil {
+					return err
+				}
+			} else if err := os.Remove(filepath.Join(c.Root, ref)); err != nil {
+				return err
+			}
+		}
+	}
+	required := int64(len(data))
+	if ref != "" {
+		required += 64
+	}
+	if required > c.Limit {
+		return c.prune(ctx, c.Limit, "", "")
+	}
+	var reserve int64
+	if !exists {
+		reserve += int64(len(data))
+	}
+	if ref != "" && !sameRef {
+		reserve += 64
+	}
+	if exists && (ref == "" || sameRef) {
+		// Verified duplicates only refresh idle time. Growing writes below
+		// still scan and reserve their full staging/metadata footprint.
+		return c.maybePrune(ctx)
+	}
+	protectedRef := ""
+	if sameRef {
+		protectedRef = ref
+	}
+	if err := c.prune(ctx, c.Limit-reserve, sha, protectedRef); err != nil {
+		return err
+	}
+	if !exists {
+		if err := c.publish(ctx, name, data); err != nil {
+			return err
+		}
+	}
+	if ref != "" && !sameRef {
+		return c.publish(ctx, ref, []byte(sha))
+	}
+	return ctx.Err()
+}
+
+func (c *Cache) publish(ctx context.Context, name string, data []byte) error {
+	f, err := os.CreateTemp(c.Root, ".stage-*")
 	if err != nil {
 		return err
 	}
@@ -277,124 +414,177 @@ func (c *Cache) Put(ctx context.Context, kind, key string, data []byte) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		n, writeErr := f.Write(remaining[:min(len(remaining), 64<<10)])
-		if writeErr != nil {
-			return writeErr
+		n, err := f.Write(remaining[:min(len(remaining), 64<<10)])
+		if err != nil {
+			return err
 		}
 		if n == 0 {
 			return io.ErrShortWrite
 		}
 		remaining = remaining[n:]
 	}
-	if err = f.Close(); err != nil {
+	if err := f.Close(); err != nil {
 		return err
 	}
-	if err = ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return os.Rename(f.Name(), filepath.Join(c.Root, name))
 }
 
-// Prune enforces the combined total budget and idle TTL under a cancelable lock.
+// Prune enforces the shared budget and idle TTL under a cancelable lock. Stale
+// references, interrupted staging and obsolete cache files are discarded; no
+// migration is attempted. Unsafe files are errors, not silently removed.
 func (c *Cache) Prune(ctx context.Context) error {
 	unlock, err := c.lock(ctx)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	return c.prune(ctx, c.Limit, "")
+	return c.prune(ctx, c.Limit, "", "")
 }
-
 func (c *Cache) maybePrune(ctx context.Context) error {
-	if time.Since(time.Unix(0, c.lastPrune.Load())) < time.Minute {
+	if c.pruneLimit.Load() == c.Limit && c.pruneTTL.Load() == int64(c.TTL) && time.Since(time.Unix(0, c.lastPrune.Load())) < time.Minute {
 		return ctx.Err()
 	}
-	return c.prune(ctx, c.Limit, "")
+	return c.prune(ctx, c.Limit, "", "")
 }
 
-func (c *Cache) prune(ctx context.Context, budget int64, replacing string) error {
+func (c *Cache) prune(ctx context.Context, budget int64, protected, protectedRef string) error {
 	entries, err := os.ReadDir(c.Root)
 	if err != nil {
 		return err
 	}
 	type entry struct {
-		path string
-		size int64
-		at   time.Time
+		name, sha string
+		size      int64
+		at        time.Time
+		ref       bool
 	}
-	var files []entry
+	files := make(map[string]entry)
+	refs := make(map[string][]string)
 	var total int64
 	now := time.Now()
+	remove := func(name string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(c.Root, name)); err != nil {
+			return err
+		}
+		if f, ok := files[name]; ok {
+			total -= f.size
+			delete(files, name)
+		}
+		return nil
+	}
 	for _, e := range entries {
-		if err = ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		name := e.Name()
-		if strings.HasPrefix(name, ".blob-") {
-			// All writers stage under this same lock, so any staging file seen
-			// here belongs to an interrupted writer and can be discarded.
-			st, err := e.Info()
-			if err != nil {
-				return err
-			}
-			if err := regular(st); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			if err := os.Remove(filepath.Join(c.Root, name)); err != nil {
-				return err
-			}
-			continue
-		}
-		kind, rest, ok := strings.Cut(name, "-")
-		if !ok || !strings.HasSuffix(rest, ".blob") {
-			continue
-		}
-		if _, err := blobName(kind, strings.TrimSuffix(rest, ".blob")); err != nil {
-			continue
-		}
 		st, err := e.Info()
 		if err != nil {
 			return err
 		}
-		if err = regular(st); err != nil {
+		if err := regular(st); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
-		if st.Size() > MaxBytes {
-			return fmt.Errorf("%s: blob exceeds %d bytes", name, MaxBytes)
+		if name == ".lock" {
+			if st.Size() != 0 {
+				return fmt.Errorf("cache lock must be empty")
+			}
+			continue
 		}
-		if name == replacing {
-			// Free the old disposable blob before staging its replacement;
-			// excluding it from accounting while it exists exceeds the cap.
-			if err := os.Remove(filepath.Join(c.Root, name)); err != nil {
+		f := entry{name: name, size: st.Size(), at: st.ModTime()}
+		if strings.HasPrefix(name, "blob-") && strings.HasSuffix(name, ".blob") && validKey(strings.TrimSuffix(strings.TrimPrefix(name, "blob-"), ".blob")) {
+			f.sha = strings.TrimSuffix(strings.TrimPrefix(name, "blob-"), ".blob")
+			if st.Size() > MaxBytes {
+				return fmt.Errorf("%s: blob exceeds %d bytes", name, MaxBytes)
+			}
+		} else if strings.HasPrefix(name, "render-") && strings.HasSuffix(name, ".ref") && validKey(strings.TrimSuffix(strings.TrimPrefix(name, "render-"), ".ref")) {
+			b, _, err := c.load(ctx, name, "")
+			if err != nil {
+				return err
+			}
+			f.sha, f.ref = string(b), true
+			refs[f.sha] = append(refs[f.sha], name)
+		} else {
+			// The directory is exclusively cache-owned. This also removes old
+			// original-/render-*.blob files and interrupted staging, not copies.
+			if err := remove(name); err != nil {
 				return err
 			}
 			continue
 		}
-		files = append(files, entry{filepath.Join(c.Root, name), st.Size(), st.ModTime()})
-		total += st.Size()
+		files[name] = f
+		total += f.size
 	}
-	// Idle expiry does not need ordering. Only sort when space eviction must
-	// choose the least-recently-used entries.
-	if total > budget {
-		sort.Slice(files, func(i, j int) bool {
-			if files[i].at.Equal(files[j].at) {
-				return files[i].path < files[j].path
+	removeBlob := func(f entry) error {
+		// References disappear first, so cancellation cannot leave dangling
+		// references to a blob removed by this operation.
+		for _, name := range refs[f.sha] {
+			if _, ok := files[name]; ok {
+				if err := remove(name); err != nil {
+					return err
+				}
 			}
-			return files[i].at.Before(files[j].at)
-		})
+		}
+		return remove(f.name)
 	}
 	for _, f := range files {
-		if err = ctx.Err(); err != nil {
-			return err
+		if f.ref {
+			_, hasBlob := files[blobName(f.sha)]
+			if f.name != protectedRef && (!hasBlob || now.Sub(f.at) > c.TTL) {
+				if err := remove(f.name); err != nil {
+					return err
+				}
+			}
+		} else if f.sha != protected && now.Sub(f.at) > c.TTL {
+			if err := removeBlob(f); err != nil {
+				return err
+			}
 		}
-		if total <= budget && now.Sub(f.at) <= c.TTL {
-			continue
-		}
-		if err = os.Remove(f.path); err != nil {
-			return err
-		}
-		total -= f.size
 	}
+	if total > budget {
+		ordered := make([]entry, 0, len(files))
+		for _, f := range files {
+			ordered = append(ordered, f)
+		}
+		sort.Slice(ordered, func(i, j int) bool {
+			if ordered[i].at.Equal(ordered[j].at) {
+				return ordered[i].name < ordered[j].name
+			}
+			return ordered[i].at.Before(ordered[j].at)
+		})
+		for _, f := range ordered {
+			if total <= budget {
+				break
+			}
+			if _, ok := files[f.name]; !ok {
+				continue
+			}
+			if !f.ref && f.sha == protected {
+				continue
+			}
+			if f.name == protectedRef {
+				continue
+			}
+			if f.ref {
+				err = remove(f.name)
+			} else {
+				err = removeBlob(f)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if total > budget {
+		return fmt.Errorf("cache cannot reserve space within total limit")
+	}
+	c.pruneLimit.Store(c.Limit)
+	c.pruneTTL.Store(int64(c.TTL))
 	c.lastPrune.Store(now.UnixNano())
-	return nil
+	return ctx.Err()
 }

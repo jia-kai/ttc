@@ -59,21 +59,24 @@
 - Budget from `context_window`, using `max_context_window` only if absent; apply
   `effective_context_window_percent`, not the larger maximum automatically. The
   sidebar shows the latest parent request's resolved budget.
+- Estimate each document as `max(4096, original_bytes)` tokens and each image as
+  4096 tokens, not base64 transport size. These are heuristics, not expansion
+  bounds: compressed text, PDF page images and provider augmentation can cost more.
 
 ### Budget metadata
 
 Providers supply these fields; never invent model limits.
 
-| Token field                | Meaning                                      |
-| -------------------------- | -------------------------------------------- |
-| `context_limit`            | Effective input-plus-output capacity         |
-| `max_output_tokens`        | Endpoint ceiling, or zero when unpublished   |
-| `output_allowance`         | Coding output reserve; cap where supported   |
-| `estimation_margin`        | Estimation/wire-overhead reserve             |
-| `recent_tokens_min`        | Soft minimum for recent model/tool cycles    |
-| `recent_tokens_max`        | Hard maximum for recent model/tool cycles    |
-| `next_turn_input_reserve`  | Free capacity for new input after compaction |
-| `summary_output_allowance` | Summary reserve; cap where supported         |
+| Token field                | Meaning                                       |
+| -------------------------- | --------------------------------------------- |
+| `context_limit`            | Effective input-plus-output capacity          |
+| `max_output_tokens`        | Endpoint ceiling, or zero when unpublished    |
+| `output_allowance`         | Coding output reserve; cap where supported    |
+| `estimation_margin`        | Estimation/wire-overhead reserve              |
+| `recent_tokens_min`        | Soft minimum for recent model/tool cycles     |
+| `recent_tokens_max`        | Tail target cap; unread binary cycle excepted |
+| `next_turn_input_reserve`  | Free capacity for new input after compaction  |
+| `summary_output_allowance` | Summary reserve; cap where supported          |
 
 Reject unknown variants/options, nonpositive limits/allowances, negative
 reserves/ceilings and budgets unable to fit fixed instructions plus required

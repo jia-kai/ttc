@@ -18,7 +18,6 @@ import (
 	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	"ttc/internal/assets"
 	"ttc/internal/blobcache"
 	"ttc/internal/provider"
 	"ttc/internal/workspace"
@@ -85,35 +84,36 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		return rangeInt("limit", a.Limit, 1, 2000)
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
 		path := w.Path(a.Path)
-		page, err := readPage(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200))
+		page, err := readPage(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200), x.BinaryFiles)
 		if err != nil {
 			return nil, err
 		}
-		im, ok := page.(imageRead)
+		binary, ok := page.(binaryRead)
 		if !ok {
 			return page, nil
 		}
 		if a.Offset != nil || a.Limit != nil {
-			return nil, Fail("invalid_input", "image reads do not support offset or limit; omit pagination arguments")
-		}
-		if !x.ImageInput {
-			return nil, Fail("unsupported_image_input", "selected model does not support image input; select a vision-capable model")
+			return nil, Fail("invalid_input", "binary reads do not support offset or limit; omit pagination arguments")
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		hash := sha256.Sum256(im.data)
+		hash := sha256.Sum256(binary.data)
 		checksum := hex.EncodeToString(hash[:])
 		cache, err := blobcache.Default()
 		if err != nil {
-			return nil, fmt.Errorf("open image cache: %w", err)
+			return nil, fmt.Errorf("open binary cache: %w", err)
 		}
-		if err := cache.Put(ctx, "original", checksum, im.data); err != nil {
-			return nil, fmt.Errorf("cache image: %w", err)
+		if err := cache.Put(ctx, "original", checksum, binary.data); err != nil {
+			return nil, fmt.Errorf("cache binary file: %w", err)
+		}
+		metadata := map[string]any{"kind": binary.kind, "path": path, "sha256": checksum, "mime_type": binary.mime, "bytes": len(binary.data), "truncated": false}
+		if binary.kind == "image" {
+			metadata["width"], metadata["height"] = binary.width, binary.height
 		}
 		return Output{
-			Value:  map[string]any{"kind": "image", "path": path, "sha256": checksum, "mime_type": im.mime, "width": im.width, "height": im.height, "bytes": len(im.data), "truncated": false},
-			Images: []provider.Image{{Path: path, SHA256: checksum}},
+			Value: metadata,
+			Files: []provider.BinaryFile{{Path: path, SHA256: checksum, MIMEType: binary.mime, Bytes: len(binary.data)}},
 		}, nil
 	})
 	Register(r, "write", prompts.ToolDescription("write"), map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
@@ -170,7 +170,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 	addSearch(r, w)
 	addPatch(r, w)
 }
-func readPage(ctx context.Context, path string, offset, limit int) (any, error) {
+func readPage(ctx context.Context, path string, offset, limit int, types []provider.BinaryFileType) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func readPage(ctx context.Context, path string, offset, limit int) (any, error) 
 	defer f.Close()
 	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
 	defer stop()
-	page, err := readOpenedPage(ctx, f, path, offset, limit)
+	page, err := readOpenedPage(ctx, f, path, offset, limit, types)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -191,7 +191,7 @@ func readPage(ctx context.Context, path string, offset, limit int) (any, error) 
 }
 
 // readOpenedPage consumes the caller-owned descriptor, never reopening path.
-func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit int) (any, error) {
+func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit int, types []provider.BinaryFileType) (any, error) {
 	st, e := f.Stat()
 	if e != nil {
 		return nil, e
@@ -237,23 +237,8 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	mime := imageMIME(header)
-	if mime != "" {
-		if st.Size() > assets.MaxBytes {
-			return nil, Fail("image_too_large", "image exceeds 32 MiB; provide a smaller image")
-		}
-		data, err := io.ReadAll(io.LimitReader(reader, assets.MaxBytes+1))
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if err != nil {
-			return nil, err
-		}
-		config, err := validateReadImage(data)
-		if err != nil {
-			return nil, Fail("unsupported_content", err.Error())
-		}
-		return imageRead{data: data, mime: mime, width: config.Width, height: config.Height}, nil
+	if kind, mime, extension := binaryKind(path, header, types); kind != "" {
+		return readBinary(ctx, reader, st.Size(), kind, mime, extension, types)
 	}
 	var content strings.Builder
 	line := 1
@@ -291,7 +276,7 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 			}
 		}
 		if err := validText(part); err != nil {
-			return nil, err
+			return nil, Fail("unsupported_content", "expected UTF-8 text without NUL; no supported binary format was recognized; provide an announced original format or use shell for explicit inspection/conversion")
 		}
 		if line >= offset {
 			content.WriteString(part)
@@ -305,9 +290,10 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 	return map[string]any{"kind": "file", "path": path, "content": content.String(), "start_line": offset, "next_offset": next, "truncated": next != nil}, nil
 }
 
-type imageRead struct {
+type binaryRead struct {
 	data          []byte
 	mime          string
+	kind          string
 	width, height int
 }
 

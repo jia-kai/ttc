@@ -89,8 +89,8 @@ func summaryTranscript(messages []provider.Message) string {
 		for _, call := range message.Calls {
 			fmt.Fprintf(&out, "Tool call %s · %s\n%s\n", call.ID, call.Name, call.Arguments)
 		}
-		for _, image := range message.Images {
-			fmt.Fprintf(&out, "Image attachment: %s\n", image.Path)
+		for _, file := range message.Files {
+			fmt.Fprintf(&out, "Binary attachment (%s): %s\n", file.MIMEType, file.Path)
 		}
 	}
 	return out.String()
@@ -106,7 +106,7 @@ func compactionFits(selection provider.Selection, system string, tools []provide
 		messages = append(messages, *runtime)
 	}
 	if !contextbuild.Fits(selection, system, tools, messages, true) {
-		return errors.New("compaction summary, retained history and pending input/events exceed context headroom")
+		return errors.New("compaction summary, retained history (including unread binary results) and pending input/events exceed context headroom; use smaller files or narrower input")
 	}
 	return nil
 }
@@ -318,8 +318,8 @@ func childTranscript(messages []provider.Message) string {
 				out.WriteString(render.Tool(call.Name, call.Arguments, nil).Detail + "\n\n")
 			}
 		}
-		for _, image := range message.Images {
-			fmt.Fprintf(&out, "Image: %s\n\n", render.Inline(image.Path))
+		for _, file := range message.Files {
+			fmt.Fprintf(&out, "Binary file: %s\n\n", render.Inline(file.Path))
 		}
 	}
 	return out.String()

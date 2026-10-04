@@ -93,7 +93,7 @@ func TestPendingInputDrawPreservesOriginalsAndGraphemes(t *testing.T) {
 	original := "e\u0301界" + strings.Repeat(" word\n\t", 1<<17) + " original suffix  "
 	input := contextbuild.Input{Text: original, Attachments: []contextbuild.Attachment{
 		{Path: "snapshot.txt", Kind: "text", Text: "immutable snapshot\n", Truncated: true},
-		{Path: "snapshot.png", Image: &provider.Image{DataURL: "data:image/png;base64,snapshot"}},
+		{Path: "snapshot.png", Image: &provider.BinaryFile{DataURL: "data:image/png;base64,snapshot"}},
 	}}
 	before := input.Message()
 	queue := []contextbuild.Input{input}
