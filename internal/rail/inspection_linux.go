@@ -122,6 +122,19 @@ func (p *sandboxPlan) validateHost(ctx context.Context) error {
 			return hostChanged(observation.key)
 		}
 	}
+	for _, observation := range p.sshDirectories {
+		info, err := os.Stat(observation.path)
+		if err != nil {
+			return fmt.Errorf("rail revalidate SSH directory %q: %w", observation.path, err)
+		}
+		current, err := readSSHDirectory(ctx, observation.path, info)
+		if err != nil {
+			return err
+		}
+		if current != observation {
+			return fmt.Errorf("rail SSH directory %q changed during planning or before launch", observation.path)
+		}
+	}
 	return ctx.Err()
 }
 

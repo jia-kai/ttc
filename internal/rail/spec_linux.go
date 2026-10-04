@@ -80,6 +80,7 @@ type sandboxSpec struct {
 	options     sandboxOptions
 	environment sandboxEnvironment
 	mounts      []mountRequest
+	sshDropins  bool // Snapshot effective system client drop-ins; no source discovery here.
 }
 
 // resolveSandboxSpec expands the central defaults and config policy into one
@@ -142,5 +143,5 @@ func resolveSandboxSpec(ctx context.Context, opts sandboxOptions, env sandboxEnv
 	opts.Policy.Mounts = nil // Consumed into the owned request stream above.
 	opts.Policy.Denies = append([]string(nil), opts.Policy.Denies...)
 	opts.Policy.ConfigFiles = append([]string(nil), opts.Policy.ConfigFiles...)
-	return sandboxSpec{options: opts, environment: env, mounts: mounts}, nil
+	return sandboxSpec{options: opts, environment: env, mounts: mounts, sshDropins: true}, nil
 }

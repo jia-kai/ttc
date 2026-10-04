@@ -44,13 +44,40 @@ def main():
     (home / '.config/nvim').mkdir()
     (home / '.config/nvim/init.lua').write_text('-- read-only fixture\n')
     (home / '.zsh_history').write_text('history fixture\n')
+    # Mount a complete fixture rather than relying on host SSH configuration:
+    # nested rail maps host root ownership to nobody, which is not trusted.
+    ssh_config = root / 'ssh-config'
+    ssh_vendor = root / 'ssh-vendor'
+    ssh_vendor_dest = Path('/ttc-rail-ssh-fixture')
+    ssh_dropins = ssh_config / 'ssh_config.d'
+    ssh_dropins.mkdir(parents=True)
+    ssh_vendor.mkdir()
+    (ssh_config / 'ssh_config').write_text(
+        'Include /etc/ssh/ssh_config.d/*.conf\nHost *\n    BatchMode yes\n')
+    ssh_source = ssh_vendor / 'vendor.conf'
+    ssh_source.write_text('Host *\n    Port 17022\n    ServerAliveInterval 37\n')
+    ssh_link = Path('/etc/ssh/ssh_config.d/10-rail-vendor.conf')
+    ssh_target = ssh_vendor_dest / 'vendor.conf'
+    (ssh_dropins / ssh_link.name).symlink_to(ssh_target)
+    ssh_direct = Path('/etc/ssh/ssh_config.d/20-rail-direct.conf')
+    (ssh_dropins / ssh_direct.name).write_text('Host *\n    ConnectTimeout 19\n')
+    for path in (ssh_config / 'ssh_config', ssh_source, ssh_dropins / ssh_direct.name):
+        path.chmod(0o644)
+    ssh_mounts = [{'source': str(ssh_config), 'dest': '/etc/ssh', 'mode': 'ro'},
+                  {'source': str(ssh_vendor), 'dest': str(ssh_vendor_dest), 'mode': 'ro'}]
+
+    def write_global_config(deny):
+        # Every recreation must retain the self-contained SSH fixture mounts.
+        global_config.write_text(json.dumps({'authorize_services': ['ssh-agent'],
+                                            'allow': [str(outside), 'ssh-agent', *ssh_mounts],
+                                            'deny': deny}))
+
     agent_path = root / 'agent.sock'
     agent = socket.socket(socket.AF_UNIX)
     agent.bind(str(agent_path))
     agent.listen()
     agent.settimeout(15)
-    global_config.write_text(json.dumps({'authorize_services': ['ssh-agent'],
-                                        'allow': [str(outside), 'ssh-agent'], 'deny': []}))
+    write_global_config([])
     local_config.write_text(json.dumps({'deny': ['secret']}))
     env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'),
                XDG_CACHE_HOME=str(home / '.cache'), XDG_DATA_HOME=str(home / '.local/share'),
@@ -141,6 +168,53 @@ def main():
             time.sleep(0.03)
         raise AssertionError(f'instance not cleaned up: {sock}')
 
+    ssh_probe = project / 'ssh-probe.py'
+    ssh_probe.write_text('''import json, os, subprocess, sys
+from pathlib import Path
+link, target, direct, output = map(Path, sys.argv[1:])
+result = {'symlink': link.is_symlink(), 'link': os.readlink(link),
+          'canonical': str(link.resolve()), 'readonly': {}, 'owners': {}}
+for path in (link, target, direct):
+    result['owners'][str(path)] = path.stat().st_uid
+    try:
+        with path.open('a'):
+            pass
+        result['readonly'][str(path)] = False
+    except OSError:
+        result['readonly'][str(path)] = True
+result['target-text'] = target.read_text()
+result['direct-text'] = direct.read_text()
+# -G evaluates the default system config without connecting or using keys.
+ssh = subprocess.run(['ssh', '-G', 'rail-snapshot.invalid'],
+                     stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+result.update({'status': ssh.returncode, 'stdout': ssh.stdout, 'stderr': ssh.stderr})
+output.write_text(json.dumps(result))
+''')
+
+    def check_ssh(sock, label, port, direct_denied=False):
+        output = project / f'ssh-{label}.json'
+        done = project / f'ssh-{label}.done'
+        command = ' '.join(shlex.quote(str(arg)) for arg in
+                           ('python3', ssh_probe, ssh_link, ssh_target, ssh_direct, output))
+        tmux(sock, 'new-window', '-d', '-n', f'ssh-{label}', '-c', str(project),
+             command + ' > ' + shlex.quote(str(project / f'ssh-{label}.log')) +
+             ' 2>&1; touch ' + shlex.quote(str(done)))
+        wait_file(done)
+        assert output.exists(), (project / f'ssh-{label}.log').read_text()
+        result = json.loads(output.read_text())
+        assert result['status'] == 0, result
+        values = dict(line.split(' ', 1) for line in result['stdout'].splitlines())
+        assert values['port'] == str(port) and values['serveraliveinterval'] == '37', result
+        assert values['batchmode'] == 'yes', result
+        assert values['connecttimeout'] == ('none' if direct_denied else '19'), result
+        assert result['symlink'] and result['link'] == str(ssh_target), result
+        assert result['canonical'] == str(ssh_target), result
+        assert all(result['readonly'].values()), result
+        for path in (ssh_link, ssh_target) if direct_denied else (ssh_link, ssh_target, ssh_direct):
+            assert result['owners'][str(path)] == os.getuid(), result
+        assert result['target-text'] == f'Host *\n    Port {port}\n    ServerAliveInterval 37\n', result
+        assert result['direct-text'] == ('' if direct_denied else 'Host *\n    ConnectTimeout 19\n'), result
+
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen()
@@ -185,6 +259,7 @@ def main():
         listing = run(binary, 'rail', '--list').stdout
         assert str(project) in listing and 'rail' in listing, listing
         original_pid = tmux(sock, 'display-message', '-p', '#{pid}').strip()
+        check_ssh(sock, 'initial', 17022)
 
         # tmux detection must list without needing a terminal, valid workdir,
         # or storage default, and must not create another instance/client.
@@ -272,6 +347,10 @@ Path('probe.json').write_text(json.dumps(result))
 
         # A launch-time policy change must not affect an existing instance.
         local_config.write_text('{invalid json')
+        # In-place edits are visible through the explicit vendor directory bind,
+        # but the canonical drop-in target must remain a launch-time snapshot.
+        ssh_source.write_text('Host *\n    Port 17023\n    ServerAliveInterval 37\n')
+        check_ssh(sock, 'source-changed', 17022)
         alias = root / 'alias'
         alias.symlink_to(project)
         second, third = start(alias), start(project)
@@ -283,6 +362,7 @@ Path('probe.json').write_text(json.dumps(result))
             drain(third)
         assert len(tmux(sock, 'list-clients').splitlines()) == 2
         assert tmux(sock, 'display-message', '-p', '#{pid}').strip() == original_pid
+        check_ssh(sock, 'reattached', 17022)
         assert run(binary, 'rail', '--list').stdout.count(str(project)) == 1
         # Host attachment environment must never replace the instance socket.
         assert tmux(sock, 'show-environment', 'SSH_AUTH_SOCK').strip() == 'SSH_AUTH_SOCK=/run/ssh-agent.sock'
@@ -327,13 +407,14 @@ Path(os.environ['RAIL_RESULT']).write_text(json.dumps(result))
 
         # Concurrent creation converges on a single server.
         local_config.write_text('{}')
-        global_config.write_text(json.dumps({'authorize_services': ['ssh-agent'],
-                                            'allow': [str(outside), 'ssh-agent'],
-                                            'deny': ['ssh-agent', str(home / '.config/nvim')]}))
+        write_global_config(['ssh-agent', str(home / '.config/nvim'), str(ssh_direct)])
         fourth, fifth = start(project), start(alias)
         wait_attach(fourth, sock)
         wait_attach(fifth, sock)
         assert run(binary, 'rail', '--list').stdout.count(str(project)) == 1
+        # Recreation refreshes the vendor snapshot; an explicit drop-in deny
+        # still wins over the generated direct-file snapshot overlay.
+        check_ssh(sock, 'recreated', 17023, direct_denied=True)
         denied_probe = "python3 -c " + shlex.quote(
             "import json, os; from pathlib import Path; "
             "Path('denied.json').write_text(json.dumps({"

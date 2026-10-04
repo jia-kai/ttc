@@ -22,11 +22,12 @@ type resolvedMount struct {
 }
 
 type mountPlanner struct {
-	root       string
-	mounts     []resolvedMount
-	links      map[string]string
-	plan       sandboxPlan
-	inspection hostInspection
+	root             string
+	mounts           []resolvedMount
+	links            map[string]string
+	plan             sandboxPlan
+	inspection       hostInspection
+	sshConfigTargets map[string]bool // Selected canonical drop-ins, including denied files.
 }
 
 // serviceEndpoints retains canonical host paths and inode information for the
@@ -71,6 +72,9 @@ func planSandbox(ctx context.Context, spec sandboxSpec, hostRoot string) (*sandb
 		return nil, err
 	}
 	if err := p.protectMounts(ctx, spec, ordered); err != nil {
+		return nil, err
+	}
+	if err := p.snapshotSSHConfigs(ctx, spec); err != nil {
 		return nil, err
 	}
 	if err := p.applyDenies(ctx, spec.options, endpoints); err != nil {
@@ -453,6 +457,13 @@ func (p *mountPlanner) maskDenies(ctx context.Context, resolved []string) error 
 			return fmt.Errorf("rail deny %q: %w", path, err)
 		}
 		if err == nil && !info.IsDir() {
+			if p.sshConfigTargets[path] {
+				// OpenSSH checks included files' owners even when they are
+				// empty. A host /dev/null bind can have an unmapped owner.
+				p.plan.filesystem = append(p.plan.filesystem, filesystemOperation{kind: filesystemFile, dest: path})
+				masked = append(masked, path)
+				continue
+			}
 			source, _, err := p.source(ctx, "/dev/null")
 			if err != nil {
 				return fmt.Errorf("rail deny mask source: %w", err)

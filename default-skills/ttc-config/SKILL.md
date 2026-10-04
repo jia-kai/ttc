@@ -111,6 +111,18 @@ Rail reads global `${XDG_CONFIG_HOME:-~/.config}/ttc/rail.json`, then
 
 - Workdir and existing TTC data/cache roots are writable. Host system paths and
   `/etc` are read-only; home, `/tmp` and `/run` are private. Networking is shared.
+- Existing non-hidden `/etc/ssh/ssh_config.d/*.conf` files in the effective
+  namespace are snapshotted read-only at their resolved targets with launcher
+  ownership; symlinks stay intact. Sources must be regular files owned by root
+  or the launcher and not group/other-writable. Denied drop-in files are empty,
+  read-only launcher-owned masks; directory denies still hide the directory.
+  Bounds: 256 directory entries, 1 MiB per file, 4 MiB total snapshot bytes.
+  Recreate rail to refresh selected file contents. Directory membership and
+  ancestor replacement remain live; nested/external SSH `Include` paths are not
+  snapshotted.
+  Launching from another user namespace can make root ownership appear as UID
+  65534; that owner is not trusted. Launch from the host or explicitly import
+  appropriately owned client-config fixtures; never change host system ownership.
 - Existing Bash/Zsh startup files, `~/.gitconfig`, Zsh/tmux/Neovim config directories
   (both `~/.config` and XDG config home), TTC config and ancestor AGENTS/skills are
   read-only. An optional config directory naming the same underlying directory

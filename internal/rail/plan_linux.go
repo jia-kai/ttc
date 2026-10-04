@@ -13,8 +13,9 @@ type sandboxPlan struct {
 	newSession, dropCapabilities bool
 	filesystem                   []filesystemOperation
 	environment                  []environmentChange
-	tmuxConfig                   string            // Named sandbox entrypoint selected during host inspection.
-	hostObservations             []hostObservation // Owned, sorted facts inspected during planning.
+	tmuxConfig                   string                     // Named sandbox entrypoint selected during host inspection.
+	hostObservations             []hostObservation          // Owned, sorted facts inspected during planning.
+	sshDirectories               []hostDirectoryObservation // Bounded drop-in listings inspected for snapshots.
 }
 
 type namespaceKind uint8
@@ -34,17 +35,20 @@ const (
 	filesystemDevices
 	filesystemTmpfs
 	filesystemDirectory
+	filesystemFile
 )
 
 // filesystemOperation describes one ordered namespace mutation. source is an
 // absolute canonical host path for binds, or a literal target for symlinks.
 // dest is an absolute sandbox path. writable applies to binds and tmpfs only;
-// mode is the creation permission bits for synthetic directories only.
+// mode is the creation permission bits for synthetic directories only. data is
+// an owned byte string for read-only generated files; it may contain NUL bytes.
 type filesystemOperation struct {
 	kind         filesystemKind
 	source, dest string
 	writable     bool
 	mode         fs.FileMode
+	data         string
 }
 
 // An unset removes an inherited variable; an empty value alone does not unset it.
@@ -69,4 +73,5 @@ type invocation struct {
 	executable  string
 	args        []string
 	environment []string
+	files       []string // Planned file bytes, inherited on consecutive descriptors starting at 3.
 }

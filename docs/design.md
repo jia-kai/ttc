@@ -86,15 +86,16 @@ backend/plugin framework:
    filesystem access; namespace-aware planning is authoritative.
 2. **Specification:** `sandboxSpec` combines the central default-import catalog
    with explicit/service requests and captured host environment/UID. Requests
-   retain source requirements, protection and origin; this stage performs no
-   filesystem inspection.
+   retain source requirements, protection and origin, alongside the system SSH
+   drop-in snapshot intent; this stage performs no filesystem inspection.
 3. **Planning:** host probes and the evolving sandbox namespace resolve sources
    and destinations separately. Audits, access modes, collision checks and
    precedence produce `sandboxPlan`: ordered filesystem operations, namespace
    choices, environment changes, workdir/hostname and selected tmux config.
-   Primary binds precede protective overlays; deny masks come last. Logical and
-   discovered canonical dependencies order parents before children; newly revealed
-   ancestors discard tentative placements and replay with the additional dependency.
+   Primary binds precede protective and SSH snapshot overlays; deny masks come
+   last. Logical and discovered canonical dependencies order parents before
+   children; newly revealed ancestors discard tentative placements and replay
+   with the additional dependency.
    Host observations detect inconsistent reads during planning. Cancellation is
    checked between host syscalls, not within a blocking syscall.
 4. **Emission:** pure Bubblewrap translation consumes the plan plus typed process
@@ -102,16 +103,27 @@ backend/plugin framework:
    policy). It validates representation shape, never reads the host, reorders
    operations or makes access decisions. Planned set/unset operations override
    inherited variables. The resulting invocation owns its argument/environment
-   slices; tmux startup generation likewise consumes planned inputs.
+   slices and immutable file payloads. Generated files lower to `--ro-bind-data`
+   with distinct inherited descriptors; tmux startup generation likewise consumes
+   planned inputs.
 5. **Execution:** the registry/supervisor owns locks, private runtime directories,
    process launch, readiness, cleanup and client transport. It supplies lifecycle
    settings but does not splice backend flags into an invocation. Immediately
    before launch, bounded revalidation rejects changes to observed host facts.
+   Planned file bytes are materialized in sealed anonymous descriptors, whose
+   parent handles close after start or on failure. Bubblewrap creates read-only,
+   launcher-owned files and consumes the descriptors without exposing staging paths.
 
-Specs/plans are transient owned values, not persisted state or filesystem
-snapshots. Revalidation covers observed entry identities, symlink targets and
-relevant metadata, not recursive directory contents. Host files can still change
-between the check and mounting; this is not atomic snapshot semantics. Configuration
+Specs/plans are transient owned values, not persisted state. SSH drop-in snapshots
+use bounded descriptor-checked reads and overlay regular-file targets in the
+effective namespace, preserving symlink paths. Denied files are not read; their
+final masks are empty generated files with acceptable SSH ownership. Namespace
+probes retain original sources for file shape/path reasoning, not generated
+ownership or inode metadata. Revalidation covers observed identities, symlink
+targets, relevant metadata and bounded SSH directory listings, not recursive
+directory contents. Ordinary host binds can still change after validation;
+selected snapshot bytes stay fixed, but directory membership and ancestor
+replacement remain live. Configuration
 and user-visible security limits remain in the [rail reference](../default-skills/ttc-config/SKILL.md#rail-configuration-reference).
 
 ## Event ordering and main timeline

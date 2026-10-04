@@ -98,7 +98,9 @@ loopback networking, TTC startup, detach/reattach and concurrent creation, plus
 independent tmux bootstrap and containment of tmux client replacement commands.
 It also checks SSH-agent socket forwarding and reattachment, service denies,
 read-only Neovim/global Git config, and writable Zsh history. Unit/CLI tests verify TTC's
-SSH_AUTH_SOCK removal and global opt-in. It uses private scratch fixtures
+SSH_AUTH_SOCK removal and global opt-in. Offline `ssh -G` probes verify system
+drop-in snapshot ownership, preserved symlinks, read-only files, deny masks and
+refresh on recreation rather than reattachment. It uses private scratch fixtures
 and no credentials or external network access.
 
 The automated demo checks server-side request shapes, all tool types and their

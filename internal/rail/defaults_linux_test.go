@@ -247,6 +247,13 @@ func TestSandboxNeovimWorkspaceAliasUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts.Policy.ConfigFiles = []string{policyFile}
+	// Keep the test independent of host SSH configuration and nested-userns
+	// ownership: the effective system config is a launcher-owned fixture.
+	ssh := filepath.Join(root, "ssh")
+	if err := os.Mkdir(ssh, 0700); err != nil {
+		t.Fatal(err)
+	}
+	opts.Policy.Mounts = []Mount{{Source: ssh, Dest: "/etc/ssh"}}
 	spec, err := resolveSandboxSpec(ctx, opts, sandboxEnvironment{Path: "/usr/bin:/bin", UID: os.Geteuid()})
 	if err != nil {
 		t.Fatal(err)
@@ -262,8 +269,11 @@ func TestSandboxNeovimWorkspaceAliasUsable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(ctx, command.executable, command.args...)
-	cmd.Env = command.environment
+	cmd, closeFiles, err := command.prepareCommand(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeFiles()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("forwarded Neovim alias unusable: %v: %s", err, output)
 	}

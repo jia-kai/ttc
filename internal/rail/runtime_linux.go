@@ -389,8 +389,11 @@ func Serve(ctx context.Context) (err error) {
 	if err = os.WriteFile(filepath.Join(runDir, "tmux.conf"), []byte(startup), 0600); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, command.executable, command.args...)
-	cmd.Env = command.environment
+	cmd, closeFiles, err := command.prepareCommand(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeFiles()
 	cmd.Stdin = nil
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err = plan.validateHost(ctx); err != nil {
@@ -399,6 +402,7 @@ func Serve(ctx context.Context) (err error) {
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	closeFiles()
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	startupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

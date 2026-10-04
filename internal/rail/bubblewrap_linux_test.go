@@ -91,6 +91,26 @@ func TestBubblewrapInvocationOwnership(t *testing.T) {
 	}
 }
 
+func TestBubblewrapInvocationGeneratedFiles(t *testing.T) {
+	plan := sandboxPlan{hostname: "host", workdir: "/work", filesystem: []filesystemOperation{
+		{kind: filesystemBind, source: "/absent", dest: "/work"},
+		{kind: filesystemFile, dest: "/work/config", data: "exact\x00\xffbytes"},
+		{kind: filesystemFile, dest: "/work/hidden.conf"}, // A final empty file mask.
+	}}
+	got, err := bubblewrapInvocation(plan, sandboxProcess{command: []string{"tool"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--hostname", "host", "--ro-bind", "/absent", "/work", "--perms", "0600", "--ro-bind-data", "3", "/work/config", "--perms", "0600", "--ro-bind-data", "4", "/work/hidden.conf", "--chdir", "/work", "--", "tool"}
+	if !reflect.DeepEqual(got.args, want) || !reflect.DeepEqual(got.files, []string{"exact\x00\xffbytes", ""}) {
+		t.Fatalf("generated files changed or reordered: %#v", got)
+	}
+	plan.filesystem[1].data = "changed"
+	if got.files[0] != "exact\x00\xffbytes" {
+		t.Fatal("invocation aliases plan payloads")
+	}
+}
+
 func TestBubblewrapInvocationExplicitChoices(t *testing.T) {
 	plan := sandboxPlan{
 		hostname: "host", workdir: "/",
@@ -151,6 +171,10 @@ func TestBubblewrapInvocationRejectsMalformedInputs(t *testing.T) {
 		{"unclean bind source", func(p *sandboxPlan, _ *sandboxProcess) { p.filesystem[0].source = "/source/../other" }},
 		{"NUL bind source", func(p *sandboxPlan, _ *sandboxProcess) { p.filesystem[0].source = "/source\x00" }},
 		{"bind mode", func(p *sandboxPlan, _ *sandboxProcess) { p.filesystem[0].mode = 0700 }},
+		{"bind data", func(p *sandboxPlan, _ *sandboxProcess) { p.filesystem[0].data = "unexpected" }},
+		{"generated file source", func(p *sandboxPlan, _ *sandboxProcess) {
+			p.filesystem[0] = filesystemOperation{kind: filesystemFile, dest: "/config", source: "/source"}
+		}},
 		{"empty symlink target", func(p *sandboxPlan, _ *sandboxProcess) {
 			p.filesystem[0] = filesystemOperation{kind: filesystemSymlink, dest: "/link"}
 		}},
@@ -183,7 +207,7 @@ func TestBubblewrapInvocationRejectsMalformedInputs(t *testing.T) {
 		{"inherited env NUL name", func(_ *sandboxPlan, p *sandboxProcess) { p.environment = []string{"NAME\x00=value"} }},
 		{"inherited env NUL value", func(_ *sandboxPlan, p *sandboxProcess) { p.environment = []string{"NAME=value\x00"} }},
 	}
-	for _, kind := range []filesystemKind{filesystemProc, filesystemDevices, filesystemTmpfs, filesystemDirectory} {
+	for _, kind := range []filesystemKind{filesystemProc, filesystemDevices, filesystemTmpfs, filesystemDirectory, filesystemFile} {
 		for _, field := range []string{"source", "mode", "writable"} {
 			if kind == filesystemDirectory && field == "mode" || kind == filesystemTmpfs && field == "writable" {
 				continue

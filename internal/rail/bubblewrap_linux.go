@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -32,6 +33,7 @@ func bubblewrapInvocation(plan sandboxPlan, process sandboxProcess) (invocation,
 	}
 
 	var args []string
+	var files []string
 	seen := make(map[namespaceKind]bool)
 	for _, namespace := range plan.namespaces {
 		if seen[namespace] {
@@ -93,6 +95,9 @@ func bubblewrapInvocation(plan sandboxPlan, process sandboxProcess) (invocation,
 				mode |= 04000
 			}
 			args = append(args, "--perms", fmt.Sprintf("%04o", mode), "--dir", operation.dest)
+		case filesystemFile:
+			args = append(args, "--perms", "0600", "--ro-bind-data", strconv.Itoa(3+len(files)), operation.dest)
+			files = append(files, operation.data)
 		}
 	}
 	for i, change := range plan.environment {
@@ -110,12 +115,15 @@ func bubblewrapInvocation(plan sandboxPlan, process sandboxProcess) (invocation,
 	// A non-nil empty environment prevents exec.Cmd from inheriting live host state.
 	environment := make([]string, len(process.environment))
 	copy(environment, process.environment)
-	return invocation{executable: "bwrap", args: args, environment: environment}, nil
+	return invocation{executable: "bwrap", args: args, environment: environment, files: files}, nil
 }
 
 func (operation filesystemOperation) validateBubblewrap() error {
 	if !bubblewrapPath(operation.dest) {
 		return fmt.Errorf("invalid destination %q", operation.dest)
+	}
+	if operation.kind != filesystemFile && operation.data != "" {
+		return fmt.Errorf("data is only valid for generated files")
 	}
 	if operation.kind != filesystemDirectory && operation.mode != 0 {
 		return fmt.Errorf("mode is only valid for directories")
@@ -132,7 +140,7 @@ func (operation filesystemOperation) validateBubblewrap() error {
 		if operation.source == "" || strings.ContainsRune(operation.source, 0) {
 			return fmt.Errorf("invalid symlink target")
 		}
-	case filesystemProc, filesystemDevices, filesystemTmpfs, filesystemDirectory:
+	case filesystemProc, filesystemDevices, filesystemTmpfs, filesystemDirectory, filesystemFile:
 		if operation.source != "" {
 			return fmt.Errorf("source is only valid for binds and symlinks")
 		}
