@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestHistoryTreeShowsSiblingBranchesAndBoundedLabels(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"errors"
 	"sync"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/render"
+	"ttc/internal/tool"
 )
 
 func fileMutation(name string) bool {

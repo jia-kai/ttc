@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {

@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"scicode/internal/history"
+	"ttc/internal/history"
 )
 
 // Limits bound encoded source bytes and decoded pixel allocation.

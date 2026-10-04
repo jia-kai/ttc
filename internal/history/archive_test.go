@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestContinuationRequiresBothArchiveFilesBeforeCommit(t *testing.T) {

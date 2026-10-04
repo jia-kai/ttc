@@ -17,7 +17,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
-	"scicode/internal/history"
+	"ttc/internal/history"
 )
 
 // MaxFileBytes bounds each mutation's original and resulting file contents.

@@ -10,7 +10,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/sys/unix"
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestPathCompletionRejectsFIFOAndWorkerStillCloses(t *testing.T) {

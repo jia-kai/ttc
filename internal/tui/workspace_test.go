@@ -5,10 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"scicode/internal/workspace"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/workspace"
 
 	"github.com/gdamore/tcell/v2"
 )

@@ -9,15 +9,15 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"scicode/internal/prompts"
 	"strings"
 	"sync"
 	"time"
+	"ttc/internal/prompts"
 	"unicode/utf8"
 
 	"golang.org/x/net/html/charset"
-	"scicode/internal/history"
-	"scicode/internal/render"
+	"ttc/internal/history"
+	"ttc/internal/render"
 )
 
 const webDownloadBytes = 4 << 20

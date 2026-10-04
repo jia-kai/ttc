@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {

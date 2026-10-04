@@ -1,6 +1,6 @@
 package tui
 
-import "scicode/internal/history"
+import "ttc/internal/history"
 
 // promptHistory recalls saved human prompts and submissions from this frontend
 // lifetime, including commands. Runtime notifications never enter this list.

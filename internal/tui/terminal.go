@@ -4,8 +4,8 @@ import (
 	"context"
 	"github.com/gdamore/tcell/v2"
 	"os"
-	"scicode/internal/graphics"
 	"sync"
+	"ttc/internal/graphics"
 )
 
 // terminalTTY serializes protocol writes with all tcell writes, including input

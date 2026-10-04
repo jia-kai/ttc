@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 const maxMessageBytes = 8 << 20

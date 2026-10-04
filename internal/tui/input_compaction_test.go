@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 )
 
 // inputCompactionProvider gates the real summarizer and first continuation

@@ -6,11 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"scicode/internal/prompts"
-	"scicode/internal/provider"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/prompts"
+	"ttc/internal/provider"
 )
 
 func TestRecentCycleRetentionAndBudgets(t *testing.T) {

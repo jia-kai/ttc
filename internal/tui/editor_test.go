@@ -10,8 +10,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/sys/unix"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 )
 
 func TestHeldEditorDrainsEventsAndJoinsOnCancellation(t *testing.T) {

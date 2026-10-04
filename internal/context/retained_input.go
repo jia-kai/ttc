@@ -3,9 +3,9 @@ package context
 import (
 	"encoding/json"
 	"fmt"
-	"scicode/internal/prompts"
-	"scicode/internal/provider"
 	"time"
+	"ttc/internal/prompts"
+	"ttc/internal/provider"
 )
 
 // InputMarker describes the following retained human message without changing

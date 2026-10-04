@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"scicode/internal/session"
+	"ttc/internal/session"
 )
 
 type questionActivity struct {

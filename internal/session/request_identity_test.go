@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestRequestIdentityAcrossToolBoundariesChildrenTurnsAndSessionChanges(t *testing.T) {

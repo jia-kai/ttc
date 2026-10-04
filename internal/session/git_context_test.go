@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {

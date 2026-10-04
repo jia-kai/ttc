@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/history"
+	"ttc/internal/history"
 )
 
 func TestPromptRecallRestoresDraftWithoutSubmitting(t *testing.T) {

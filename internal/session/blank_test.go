@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func assertStoredSessions(t *testing.T, r *Runtime, want int) {

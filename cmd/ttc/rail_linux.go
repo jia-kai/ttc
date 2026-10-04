@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"scicode/internal/history"
-	"scicode/internal/rail"
+	"ttc/internal/history"
+	"ttc/internal/rail"
 )
 
 func railOptions(args []string) (rail.Options, error) {

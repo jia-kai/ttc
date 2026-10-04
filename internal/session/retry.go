@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 // retryNotice commits an inspectable system message without adding model input.

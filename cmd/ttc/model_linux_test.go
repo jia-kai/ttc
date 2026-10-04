@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestStartupSelection(t *testing.T) {

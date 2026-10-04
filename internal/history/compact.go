@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	ctxmgr "scicode/internal/context"
-	"scicode/internal/provider"
 	"syscall"
 	"time"
+	ctxmgr "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 // Continue atomically freezes a predecessor and copies a retained visible suffix.

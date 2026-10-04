@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"scicode/internal/render"
-	"scicode/internal/workspace"
+	"ttc/internal/render"
+	"ttc/internal/workspace"
 )
 
 // fileResult separates mutation presentation from the model-facing value.

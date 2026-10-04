@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/history"
-	"scicode/internal/render"
+	"ttc/internal/history"
+	"ttc/internal/render"
 )
 
 // sessionMenu is a local metadata snapshot; reload remains an idle runtime command.

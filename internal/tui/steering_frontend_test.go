@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestAltEnterSteersWithoutSubmittingQueuedTurn(t *testing.T) {

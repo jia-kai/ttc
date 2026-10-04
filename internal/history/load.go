@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 // Load snapshots a writable conversation into an independent session, with an

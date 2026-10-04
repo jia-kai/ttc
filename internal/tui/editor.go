@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"scicode/internal/scratch"
+	"ttc/internal/scratch"
 )
 
 const maxDraftBytes = 8 << 20

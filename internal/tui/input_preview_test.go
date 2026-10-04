@@ -8,9 +8,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestPendingInputPreviewNormalizationAndCellClipping(t *testing.T) {

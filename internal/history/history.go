@@ -21,9 +21,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"scicode/internal/filelock"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/filelock"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"

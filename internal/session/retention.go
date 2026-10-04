@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // startRetention sweeps now and every hour. The caller owns the

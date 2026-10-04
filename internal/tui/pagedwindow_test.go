@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/history"
-	"scicode/internal/render"
+	"ttc/internal/history"
+	"ttc/internal/render"
 
 	"github.com/gdamore/tcell/v2"
 )

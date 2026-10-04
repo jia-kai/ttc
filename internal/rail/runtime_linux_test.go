@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/filelock"
+	"ttc/internal/filelock"
 )
 
 func TestCanonicalWorkdir(t *testing.T) {

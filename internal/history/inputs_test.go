@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 type countingHistoryReader struct {

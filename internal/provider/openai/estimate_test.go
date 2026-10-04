@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestReplayEstimateExcludesTransportAndBase64Expansion(t *testing.T) {

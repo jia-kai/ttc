@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 // Error is an actionable, model-facing failure.

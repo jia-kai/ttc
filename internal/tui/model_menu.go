@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 
 	"github.com/gdamore/tcell/v2"
 )

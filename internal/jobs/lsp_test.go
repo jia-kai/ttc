@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/lsp"
+	"ttc/internal/lsp"
 )
 
 func serverCommand(t *testing.T) string {

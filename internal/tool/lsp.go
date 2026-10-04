@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"scicode/internal/prompts"
 	"strings"
 	"time"
+	"ttc/internal/prompts"
 
-	"scicode/internal/jobs"
-	"scicode/internal/lsp"
-	"scicode/internal/workspace"
+	"ttc/internal/jobs"
+	"ttc/internal/lsp"
+	"ttc/internal/workspace"
 )
 
 type lspArgs struct {

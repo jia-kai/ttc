@@ -3,9 +3,9 @@ package tui
 import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/provider"
 	"strings"
 	"testing"
+	"ttc/internal/provider"
 )
 
 func TestSharedPresentationInterleavingAndFinalImmutability(t *testing.T) {

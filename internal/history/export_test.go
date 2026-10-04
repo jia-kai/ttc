@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestInternalEventsRemainExactWithoutConversationDuplication(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/jobs"
-	"scicode/internal/render"
+	"ttc/internal/jobs"
+	"ttc/internal/render"
 )
 
 type backgroundMenu struct {

@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 // ArchiveMessages freezes an isolated actor's model input as Markdown and exact

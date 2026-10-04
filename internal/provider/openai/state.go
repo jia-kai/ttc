@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 const replayVersion = 1

@@ -3,10 +3,10 @@ package openai
 import (
 	"context"
 	"os"
-	"scicode/internal/provider"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/provider"
 )
 
 // TestLiveSmoke is opt-in and makes exactly one tiny inference request. All other tests are local.

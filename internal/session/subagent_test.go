@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
-	"scicode/internal/tool"
-	"scicode/internal/workspace"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
+	"ttc/internal/workspace"
 )
 
 // childProvider retains the fixture's catalog/login behavior and controls streams.

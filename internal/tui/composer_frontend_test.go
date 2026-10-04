@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 )
 
 func TestComposerFrontendEditingRecallAndModelWindow(t *testing.T) {

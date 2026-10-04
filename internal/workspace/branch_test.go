@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func branchWrite(t *testing.T, w *Manager, saved history.Session, turn, actor string, request int64, body string) int64 {

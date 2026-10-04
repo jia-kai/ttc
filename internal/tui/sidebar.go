@@ -2,13 +2,13 @@ package tui
 
 import (
 	"fmt"
-	"scicode/internal/workspace"
 	"strings"
 	"time"
+	"ttc/internal/workspace"
 
-	"scicode/internal/jobs"
-	"scicode/internal/render"
-	"scicode/internal/session"
+	"ttc/internal/jobs"
+	"ttc/internal/render"
+	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"

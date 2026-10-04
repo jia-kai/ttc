@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {

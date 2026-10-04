@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"scicode/internal/assets"
-	"scicode/internal/graphics"
-	"scicode/internal/render"
-	"scicode/internal/session"
+	"ttc/internal/assets"
+	"ttc/internal/graphics"
+	"ttc/internal/render"
+	"ttc/internal/session"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"

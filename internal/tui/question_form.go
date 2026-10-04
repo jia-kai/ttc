@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"scicode/internal/session"
+	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v2"
 )

@@ -12,9 +12,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/assets"
-	"scicode/internal/graphics"
-	"scicode/internal/provider"
+	"ttc/internal/assets"
+	"ttc/internal/graphics"
+	"ttc/internal/provider"
 )
 
 func TestMarkdownWindowRefreshesPendingMathAndRequestsOnlyVisibleAssets(t *testing.T) {

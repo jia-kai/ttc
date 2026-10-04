@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/provider/openai"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/provider/openai"
 )
 
 func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {

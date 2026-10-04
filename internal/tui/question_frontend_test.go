@@ -6,19 +6,19 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"scicode/internal/tool"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/tool"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/graphics"
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/scratch"
-	"scicode/internal/session"
-	"scicode/internal/skills"
-	"scicode/internal/workspace"
+	"ttc/internal/graphics"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/scratch"
+	"ttc/internal/session"
+	"ttc/internal/skills"
+	"ttc/internal/workspace"
 )
 
 type questionTestProvider struct {

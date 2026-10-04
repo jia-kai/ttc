@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {

@@ -9,16 +9,16 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"scicode/internal/capture"
-	"scicode/internal/prompts"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"ttc/internal/capture"
+	"ttc/internal/prompts"
 
-	"scicode/internal/history"
-	"scicode/internal/lsp"
+	"ttc/internal/history"
+	"ttc/internal/lsp"
 )
 
 // ErrNotFound identifies a stale or inaccessible job handle without exposing

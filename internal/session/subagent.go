@@ -6,17 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"scicode/internal/prompts"
 	"slices"
 	"strings"
 	"time"
+	"ttc/internal/prompts"
 	"unicode"
 	"unicode/utf8"
 
-	"scicode/internal/history"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/history"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func (r *Runtime) addSubagentTool() {

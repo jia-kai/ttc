@@ -3,7 +3,7 @@ package session
 import (
 	"errors"
 
-	"scicode/internal/history"
+	"ttc/internal/history"
 )
 
 // History snapshots all immutable branches of the current conversation. Blank,

@@ -1,11 +1,11 @@
 package tui
 
 import (
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/render"
 	"strings"
 	"testing"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 
 	"github.com/gdamore/tcell/v2"
 )

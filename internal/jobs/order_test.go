@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/capture"
+	"ttc/internal/capture"
 )
 
 func TestLiveStableStartOrderAndOtherListsKeepIDOrder(t *testing.T) {

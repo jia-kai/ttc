@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 func holdInputAdmission(t *testing.T, r *Runtime) func() {

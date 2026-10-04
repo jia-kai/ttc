@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 type helpGatedProvider struct {

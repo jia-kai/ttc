@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 )
 
 func holdQueuedAdmission(t *testing.T, r *session.Runtime) func() {

@@ -11,12 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"scicode/internal/prompts"
 	"sort"
 	"strings"
+	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	"scicode/internal/workspace"
+	"ttc/internal/workspace"
 )
 
 const searchTextLimit = 40000

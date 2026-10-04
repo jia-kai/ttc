@@ -13,8 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 // catalogClientVersion negotiates the verified Codex catalog contract, not TTC's release version.

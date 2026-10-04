@@ -13,9 +13,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/provider"
-	"scicode/internal/render"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/render"
+	"ttc/internal/tool"
 )
 
 func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T) {

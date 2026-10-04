@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	contextbuild "scicode/internal/context"
+	contextbuild "ttc/internal/context"
 )
 
 var errInputCancelled = errors.New("initial input cancelled before admission")

@@ -3,8 +3,8 @@ package session
 import (
 	"errors"
 	"fmt"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func pendingToolKey(request int64, id string) string { return fmt.Sprintf("stream:%d:%s", request, id) }

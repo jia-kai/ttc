@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 // assertRetainedProjection compares the complete canonical replacement, not

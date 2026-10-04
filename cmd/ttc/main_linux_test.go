@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/provider/openai"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/provider/openai"
 )
 
 type catalogTransport func(*http.Request) (*http.Response, error)

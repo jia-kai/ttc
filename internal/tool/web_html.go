@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"golang.org/x/net/html"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // htmlMarkdown preserves common document semantics without executing scripts or

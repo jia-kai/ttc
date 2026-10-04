@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"scicode/internal/jobs"
-	"scicode/internal/prompts"
-	"scicode/internal/workspace"
+	"ttc/internal/jobs"
+	"ttc/internal/prompts"
+	"ttc/internal/workspace"
 )
 
 type shellArgs struct {

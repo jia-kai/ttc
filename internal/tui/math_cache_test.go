@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/assets"
-	"scicode/internal/graphics"
+	"ttc/internal/assets"
+	"ttc/internal/graphics"
 )
 
 func TestMathRasterLRULimitsAndRecency(t *testing.T) {

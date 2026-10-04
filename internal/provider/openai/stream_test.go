@@ -2,9 +2,9 @@ package openai
 
 import (
 	"encoding/json"
-	"scicode/internal/provider"
 	"strings"
 	"testing"
+	"ttc/internal/provider"
 	"unicode/utf8"
 )
 

@@ -1,6 +1,6 @@
 package session
 
-import "scicode/internal/prompts"
+import "ttc/internal/prompts"
 
 const systemTemplate = prompts.System
 

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/jobs"
-	"scicode/internal/workspace"
+	"ttc/internal/jobs"
+	"ttc/internal/workspace"
 )
 
 func TestMutationViewsUseAppliedSnapshotDiffs(t *testing.T) {

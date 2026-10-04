@@ -17,9 +17,9 @@ import (
 	"syscall"
 	"time"
 
-	"scicode/internal/filelock"
-	"scicode/internal/history"
-	"scicode/internal/provider"
+	"ttc/internal/filelock"
+	"ttc/internal/history"
+	"ttc/internal/provider"
 )
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"

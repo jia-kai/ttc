@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestTerminalStreamFailuresCarryRecoverability(t *testing.T) {

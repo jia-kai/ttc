@@ -3,8 +3,8 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"scicode/internal/jobs"
-	"scicode/internal/render"
+	"ttc/internal/jobs"
+	"ttc/internal/render"
 )
 
 // captureJobID identifies tools returning short job previews. Reads and controls

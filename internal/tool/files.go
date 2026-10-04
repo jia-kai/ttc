@@ -9,13 +9,13 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"scicode/internal/prompts"
 	"sort"
 	"strings"
 	"syscall"
+	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	"scicode/internal/workspace"
+	"ttc/internal/workspace"
 )
 
 type readArgs struct {

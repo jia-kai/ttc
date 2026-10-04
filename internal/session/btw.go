@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
-	"scicode/internal/prompts"
 	"strings"
+	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	"scicode/internal/history"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/history"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 const btwInstruction = prompts.Btw

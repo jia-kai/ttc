@@ -3,9 +3,9 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"scicode/internal/provider"
 	"strings"
 	"testing"
+	"ttc/internal/provider"
 )
 
 func TestAttachmentDisplayMetadataDoesNotChangeWireInput(t *testing.T) {

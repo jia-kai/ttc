@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"scicode/internal/history"
+	"ttc/internal/history"
 
 	"golang.org/x/sys/unix"
 )

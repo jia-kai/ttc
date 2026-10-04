@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // InspectionPageChars is the maximum Unicode characters returned per page;

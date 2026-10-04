@@ -15,7 +15,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/sys/unix"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 type completionQuery struct {

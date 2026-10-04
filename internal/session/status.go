@@ -3,8 +3,8 @@ package session
 import (
 	"database/sql"
 	"encoding/json"
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 // TokenPart is one disjoint estimate in tokens, never endpoint-reported usage.

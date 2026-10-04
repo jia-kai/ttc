@@ -7,8 +7,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"os"
 	"path/filepath"
-	"scicode/internal/provider"
 	"testing"
+	"ttc/internal/provider"
 )
 
 type pendingProvider struct {

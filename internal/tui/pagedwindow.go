@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"scicode/internal/history"
-	"scicode/internal/render"
+	"ttc/internal/history"
+	"ttc/internal/render"
 )
 
 type inspectionPages struct {

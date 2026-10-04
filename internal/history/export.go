@@ -11,10 +11,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"scicode/internal/provider"
-	"scicode/internal/render"
 	"strings"
 	"syscall"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 // Transcript freezes the selected branch as dense, user-readable Markdown.

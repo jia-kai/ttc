@@ -10,11 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"scicode/internal/provider"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/provider"
 )
 
 func TestExplicitAndSyntheticNoneReasoning(t *testing.T) {

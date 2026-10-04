@@ -22,9 +22,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"scicode/internal/provider"
-	"scicode/internal/provider/openai"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/provider/openai"
+	"ttc/internal/tool"
 )
 
 // pipeListener exercises net/http's actual request parsing, connection lifecycle

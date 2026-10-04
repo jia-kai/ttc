@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestCacheAffinityIsRequestScopedAndKeepsStorageDisabled(t *testing.T) {

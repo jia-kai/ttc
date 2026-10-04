@@ -5,7 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // pendingPreviewBytes caps source work per visible row, independently of the

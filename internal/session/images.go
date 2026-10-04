@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"scicode/internal/prompts"
 	"sort"
 	"sync"
+	"ttc/internal/prompts"
 
-	"scicode/internal/assets"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/assets"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 // ImageSnapshot identifies immutable source pixels in a private history asset.

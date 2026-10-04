@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/scratch"
-	"scicode/internal/skills"
-	"scicode/internal/tool"
-	"scicode/internal/workspace"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/scratch"
+	"ttc/internal/skills"
+	"ttc/internal/tool"
+	"ttc/internal/workspace"
 )
 
 // contextCursor belongs to one actor, advances after successful request admission,

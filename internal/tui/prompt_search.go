@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // promptSearch searches a frozen, bounded prompt snapshot. Folded text is built

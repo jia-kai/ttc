@@ -1,4 +1,4 @@
-module scicode
+module ttc
 
 go 1.26.5
 

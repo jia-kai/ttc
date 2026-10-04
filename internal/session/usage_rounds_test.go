@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestUsageAcrossToolRoundsAndTurns(t *testing.T) {

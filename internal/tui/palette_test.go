@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 func TestInlineCodeUsesLightForegroundWithoutBackground(t *testing.T) {

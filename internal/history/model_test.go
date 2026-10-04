@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestModelPreferencesRestartIsolationAndNoSessions(t *testing.T) {

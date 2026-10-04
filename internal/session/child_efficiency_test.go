@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"scicode/internal/history"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
+	"ttc/internal/history"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
 )
 
 func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T) {

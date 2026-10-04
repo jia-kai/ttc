@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func assertChildCapabilities(t *testing.T, r *Runtime, request provider.Request) {

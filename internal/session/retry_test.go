@@ -3,11 +3,11 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"scicode/internal/tool"
 	"strings"
 	"testing"
+	"ttc/internal/tool"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T) {

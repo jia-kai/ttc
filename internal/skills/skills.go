@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	defaultskills "scicode/default-skills"
 	"sort"
 	"strings"
+	defaultskills "ttc/default-skills"
 )
 
 // Skill identifies a discovered document; Content is loaded only on request.

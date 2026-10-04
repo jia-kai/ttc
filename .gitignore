@@ -4,5 +4,7 @@
 /coverage.out
 __pycache__/
 *.py[cod]
+task_plan.md
 
 /internal/prompts/assets_generated.go
+

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestRetryAfterAndSaturatedBackoff(t *testing.T) {

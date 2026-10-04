@@ -2,8 +2,8 @@ package session
 
 import (
 	"errors"
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
 	"unicode/utf8"
 )
 

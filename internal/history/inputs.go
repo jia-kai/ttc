@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 type inputMetadata struct {

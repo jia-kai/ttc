@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {

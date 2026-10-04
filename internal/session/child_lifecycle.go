@@ -9,12 +9,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/history"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/render"
-	"scicode/internal/tool"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/render"
+	"ttc/internal/tool"
 )
 
 // codingChild retains one isolated context. childStartMu protects all fields;

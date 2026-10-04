@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 const maxRetryDelay = 30 * time.Second

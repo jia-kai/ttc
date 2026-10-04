@@ -6,14 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"scicode/internal/prompts"
 	"strings"
 	"syscall"
 	"time"
+	"ttc/internal/prompts"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 const summaryInstructions = prompts.Compaction

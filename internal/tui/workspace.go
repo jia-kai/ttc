@@ -2,9 +2,9 @@ package tui
 
 import (
 	"context"
-	"scicode/internal/workspace"
 	"sync"
 	"time"
+	"ttc/internal/workspace"
 )
 
 // workspaceMonitor owns periodic Git queries; drawing never starts a process.

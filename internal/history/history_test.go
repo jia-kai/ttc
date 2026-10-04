@@ -12,11 +12,11 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"scicode/internal/provider"
-	"scicode/internal/render"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestGeneratedIDsAreCompactOpaqueAndURLSafe(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"testing"
 
-	"scicode/internal/filelock"
+	"ttc/internal/filelock"
 )
 
 func TestInstanceMetadataSizeLimit(t *testing.T) {

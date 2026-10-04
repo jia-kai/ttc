@@ -11,9 +11,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 )
 
 func TestPromptSearchNewestFirstEditingAndExactSelection(t *testing.T) {

@@ -20,8 +20,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"scicode/internal/filelock"
-	"scicode/internal/history"
+	"ttc/internal/filelock"
+	"ttc/internal/history"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"

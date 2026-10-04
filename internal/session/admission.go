@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/history"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 var errNeedsCompaction = errors.New("request requires compaction")

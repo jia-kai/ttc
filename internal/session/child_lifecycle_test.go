@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func childInvocation(t *testing.T, r *Runtime, callID, arguments string) map[string]any {

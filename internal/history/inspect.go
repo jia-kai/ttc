@@ -3,8 +3,8 @@ package history
 import (
 	"encoding/json"
 	"fmt"
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 // InternalEvent identifies durable ordering and delivery records whose effects

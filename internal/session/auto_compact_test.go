@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 func compactionBudget(t *testing.T, r *Runtime) {

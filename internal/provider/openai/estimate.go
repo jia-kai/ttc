@@ -3,7 +3,7 @@ package openai
 import (
 	"encoding/json"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 // EstimateReplay counts model-visible content rather than serialized envelopes.

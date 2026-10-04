@@ -3,9 +3,9 @@ package tui
 import (
 	"fmt"
 	"github.com/charmbracelet/x/ansi"
-	"scicode/internal/render"
 	"strings"
 	"testing"
+	"ttc/internal/render"
 )
 
 func transcriptOf(lines []line) *transcript {

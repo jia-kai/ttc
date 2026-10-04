@@ -10,9 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"scicode/internal/filelock"
-	"scicode/internal/provider"
 	"strings"
+	"ttc/internal/filelock"
+	"ttc/internal/provider"
 	"unicode"
 	"unicode/utf8"
 

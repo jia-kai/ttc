@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"scicode/internal/tool"
+	"ttc/internal/tool"
 )
 
 func webSearchConfigPath() (string, error) {

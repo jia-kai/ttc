@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/filelock"
+	"ttc/internal/filelock"
 )
 
 func TestSharedCredentialsRefreshOnceAndReloadRotatedTokens(t *testing.T) {

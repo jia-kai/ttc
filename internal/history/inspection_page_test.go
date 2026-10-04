@@ -7,8 +7,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 func TestInspectionPagesBoundLargeToolAndMessageBodies(t *testing.T) {

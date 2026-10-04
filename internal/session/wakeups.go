@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"scicode/internal/history"
-	"scicode/internal/prompts"
-	"scicode/internal/tool"
 	"sort"
 	"sync"
 	"time"
+	"ttc/internal/history"
+	"ttc/internal/prompts"
+	"ttc/internal/tool"
 )
 
 type wakeup struct {

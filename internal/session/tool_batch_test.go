@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func batchIntents(t *testing.T, r *Runtime, actor string, calls []provider.ToolCall) (string, []string) {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/jobs"
+	"ttc/internal/jobs"
 )
 
 func TestUnknownJobHandlesReturnNotFound(t *testing.T) {

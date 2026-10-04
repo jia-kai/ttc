@@ -7,15 +7,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/scratch"
-	"scicode/internal/skills"
-	"scicode/internal/tool"
-	"scicode/internal/workspace"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/scratch"
+	"ttc/internal/skills"
+	"ttc/internal/tool"
+	"ttc/internal/workspace"
 )
 
 func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime, chan Event) {

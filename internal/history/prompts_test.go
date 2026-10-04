@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/history"
-	"scicode/internal/provider"
+	"ttc/internal/history"
+	"ttc/internal/provider"
 )
 
 func TestSessionPickerReloadPreservesEditedDraft(t *testing.T) {

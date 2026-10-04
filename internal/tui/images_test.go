@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/assets"
-	"scicode/internal/graphics"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	"ttc/internal/assets"
+	"ttc/internal/graphics"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v2"
 )

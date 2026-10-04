@@ -6,10 +6,10 @@ import (
 	"reflect"
 	"testing"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func TestUnchangedRuntimeAdmissionsKeepContextBounded(t *testing.T) {

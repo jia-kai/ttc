@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/scratch"
-	"scicode/internal/session"
-	"scicode/internal/skills"
-	"scicode/internal/tool"
-	"scicode/internal/workspace"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/scratch"
+	"ttc/internal/session"
+	"ttc/internal/skills"
+	"ttc/internal/tool"
+	"ttc/internal/workspace"
 )
 
 // helpTestProvider records inference requests and holds the first response until

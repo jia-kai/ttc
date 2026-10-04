@@ -3,8 +3,8 @@ package tui
 
 import (
 	"fmt"
-	"scicode/internal/render"
 	"strings"
+	"ttc/internal/render"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"

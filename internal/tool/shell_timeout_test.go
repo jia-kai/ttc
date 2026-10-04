@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/jobs"
+	"ttc/internal/jobs"
 )
 
 func TestShellTimeoutValidationAndForegroundEnforcement(t *testing.T) {

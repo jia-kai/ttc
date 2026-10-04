@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func TestQuestionRejectsNonMainExecution(t *testing.T) {

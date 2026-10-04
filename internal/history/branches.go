@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"scicode/internal/provider"
-	"scicode/internal/render"
+	"ttc/internal/provider"
+	"ttc/internal/render"
 )
 
 // BranchNode is bounded display metadata for one immutable history entry.

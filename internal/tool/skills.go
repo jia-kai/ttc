@@ -2,8 +2,8 @@ package tool
 
 import (
 	"context"
-	"scicode/internal/prompts"
-	"scicode/internal/skills"
+	"ttc/internal/prompts"
+	"ttc/internal/skills"
 )
 
 // AddSkills exposes exact-name instruction loading from the selected catalog.

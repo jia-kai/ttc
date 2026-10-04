@@ -1,6 +1,6 @@
 package tui
 
-import "scicode/internal/session"
+import "ttc/internal/session"
 
 // modalState owns one foreground view and its asynchronous image load.
 // Clearing it discards late source results without using window titles as state.

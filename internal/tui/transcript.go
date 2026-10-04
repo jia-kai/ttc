@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // transcript owns a lazily laid-out history. Row heights for unseen blocks are

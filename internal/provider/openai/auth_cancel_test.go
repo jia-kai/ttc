@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestAuthenticationWaitCanBeCanceledDuringAnotherRefresh(t *testing.T) {

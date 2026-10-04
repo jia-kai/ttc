@@ -9,10 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"scicode/internal/provider"
 	"sort"
 	"strings"
 	"syscall"
+	"ttc/internal/provider"
 	"unicode/utf8"
 )
 

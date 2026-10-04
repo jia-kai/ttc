@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/history"
-	"scicode/internal/provider"
+	"ttc/internal/history"
+	"ttc/internal/provider"
 )
 
 func retentionFixture(t *testing.T) (*Runtime, chan Event, string) {

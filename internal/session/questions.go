@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	contextbuild "scicode/internal/context"
-	"scicode/internal/history"
-	"scicode/internal/prompts"
-	"scicode/internal/tool"
 	"strings"
 	"sync"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
+	"ttc/internal/prompts"
+	"ttc/internal/tool"
 	"unicode/utf8"
 )
 

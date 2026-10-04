@@ -2,7 +2,7 @@ package session
 
 import (
 	"fmt"
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 // CurrentSelection returns the immutable selection used by the most recent request.

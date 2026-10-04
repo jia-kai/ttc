@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 type historyReader interface {

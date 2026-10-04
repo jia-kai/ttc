@@ -3,8 +3,8 @@ package tui
 import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/render"
 	"testing"
+	"ttc/internal/render"
 )
 
 func TestWrappedRowsCarryStyleAndIgnoreControls(t *testing.T) {

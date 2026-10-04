@@ -4,11 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"scicode/internal/history"
-	"scicode/internal/provider"
 	"strings"
 	"sync"
 	"testing"
+	"ttc/internal/history"
+	"ttc/internal/provider"
 )
 
 func TestMutationReadsRejectShellGrownFile(t *testing.T) {

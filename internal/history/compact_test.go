@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	ctxmgr "scicode/internal/context"
-	"scicode/internal/provider"
+	ctxmgr "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *testing.T) {

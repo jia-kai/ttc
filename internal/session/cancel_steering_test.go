@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/provider"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/provider"
 )
 
 func enableCancelTestSteering(r *Runtime) {

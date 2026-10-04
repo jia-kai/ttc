@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func TestSubagentRequiresExplicitPersistence(t *testing.T) {

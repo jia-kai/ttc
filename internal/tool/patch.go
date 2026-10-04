@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"scicode/internal/prompts"
-	"scicode/internal/workspace"
 	"strings"
+	"ttc/internal/prompts"
+	"ttc/internal/workspace"
 )
 
 type patchArgs struct {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // Location uses absolute disk paths and 1-based Unicode code-point coordinates.

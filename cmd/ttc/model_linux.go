@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 // startupSelection resolves saved IDs against current catalog metadata. CLI

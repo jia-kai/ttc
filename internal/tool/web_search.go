@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"scicode/internal/prompts"
 	"strings"
 	"time"
+	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 type webSearchArgs struct {

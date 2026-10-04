@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"scicode/internal/history"
-	"scicode/internal/provider"
-	"scicode/internal/scratch"
-	"scicode/internal/workspace"
 	"strings"
 	"testing"
+	"ttc/internal/history"
+	"ttc/internal/provider"
+	"ttc/internal/scratch"
+	"ttc/internal/workspace"
 )
 
 func toolFixture(t *testing.T) (*Registry, *workspace.Manager, Execution, int64) {

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func lifetimeUsage() provider.Usage {

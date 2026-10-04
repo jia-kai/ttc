@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func admissionTurn(t *testing.T, r *Runtime) string {

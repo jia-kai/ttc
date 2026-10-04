@@ -11,7 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {

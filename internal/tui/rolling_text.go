@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/render"
+	"ttc/internal/render"
 )
 
 // rollingText is a single-line, cell-clipped text widget. Overflow bounces at

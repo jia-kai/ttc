@@ -11,14 +11,14 @@ import (
 	"sync"
 	"time"
 
-	contextbuild "scicode/internal/context"
-	"scicode/internal/history"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/render"
-	"scicode/internal/skills"
-	"scicode/internal/tool"
-	"scicode/internal/workspace"
+	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/render"
+	"ttc/internal/skills"
+	"ttc/internal/tool"
+	"ttc/internal/workspace"
 )
 
 // Event contains a view update, never authentication state. EntryID makes every record inspectable.

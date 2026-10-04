@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"scicode/internal/provider"
+	"ttc/internal/provider"
 )
 
 func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {

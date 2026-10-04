@@ -2,15 +2,15 @@ package tui
 
 import (
 	"fmt"
-	"scicode/internal/workspace"
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/workspace"
 
 	"github.com/gdamore/tcell/v2"
-	"scicode/internal/jobs"
-	"scicode/internal/provider"
-	"scicode/internal/session"
+	"ttc/internal/jobs"
+	"ttc/internal/provider"
+	"ttc/internal/session"
 )
 
 func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {

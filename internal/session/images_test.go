@@ -8,10 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"scicode/internal/provider"
-	"scicode/internal/tool"
 	"strings"
 	"testing"
+	"ttc/internal/provider"
+	"ttc/internal/tool"
 )
 
 func showTestImage(t *testing.T, r *Runtime, id, actor string, click bool) ImageSnapshot {
