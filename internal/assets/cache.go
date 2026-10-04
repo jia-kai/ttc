@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -13,18 +14,14 @@ import (
 	"image/png"
 	"io"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
-	"ttc/internal/history"
+	"ttc/internal/blobcache"
 )
 
 // Limits bound encoded source bytes and decoded pixel allocation.
-const MaxBytes = 32 << 20
+const MaxBytes = blobcache.MaxBytes
 const MaxPixels = 16 << 20
 
 // Config validates encoded size and canvas dimensions without allocating pixels.
@@ -79,24 +76,30 @@ func Read(path string) ([]byte, image.Image, error) {
 	return b, m, err
 }
 
-// Cache owns only derived PNG files. Original history assets are never pruned.
-// Methods serialize render creation and periodically prune least-recently-used files.
+// Cache serializes render creation while sharing disk storage and eviction with
+// original image bytes. Durable history snapshots are outside this cache.
 type Cache struct {
-	Root      string
-	Limit     int64
-	TTL       time.Duration
-	mu        sync.Mutex
-	lastPrune time.Time
-	size      int64
+	*blobcache.Cache
+	gate chan struct{}
 }
 
-// New opens a private cache with a 256 MiB limit and 30-day idle retention.
+// New opens an absolute private cache root with a shared 4 GiB budget and
+// 30-day idle retention. Use Default for production's shared XDG cache.
 func New(root string) (*Cache, error) {
-	if err := history.PrivateDir(root); err != nil {
+	c, err := blobcache.New(root)
+	if err != nil {
 		return nil, err
 	}
-	c := &Cache{Root: root, Limit: 256 << 20, TTL: 30 * 24 * time.Hour}
-	return c, c.Prune()
+	return &Cache{Cache: c, gate: make(chan struct{}, 1)}, nil
+}
+
+// Default opens the shared os.UserCacheDir()/ttc/assets blob cache.
+func Default() (*Cache, error) {
+	c, err := blobcache.Default()
+	if err != nil {
+		return nil, err
+	}
+	return &Cache{Cache: c, gate: make(chan struct{}, 1)}, nil
 }
 
 // Key identifies the render inputs, including backend revision and geometry.
@@ -106,87 +109,42 @@ func Key(parts ...string) string {
 }
 
 // Get returns a cached PNG or creates it atomically. Errors are never cached.
+// Creation is serialized in this wrapper, but never holds a filesystem lock.
 func (c *Cache) Get(ctx context.Context, key string, create func(context.Context) (image.Image, error)) (image.Image, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(key) != 64 || strings.Trim(key, "0123456789abcdef") != "" {
-		return nil, fmt.Errorf("invalid asset key")
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	if err := ctx.Err(); err != nil {
+	data, err := c.Cache.Get(ctx, "render", key)
+	if err == nil {
+		return Decode(data)
+	}
+	if !errors.Is(err, blobcache.ErrMiss) {
 		return nil, err
 	}
-	path := filepath.Join(c.Root, key+".png")
-	if _, m, err := Read(path); err == nil {
-		now := time.Now()
-		if err = os.Chtimes(path, now, now); err != nil {
-			return nil, err
-		}
-		return m, nil
-	} else if !os.IsNotExist(err) {
-		return nil, err
+	if create == nil {
+		return nil, fmt.Errorf("missing render callback")
 	}
 	m, err := create(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var b bytes.Buffer
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m == nil || m.Bounds().Dx() <= 0 || m.Bounds().Dy() <= 0 || m.Bounds().Dx() > MaxPixels/m.Bounds().Dy() {
+		return nil, fmt.Errorf("render dimensions are invalid or exceed %d pixels", MaxPixels)
+	}
+	b := limitedBuffer{limit: MaxBytes}
 	if err = png.Encode(&b, m); err != nil {
 		return nil, err
 	}
-	if b.Len() > MaxBytes {
-		return nil, fmt.Errorf("render exceeds image byte limit")
-	}
-	if err = history.AtomicFile(path, b.Bytes(), 0600); err != nil {
+	if err = c.Cache.Put(ctx, "render", key, b.buffer.Bytes()); err != nil {
 		return nil, err
 	}
-	c.size += int64(b.Len())
-	if c.size > c.Limit || time.Since(c.lastPrune) > time.Minute {
-		if err = c.prune(); err != nil {
-			return nil, err
-		}
-	}
 	return m, nil
-}
-
-// Prune enforces the disk limit and idle TTL; safe to call between render batches.
-func (c *Cache) Prune() error { c.mu.Lock(); defer c.mu.Unlock(); return c.prune() }
-func (c *Cache) prune() error {
-	entries, err := os.ReadDir(c.Root)
-	if err != nil {
-		return err
-	}
-	type file struct {
-		path string
-		size int64
-		at   time.Time
-	}
-	var files []file
-	var total int64
-	now := time.Now()
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".png") {
-			continue
-		}
-		st, err := e.Info()
-		if err != nil {
-			return err
-		}
-		files = append(files, file{filepath.Join(c.Root, e.Name()), st.Size(), st.ModTime()})
-		total += st.Size()
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].at.Before(files[j].at) })
-	for _, f := range files {
-		if total <= c.Limit && now.Sub(f.at) <= c.TTL {
-			continue
-		}
-		if err := os.Remove(f.path); err != nil {
-			return err
-		}
-		total -= f.size
-	}
-	c.lastPrune = now
-	c.size = total
-	return nil
 }
 
 // Resize fits an image inside pixel bounds, preserving aspect ratio and transparency.

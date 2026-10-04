@@ -21,10 +21,13 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"ttc/internal/blobcache"
 )
 
 func fileImage(t *testing.T, data []byte) Image {
 	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "source.bin")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
@@ -112,7 +115,8 @@ func TestFileImageURLSourceFailures(t *testing.T) {
 		if err := os.WriteFile(im.Path, []byte("modified"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if url, err := im.URL(context.Background()); err == nil || url != "" || !strings.Contains(err.Error(), "checksum mismatch") {
+		var unavailable *UnavailableImageError
+		if url, err := im.URL(context.Background()); !errors.As(err, &unavailable) || url != "" || !strings.Contains(err.Error(), "checksum mismatch") {
 			t.Fatal("changed file accepted", url, err)
 		}
 	})
@@ -165,6 +169,110 @@ func TestFileImageURLSourceFailures(t *testing.T) {
 			t.Fatal("FIFO open blocked waiting for a writer")
 		}
 	})
+}
+
+func TestImageURLUsesCachedOriginalUntilEviction(t *testing.T) {
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
+		t.Fatal(err)
+	}
+	im := fileImage(t, data.Bytes())
+	ctx := context.Background()
+	want, err := im.URL(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := blobcache.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(im.Path, []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := im.URL(ctx); err != nil || got != want {
+		t.Fatal("overwritten source replaced cached original", err)
+	}
+	if err := os.Remove(im.Path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := im.URL(ctx); err != nil || got != want {
+		t.Fatal("deleted source invalidated cached original", err)
+	}
+	cache.TTL = time.Nanosecond
+	if err := cache.Prune(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var unavailable *UnavailableImageError
+	if got, err := im.URL(ctx); !errors.As(err, &unavailable) || !errors.Is(err, os.ErrNotExist) || got != "" {
+		t.Fatal("uncached missing source was not unavailable", err)
+	}
+	if err := os.WriteFile(im.Path, data.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := im.URL(ctx); err != nil || got != want {
+		t.Fatal("restored original did not repopulate cache", err)
+	}
+}
+
+func TestImageURLMissingCacheStorageIsNotUnavailable(t *testing.T) {
+	im := fileImage(t, []byte("original"))
+	cache, err := blobcache.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(cache.Root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(im.Path); err != nil {
+		t.Fatal(err)
+	}
+	var unavailable *UnavailableImageError
+	if _, err := im.URL(context.Background()); err == nil || errors.As(err, &unavailable) || !strings.Contains(err.Error(), "read cached image") {
+		t.Fatal("missing cache storage was hidden as unavailable pixels", err)
+	}
+}
+
+func TestImageURLCacheFailuresAreNotUnavailable(t *testing.T) {
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
+		t.Fatal(err)
+	}
+	im := fileImage(t, data.Bytes())
+	cache, err := blobcache.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put(context.Background(), "original", im.SHA256, []byte("corrupt")); err != nil {
+		t.Fatal(err)
+	}
+	var unavailable *UnavailableImageError
+	if _, err := im.URL(context.Background()); err == nil || errors.As(err, &unavailable) || !strings.Contains(err.Error(), "cached image SHA-256") {
+		t.Fatal("cache corruption was hidden", err)
+	}
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CACHE_HOME", blocked)
+	if _, err := im.URL(context.Background()); err == nil || errors.As(err, &unavailable) {
+		t.Fatal("cache storage failure was hidden", err)
+	}
+}
+
+func TestImageURLUnsupportedCacheBytesRemainFatal(t *testing.T) {
+	data := []byte("not an image")
+	im := fileImage(t, data)
+	cache, err := blobcache.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put(context.Background(), "original", im.SHA256, data); err != nil {
+		t.Fatal(err)
+	}
+	var unavailable *UnavailableImageError
+	if _, err := im.URL(context.Background()); err == nil || errors.As(err, &unavailable) || !strings.Contains(err.Error(), "cached image: unsupported image type") {
+		t.Fatal("unsupported cached bytes were hidden as unavailable", err)
+	}
 }
 
 type cancelImageReader struct {

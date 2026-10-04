@@ -260,7 +260,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	var renderer *imageRenderer
 	var renderResults <-chan renderReply
 	if g != nil {
-		renderer, e = newImageRenderer(ctx, f.Runtime.Store.Root, g)
+		renderer, e = newImageRenderer(ctx, g)
 		if e != nil {
 			return e
 		}

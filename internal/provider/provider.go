@@ -107,8 +107,9 @@ type ToolStart struct {
 }
 
 // Image is either a queued human attachment's data URL or a file-backed tool
-// image. Tool images store only an absolute Path and SHA256; request encoding
-// rereads and verifies the file without resizing or recompression.
+// image. Tool images persist only an absolute Path and SHA256. Original encoded
+// bytes live in a disposable filesystem cache; a cache miss verifies the source
+// without resizing, recompression or substituting changed contents.
 type Image struct {
 	Path    string `json:"path"`
 	DataURL string `json:"data_url,omitempty"`

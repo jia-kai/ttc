@@ -100,10 +100,14 @@ it never replaces or changes model-facing results.
   reject animated or incomplete GIF containers without flattening them.
   Images require a vision-capable model and reject supplied `offset`/`limit`.
   History and tool records store only the absolute local path, SHA-256 checksum
-  and metadata, never image payloads or copied snapshots. The adapter rereads
-  and verifies the source for every request containing the image; missing or
-  changed sources fail request assembly with a file/checksum error. Retained
-  image references survive loading and compaction. No graphics terminal is needed.
+  and metadata, never image payloads. Successful reads cache the original bytes
+  in the shared filesystem blob cache (4 GiB hard cap, 30-day idle retention).
+  Uploads use cached originals; a miss verifies the saved source and repopulates
+  the cache. If verification fails, only the unavailable attachment becomes an
+  explicit outgoing text notice containing its path, expected checksum and reason;
+  history and tool association remain unchanged. Changed bytes are never substituted.
+  Invalid references, cancellation and cache errors still fail. Retained references
+  survive loading and compaction. No graphics terminal is needed.
 - Other binary files return `unsupported_content`; missing paths return `not_found`.
   Reads follow symlinks and use one descriptor for validation and pagination;
   special files, including FIFOs, are rejected without blocking.

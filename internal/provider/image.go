@@ -13,17 +13,35 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"ttc/internal/blobcache"
 )
 
-const maxImageBytes = 32 << 20
+const maxImageBytes = blobcache.MaxBytes
 
-// URL returns an inline attachment unchanged, or loads a file reference's
-// original encoded bytes into a transport-only data URL. File references require
-// an absolute path and lowercase SHA-256 checksum. Reads are bounded to 32 MiB,
-// check cancellation between chunks, and reject nonregular descriptors without
-// blocking on FIFOs. Missing, changed and unsupported files are errors; no files
-// are copied, resized or recompressed. Decoded pixel limits are checked by read()
-// before a reference is persisted, not during request assembly.
+// UnavailableImageError reports a valid reference whose original bytes are no
+// longer cached and cannot be reconstructed from its source. Adapters represent
+// this as an explicit text notice, preserving canonical history and tool IDs.
+// Invalid references, cancellation and cache failures are not unavailable images.
+type UnavailableImageError struct {
+	Image Image
+	Err   error // Failure to reconstruct the original bytes from Image.Path.
+}
+
+// Error describes the omitted attachment and its failed source verification.
+func (e *UnavailableImageError) Error() string {
+	return fmt.Sprintf("image unavailable: original pixels omitted for %q (expected SHA-256 %s); cache miss and source could not be verified: %v", e.Image.Path, e.Image.SHA256, e.Err)
+}
+
+// Unwrap returns the source reconstruction error.
+func (e *UnavailableImageError) Unwrap() error { return e.Err }
+
+// URL returns an inline attachment unchanged, or resolves original encoded
+// bytes cache-first into a transport-only data URL. On a miss it verifies the
+// source and repopulates the shared cache. Reads are bounded to 32 MiB and
+// cancelable; nonregular descriptors are rejected without blocking on FIFOs.
+// Missing/changed sources return UnavailableImageError, never substitute new
+// contents. Decoded pixel limits are checked by read(), not request assembly.
 func (im Image) URL(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -51,11 +69,59 @@ func (im Image) URL(ctx context.Context) (string, error) {
 }
 
 func (im Image) fileURL(ctx context.Context) (string, error) {
+	cache, err := blobcache.Default()
+	if err != nil {
+		return "", fmt.Errorf("open image cache: %w", err)
+	}
+	data, err := cache.Get(ctx, "original", im.SHA256)
+	cached := err == nil
+	if errors.Is(err, blobcache.ErrMiss) {
+		data, err = im.sourceBytes(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", &UnavailableImageError{Image: im, Err: err}
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("read cached image: %w", err)
+	}
+	// Cached bytes are an external boundary. sourceBytes already verified a
+	// miss result, so only hits need another checksum check.
+	if cached {
+		checksum := sha256.Sum256(data)
+		if hex.EncodeToString(checksum[:]) != im.SHA256 {
+			return "", errors.New("cached image SHA-256 checksum mismatch")
+		}
+	}
+	mime := http.DetectContentType(data)
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif":
+	default:
+		err := fmt.Errorf("unsupported image type %q; expected PNG, JPEG or GIF", mime)
+		if !cached {
+			return "", &UnavailableImageError{Image: im, Err: err}
+		}
+		return "", fmt.Errorf("cached image: %w", err)
+	}
+	if !cached {
+		if err := cache.Put(ctx, "original", im.SHA256, data); err != nil {
+			return "", fmt.Errorf("cache reconstructed image: %w", err)
+		}
+	}
+	url := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return url, nil
+}
+
+func (im Image) sourceBytes(ctx context.Context) ([]byte, error) {
 	// Validate the opened descriptor rather than a racy pathname stat. Linux
 	// ignores O_NONBLOCK for regular files, but it prevents waiting on a FIFO.
 	f, err := os.OpenFile(im.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer f.Close()
 	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
@@ -63,41 +129,31 @@ func (im Image) fileURL(ctx context.Context) (string, error) {
 	st, err := f.Stat()
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
-		return "", err
+		return nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return "", errors.New("source is not a regular file")
+		return nil, errors.New("source is not a regular file")
 	}
 	if st.Size() > maxImageBytes {
-		return "", fmt.Errorf("source exceeds %d bytes", maxImageBytes)
+		return nil, fmt.Errorf("source exceeds %d bytes", maxImageBytes)
 	}
 	data, err := io.ReadAll(io.LimitReader(imageContextReader{ctx, f}, maxImageBytes+1))
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(data) > maxImageBytes {
-		return "", fmt.Errorf("source exceeds %d bytes", maxImageBytes)
+		return nil, fmt.Errorf("source exceeds %d bytes", maxImageBytes)
 	}
 	checksum := sha256.Sum256(data)
 	if hex.EncodeToString(checksum[:]) != im.SHA256 {
-		return "", errors.New("source SHA-256 checksum mismatch; original image has changed")
+		return nil, errors.New("source SHA-256 checksum mismatch; original image has changed")
 	}
-	mime := http.DetectContentType(data)
-	switch mime {
-	case "image/png", "image/jpeg", "image/gif":
-	default:
-		return "", fmt.Errorf("unsupported image type %q; expected PNG, JPEG or GIF", mime)
-	}
-	url := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return url, nil
+	return data, nil
 }
 
 type imageContextReader struct {

@@ -17,6 +17,7 @@ import (
 
 func toolFixture(t *testing.T) (*Registry, *workspace.Manager, Execution, int64) {
 	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	if _, e := scratch.Verify(); e != nil {
 		t.Fatal(e)
 	}

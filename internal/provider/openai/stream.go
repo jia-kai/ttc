@@ -173,6 +173,21 @@ func headers(req *http.Request, t Tokens) {
 	req.Header.Set("User-Agent", "ttc/0.1")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 }
+
+// imagePart degrades only unavailable original bytes, not invalid references,
+// cancellation or cache failures. Canonical messages remain unchanged.
+func imagePart(ctx context.Context, im provider.Image, textKind string) (map[string]any, error) {
+	url, err := im.URL(ctx)
+	if err != nil {
+		var unavailable *provider.UnavailableImageError
+		if errors.As(err, &unavailable) {
+			return map[string]any{"type": textKind, "text": unavailable.Error()}, nil
+		}
+		return nil, err
+	}
+	return map[string]any{"type": "input_image", "image_url": url}, nil
+}
+
 func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -204,11 +219,11 @@ func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 			if len(m.Images) > 0 {
 				parts := []any{map[string]any{"type": "input_text", "text": m.Content}}
 				for _, im := range m.Images {
-					url, err := im.URL(ctx)
+					part, err := imagePart(ctx, im, "input_text")
 					if err != nil {
 						return nil, fmt.Errorf("tool output %q image: %w", m.CallID, err)
 					}
-					parts = append(parts, map[string]any{"type": "input_image", "image_url": url})
+					parts = append(parts, part)
 				}
 				output = parts
 			}
@@ -225,11 +240,11 @@ func wire(ctx context.Context, req provider.Request) ([]byte, error) {
 				content = append(content, map[string]any{"type": kind, "text": m.Content})
 			}
 			for _, im := range m.Images {
-				url, err := im.URL(ctx)
+				part, err := imagePart(ctx, im, kind)
 				if err != nil {
 					return nil, fmt.Errorf("%s message image: %w", m.Role, err)
 				}
-				content = append(content, map[string]any{"type": "input_image", "image_url": url})
+				content = append(content, part)
 			}
 			message := map[string]any{"type": "message", "role": m.Role, "content": content}
 			if m.Role == "assistant" && m.Phase != "" {

@@ -20,6 +20,7 @@ import (
 
 func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime, chan Event) {
 	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	scratch.Verify()
 	store, e := history.Open(filepath.Join(t.TempDir(), "data"))
 	if e != nil {

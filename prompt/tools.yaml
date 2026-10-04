@@ -73,8 +73,9 @@ read:
   description: >-
     Read UTF-8 text, original PNG/JPEG/non-animated GIF pixels, or directory entries.
     Images require a vision-capable model; omit offset and limit. Image history
-    stores only the local path and SHA-256 checksum; missing or changed sources
-    fail later requests that include the image. For text/directories, offset is
+    stores only the local path and SHA-256 checksum; original bytes use a shared
+    disposable cache. On a miss, verify the source; unavailable originals become
+    explicit text notices, never substituted contents. For text/directories, offset is
     a 1-based line or sorted entry number (default 1); limit defaults to 200.
     Continue with next_offset. Paths may be absolute or relative to cwd.
 shell:

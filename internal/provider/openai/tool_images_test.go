@@ -17,12 +17,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"ttc/internal/blobcache"
 	"ttc/internal/provider"
 )
 
 func originalFileImage(t *testing.T, name string, data []byte) provider.Image {
 	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
@@ -67,16 +70,84 @@ func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
 			if err := os.WriteFile(im.Path, []byte("changed"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if body, err := wire(context.Background(), req); err == nil || body != nil || !strings.Contains(err.Error(), "checksum mismatch") {
-				t.Fatal("changed source did not fail reconstruction", err)
+			if got, err := wire(context.Background(), req); err != nil || !bytes.Equal(got, body) {
+				t.Fatal("changed source invalidated cached upload", err)
 			}
+			cache, err := blobcache.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache.TTL = time.Nanosecond
+			if err := cache.Prune(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			checkNotice := func(reason string) {
+				t.Helper()
+				got, err := wire(context.Background(), req)
+				if err != nil {
+					t.Fatal("unavailable image blocked request", err)
+				}
+				var decoded struct{ Input []map[string]any }
+				if err := json.Unmarshal(got, &decoded); err != nil || len(decoded.Input) != 1 {
+					t.Fatal("invalid unavailable-image wire", string(got), err)
+				}
+				parts := decoded.Input[0][field].([]any)
+				if len(parts) != 2 || !reflect.DeepEqual(parts[0], map[string]any{"type": "input_text", "text": "image"}) {
+					t.Fatal("unavailable image lost original text", string(got))
+				}
+				part := parts[1].(map[string]any)
+				text, _ := part["text"].(string)
+				if part["type"] != "input_text" || !strings.Contains(text, "image unavailable") || !strings.Contains(text, im.Path) || !strings.Contains(text, im.SHA256) || !strings.Contains(text, reason) || part["image_url"] != nil {
+					t.Fatal("missing explicit unavailable-image diagnostic", string(got))
+				}
+				if role == "tool" && decoded.Input[0]["call_id"] != "read-file" {
+					t.Fatal("unavailable image lost tool association", string(got))
+				}
+				if !reflect.DeepEqual(req.Messages[0].Images, []provider.Image{im}) || req.Messages[0].Content != "image" {
+					t.Fatal("unavailable image mutated history", req.Messages[0])
+				}
+			}
+			checkNotice("checksum mismatch")
 			if err := os.Remove(im.Path); err != nil {
 				t.Fatal(err)
 			}
-			if body, err := wire(context.Background(), req); !errors.Is(err, os.ErrNotExist) || body != nil {
-				t.Fatal("missing source did not fail reconstruction", err)
-			}
+			checkNotice("no such file")
 		})
+	}
+}
+
+func TestUnavailableImageDoesNotDiscardOtherAttachments(t *testing.T) {
+	var missingBytes, validBytes bytes.Buffer
+	if err := png.Encode(&missingBytes, image.NewNRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(&validBytes, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
+		t.Fatal(err)
+	}
+	missing := originalFileImage(t, "missing.png", missingBytes.Bytes())
+	valid := originalFileImage(t, "valid.png", validBytes.Bytes())
+	if err := os.Remove(missing.Path); err != nil {
+		t.Fatal(err)
+	}
+	selection := provider.Selection{Provider: "openai", Model: provider.ScriptModel()}
+	selection.Model.Images = true
+	m := provider.Message{Role: "tool", CallID: "read-both", Content: "Original metadata", Images: []provider.Image{missing, valid}}
+	body, err := wire(context.Background(), provider.Request{ConversationID: "mixed-availability", Selection: selection, Messages: []provider.Message{m}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct{ Input []map[string]any }
+	if err := json.Unmarshal(body, &request); err != nil || len(request.Input) != 1 {
+		t.Fatal("invalid wire input", string(body), err)
+	}
+	parts := request.Input[0]["output"].([]any)
+	wantImage := map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(validBytes.Bytes())}
+	if request.Input[0]["call_id"] != m.CallID || len(parts) != 3 || !reflect.DeepEqual(parts[0], map[string]any{"type": "input_text", "text": m.Content}) || !reflect.DeepEqual(parts[2], wantImage) {
+		t.Fatal("unavailable attachment discarded valid image or text", string(body))
+	}
+	notice := parts[1].(map[string]any)
+	if notice["type"] != "input_text" || !strings.Contains(notice["text"].(string), missing.SHA256) {
+		t.Fatal("missing unavailable-image notice", string(body))
 	}
 }
 

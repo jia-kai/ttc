@@ -13,12 +13,14 @@ platform. See `docs/design.md` for module and persistence contracts.
   Core workflows must work without a graphical desktop or browser.
 - The interface is terminal native. Keep output readable in a terminal, and
   account for narrow panes, redirected output, and long-running sessions.
-- Image and formula renders share a disposable filesystem cache; original image
-  snapshots remain durable history assets. Pending image clicks are live runtime
-  state and require explicit user confirmation; never restore them from history.
-- LLM image reads store only original local paths, SHA-256 checksums and metadata,
-  not image payloads or copied snapshots. Request assembly verifies the source
-  and surfaces missing/changed-file errors; do not silently refresh or resize it.
+- Original LLM image bytes and image/formula renders share a disposable filesystem
+  blob cache with a 4 GiB hard cap and 30-day idle retention. `image_show` snapshots
+  remain durable history assets. Pending clicks are live state and require explicit
+  user confirmation; never restore them from history.
+- LLM `read()` history stores only original paths, SHA-256 checksums and metadata,
+  never payloads in the database. Upload cached original bytes; on a miss verify
+  the source. Unavailable originals become explicit outgoing text notices without
+  changing history. Never silently substitute changed contents or resize uploads.
 - Keep MathJax optional and its dependencies outside scratch/the executable.
   See `docs/mathjax.md` for setup, cache and worker contracts.
 - The sidebar reads copied runtime metadata. Refresh optional Git information

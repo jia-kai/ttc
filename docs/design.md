@@ -56,6 +56,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/graphics`        | Kitty detection, protocol and passthrough           |
 | `internal/lsp`             | Language servers, document sync and query results   |
 | `internal/assets`          | Images, render cache and warm MathJax backend       |
+| `internal/blobcache`       | Shared disposable filesystem blob storage          |
 
 - The leaf `internal/prompts` package contains generated assets; authoring,
   validation and build integration belong to [prompt/README.md](../prompt/README.md).
@@ -408,14 +409,23 @@ The concrete boundaries above are TTC decisions, informed by:
 ### Image and math assets
 
 - LLM `read()` images are file references: absolute original path and SHA-256
-  checksum, with metadata but no pixel payload or copied asset in the database.
+  checksum, with metadata but no image payload in the database. Successful reads
+  cache the exact validated original bytes under their checksum.
   Canonical tool messages retain references through history/load/compaction.
-  The provider adapter loads bounded original bytes and verifies the checksum
-  during request assembly; missing or changed sources surface errors. Native
+  The provider adapter uploads cached bytes without reopening the source. A miss
+  verifies the source and repopulates the cache; unavailable originals become
+  explicit outgoing text notices without modifying history or tool association.
+  Invalid references, cancellation and cache errors still fail requests. Native
   image tool outputs use backend-default detail, without client preprocessing.
 - Original `image_show` bytes are content-addressed private lineage artifacts.
-  Derived thumbnails/formulas use a separate 256 MiB render cache with 30-day
-  idle pruning. Keys include source, parameters, cell size and backend/lock hash.
+  Disposable original uploads and derived PNGs share `$XDG_CACHE_HOME/ttc/assets`
+  (default `~/.cache/ttc/assets`), a 4 GiB hard total cap and 30-day idle retention.
+  Hits refresh access time; TTL/least-recently-used pruning may evict active images.
+  Original checksum keys and render-recipe keys occupy separate namespaces.
+  Render keys include source, parameters, cell size and backend/lock hash.
+  Atomic publication and short-lived cancelable filesystem locks coordinate
+  writes/access/pruning across instances. No blob payloads enter the database;
+  durable lineage snapshots and MathJax dependencies are outside this budget.
 - One cancelable frontend worker decodes visible assets and owns optional warm
   MathJax/librsvg work for conversation and Markdown inspectors. Queue/transmit
   only visible rows; cancel offscreen tasks and discard decoded thumbnails.

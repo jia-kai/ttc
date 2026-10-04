@@ -72,8 +72,8 @@ type imageRenderer struct {
 	pendingClick          func(string) bool
 }
 
-func newImageRenderer(ctx context.Context, root string, g *graphics.Kitty) (*imageRenderer, error) {
-	cache, err := assets.New(filepath.Join(root, "render-cache"))
+func newImageRenderer(ctx context.Context, g *graphics.Kitty) (*imageRenderer, error) {
+	cache, err := assets.Default()
 	if err != nil {
 		return nil, err
 	}

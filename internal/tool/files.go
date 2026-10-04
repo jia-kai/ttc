@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"ttc/internal/assets"
+	"ttc/internal/blobcache"
 	"ttc/internal/provider"
 	"ttc/internal/workspace"
 )
@@ -103,6 +104,13 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		}
 		hash := sha256.Sum256(im.data)
 		checksum := hex.EncodeToString(hash[:])
+		cache, err := blobcache.Default()
+		if err != nil {
+			return nil, fmt.Errorf("open image cache: %w", err)
+		}
+		if err := cache.Put(ctx, "original", checksum, im.data); err != nil {
+			return nil, fmt.Errorf("cache image: %w", err)
+		}
 		return Output{
 			Value:  map[string]any{"kind": "image", "path": path, "sha256": checksum, "mime_type": im.mime, "width": im.width, "height": im.height, "bytes": len(im.data), "truncated": false},
 			Images: []provider.Image{{Path: path, SHA256: checksum}},

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"ttc/internal/assets"
+	"ttc/internal/blobcache"
 )
 
 func TestReadImagesStoreOnlyOriginalPathAndChecksum(t *testing.T) {
@@ -74,6 +75,14 @@ func TestReadImagesStoreOnlyOriginalPathAndChecksum(t *testing.T) {
 			if len(record.Images) != 1 || record.Images[0].Path != path || record.Images[0].SHA256 != checksum || record.Images[0].DataURL != "" {
 				t.Fatalf("image must be a file reference, not stored pixels: %+v", record.Images)
 			}
+			cache, err := blobcache.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cached, err := cache.Get(context.Background(), "original", checksum)
+			if err != nil || !bytes.Equal(cached, data.Bytes()) {
+				t.Fatal("read did not cache exact validated bytes", err)
+			}
 			version, encoded, err := record.Encode()
 			if err != nil {
 				t.Fatal(err)
@@ -91,6 +100,27 @@ func TestReadImagesStoreOnlyOriginalPathAndChecksum(t *testing.T) {
 				t.Fatal("read changed source bytes", err)
 			}
 		})
+	}
+}
+
+func TestReadImageCacheFailureHasNoAttachment(t *testing.T) {
+	r, w, x, req := toolFixture(t)
+	x.ImageInput = true
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w.Root, "image.png"), data.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CACHE_HOME", blocked)
+	record := invoke(t, r, w, x, req, "read", `{"path":"image.png"}`)
+	if len(record.Images) != 0 || !strings.Contains(string(record.Result), `"ok":false`) || !strings.Contains(string(record.Result), "open image cache") {
+		t.Fatal("read silently ignored cache failure", string(record.Result))
 	}
 }
 

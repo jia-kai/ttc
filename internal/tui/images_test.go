@@ -20,6 +20,13 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
+func isolatedImageFrontend(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	// These image tests do not need optional MathJax host binaries or installs.
+	t.Setenv("PATH", t.TempDir())
+}
+
 func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
@@ -39,7 +46,7 @@ func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) 
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var output bytes.Buffer
-	r, err := newImageRenderer(context.Background(), filepath.Join(root, "data"), graphics.New(&output, false))
+	r, err := newImageRenderer(context.Background(), graphics.New(&output, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +79,20 @@ func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) 
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("math installation blocked image rendering")
+	}
+	key := assets.Key("shared-render-root")
+	r.tasks <- renderTask{key: key, path: path}
+	select {
+	case reply := <-r.results:
+		if reply.key != key || reply.err != nil || reply.pixels == nil {
+			t.Fatalf("thumbnail render failed: %+v", reply)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("math installation blocked thumbnail rendering")
+	}
+	cachePath := filepath.Join(root, "cache", "ttc", "assets", "render-"+key+".blob")
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatal("renderer did not use shared XDG cache", err)
 	}
 	start := time.Now()
 	if err := r.close(); err != nil {
@@ -126,6 +147,7 @@ func TestPreviewCoordinatesPanZoomAndExplicitConfirm(t *testing.T) {
 }
 
 func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
+	isolatedImageFrontend(t)
 	p := &provider.Script{Responses: []provider.ScriptResponse{
 		{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png","request_click":true}`)}}},
 		{Text: "Select the image."}, {Text: "The image selection is still pending."}, {Prefix: "user: {", Text: "Archived image selection received."},
@@ -177,6 +199,7 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 }
 
 func TestConfirmOlderImageFollowsResumedReply(t *testing.T) {
+	isolatedImageFrontend(t)
 	p := &provider.Script{Responses: []provider.ScriptResponse{
 		{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte("{\"path\":\"field.png\",\"request_click\":true}")}}},
 		{Text: strings.Repeat("More research results.\n", 60)},
@@ -433,6 +456,7 @@ func TestCellMeasurementFallbackWarningAndRecovery(t *testing.T) {
 }
 
 func TestFallbackWarningIsVisibleAndNotModelContext(t *testing.T) {
+	isolatedImageFrontend(t)
 	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Warning check complete."}}}, graphics.New(&bytes.Buffer{}, false))
 	u.typeText("draw marker")
 	frame := u.wait(t, "draw marker")
@@ -476,6 +500,7 @@ func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
 	}
 }
 func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
+	isolatedImageFrontend(t)
 	p := &provider.Script{Responses: []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png","request_click":true}`)}}}, {Text: "Click the image."}, {Prefix: "user: {", Text: "Coordinate received."}}}
 	var output bytes.Buffer
 	g := graphics.New(&output, false)
@@ -540,6 +565,7 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 }
 
 func TestPastePreservesImagePreviewWithDismissedQuestion(t *testing.T) {
+	isolatedImageFrontend(t)
 	p := &provider.Script{Responses: []provider.ScriptResponse{
 		{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png"}`)}}},
 		questionScript()[0],

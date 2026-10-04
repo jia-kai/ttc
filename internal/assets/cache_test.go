@@ -72,7 +72,7 @@ func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 			if _, err := c.Get(ctx, Key("same"), create); err != nil {
 				t.Error(err)
 			}
-			if err := c.Prune(); err != nil {
+			if err := c.Prune(ctx); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -81,7 +81,7 @@ func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 	if calls != 1 {
 		t.Fatal("duplicate render", calls)
 	}
-	p := filepath.Join(c.Root, Key("same")+".png")
+	p := filepath.Join(c.Root, "render-"+Key("same")+".blob")
 	st, _ := os.Stat(p)
 	if st.Mode().Perm() != 0600 {
 		t.Fatal(st.Mode())
@@ -90,7 +90,7 @@ func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 	if err = os.Chtimes(p, old, old); err != nil {
 		t.Fatal(err)
 	}
-	if err = c.Prune(); err != nil {
+	if err = c.Prune(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(p); !os.IsNotExist(err) {
@@ -105,6 +105,9 @@ func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 	entries, _ := os.ReadDir(c.Root)
 	var total int64
 	for _, v := range entries {
+		if !strings.HasSuffix(v.Name(), ".blob") {
+			continue
+		}
 		st, _ := v.Info()
 		total += st.Size()
 	}
@@ -119,7 +122,7 @@ func TestCacheHitRejectsOversizedFileBeforeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := Key("oversized")
-	f, err := os.Create(filepath.Join(c.Root, key+".png"))
+	f, err := os.Create(filepath.Join(c.Root, "render-"+key+".blob"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +132,83 @@ func TestCacheHitRejectsOversizedFileBeforeRead(t *testing.T) {
 	f.Close()
 	if _, err = c.Get(context.Background(), key, func(context.Context) (image.Image, error) { t.Fatal("invalid hit treated as miss"); return nil, nil }); err == nil {
 		t.Fatal("accepted oversized cache hit")
+	}
+}
+
+func TestCacheSharesOriginalBudgetAndRecreatesExpiredRender(t *testing.T) {
+
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	c, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Root != filepath.Join(os.Getenv("XDG_CACHE_HOME"), "ttc", "assets") {
+		t.Fatal(c.Root)
+	}
+	ctx := context.Background()
+	key := Key("shared")
+	calls := 0
+	create := func(context.Context) (image.Image, error) {
+		calls++
+		return image.NewNRGBA(image.Rect(0, 0, 8, 8)), nil
+	}
+	if _, err = c.Get(ctx, key, create); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(c.Root, "render-"+key+".blob")
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Limit = st.Size()
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	if err = os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.Get(ctx, key, create); err != nil || calls != 2 {
+		t.Fatal("expired render reused", calls, err)
+	}
+	if err = c.Cache.Put(ctx, "original", key, make([]byte, st.Size())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(p); !os.IsNotExist(err) {
+		t.Fatal("original bytes did not evict rendered bytes", err)
+	}
+}
+
+func TestRenderCallbackDoesNotHoldFilesystemLockAndWaitIsCancelable(t *testing.T) {
+	c, err := New(filepath.Join(t.TempDir(), "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Get(context.Background(), Key("slow"), func(ctx context.Context) (image.Image, error) {
+			close(started)
+			<-release
+			return image.NewNRGBA(image.Rect(0, 0, 1, 1)), nil
+		})
+		done <- err
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	err = c.Cache.Put(ctx, "original", Key("parallel"), []byte("bytes"))
+	cancel()
+	if err != nil {
+		close(release)
+		<-done
+		t.Fatal("render held filesystem lock", err)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+	_, err = c.Get(ctx, Key("waiting"), nil)
+	cancel()
+	close(release)
+	if err != context.DeadlineExceeded {
+		t.Fatal("render wait ignored cancellation", err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -187,7 +267,7 @@ func TestCacheCreationAndWriteErrorsNotHidden(t *testing.T) {
 	if _, err = c.Get(canceled, Key("canceled"), nil); err == nil {
 		t.Fatal("ignored cancellation")
 	}
-	if err = os.Remove(c.Root); err != nil {
+	if err = os.RemoveAll(c.Root); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.WriteFile(c.Root, []byte("blocked"), 0600); err != nil {

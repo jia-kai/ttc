@@ -224,6 +224,11 @@ Background jobs, subagents, and timers belong to the active runtime. Compaction
 preserves them; switching sessions or exiting cancels them. Use tmux for work
 that needs to outlive TTC.
 
+Original `read()` image bytes and rendered thumbnails/formulas share a
+disposable filesystem cache at `${XDG_CACHE_HOME:-~/.cache}/ttc/assets`: **4 GiB
+total**, with least-recently-used eviction and **30-day idle retention**. Active
+images are not pinned.
+
 ## Testing
 
 Validation uses self-contained unit tests and a **local mock OpenAI HTTP

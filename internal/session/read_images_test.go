@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"image"
 	"image/png"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/blobcache"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/provider"
 	"ttc/internal/provider/openai"
@@ -150,11 +152,11 @@ func TestImageReadUsesProducingRequestVisionCapability(t *testing.T) {
 	}
 }
 
-func TestImageReadChangedOrMissingSourceSurfacesBeforeHTTP(t *testing.T) {
+func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "changed", true: "missing"}[missing], func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
-			path, _ := readImageFixture(t, r)
+			path, checksum := readImageFixture(t, r)
 			auth := filepath.Join(t.TempDir(), "auth.json")
 			credentials, err := json.Marshal(openai.Credentials{AuthMode: "chatgpt", Tokens: openai.Tokens{Access: "mock-token", AccountID: "mock-account"}, LastRefresh: time.Now()})
 			if err != nil {
@@ -164,14 +166,26 @@ func TestImageReadChangedOrMissingSourceSurfacesBeforeHTTP(t *testing.T) {
 				t.Fatal(err)
 			}
 			requests := 0
+			unavailable := false
 			adapter := openai.New(auth)
 			adapter.BaseURL = "http://mock.invalid"
-			adapter.Client = mockHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			adapter.Client = mockHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				step := requests
 				requests++
 				if step == 0 {
 					streamMockResponse(w, "image", step, []mockCall{{"read", map[string]string{"path": "source.png"}}}, "")
 				} else {
+					body, err := io.ReadAll(req.Body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if unavailable {
+						if !bytes.Contains(body, []byte("image unavailable")) || !bytes.Contains(body, []byte(path)) || !bytes.Contains(body, []byte(checksum)) || bytes.Contains(body, []byte("input_image")) {
+							t.Fatal("request lost explicit unavailable-image notice", string(body))
+						}
+					} else if !bytes.Contains(body, []byte("input_image")) || bytes.Contains(body, []byte("image unavailable")) {
+						t.Fatal("request lost cached image", string(body))
+					}
 					streamMockResponse(w, "image", step, nil, "Image received.")
 				}
 			}))
@@ -181,9 +195,7 @@ func TestImageReadChangedOrMissingSourceSurfacesBeforeHTTP(t *testing.T) {
 			if err := r.Run(&provider.Message{Role: "user", Content: "Read the image."}); err != nil || requests != 2 {
 				t.Fatal("initial image exchange failed", err, requests)
 			}
-			want := "checksum mismatch"
 			if missing {
-				want = "no such file"
 				err = os.Remove(path)
 			} else {
 				err = os.WriteFile(path, []byte("changed locally"), 0600)
@@ -191,9 +203,43 @@ func TestImageReadChangedOrMissingSourceSurfacesBeforeHTTP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = r.Run(&provider.Message{Role: "user", Content: "Continue using the image."})
-			if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), path) || requests != 2 {
-				t.Fatal("missing/changed source did not surface before HTTP", err, requests)
+			// Loading reconstructs history into a new runtime session, but the
+			// disposable cache survives and supplies the captured original.
+			if _, err := r.Command("/load " + r.Current()); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Run(&provider.Message{Role: "user", Content: "Continue using the image."}); err != nil || requests != 3 {
+				t.Fatal("missing/changed source blocked cached continuation", err, requests)
+			}
+			cache, err := blobcache.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache.TTL = time.Nanosecond
+			if err := cache.Prune(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			unavailable = true
+			if err := r.Run(&provider.Message{Role: "user", Content: "Continue after eviction."}); err != nil || requests != 4 {
+				t.Fatal("unavailable image blocked continuation", err, requests)
+			}
+			messages, err := r.Store.Messages(r.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, message := range messages {
+				for _, im := range message.Images {
+					if im.Path == path && im.SHA256 == checksum && im.DataURL == "" {
+						found = true
+					}
+				}
+				if strings.Contains(message.Content, "image unavailable") {
+					t.Fatal("transport notice altered canonical history")
+				}
+			}
+			if !found {
+				t.Fatal("eviction lost persisted image reference")
 			}
 		})
 	}
