@@ -11,7 +11,35 @@ import (
 	"ttc/internal/jobs"
 	"ttc/internal/provider"
 	"ttc/internal/session"
+	"ttc/internal/version"
 )
+
+func TestSidebarVersionHeader(t *testing.T) {
+	for _, width := range []int{120, 80} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			s := tcell.NewSimulationScreen("UTF-8")
+			if err := s.Init(); err != nil {
+				t.Fatal(err)
+			}
+			defer s.Fini()
+			s.SetSize(width, 24)
+			b := newSidebar()
+			b.sessionName = "Research session"
+			b.overlay = width < 100
+			b.bounds(width, 24, false)
+			b.draw(s)
+			if got := strings.TrimSpace(sidebarScreenText(s, b.left+1, 0, b.width-2)); got != "TTC "+version.Version {
+				t.Fatalf("sidebar header = %q, want TTC %s", got, version.Version)
+			}
+			if got := strings.TrimSpace(sidebarScreenText(s, b.left+1, 1, b.width-2)); got != b.sessionName {
+				t.Fatalf("session name = %q, want %q", got, b.sessionName)
+			}
+			if _, action := b.mouse(tcell.NewEventMouse(b.left+1, 0, tcell.Button1, 0)); !action.workspace {
+				t.Fatal("version header no longer opens session and workspace details")
+			}
+		})
+	}
+}
 
 func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 	cached := 800

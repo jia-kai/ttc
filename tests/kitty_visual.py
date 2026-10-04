@@ -142,6 +142,8 @@ def main():
             (root / (name + '.txt')).write_text(remote('get-text', '--extent', 'screen'))
 
         wait('/help')
+        header = wait('TTC 0.1.0').splitlines()[0]
+        assert header.rstrip().endswith('TTC 0.1.0'), 'version header is not at the top right'
         send('cursor draft')
         wait('> cursor draft')
         cursor_state = remote('get-text', '--extent', 'screen', '--add-cursor')

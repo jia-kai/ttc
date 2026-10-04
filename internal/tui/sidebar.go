@@ -9,6 +9,7 @@ import (
 	"ttc/internal/jobs"
 	"ttc/internal/render"
 	"ttc/internal/session"
+	"ttc/internal/version"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
@@ -164,7 +165,7 @@ func (b *sidebar) drawAt(s tcell.Screen, now time.Time) {
 	}
 	top := 0
 	if b.sessionName != "" {
-		drawText("session-header", b.left+1, top, b.width-2, "SESSION", style.Foreground(tcell.GetColor(render.CyanColor)).Bold(true))
+		drawText("session-header", b.left+1, top, b.width-2, "TTC "+version.Version, style.Foreground(tcell.GetColor(render.CyanColor)).Bold(true))
 		top++
 		drawText("session-name", b.left+1, top, b.width-2, b.sessionName, style.Foreground(tcell.GetColor(render.BlueColor)))
 		top++

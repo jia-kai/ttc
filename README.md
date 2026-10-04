@@ -253,3 +253,7 @@ live inference requests; the mock also handles web search locally. Type
 See [testing and demo instructions](tests/README.md) for coverage, individual
 regressions, saved artifacts, and automated Kitty screenshots on headless
 Linux.
+
+## License
+
+TTC is licensed under the [MIT License](LICENSE).
