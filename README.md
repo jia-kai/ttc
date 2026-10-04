@@ -15,6 +15,7 @@ be helpful to you:
   container. Agents should be fully autonomous within the predefined boundary.
 * Agents should provide a small set of useful LLM-facing tools to make effective
   use of LLM capabilities.
+* Agents should work out of the box, with minimum configurations needed.
 * Agents only need to run on Linux hosts.
 
 Besides conventional tools like file editing, web access, and shell execution,
