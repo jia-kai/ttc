@@ -11,7 +11,7 @@ import (
 func TestAttachmentDisplayMetadataDoesNotChangeWireInput(t *testing.T) {
 	text := "Review this file."
 	content := text + "\n\nAttachment (text): file.txt\nPreserve complete snapshot."
-	body, err := wire(provider.Request{ConversationID: "attachments", Selection: provider.Selection{Provider: "openai", Model: provider.ScriptModel()}, Messages: []provider.Message{{Role: "user", Content: content, UserText: &text}}})
+	body, err := wire(context.Background(), provider.Request{ConversationID: "attachments", Selection: provider.Selection{Provider: "openai", Model: provider.ScriptModel()}, Messages: []provider.Message{{Role: "user", Content: content, UserText: &text}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestNativePhaseStateUsageAndStatelessWire(t *testing.T) {
 	if usage == nil || usage.CachedInputTokens == nil || *usage.CachedInputTokens != 800 || usage.CacheWriteTokens == nil || *usage.CacheWriteTokens != 100 || usage.ReasoningOutputTokens == nil || *usage.ReasoningOutputTokens != 70 {
 		t.Fatal(usage)
 	}
-	body, err := wire(provider.Request{ConversationID: "test-conversation", Selection: selection, System: "Stable", Messages: []provider.Message{reply}})
+	body, err := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, System: "Stable", Messages: []provider.Message{reply}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestNativePhaseStateUsageAndStatelessWire(t *testing.T) {
 		t.Fatal(string(body))
 	}
 	reply.State = nil
-	body, err = wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{reply}})
+	body, err = wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{reply}})
 	if err != nil || !strings.Contains(string(body), `"phase":"commentary"`) {
 		t.Fatal(string(body), err)
 	}
@@ -96,7 +96,7 @@ func TestStateIsolationCodecAndCanonicalConsistency(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := provider.Message{Role: "assistant", State: &provider.ReplayState{Provider: test.provider, Model: test.model, Version: test.version, Items: []json.RawMessage{item}}}
-			body, err := wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}})
+			body, err := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}})
 			if (err != nil) != test.wantError {
 				t.Fatal(err)
 			}
@@ -109,7 +109,7 @@ func TestStateIsolationCodecAndCanonicalConsistency(t *testing.T) {
 		})
 	}
 	m := provider.Message{Role: "assistant", Content: "different", State: &provider.ReplayState{Provider: "openai", Model: "scripted", Version: 1, Items: []json.RawMessage{item}}}
-	if _, err := wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}}); err == nil {
+	if _, err := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}}); err == nil {
 		t.Fatal("accepted contradictory canonical state")
 	}
 }
@@ -157,7 +157,7 @@ func TestRefusalAndContradictoryNativeMessage(t *testing.T) {
 		if err != nil || m.Content != "Declined" || !completed {
 			t.Fatal(m, err)
 		}
-		if _, err = wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}}); err != nil {
+		if _, err = wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}}); err != nil {
 			t.Fatal(err)
 		}
 	}

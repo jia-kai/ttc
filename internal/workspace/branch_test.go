@@ -21,7 +21,7 @@ func branchWrite(t *testing.T, w *Manager, saved history.Session, turn, actor st
 	if _, err = w.Apply(context.Background(), saved.ID, calls[0], []Mutation{{Path: "result", Data: []byte(body)}}); err != nil {
 		t.Fatal(err)
 	}
-	id, err := w.Store.CallResult(saved.ID, turn, actor, calls[0], []byte(`{"ok":true}`), nil, render.Markdown{Revision: 1, Summary: "write result"}, actor == "main")
+	id, err := w.Store.CallResult(saved.ID, turn, actor, calls[0], []byte(`{"ok":true}`), nil, nil, render.Markdown{Revision: 1, Summary: "write result"}, actor == "main")
 	if err != nil {
 		t.Fatal(err)
 	}

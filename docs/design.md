@@ -407,6 +407,12 @@ The concrete boundaries above are TTC decisions, informed by:
 
 ### Image and math assets
 
+- LLM `read()` images are file references: absolute original path and SHA-256
+  checksum, with metadata but no pixel payload or copied asset in the database.
+  Canonical tool messages retain references through history/load/compaction.
+  The provider adapter loads bounded original bytes and verifies the checksum
+  during request assembly; missing or changed sources surface errors. Native
+  image tool outputs use backend-default detail, without client preprocessing.
 - Original `image_show` bytes are content-addressed private lineage artifacts.
   Derived thumbnails/formulas use a separate 256 MiB render cache with 30-day
   idle pruning. Keys include source, parameters, cell size and backend/lock hash.

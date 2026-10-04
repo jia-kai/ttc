@@ -175,7 +175,7 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 	result := json.RawMessage(`{"ok":true,"content":"future-result<exact>"}`)
 	exportBody := "Concise read result"
 	md := render.Markdown{Revision: 1, Summary: "read", Detail: "expanded details", Export: &exportBody}
-	resultID, err := s.CallResult(v.ID, turn, "main", calls[0], result, map[string]any{"version": 1, "result": result}, md, true)
+	resultID, err := s.CallResult(v.ID, turn, "main", calls[0], result, nil, map[string]any{"version": 1, "result": result}, md, true)
 	if err != nil {
 		t.Fatal(err)
 	}

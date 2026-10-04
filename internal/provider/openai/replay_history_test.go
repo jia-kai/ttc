@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func TestNativeToolReplayAfterHistorySerialization(t *testing.T) {
 	if err = m.AppendState(selection, replayVersion, native); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}}); err != nil {
+	if _, err = wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{m}}); err != nil {
 		t.Fatal("initial replay", err)
 	}
 	if _, _, err = store.Assistant(id, turn, "main", request, m); err != nil {
@@ -45,7 +46,7 @@ func TestNativeToolReplayAfterHistorySerialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: messages}); err != nil {
+	if _, err = wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: messages}); err != nil {
 		t.Fatal("saved replay", err)
 	}
 	if len(messages) != 2 || messages[0].Role != "user" || messages[1].Role != "assistant" {
@@ -64,7 +65,7 @@ func TestNativeToolReplayAfterHistorySerialization(t *testing.T) {
 		case "arguments":
 			changed.Calls[0].Arguments = json.RawMessage(`{"path":"changed"}`)
 		}
-		if _, err = wire(provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{changed}}); err == nil {
+		if _, err = wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: selection, Messages: []provider.Message{changed}}); err == nil {
 			t.Fatal("changed canonical", field, "accepted")
 		}
 	}

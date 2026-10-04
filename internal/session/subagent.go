@@ -310,7 +310,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			if _, err := fmt.Fprintln(stderr, record.Markdown.Summary); err != nil {
 				return err
 			}
-			messages = append(messages, provider.Message{Role: "tool", CallID: reply.Calls[i].ID, Content: string(record.Result)})
+			messages = append(messages, provider.Message{Role: "tool", CallID: reply.Calls[i].ID, Content: string(record.Result), Images: record.Images})
 		}
 		if streamErr != nil {
 			return streamErr

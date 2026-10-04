@@ -1,7 +1,9 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -169,6 +171,10 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
+	originalImage, err := os.ReadFile(filepath.Join(root, "fixture.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TTC_LSP_MODE", "normal")
 	t.Setenv("TTC_LSP_ENCODING", "utf-16")
 	var mu sync.Mutex
@@ -176,6 +182,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 	requests := 0
 	failures := make(chan error, 64)
 	var droppedFailures atomic.Int64
+	var imageOutputs atomic.Int64
 	failure := func(err error) {
 		select {
 		case failures <- err:
@@ -216,9 +223,9 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 				Effort string `json:"effort"`
 			} `json:"reasoning"`
 			Input []struct {
-				Type   string `json:"type"`
-				CallID string `json:"call_id"`
-				Output string `json:"output"`
+				Type   string          `json:"type"`
+				CallID string          `json:"call_id"`
+				Output json.RawMessage `json:"output"`
 			} `json:"input"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -250,8 +257,26 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		results := map[string]map[string]any{}
 		for _, item := range body.Input {
 			if item.Type == "function_call_output" {
+				var output string
+				if err := json.Unmarshal(item.Output, &output); err != nil {
+					var parts []struct {
+						Type     string `json:"type"`
+						Text     string `json:"text"`
+						ImageURL string `json:"image_url"`
+					}
+					if err := json.Unmarshal(item.Output, &parts); err != nil || len(parts) != 2 || parts[0].Type != "input_text" || parts[1].Type != "input_image" {
+						failure(fmt.Errorf("invalid native image tool output %s: %s", item.CallID, item.Output))
+						continue
+					}
+					data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(parts[1].ImageURL, "data:image/png;base64,"))
+					if err != nil || !bytes.Equal(data, originalImage) || item.CallID != "m1_read" && item.CallID != "c0_read" {
+						failure(fmt.Errorf("image bytes/call association changed for %s", item.CallID))
+					}
+					imageOutputs.Add(1)
+					output = parts[0].Text
+				}
 				var result map[string]any
-				if err := json.Unmarshal([]byte(item.Output), &result); err != nil {
+				if err := json.Unmarshal([]byte(output), &result); err != nil {
 					failure(err)
 				}
 				results[item.CallID] = result
@@ -272,7 +297,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		if identity == "c" {
 			switch step {
 			case 0:
-				calls = []mockCall{{"write", map[string]any{"path": "child.txt", "content": "one\n"}}}
+				calls = []mockCall{{"write", map[string]any{"path": "child.txt", "content": "one\n"}}, {"read", map[string]any{"path": "fixture.png"}}}
 			case 1:
 				text = "First child assignment complete."
 			case 2:
@@ -294,6 +319,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 				}
 			case 1:
 				calls = []mockCall{
+					{"read", map[string]any{"path": "fixture.png"}},
 					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true, "wake_on_exit": false}}, {"subagent", map[string]any{"persistent": true, "variant": "low", "prompt": "Write the isolated fixture result", "label": "fixture child"}},
 				}
 			case 2:
@@ -397,6 +423,19 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 	}
 	if len(names) != 20 {
 		t.Fatal("tool type coverage", len(names), names)
+	}
+	if imageOutputs.Load() < 2 {
+		t.Fatal("main/child native image outputs were not sent", imageOutputs.Load())
+	}
+	for _, query := range []string{
+		`SELECT count(*) FROM tool_records WHERE record_json LIKE '%"data_url"%' OR record_json LIKE '%base64%'`,
+		`SELECT count(*) FROM entries WHERE content_json LIKE '%"data_url"%' OR content_json LIKE '%base64%'`,
+		`SELECT count(*) FROM model_requests WHERE input_json LIKE '%"data_url"%' OR input_json LIKE '%base64%'`,
+	} {
+		var storedPixels int
+		if err := r.Store.DB.QueryRow(query).Scan(&storedPixels); err != nil || storedPixels != 0 {
+			t.Fatal("tool image payload stored in database", query, storedPixels, err)
+		}
 	}
 	var broken int
 	if err := r.Store.DB.QueryRow("SELECT count(*) FROM tool_calls WHERE result_json IS NULL OR json_extract(result_json,'$.ok')!=1").Scan(&broken); err != nil || broken != 0 {

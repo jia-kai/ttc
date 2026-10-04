@@ -27,17 +27,26 @@ import (
 const MaxBytes = 32 << 20
 const MaxPixels = 16 << 20
 
-// Decode rejects oversized or malformed images before allocating their pixels.
-func Decode(data []byte) (image.Image, error) {
+// Config validates encoded size and canvas dimensions without allocating pixels.
+// It returns the decoder format (png, jpeg or gif) alongside the header metadata.
+func Config(data []byte) (image.Config, string, error) {
 	if len(data) > MaxBytes {
-		return nil, fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", MaxBytes)
+		return image.Config{}, "", fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", MaxBytes)
 	}
-	c, _, err := image.DecodeConfig(bytes.NewReader(data))
+	c, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("cannot decode image header; provide a valid PNG, JPEG or GIF: %w", err)
+		return image.Config{}, "", fmt.Errorf("cannot decode image header; provide a valid PNG, JPEG or GIF: %w", err)
 	}
 	if c.Width <= 0 || c.Height <= 0 || c.Width > MaxPixels/c.Height {
-		return nil, fmt.Errorf("image dimensions are invalid or exceed %d pixels; provide a valid image with fewer pixels", MaxPixels)
+		return image.Config{}, "", fmt.Errorf("image dimensions are invalid or exceed %d pixels; provide a valid image with fewer pixels", MaxPixels)
+	}
+	return c, format, nil
+}
+
+// Decode rejects oversized or malformed images before allocating their pixels.
+func Decode(data []byte) (image.Image, error) {
+	if _, _, err := Config(data); err != nil {
+		return nil, err
 	}
 	m, _, err := image.Decode(bytes.NewReader(data))
 	return m, err

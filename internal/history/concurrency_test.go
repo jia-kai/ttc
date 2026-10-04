@@ -114,7 +114,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	}
 	result := []byte(`{"content":"saved"}`)
 	md := render.Tool(call.Name, call.Arguments, result)
-	if _, err := s.CallResult(source.ID, turn, "main", ids[0], result, map[string]string{"name": "read"}, md, true); err != nil {
+	if _, err := s.CallResult(source.ID, turn, "main", ids[0], result, nil, map[string]string{"name": "read"}, md, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Append(source.ID, turn, "main", "message", "developer", true, provider.Message{Role: "developer", Runtime: true, Content: "old live jobs"}); err != nil {

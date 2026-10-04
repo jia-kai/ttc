@@ -54,11 +54,11 @@ func TestBranchSelectionRequiresCompleteMainToolBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.CallResult(saved.ID, turn, "main", calls[0], []byte(`{"ok":true}`), nil, render.Markdown{Revision: 1, Summary: "read one"}, true)
+	first, err := s.CallResult(saved.ID, turn, "main", calls[0], []byte(`{"ok":true}`), nil, nil, render.Markdown{Revision: 1, Summary: "read one"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.CallResult(saved.ID, turn, "main", calls[1], []byte(`{"ok":true}`), nil, render.Markdown{Revision: 1, Summary: "read two"}, true)
+	second, err := s.CallResult(saved.ID, turn, "main", calls[1], []byte(`{"ok":true}`), nil, nil, render.Markdown{Revision: 1, Summary: "read two"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

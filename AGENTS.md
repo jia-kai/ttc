@@ -16,6 +16,9 @@ platform. See `docs/design.md` for module and persistence contracts.
 - Image and formula renders share a disposable filesystem cache; original image
   snapshots remain durable history assets. Pending image clicks are live runtime
   state and require explicit user confirmation; never restore them from history.
+- LLM image reads store only original local paths, SHA-256 checksums and metadata,
+  not image payloads or copied snapshots. Request assembly verifies the source
+  and surfaces missing/changed-file errors; do not silently refresh or resize it.
 - Keep MathJax optional and its dependencies outside scratch/the executable.
   See `docs/mathjax.md` for setup, cache and worker contracts.
 - The sidebar reads copied runtime metadata. Refresh optional Git information

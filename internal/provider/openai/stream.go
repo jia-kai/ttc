@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -172,7 +173,10 @@ func headers(req *http.Request, t Tokens) {
 	req.Header.Set("User-Agent", "ttc/0.1")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 }
-func wire(req provider.Request) ([]byte, error) {
+func wire(ctx context.Context, req provider.Request) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if req.Selection.Provider != "openai" || req.Selection.Model.RequestID() == "" {
 		return nil, errors.New("OpenAI adapter requires an OpenAI model selection")
 	}
@@ -181,7 +185,13 @@ func wire(req provider.Request) ([]byte, error) {
 	}
 	input := []any{}
 	for _, m := range provider.ContextFor(req.Selection, req.Messages) {
+		if len(m.Images) > 0 && !req.Selection.Model.Images {
+			return nil, errors.New("model does not support images")
+		}
 		if m.State != nil {
+			if len(m.Images) > 0 {
+				return nil, errors.New("OpenAI replay state does not support canonical images")
+			}
 			items, err := replayItems(m)
 			if err != nil {
 				return nil, err
@@ -190,7 +200,19 @@ func wire(req provider.Request) ([]byte, error) {
 			continue
 		}
 		if m.Role == "tool" {
-			input = append(input, map[string]any{"type": "function_call_output", "call_id": m.CallID, "output": m.Content})
+			var output any = m.Content
+			if len(m.Images) > 0 {
+				parts := []any{map[string]any{"type": "input_text", "text": m.Content}}
+				for _, im := range m.Images {
+					url, err := im.URL(ctx)
+					if err != nil {
+						return nil, fmt.Errorf("tool output %q image: %w", m.CallID, err)
+					}
+					parts = append(parts, map[string]any{"type": "input_image", "image_url": url})
+				}
+				output = parts
+			}
+			input = append(input, map[string]any{"type": "function_call_output", "call_id": m.CallID, "output": output})
 			continue
 		}
 		if m.Content != "" || len(m.Images) > 0 {
@@ -203,10 +225,11 @@ func wire(req provider.Request) ([]byte, error) {
 				content = append(content, map[string]any{"type": kind, "text": m.Content})
 			}
 			for _, im := range m.Images {
-				if !req.Selection.Model.Images {
-					return nil, errors.New("model does not support images")
+				url, err := im.URL(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("%s message image: %w", m.Role, err)
 				}
-				content = append(content, map[string]any{"type": "input_image", "image_url": im.DataURL})
+				content = append(content, map[string]any{"type": "input_image", "image_url": url})
 			}
 			message := map[string]any{"type": "message", "role": m.Role, "content": content}
 			if m.Role == "assistant" && m.Phase != "" {
@@ -267,7 +290,7 @@ type wireEvent struct {
 // Stream retries uncommitted transient failures until cancellation or MaxAttempts.
 // The subscription endpoint has no verified output cap; OutputTokens reserves context only.
 func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-	body, e := wire(req)
+	body, e := wire(ctx, req)
 	if e != nil {
 		return e
 	}
@@ -287,7 +310,7 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 			}
 			continue
 		}
-		h, e := http.NewRequestWithContext(ctx, "POST", a.BaseURL+"/responses", strings.NewReader(string(body)))
+		h, e := http.NewRequestWithContext(ctx, "POST", a.BaseURL+"/responses", bytes.NewReader(body))
 		if e != nil {
 			return e
 		}

@@ -110,7 +110,7 @@ func TestChildToolLabelKeepsActorSeparateFromMarkdown(t *testing.T) {
 	}
 	result := json.RawMessage(`{"ok":true,"content":"text"}`)
 	md := render.Tool("read", call.Arguments, result)
-	entryID, err := s.CallResult(v.ID, turn, actor, id, result, map[string]any{"result": result}, md, false)
+	entryID, err := s.CallResult(v.ID, turn, actor, id, result, nil, map[string]any{"result": result}, md, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,10 +203,10 @@ func TestHistoryImmutableResultsBranchAndSystemInspection(t *testing.T) {
 	}
 	result := json.RawMessage(`{"ok":true,"content":"x"}`)
 	md := render.Tool("read", call.Arguments, result)
-	if _, e = s.CallResult(v.ID, turn, "main", id, result, map[string]any{"result": result}, md, true); e != nil {
+	if _, e = s.CallResult(v.ID, turn, "main", id, result, nil, map[string]any{"result": result}, md, true); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.CallResult(v.ID, turn, "main", id, []byte(`{"ok":false}`), nil, md, true); e == nil {
+	if _, e = s.CallResult(v.ID, turn, "main", id, []byte(`{"ok":false}`), nil, nil, md, true); e == nil {
 		t.Fatal("mutable result")
 	}
 	promptID, e := s.RecordSystemPrompt(v.ID, turn, "main", req, "exact system instruction")

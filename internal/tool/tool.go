@@ -31,26 +31,27 @@ func Fail(code, message string) *Error { return &Error{Code: code, Message: mess
 type Execution struct {
 	SessionID, CallID, Actor string
 	Update                   func(any) // Optional transient result update. Call serially; the runtime owns presentation and persistence.
+	ImageInput               bool      // Image capability of the model selection frozen for the producing request.
+}
+
+// Output separates JSON metadata from native images. File-backed images retain
+// a checksum for verified request-time loading, rather than carrying stored pixels.
+type Output struct {
+	Value  any
+	Images []provider.Image
 }
 
 // Record holds exact arguments/result/presentation; decoding it never starts work.
 type Record struct {
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Result    json.RawMessage `json:"result"`
-	Markdown  render.Markdown `json:"markdown"`
+	Name      string           `json:"name"`
+	Arguments json.RawMessage  `json:"arguments"`
+	Result    json.RawMessage  `json:"result"`
+	Markdown  render.Markdown  `json:"markdown"`
+	Images    []provider.Image `json:"images,omitempty"` // Native images, separate from textual Result.
 }
 
 // Encode serializes the historical record at version one.
 func (r Record) Encode() (int, []byte, error) { b, e := json.Marshal(r); return 1, b, e }
-
-// ModelResult returns the exact delivered JSON.
-func (r Record) ModelResult() (json.RawMessage, error) {
-	if !json.Valid(r.Result) {
-		return nil, errors.New("invalid recorded result")
-	}
-	return r.Result, nil
-}
 
 // Call is a validated serializable input with no live resources.
 type Call interface {
@@ -207,6 +208,13 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 		}
 	}
 	var file *fileResult
+	var images []provider.Image
+	if output, ok := value.(Output); ok {
+		value, images = output.Value, output.Images
+	}
+	if err != nil {
+		images = nil
+	}
 	if presented, ok := value.(fileResult); ok {
 		file, value = &presented, presented.value
 	}
@@ -234,11 +242,13 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 		}
 		if e != nil {
 			result = map[string]any{"ok": false, "error": Fail("execution_failed", e.Error())}
+			images = nil
 		}
 	}
 	b, e := json.Marshal(result)
 	if e != nil {
 		b = []byte(`{"ok":false,"error":{"code":"execution_failed","message":"result encoding failed"}}`)
+		images = nil
 	}
 	md := render.Tool(name, args, b)
 	if file != nil {
@@ -246,6 +256,7 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 		md.Detail = file.detail + md.Detail
 	}
 	if len(b) > 64<<10 {
+		images = nil
 		path := ""
 		if r.Detail != nil {
 			path, e = r.Detail(x, b)
@@ -257,7 +268,7 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 		}
 		md.Summary = render.Inline(name + " · result too large")
 	}
-	return Record{Name: name, Arguments: args, Result: b, Markdown: md}
+	return Record{Name: name, Arguments: args, Result: b, Markdown: md, Images: images}
 }
 
 // Required validates nonempty required text without changing whitespace semantics.

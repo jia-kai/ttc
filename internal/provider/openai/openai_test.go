@@ -21,7 +21,7 @@ func TestExplicitAndSyntheticNoneReasoning(t *testing.T) {
 	for _, explicit := range []bool{false, true} {
 		model := provider.ScriptModel()
 		model.SupportsReasoning = explicit
-		body, err := wire(provider.Request{ConversationID: "test-conversation", Selection: provider.Selection{Provider: "openai", Model: model, Variant: "none"}})
+		body, err := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: provider.Selection{Provider: "openai", Model: model, Variant: "none"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,7 +165,7 @@ func TestCatalogAndStreamToolReasoningContinuity(t *testing.T) {
 	if e != nil || len(events) != 7 || events[5].Call.ID != "c" {
 		t.Fatal(events, e)
 	}
-	b, e := wire(provider.Request{ConversationID: "test-conversation", Selection: sel, Messages: []provider.Message{{Role: "assistant", State: &provider.ReplayState{Provider: "openai", Model: sel.Model.RequestID(), Version: 1, Items: []json.RawMessage{events[2].StateItem}}}}})
+	b, e := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: sel, Messages: []provider.Message{{Role: "assistant", State: &provider.ReplayState{Provider: "openai", Model: sel.Model.RequestID(), Version: 1, Items: []json.RawMessage{events[2].StateItem}}}}})
 	if e != nil || !strings.Contains(string(b), "encrypted_content") {
 		t.Fatal(string(b), e)
 	}

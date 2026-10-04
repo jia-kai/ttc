@@ -23,7 +23,8 @@ TTC also supports the following:
 * Background jobs, subagents, and wakeup timers.
 * Built-in planning, tmux, LSP and TTC-configuration skills.
 * Image display and confirmed point coordinates delivered to the LLM as a later
-  runtime message.
+  runtime message. Direct LLM image reading through `read()`, using original
+  PNG/JPEG/non-animated GIF bytes.
 * Inline and block math using MathJax.
 * Transparency of all internal processes. Click a message or tool row to inspect
   raw messages and saved tool details.

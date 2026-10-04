@@ -90,7 +90,21 @@ it never replaces or changes model-facing results.
   next_offset:integer|null, truncated:boolean}`. Entries are sorted by name.
   Enumeration is cancellable and capped at 10,000 entries; larger directories
   return `directory_too_large`. Use `glob` with a narrower pattern instead.
-- Binary files return `unsupported_content`; missing paths return `not_found`.
+- Image result: `{kind:"image", path:string, sha256:string, mime_type:string,
+  width:integer, height:integer, bytes:integer, truncated:false}`, accompanied
+  by native image input associated with the tool call. Detect PNG/JPEG/non-animated
+  GIF from contents, not extensions. Accept at most 32 MiB encoded bytes and 16,777,216
+  decoded pixels. Send original encoded bytes without resizing/recompression or
+  an explicit provider detail setting; backend preprocessing and limits apply.
+  Report canvas dimensions, including for GIFs with offset or smaller frames;
+  reject animated or incomplete GIF containers without flattening them.
+  Images require a vision-capable model and reject supplied `offset`/`limit`.
+  History and tool records store only the absolute local path, SHA-256 checksum
+  and metadata, never image payloads or copied snapshots. The adapter rereads
+  and verifies the source for every request containing the image; missing or
+  changed sources fail request assembly with a file/checksum error. Retained
+  image references survive loading and compaction. No graphics terminal is needed.
+- Other binary files return `unsupported_content`; missing paths return `not_found`.
   Reads follow symlinks and use one descriptor for validation and pagination;
   special files, including FIFOs, are rejected without blocking.
 

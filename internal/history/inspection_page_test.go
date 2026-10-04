@@ -20,7 +20,7 @@ func TestInspectionPagesBoundLargeToolAndMessageBodies(t *testing.T) {
 	}
 	body := strings.Repeat("界", (8<<20)/3) + "Last line"
 	md := render.Markdown{Revision: 1, Summary: "read · fixture.txt", Detail: body}
-	id, err := s.CallResult(v.ID, turn, "main", calls[0], json.RawMessage(`{"ok":true}`), nil, md, true)
+	id, err := s.CallResult(v.ID, turn, "main", calls[0], json.RawMessage(`{"ok":true}`), nil, nil, md, true)
 	if err != nil {
 		t.Fatal(err)
 	}

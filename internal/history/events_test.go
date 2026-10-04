@@ -222,7 +222,7 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, _ := json.Marshal(map[string]any{"ok": true, "finish_event_seq": finish})
-	if _, err = s.CallResult(v.ID, turn, "main", call, result, map[string]string{}, render.Markdown{}, true); err != nil {
+	if _, err = s.CallResult(v.ID, turn, "main", call, result, nil, map[string]string{}, render.Markdown{}, true); err != nil {
 		t.Fatal(err)
 	}
 	cm := &provider.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
@@ -261,7 +261,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CallResult(source.ID, turn, "main", calls[0], result, map[string]string{}, render.Markdown{}, true); err != nil {
+	if _, err := s.CallResult(source.ID, turn, "main", calls[0], result, nil, map[string]string{}, render.Markdown{}, true); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := s.Load(source.ID)

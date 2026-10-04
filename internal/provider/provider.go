@@ -106,10 +106,13 @@ type ToolStart struct {
 	Name string `json:"name"`
 }
 
-// Image contains a submitted immutable image as a MIME-qualified data URL.
+// Image is either a queued human attachment's data URL or a file-backed tool
+// image. Tool images store only an absolute Path and SHA256; request encoding
+// rereads and verifies the file without resizing or recompression.
 type Image struct {
 	Path    string `json:"path"`
-	DataURL string `json:"data_url"`
+	DataURL string `json:"data_url,omitempty"`
+	SHA256  string `json:"sha256,omitempty"` // Lowercase hex SHA-256 of original encoded bytes; mutually exclusive with DataURL.
 }
 
 // ReplayState is an immutable, versioned adapter-owned response payload. Model

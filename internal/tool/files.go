@@ -2,7 +2,10 @@ package tool
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +18,8 @@ import (
 	"ttc/internal/prompts"
 	"unicode/utf8"
 
+	"ttc/internal/assets"
+	"ttc/internal/provider"
 	"ttc/internal/workspace"
 )
 
@@ -78,7 +83,30 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		}
 		return rangeInt("limit", a.Limit, 1, 2000)
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
-		return readPage(ctx, w.Path(a.Path), intDefault(a.Offset, 1), intDefault(a.Limit, 200))
+		path := w.Path(a.Path)
+		page, err := readPage(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200))
+		if err != nil {
+			return nil, err
+		}
+		im, ok := page.(imageRead)
+		if !ok {
+			return page, nil
+		}
+		if a.Offset != nil || a.Limit != nil {
+			return nil, Fail("invalid_input", "image reads do not support offset or limit; omit pagination arguments")
+		}
+		if !x.ImageInput {
+			return nil, Fail("unsupported_image_input", "selected model does not support image input; select a vision-capable model")
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		hash := sha256.Sum256(im.data)
+		checksum := hex.EncodeToString(hash[:])
+		return Output{
+			Value:  map[string]any{"kind": "image", "path": path, "sha256": checksum, "mime_type": im.mime, "width": im.width, "height": im.height, "bytes": len(im.data), "truncated": false},
+			Images: []provider.Image{{Path: path, SHA256: checksum}},
+		}, nil
 	})
 	Register(r, "write", prompts.ToolDescription("write"), map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
 		if e := Required("path", a.Path); e != nil {
@@ -195,6 +223,30 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 		return nil, Fail("unsupported_content", "not a regular file")
 	}
 	reader := bufio.NewReader(f)
+	// Sniff only the opened descriptor, not the extension or a reopened path.
+	// Peek does not consume text bytes or validate content outside its page.
+	header, err := reader.Peek(8)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	mime := imageMIME(header)
+	if mime != "" {
+		if st.Size() > assets.MaxBytes {
+			return nil, Fail("image_too_large", "image exceeds 32 MiB; provide a smaller image")
+		}
+		data, err := io.ReadAll(io.LimitReader(reader, assets.MaxBytes+1))
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			return nil, err
+		}
+		config, err := validateReadImage(data)
+		if err != nil {
+			return nil, Fail("unsupported_content", err.Error())
+		}
+		return imageRead{data: data, mime: mime, width: config.Width, height: config.Height}, nil
+	}
 	var content strings.Builder
 	line := 1
 	count := 0
@@ -243,6 +295,25 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 		}
 	}
 	return map[string]any{"kind": "file", "path": path, "content": content.String(), "start_line": offset, "next_offset": next, "truncated": next != nil}, nil
+}
+
+type imageRead struct {
+	data          []byte
+	mime          string
+	width, height int
+}
+
+func imageMIME(header []byte) string {
+	switch {
+	case bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case bytes.HasPrefix(header, []byte("\xff\xd8\xff")):
+		return "image/jpeg"
+	case bytes.HasPrefix(header, []byte("GIF87a")), bytes.HasPrefix(header, []byte("GIF89a")):
+		return "image/gif"
+	default:
+		return ""
+	}
 }
 
 const directoryEntryLimit = 10000

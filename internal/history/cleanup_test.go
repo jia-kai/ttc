@@ -49,7 +49,7 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := []byte(`{"path":"result.txt","ok":true}`)
-	if _, err := s.CallResult(v.ID, turn, "main", calls[0], result, map[string]string{"name": "write"}, render.Tool("write", call.Arguments, result), true); err != nil {
+	if _, err := s.CallResult(v.ID, turn, "main", calls[0], result, nil, map[string]string{"name": "write"}, render.Tool("write", call.Arguments, result), true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordSystemPrompt(v.ID, turn, "main", req, "Exact instructions."); err != nil {

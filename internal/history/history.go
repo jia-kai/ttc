@@ -488,7 +488,8 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 		}
 		if v.Kind == "tool_result" {
 			var ref struct {
-				CallID string `json:"call_id"`
+				CallID string           `json:"call_id"`
+				Images []provider.Image `json:"images,omitempty"`
 			}
 			if e = json.Unmarshal(v.Content, &ref); e != nil {
 				return nil, e
@@ -497,7 +498,7 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 			if e = q.QueryRow("SELECT result_json,provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&result, &pcid); e != nil {
 				return nil, e
 			}
-			out = append(out, provider.Message{Role: "tool", CallID: pcid, Content: result})
+			out = append(out, provider.Message{Role: "tool", CallID: pcid, Content: result, Images: ref.Images})
 		} else {
 			var m provider.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
@@ -612,8 +613,9 @@ func (s *Store) CallIntent(session, turn, actor string, request int64, c provide
 	return id, e
 }
 
-// CallResult commits an immutable result and its portable presentation.
-func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, record any, md render.Markdown, visible bool) (int64, error) {
+// CallResult commits immutable JSON metadata, native image references and portable
+// presentation. File-backed images retain only their path/checksum for verified replay.
+func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, images []provider.Image, record any, md render.Markdown, visible bool) (int64, error) {
 	b, e := json.Marshal(record)
 	if e != nil {
 		return 0, e
@@ -628,7 +630,13 @@ func (s *Store) CallResult(session, turn, actor, call string, result json.RawMes
 		if e != nil {
 			return e
 		}
-		ref, _ := json.Marshal(map[string]string{"call_id": call})
+		ref, err := json.Marshal(struct {
+			CallID string           `json:"call_id"`
+			Images []provider.Image `json:"images,omitempty"`
+		}{call, images})
+		if err != nil {
+			return err
+		}
 		id, e := appendTx(tx, session, turn, actor, "tool_result", "tool", visible, ref, 0)
 		if e != nil {
 			return e
