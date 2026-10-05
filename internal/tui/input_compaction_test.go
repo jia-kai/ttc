@@ -121,10 +121,10 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		u.wait(t, "Attached")
 		u.typeText(text)
 		if i < 2 {
-			u.key(tcell.KeyEnter)
+			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
 			u.wait(t, "Queued · "+text)
 		} else {
-			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+			u.key(tcell.KeyEnter)
 			u.wait(t, "Steer · "+text)
 		}
 	}
@@ -148,7 +148,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	if err := u.runtime.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE model_visible=1 AND role='user' AND json_extract(content_json,'$.content') LIKE 'Queued %'`).Scan(&queuedEntries); err != nil || queuedEntries != 0 {
 		t.Fatal("queued or cancelled input entered history before admission", queuedEntries, err)
 	}
-	u.key(tcell.KeyEnter)
+	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
 	u.wait(t, "Queued · Queued second")
 	close(p.finishContinuation)
 	u.wait(t, "Input compaction response 3.")

@@ -64,7 +64,9 @@ type operationResult struct {
 	err      error
 }
 
-// Run keeps input available while a model or foreground tool runs. Enter queues FIFO.
+// Run keeps input available while a model or foreground tool runs.
+// In the TUI, Enter steers active main work and Alt+Enter queues FIFO.
+// Plain-mode messages queue while busy.
 func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -1595,7 +1597,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						inspect(displayView().lines[target].id)
 					} else {
 						submit = draft.text
-						steering = busy && !commandBusy && ev.Modifiers()&tcell.ModAlt != 0
+						steering = busy && !commandBusy && ev.Modifiers()&tcell.ModAlt == 0
 						setFullscreen(false)
 						draft.set("")
 						haveInput = true

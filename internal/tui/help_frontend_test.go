@@ -97,10 +97,10 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	helpTestRequest(t, p, "initial")
 	u.typeText("steer instruction")
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+	u.key(tcell.KeyEnter)
 	u.wait(t, "Steer · steer instruction")
 	u.typeText("queued instruction")
-	u.key(tcell.KeyEnter)
+	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
 	u.wait(t, "Queued · queued instruction")
 	path := filepath.Join(u.runtime.Workspace.Root, "help-attachment.txt")
 	if err := os.WriteFile(path, []byte("preserved snapshot"), 0600); err != nil {

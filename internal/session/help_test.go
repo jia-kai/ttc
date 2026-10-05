@@ -2,11 +2,26 @@ package session
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"ttc/internal/provider"
 )
+
+func TestHelpSendShortcuts(t *testing.T) {
+	for _, want := range []string{
+		"Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.",
+		"**Enter / Alt+Enter while idle** — Start a normal turn.",
+		"**Enter while busy** — Steer the active main turn",
+		"**Alt+Enter while busy** — Queue a new turn FIFO.",
+		"**Foreground shells** — Delay steer delivery",
+	} {
+		if !strings.Contains(helpMarkdown, want) {
+			t.Errorf("help is missing %q", want)
+		}
+	}
+}
 
 type helpGatedProvider struct {
 	provider.Script

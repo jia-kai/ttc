@@ -46,6 +46,7 @@ def main():
                 'wake_on_exit': False}},
         ]},
         {'prefix': 'user: steer promoted', 'text': 'Steering and promotion verified.'},
+        {'prefix': 'user: queued after promotion', 'text': 'Queued turn verified.'},
     ]))
     editor = root / 'fake editor.py'
     editor.write_text('''import json, os, sys
@@ -232,16 +233,21 @@ path.write_text('Edited in external editor.\\nsecond line')
         while not (project / 'promotion.ready').exists() and time.monotonic() < deadline:
             read_for(0.1)
         assert (project / 'promotion.ready').exists(), 'foreground promotion fixture did not start'
-        send(b'steer promoted\x1b\r')  # Alt+Enter keeps this instruction in the current coding turn.
+        send(b'steer promoted\r')  # Enter keeps this instruction in the current coding turn.
         expect('Steer')
+        send(b'queued after promotion\x1b\r')  # Legacy Alt+Enter queues a separate turn.
+        expect('Queued')
         send(b'\x02')  # Ctrl+B releases the foreground tool without canceling its process.
         expect('Steering and promotion verified.')
+        expect('Queued turn verified.')
         expect('Turn complete')
         with sqlite3.connect(data / 'history.sqlite') as db:
             promoted = json.loads(db.execute("SELECT result_json FROM tool_calls WHERE provider_call_id='promoted-shell'").fetchone()[0])
             assert promoted['status'] == 'running', promoted
             turns = db.execute("SELECT count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding' AND turn_id IN (SELECT turn_id FROM entries WHERE json_extract(content_json,'$.content')='promote shell')").fetchone()[0]
             assert turns == 1, turns
+            inputs = db.execute("SELECT json_extract(content_json,'$.content'), json_extract(content_json,'$.input_source') FROM entries WHERE role='user' AND json_extract(content_json,'$.content') IN ('steer promoted','queued after promotion') ORDER BY id").fetchall()
+            assert inputs == [('steer promoted', 'steer'), ('queued after promotion', 'queue')], inputs
         assert not (project / 'promotion.release').exists()
         (project / 'promotion.release').write_text('release')
         read_for(0.2)

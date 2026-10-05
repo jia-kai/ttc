@@ -203,6 +203,12 @@ For implementation boundaries, see [rail layering](docs/design.md#rail-layering)
 
 ### Interactive usage
 
+Enter starts a normal turn while idle; while busy, it steers the active main
+turn after the current LLM response and foreground tool batch finish. Alt+Enter
+sends while idle or queues a new turn FIFO while busy. Neither key steers child
+agents. After dismissing a question, the next message redirects the current turn
+instead.
+
 Use `/help` for the keyboard and command guide. Up/Down recall prompts across
 sessions and restarts. Ctrl-R searches the most recent 1000 prompts (at most
 8 MiB), newest matches first. Every whitespace-separated term must match a

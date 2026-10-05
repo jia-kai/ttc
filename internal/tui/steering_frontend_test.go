@@ -8,34 +8,70 @@ import (
 	"ttc/internal/provider"
 )
 
-func TestAltEnterSteersWithoutSubmittingQueuedTurn(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(map[bool]string{false: "modified_enter", true: "legacy_tty"}[legacy], func(t *testing.T) { testAltEnterSteering(t, legacy) })
-	}
-}
-
-func testAltEnterSteering(t *testing.T, legacy bool) {
-	p := &questionTestProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "First boundary settles"}, {Text: "Steering accepted"}}}, ready: make(chan struct{}), release: make(chan struct{})}
-	u := newQuestionTestUI(t, p)
-	u.typeText("start")
-	u.key(tcell.KeyEnter)
-	select {
-	case <-p.ready:
-	case <-time.After(3 * time.Second):
-		t.Fatal("request did not start")
-	}
-	u.typeText("change direction")
-	if legacy {
-		u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyRune, 'm', tcell.ModAlt|tcell.ModCtrl))
-	} else {
-		u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
-	}
-	u.wait(t, "Steer · change direction")
-	close(p.release)
-	u.wait(t, "Steering accepted")
-	u.wait(t, "Turn complete")
-	var codingTurns int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&codingTurns); err != nil || codingTurns != 1 {
-		t.Fatal("steer became a separate coding turn", codingTurns, err)
+func TestEnterSteersAndAltEnterQueues(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tcell.Key
+		rune rune
+		mods tcell.ModMask
+	}{
+		{"modified_enter", tcell.KeyEnter, 0, tcell.ModAlt},
+		{"legacy_cr", tcell.KeyRune, 'm', tcell.ModAlt | tcell.ModCtrl},
+		{"legacy_lf", tcell.KeyRune, 'j', tcell.ModAlt | tcell.ModCtrl},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &questionTestProvider{Script: provider.Script{Responses: []provider.ScriptResponse{
+				{Prefix: "user: start", Text: "First boundary settles"},
+				{Prefix: "user: change direction", Text: "Steering accepted"},
+				{Prefix: "user: next turn", Text: "Queued turn accepted"},
+			}}, ready: make(chan struct{}), release: make(chan struct{})}
+			u := newQuestionTestUI(t, p)
+			// Alt+Enter still sends an ordinary turn when idle.
+			u.typeText("start")
+			u.screen.PostEventWait(tcell.NewEventKey(tc.key, tc.rune, tc.mods))
+			select {
+			case <-p.ready:
+			case <-time.After(3 * time.Second):
+				t.Fatal("request did not start")
+			}
+			u.typeText("next turn")
+			u.screen.PostEventWait(tcell.NewEventKey(tc.key, tc.rune, tc.mods))
+			u.wait(t, "Queued · next turn")
+			u.typeText("change direction")
+			u.key(tcell.KeyEnter)
+			u.wait(t, "Steer · change direction")
+			if count, _ := u.runtime.SteeringPreview(0); count != 1 {
+				t.Fatal("Enter did not steer exclusively", count)
+			}
+			var pendingEntries int
+			if err := u.runtime.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE role='user' AND json_extract(content_json,'$.content') IN ('next turn','change direction')`).Scan(&pendingEntries); err != nil || pendingEntries != 0 {
+				t.Fatal("pending inputs entered history before admission", pendingEntries, err)
+			}
+			close(p.release)
+			u.wait(t, "Queued turn accepted")
+			u.wait(t, "Turn complete")
+			var requests, codingTurns int
+			if err := u.runtime.Store.DB.QueryRow("SELECT count(*), count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&requests, &codingTurns); err != nil || requests != 3 || codingTurns != 2 {
+				t.Fatal("steer or queue used the wrong coding turn", requests, codingTurns, err)
+			}
+			messages, err := u.runtime.Store.Messages(u.runtime.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var humans []provider.Message
+			for _, m := range messages {
+				if m.Role == "user" && !m.Runtime {
+					humans = append(humans, m)
+				}
+			}
+			if len(humans) != 3 {
+				t.Fatal("inputs lost or duplicated", humans)
+			}
+			for i, want := range []struct{ text, source string }{{"start", "normal"}, {"change direction", "steer"}, {"next turn", "queue"}} {
+				if humans[i].Content != want.text || humans[i].InputSource != want.source {
+					t.Fatal("input order or provenance changed", humans)
+				}
+			}
+		})
 	}
 }

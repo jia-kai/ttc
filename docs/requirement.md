@@ -93,9 +93,10 @@
 
 - Parent/child requests may overlap without cycle limits. Require
   [tool batch ordering](tools.md#common-contracts); dependencies need later responses.
-- **Enter:** idle starts a turn; busy queues FIFO, visibly unsent and excluded from
-  input until promotion. **Alt+Enter:** steer active main work after response/tools
-  settle, retaining the TTC turn. No native streaming/child steering.
+- **Enter:** idle starts a normal turn; busy steers active main work after
+  response/tools settle, retaining the TTC turn. **Alt+Enter:** idle sends a normal
+  turn; busy queues FIFO, visibly unsent and excluded from input until promotion.
+  No native streaming/child steering.
 - **Esc, Esc:** interrupt request/foreground tools, leaving independent jobs alive.
   **Ctrl+B:** promote foreground shells without canceling; a race with completion
   returns one final result. `/background` selects live shells; none is a no-op.
@@ -232,15 +233,15 @@
 - Esc exits focused editing/modal first; image Esc cancels only that pending click.
   In composer: close sidebar, leave fullscreen, then restore follow-tail. Otherwise
   arm interruption; next consecutive Esc interrupts foreground work. Other keys
-  reset the sequence. Alt+Enter steers main only; child inspectors stay read-only.
+  reset the sequence. Enter steers main only while busy; child inspectors stay read-only.
 - Images use aspect-preserving bounded thumbnails and bordered pan/zoom previews
   with source coordinates/explicit confirmation. Math uses Kitty image placements
   with readable TeX fallbacks. See [tools](tools.md#image_show)/[MathJax](mathjax.md).
 
 | Action                   | Key / command                 |
 | ------------------------ | ----------------------------- |
-| Send or queue            | Enter                         |
-| Steer active turn        | Alt+Enter                     |
+| Send idle / steer busy   | Enter                         |
+| Send idle / queue busy   | Alt+Enter                     |
 | Newline                  | Shift+Enter or Ctrl+J         |
 | External editor          | Ctrl+X E or `/editor`         |
 | Command palette          | Ctrl+P                        |

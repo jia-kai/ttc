@@ -3,12 +3,14 @@ package session
 // helpMarkdown is shared by plain output and the terminal's Markdown inspector.
 const helpMarkdown = `# TTC help
 
+Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
+
 ## Send and stop
 
-- **Enter while idle** — Start a new turn.
-- **Enter while busy** — Queue a new turn, or redirect the current turn if you dismissed its question.
-- **Alt+Enter while busy** — Send an instruction to the current turn after the LLM response and foreground tool batch finish.
-- **Foreground shells** — Delay Alt+Enter delivery until they finish or move to the background.
+- **Enter / Alt+Enter while idle** — Start a normal turn.
+- **Enter while busy** — Steer the active main turn after the LLM response and foreground tool batch finish; child agents are not steered.
+- **Alt+Enter while busy** — Queue a new turn FIFO.
+- **Foreground shells** — Delay steer delivery until they finish or move to the background.
 - **/cancel-queue** — Cancel the newest queued prompt, including while waiting for turn admission, and restore its text and attachment snapshots to the composer.
 - **/cancel-steer** — Do the same for the newest unadmitted steer. Both commands preserve older inputs, work busy or idle, and report empty lists.
 - **Ctrl+J / Shift+Enter** — Insert a newline.
@@ -84,7 +86,7 @@ These commands require an idle turn.
 - **Ctrl+X J** or **/jobs** — Inspect jobs.
 - **Ctrl+X T** or **/timers** — Inspect timers.
 - **/btw QUESTION** — Ask a parallel read-only agent; its answer opens in a popup.
-- **Esc in a question** — Leave text editing, then dismiss without answering. The next normal message redirects the turn; local commands leave the question pending.
+- **Esc in a question** — Leave text editing, then dismiss without answering. The next message redirects the turn; local commands leave the question pending.
 - **Ctrl+X ?** or **/questions [FORM_ID]** — Reopen the pending round with its drafts.
 - **/answer FORM_ID JSON_ARRAY** — Submit question answers in plain mode.
 

@@ -111,7 +111,7 @@ func TestCancelQueueNewerQueuedInputPrecedesAdmissionTicket(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Working")
 	u.typeText("newer queued input")
-	u.key(tcell.KeyEnter)
+	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
 	u.wait(t, "Queued · newer queued input")
 	u.typeText("/cancel-queue")
 	u.key(tcell.KeyEnter)

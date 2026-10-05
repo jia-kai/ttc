@@ -94,9 +94,9 @@ func TestAttachedQueueAndSteeringShowAuthoredText(t *testing.T) {
 		u.typeText(text)
 		label := "Queued · "
 		if i == 0 {
-			u.key(tcell.KeyEnter)
-		} else {
 			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+		} else {
+			u.key(tcell.KeyEnter)
 			label = "Steer · "
 		}
 		frame := u.wait(t, label+text)

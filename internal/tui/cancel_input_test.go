@@ -89,9 +89,9 @@ func pasteCancelInput(u *questionTestUI, text string) {
 
 func submitCancelInput(u *questionTestUI, steer bool) {
 	if steer {
-		u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
-	} else {
 		u.key(tcell.KeyEnter)
+	} else {
+		u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
 	}
 }
 
