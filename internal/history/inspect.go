@@ -19,7 +19,7 @@ func (v Entry) InternalEvent() bool {
 		return false
 	}
 	switch status.Type {
-	case "request_admitted", "request_finished", "job_state", "timer_state", "child_state", "turn_finished", "runtime_event", "file_changed":
+	case "request_admitted", "request_finished", "job_state", "timer_state", "child_state", "turn_finished", "runtime_event", "compaction_started", "compaction_recovery", "file_changed":
 		return true
 	}
 	return false

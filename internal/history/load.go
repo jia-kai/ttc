@@ -13,7 +13,9 @@ import (
 // undo boundary at the imported tip and no file changes or restored live work.
 // It excludes the suffix after the last balanced main tool exchange. Source
 // entries, requests and turns remain unchanged. Copies share their lineage's
-// immutable assets and retention lifetime. Read-only predecessors open for inspection.
+// immutable assets and retention lifetime. At a compaction boundary it atomically
+// recovers durable pending events into fresh snapshot-owned notification rows.
+// Read-only predecessors open for inspection.
 func (s *Store) Load(id string) (Session, error) {
 	if err := s.ValidateArchive(id); err != nil {
 		return Session{}, err
@@ -21,7 +23,8 @@ func (s *Store) Load(id string) (Session, error) {
 	loaded := id
 	err := s.transact(func(tx *sql.Tx) error {
 		var readOnly bool
-		if err := tx.QueryRow("SELECT read_only FROM sessions WHERE id=?", id).Scan(&readOnly); err != nil {
+		var fatal string
+		if err := tx.QueryRow("SELECT read_only,coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?", id).Scan(&readOnly, &fatal); err != nil {
 			return err
 		}
 		if readOnly {
@@ -65,6 +68,24 @@ func (s *Store) Load(id string) (Session, error) {
 				end = i + 1
 			}
 		}
+		var recovery []recoveryEvent
+		boundary := false
+		if fatal == "" {
+			boundary, err = compactionBoundaryWith(tx, entries)
+			if err != nil {
+				return err
+			}
+			if boundary {
+				ancestry, err := recoveryAncestryWith(tx, id, entries)
+				if err != nil {
+					return err
+				}
+				recovery, err = recoveryCandidatesWith(tx, ancestry, entries[:end])
+				if err != nil {
+					return err
+				}
+			}
+		}
 		loaded = NewID("session")
 		_, err = tx.Exec(`INSERT INTO sessions(id,workspace_id,lineage_id,name,name_source,model_json,last_activity_ms,metadata_json)
 			SELECT ?,workspace_id,lineage_id,name,'manual',model_json,?,
@@ -96,6 +117,38 @@ func (s *Store) Load(id string) (Session, error) {
 				if _, err = tx.Exec("INSERT INTO tool_records(entry_id,call_id,version,record_json,markdown_json) SELECT ?,call_id,version,record_json,markdown_json FROM tool_records WHERE entry_id=?", copyID, entry.ID); err != nil {
 					return err
 				}
+			}
+		}
+		for _, event := range recovery {
+			data, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
+			eventID, err := appendTx(tx, loaded, "", "main", "status", "", false, data, 0)
+			if err != nil {
+				return err
+			}
+			body, err := recoveryBody(event.Body)
+			if err != nil {
+				return err
+			}
+			body["event_seq"] = json.RawMessage(fmt.Sprint(eventID))
+			body["recovered_from_event_seq"] = json.RawMessage(fmt.Sprint(event.RecoveredFrom))
+			event.Body, err = json.Marshal(body)
+			if err != nil {
+				return err
+			}
+			data, err = json.Marshal(event)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.Exec("UPDATE entries SET content_json=? WHERE id=?", string(data), eventID); err != nil {
+				return err
+			}
+		}
+		if boundary {
+			if _, err = appendTx(tx, loaded, "", "main", "status", "", false, json.RawMessage(`{"type":"compaction_recovery"}`), 0); err != nil {
+				return err
 			}
 		}
 		_, err = tx.Exec("UPDATE sessions SET undo_floor_id=active_entry_id WHERE id=?", loaded)

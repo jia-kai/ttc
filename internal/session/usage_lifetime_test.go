@@ -104,7 +104,10 @@ func TestUsageLifetimeRestartDoesNotRestoreHistory(t *testing.T) {
 	}
 	saved, selection := r.Current(), r.CurrentSelection()
 	r.Close()
-	restarted := New(context.Background(), r.Store, r.Workspace, r.Provider, selection, saved, r.Skills, tool.WebSearchConfig{}, nil)
+	restarted, err := New(context.Background(), r.Store, r.Workspace, r.Provider, selection, saved, r.Skills, tool.WebSearchConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(restarted.Close)
 	if got := restarted.UsageSnapshot(); !reflect.DeepEqual(got.Totals, UsageTotals{}) || got.Reported != nil {
 		t.Fatal("restart rebuilt counters from durable requests", got)

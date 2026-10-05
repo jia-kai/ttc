@@ -110,7 +110,9 @@
   implied answers. [question](tools.md#question) defines the dialog and results.
 - **Wakeup:** deliver ahead of queued prompts; repeating firings coalesce without
   losing later arrivals. Require [admission/coalescing ordering](design.md#event-ordering-and-main-timeline)
-  and [wakeup contracts](tools.md#wakeups), with no replay after exit/switch.
+  and [wakeup contracts](tools.md#wakeups). Exit/switch never restores scheduling;
+  explicit [compaction-boundary loads](compaction.md#reload-recovery) may recover
+  committed, undelivered firings into fresh notification events.
 - **Image click:** return immediately and require explicit confirmation of source
   coordinates. [image_show](tools.md#image_show) defines actor ownership,
   cancellation and snapshot retention.

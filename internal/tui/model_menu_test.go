@@ -137,12 +137,16 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
 	p := &gatedModelProvider{requests: make(chan provider.Request, 4), release: make(chan struct{})}
-	r := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
+	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
 		case <-ctx.Done():
 		}
 	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	r.AutoName = false
 	defer func() { cancel(); r.Close() }()
 	screen := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 64)}

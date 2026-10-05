@@ -37,7 +37,10 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
 	catalog, _ := skills.Discover(context.Background(), w.Root, "")
 	events := make(chan session.Event, 64)
-	r := session.New(context.Background(), store, w, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Done."}}}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) { events <- v })
+	r, e := session.New(context.Background(), store, w, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Done."}}}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) { events <- v })
+	if e != nil {
+		t.Fatal(e)
+	}
 	r.AutoName = false
 	defer r.Close()
 	screen := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 64)}
@@ -111,12 +114,16 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 1)
-	r := session.New(ctx, store, w, &provider.Script{}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) {
+	r, err := session.New(ctx, store, w, &provider.Script{}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) {
 		select {
 		case events <- v:
 		case <-ctx.Done():
 		}
 	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	r.AutoName = false
 	defer func() { cancel(); r.Close() }()
 	closing, release := make(chan struct{}), make(chan struct{})

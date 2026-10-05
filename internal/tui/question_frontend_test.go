@@ -79,7 +79,7 @@ func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(c
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
 	questionEvents := make(chan struct{}, 8)
-	r := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
+	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
 			if e.Kind == "question" {
@@ -88,6 +88,10 @@ func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(c
 		case <-ctx.Done():
 		}
 	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	r.AutoName = false
 	if setup != nil {
 		setup(r)

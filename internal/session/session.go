@@ -92,16 +92,27 @@ type Runtime struct {
 
 // New constructs an active runtime. An empty session ID starts an in-memory
 // blank conversation; a nonempty ID must refer to an already persisted session.
-func New(ctx context.Context, store *history.Store, w *workspace.Manager, p provider.Provider, selection provider.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) *Runtime {
+// Loaded compaction-boundary notifications are queued before any work starts.
+func New(ctx context.Context, store *history.Store, w *workspace.Manager, p provider.Provider, selection provider.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	persisted := session != ""
+	var notices []provider.Message
+	if persisted {
+		var err error
+		notices, err = store.PendingRecoveryNotifications(ctx, session)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("read recovered notifications: %w", err)
+		}
+	}
 	if !persisted {
 		session = history.NewID("session")
 	}
 	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: session, persisted: persisted, AutoName: true}
 	r.resetTransient()
+	r.notifications = notices
 	r.retentionStop = r.startRetention()
-	return r
+	return r, nil
 }
 func (r *Runtime) resetTransient() {
 	r.resetChildren()
@@ -611,6 +622,10 @@ func (r *Runtime) Command(text string) (string, error) {
 		if e != nil {
 			return "", e
 		}
+		notices, e := r.Store.PendingRecoveryNotifications(r.ctx, v.ID)
+		if e != nil {
+			return "", fmt.Errorf("read recovered notifications: %w", e)
+		}
 		selection := r.CurrentSelection()
 		var switchEntry int64
 		switchText := ""
@@ -633,6 +648,9 @@ func (r *Runtime) Command(text string) (string, error) {
 		r.selection = selection
 		r.mu.Unlock()
 		r.resetTransient()
+		r.orderMu.Lock()
+		r.notifications = notices
+		r.orderMu.Unlock()
 
 		if switchEntry != 0 {
 			r.emit(Event{Kind: "status", Text: switchText, EntryID: switchEntry, SessionID: v.ID})

@@ -149,6 +149,9 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	done := make(chan operationResult, 1)
 	busy := false
 	commandBusy := false
+	// Failed foreground work must not immediately retry the same pending notices.
+	// Explicit input and successful recovery actions reopen automatic delivery.
+	notificationPaused := false
 	defer func() {
 		if busy {
 			f.Runtime.Interrupt()
@@ -574,6 +577,9 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		view.followTail = true
 	}
 	start := func(input *session.InputAdmission) {
+		if input != nil {
+			notificationPaused = false
+		}
 		busy = true
 		started = time.Now()
 		activity = turnActivity{}
@@ -736,6 +742,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			add("Model selection failed: "+err.Error(), 0)
 			return
 		}
+		notificationPaused = false
 		add("Model selected for next tool boundary · "+id+" · "+selection.Variant, 0)
 	}
 	add("TTC · Linux terminal agent · /help", 0)
@@ -746,6 +753,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		if generation := f.Runtime.Generation(); generation != queueGeneration {
 			queue = nil
 			pendingInput = nil
+			notificationPaused = false
 			queueGeneration = generation
 			activity = turnActivity{}
 			retainedQuestion = nil
@@ -775,10 +783,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if event, err := f.Runtime.ApplyModel(""); err != nil {
 				return err
 			} else if event.Kind != "" {
+				notificationPaused = false
 				add(event.Text, event.EntryID)
 				view.lines[len(view.lines)-1].system = true
 			}
-			if f.Runtime.HasNotifications() {
+			if !notificationPaused && f.Runtime.HasNotifications() {
 				start(nil)
 			} else if len(queue) > 0 {
 				input := f.Runtime.PrepareInput(queue[0])
@@ -883,6 +892,8 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			indicator := ""
 			if busy {
 				indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C exit", activity.indicator(time.Now(), started), len(queue)+steerCount)
+			} else if notificationPaused {
+				indicator = "Auto-wake paused · send a prompt or /compact /load /new /model to resume"
 			}
 			if err := draw(screen, displayView(), sidebar, fullscreen, modal.preview, renderer, drawFocus, draft, len(attachments), queue, steers, indicator, modal.window, f.Runtime.CurrentSelection()); err != nil {
 				return err
@@ -984,7 +995,15 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			commandBusy = false
 			if result.err != nil {
 				add("Error: "+result.err.Error(), 0)
+				if result.command == "" || result.command == "/compact" {
+					notificationPaused = true
+					add("Auto-wake paused after failure/interruption; pending notifications remain queued. Send a prompt, successfully /compact or /load, or change session/model to resume.", 0)
+				}
 			} else if result.command != "" {
+				switch result.command {
+				case "/compact", "/load", "/new":
+					notificationPaused = false
+				}
 				replay()
 				if f.Plain {
 					add(result.text, 0)

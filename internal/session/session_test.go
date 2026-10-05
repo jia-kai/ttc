@@ -38,7 +38,10 @@ func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime
 		t.Fatal(e)
 	}
 	events := make(chan Event, 256)
-	r := New(context.Background(), store, w, &provider.Script{Responses: responses}, selection, "", catalog, tool.WebSearchConfig{}, func(e Event) { events <- e })
+	r, e := New(context.Background(), store, w, &provider.Script{Responses: responses}, selection, "", catalog, tool.WebSearchConfig{}, func(e Event) { events <- e })
+	if e != nil {
+		t.Fatal(e)
+	}
 	r.AutoName = false
 	t.Cleanup(r.Close)
 	return r, events

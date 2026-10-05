@@ -12,7 +12,7 @@ describes setup and current behavior. Related contracts:
 | --------------------------------------------- | -------------------------------------------------------- |
 | Conversations and history branches            | Model streams and retry waits                            |
 | Tool arguments, results and Markdown records  | Shell/LSP jobs, children and output buffers              |
-| Model selections and request usage            | Timers and pending notifications                         |
+| Model selections, request usage and events    | Live timers and notification queues                      |
 | File snapshots and undo cursors               | Queued prompts, steers, questions and armed image clicks |
 | Attachments and compaction archives           | Child contexts and concurrency slots                     |
 
@@ -500,6 +500,9 @@ The concrete boundaries above are TTC decisions, informed by:
   history stays immutable. Every coding request uses current system instructions.
   [Runtime snapshots](system_prompt.md#runtime-snapshots) define initial metadata
   and per-request refresh. Explicit loads never restore source live state.
+  [Compaction-boundary recovery](compaction.md#reload-recovery) copies saved
+  undelivered notifications into fresh events owned by the loaded session;
+  automatic delivery never acknowledges the source runtime's events.
 - Events carry generation to reject stale publications after session changes or
   same-session restore. Metering updates after responses and tool batches. Loads
   replay without an acknowledgment window; new/clear, undo/redo and export use

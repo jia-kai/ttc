@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -163,8 +164,16 @@ func (r *Runtime) compact(focus string) (string, error) {
 func (r *Runtime) compactContext(ctx context.Context, focus string, selection provider.Selection) (result string, err error) {
 	session := r.Current()
 	defer func() { err = r.compactionFailure(session, err) }()
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	// Record the boundary before naming/archive preparation so a process killed
+	// before summary-request admission can still recover pending messages.
+	if _, err := r.Store.Append(session, "", "main", "status", "", false, map[string]string{"type": "compaction_started"}); err != nil {
+		return "", fmt.Errorf("record compaction boundary: %w", err)
+	}
 	if r.namingDone != nil {
 		select {
 		case <-ctx.Done():

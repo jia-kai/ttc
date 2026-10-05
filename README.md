@@ -223,6 +223,11 @@ Archived predecessors open read-only. Loading never restores files or live jobs.
 TTC does not repair interrupted work; files can be ahead of saved history after
 a crash. Incompatible history schemas are rejected; use a new `--data-dir`.
 
+At a compaction boundary, loading also recovers saved, undelivered notifications
+(including completed subagent answers) and automatically resumes their delivery.
+It does not replay already delivered events or restore memory-only queued prompts
+and unadmitted steers. Ordinary loads do not restore pending notifications.
+
 The first model request includes cwd, whether Git inspection found a repository,
 and its branch (`detached` when HEAD has no branch). Git is optional.
 Foreground shell commands default to a 20-second timeout and cannot disable it.
@@ -231,6 +236,12 @@ Background commands have no default timeout; they can set an explicit deadline.
 Background jobs, subagents, and timers belong to the active runtime. Compaction
 preserves them; switching sessions or exiting cancels them. Use tmux for work
 that needs to outlive TTC.
+
+Main, child and aside compaction have a **10-minute timeout** and remain
+cancelable. A failed or interrupted turn pauses automatic notification turns;
+pending messages stay queued. Send a prompt, successfully `/compact` or `/load`,
+or change session/model to resume. `/compact [focus]` while idle uses the same
+handoff as automatic compaction.
 
 Original `read()` image bytes and rendered thumbnails/formulas share a
 disposable filesystem cache at `${XDG_CACHE_HOME:-~/.cache}/ttc/assets`: **4 GiB

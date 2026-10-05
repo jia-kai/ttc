@@ -58,6 +58,11 @@ explicit session changes/exit cancel them.
   summaries, oversized summary requests and summaries over 1 MiB. Output reserves
   follow [model metadata](models.md#budget-metadata); input/link templates live in
   [prompt/compaction.yaml](../prompt/compaction.yaml).
+- Main, child and aside compaction use a cooperative 10-minute deadline for the
+  whole operation, including naming, archives, summary inference/retries and
+  handoff.
+  Earlier owning-operation deadlines and cancellation still apply. Synchronous
+  storage I/O or lock waits can delay return after the deadline expires.
 - Private immutable archives belong to the main lineage:
 
   ```text
@@ -96,8 +101,10 @@ explicit session changes/exit cancel them.
 ## Failure policy
 
 - Cancellation, transport interruption, timeout, rate limits, temporary server
-  failure or exhausted disk leave prior context usable. Retry only on a later
-  request after conditions change, not automatic compaction recovery.
+  failure or exhausted disk leave prior context usable. Failed/interrupted turns
+  pause automatic notification turns without consuming pending messages. An
+  explicit prompt, successful `/compact` or `/load`, or session/model change
+  resumes them; failure alone never starts another compaction attempt.
 - Other summary/budget/invariant/persistence failures invalidate affected context.
   Persist main failure and block the live process even if that write fails;
   cancel jobs/timers/interactions. History remains inspectable/exportable. Start
@@ -107,3 +114,25 @@ explicit session changes/exit cancel them.
   disposable with their lineage. Startup leaves execution records untouched;
   manual loading copies balanced context without work repair or restored jobs,
   timers or pending clicks.
+
+## Reload recovery
+
+- `/load ID` and `--session ID` copy writable history at its last complete tool
+  exchange. If selected history ends at main compaction or a handoff before the
+  next coding request, recover committed, undelivered child completions and
+  runtime notifications. Recovered snapshots keep this boundary until coding
+  resumes. Ordinary loads and read-only/fatal contexts do not recover messages.
+- Delivery is automatic; if context is still full, a new compaction precedes the
+  coding request. `/compact [focus]` while idle also preserves recovered messages.
+  Partial replies remain inspectable, but are never reused as successful summaries.
+- Recovery creates fresh notification events in the loaded session in commit
+  order, with `recovered_from_event_seq` identifying historical notifications.
+  It does not acknowledge or modify the source session, include sibling
+  branches, replay delivered events, or duplicate child answers carried by
+  retained main tool results. Repeated undelivered timer firings coalesce to the
+  latest firing. Recovered messages survive another load before delivery.
+- Delivered means admitted to a coding request, even if that request later fails
+  or is interrupted; recovery does not replay those messages.
+- Loading does not restore files, jobs, children, timers or pending interactions.
+  Memory-only queued human prompts and unadmitted steering cannot be recovered
+  from a killed process. Only already committed notification bodies are recovered.

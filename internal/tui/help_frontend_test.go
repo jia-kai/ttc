@@ -193,12 +193,16 @@ func TestPlainBusyHelpPrintsBeforeActiveResponseFinishes(t *testing.T) {
 	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
-	r := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
+	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
 		case <-ctx.Done():
 		}
 	})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	r.AutoName = false
 	input, writer := io.Pipe()
 	t.Cleanup(func() { input.Close(); writer.Close() })

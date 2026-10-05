@@ -76,6 +76,7 @@ python3 tests/pty_input.py          # offline editor/completion/export, Ctrl+J a
 python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
 python3 tests/pty_parallel.py       # shared data/workspace, independent loads, no recovery
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery
+python3 tests/pty_compaction_reload.py # offline CLI/TUI: boundary reload and automatic pending delivery
 python3 tests/pty_subagent.py       # mock HTTP: disposable child, low variant, direct answer
 python3 tests/pty_subagent.py --offline # socket-free foreground disposal and UTF-8 answer limit
 python3 -m unittest discover -s tests -p test_scratch.py # scratch permissions

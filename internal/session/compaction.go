@@ -18,6 +18,10 @@ import (
 
 const summaryInstructions = prompts.Compaction
 
+// compactionTimeout sets the cooperative deadline for the entire operation.
+// Earlier owning-context deadlines apply; synchronous storage may delay return.
+const compactionTimeout = 10 * time.Minute
+
 // Recoverable failures leave the existing context usable. Unknown errors,
 // malformed summaries and broken persistence conservatively invalidate it.
 func recoverableCompaction(err error) bool {
@@ -111,8 +115,8 @@ func compactionFits(selection provider.Selection, system string, tools []provide
 	return nil
 }
 
-// summarize performs one bounded request shared by main, coding children and
-// asides. Request persistence follows the current continuation at each boundary.
+// summarize shares one request across main, coding children and asides using
+// the compaction operation's context. Persistence follows the current continuation.
 func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection provider.Selection, prefix, focus string) (text string, err error) {
 	input := provider.Message{Role: "user", Content: fmt.Sprintf(prompts.CompactionInput, focus, prefix)}
 	budget := selection
@@ -202,7 +206,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 // file tips and undo ownership remain unchanged; the returned cursor forces full
 // project context on the next request. Aside events never enter main context.
 func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []provider.Message, cursor contextCursor) ([]provider.Message, contextCursor, error) {
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return nil, cursor, err

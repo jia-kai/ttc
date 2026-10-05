@@ -593,9 +593,10 @@ Wakeups send `{"type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}
   committed immutable results/archives; sequence, not wall-clock time or later
   child state, determines order. `/btw` stays UI-only.
 - Commit history before delivery. Tool results and later messages are distinct
-  events visible in the TUI/model conversation. Pending notices are memory-only;
-  admitted delivery IDs are durable.
+  events visible in the TUI/model conversation. The live pending queue is
+  memory-only; semantic event bodies and admitted delivery IDs are durable.
 - [Admission ordering](design.md#event-ordering-and-main-timeline) freezes and
   acknowledges delivered input, leaving later arrivals pending. Compaction must
-  not replay copied notices; session switch/exit discards pending delivery and
-  loading never resends old notices.
+  not replay copied notices. Session switch/exit discards the live queue; explicit
+  [compaction-boundary loads](compaction.md#reload-recovery)
+  recover undelivered durable events with fresh ownership, never live work.

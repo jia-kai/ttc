@@ -209,12 +209,15 @@ func run() error {
 		return e
 	}
 	events := make(chan session.Event, 256)
-	runtime := session.New(ctx, store, w, p, selection, saved.ID, catalog, searchConfig, func(event session.Event) {
+	runtime, e := session.New(ctx, store, w, p, selection, saved.ID, catalog, searchConfig, func(event session.Event) {
 		select {
 		case events <- event:
 		case <-ctx.Done():
 		}
 	})
+	if e != nil {
+		return e
+	}
 	runtime.AutoName = *autoName
 	defer func() {
 		// Stop UI delivery before joining callbacks after the frontend has exited.

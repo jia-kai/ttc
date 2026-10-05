@@ -31,14 +31,8 @@ type ChildFinish struct {
 // FinishChildTurn commits the terminal turn state and its single semantic event
 // together. Repeating completion is rejected rather than emitting another event.
 func (s *Store) FinishChildTurn(session string, finish ChildFinish) (int64, error) {
-	if finish.ChildID == "" || finish.TurnID == "" || finish.JobID == "" && finish.Status == "completed" {
-		return 0, errors.New("child completion requires child and turn IDs; successful assignments require a job ID")
-	}
-	if finish.Status != "completed" && finish.Status != "failed" && finish.Status != "cancelled" {
-		return 0, errors.New("invalid child completion status")
-	}
-	if len(finish.Answer) > MaxChildAnswerBytes || !utf8.ValidString(finish.Answer) || (finish.Status != "completed" && (finish.Answer != "" || finish.Truncated)) {
-		return 0, errors.New("child answer must be valid UTF-8, at most 8 KiB, and belong to a successful completion")
+	if err := validateChildFinish(finish); err != nil {
+		return 0, err
 	}
 	finish.Type = "child_turn_finished"
 	b, err := json.Marshal(finish)
@@ -66,4 +60,21 @@ func (s *Store) FinishChildTurn(session string, finish ChildFinish) (int64, erro
 		return err
 	})
 	return entry, err
+}
+
+// validateChildFinish keeps durable writes and recovered notifications aligned.
+func validateChildFinish(finish ChildFinish) error {
+	if finish.ChildID == "" || finish.TurnID == "" || finish.JobID == "" && finish.Status == "completed" {
+		return errors.New("child completion requires child and turn IDs; successful assignments require a job ID")
+	}
+	if finish.Status != "completed" && finish.Status != "failed" && finish.Status != "cancelled" {
+		return errors.New("invalid child completion status")
+	}
+	if finish.ResultEntry < 0 {
+		return errors.New("child completion result entry must be nonnegative")
+	}
+	if len(finish.Answer) > MaxChildAnswerBytes || !utf8.ValidString(finish.Answer) || (finish.Status != "completed" && (finish.Answer != "" || finish.Truncated)) {
+		return errors.New("child answer must be valid UTF-8, at most 8 KiB, and belong to a successful completion")
+	}
+	return nil
 }
