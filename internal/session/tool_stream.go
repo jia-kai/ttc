@@ -34,7 +34,17 @@ func (r *Runtime) toolAnnouncement(turn, actor string, request int64, start *pro
 	if err != nil {
 		return fmt.Errorf("record tool announcement: %w", err)
 	}
-	text = "awaiting " + render.Clean(start.Name) + " ..."
+	text = "awaiting " + render.Clean(start.Name) + " (0seg/0bytes) ..."
 	r.emit(Event{Kind: "tool_pending", Actor: actor, SessionID: session, EntryID: id, CallID: pendingToolKey(request, start.ID), Text: text})
+	return nil
+}
+
+// toolProgress updates the live announcement without adding history entries.
+func (r *Runtime) toolProgress(actor string, request int64, progress *provider.ToolProgress) error {
+	if progress == nil || progress.ID == "" || progress.Name == "" || progress.Segments < 0 || progress.Bytes < 0 {
+		return errors.New("provider emitted invalid tool progress")
+	}
+	text := fmt.Sprintf("awaiting %s (%dseg/%dbytes) ...", render.Clean(progress.Name), progress.Segments, progress.Bytes)
+	r.emit(Event{Kind: "tool_progress", Actor: actor, CallID: pendingToolKey(request, progress.ID), Text: text})
 	return nil
 }

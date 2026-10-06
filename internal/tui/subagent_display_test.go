@@ -67,6 +67,9 @@ func (p *namedPendingProvider) Stream(ctx context.Context, req provider.Request,
 		if err := emit(provider.StreamEvent{Kind: "call_start", CallStart: &provider.ToolStart{ID: "read", Name: "read"}}); err != nil {
 			return err
 		}
+		if err := emit(provider.StreamEvent{Kind: "call_progress", CallProgress: &provider.ToolProgress{ID: "read", Name: "read", Segments: 1, Bytes: 4}}); err != nil {
+			return err
+		}
 		select {
 		case <-p.release:
 		case <-ctx.Done():
@@ -87,7 +90,7 @@ func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	u.screen.PostEventWait(tcell.NewEventResize(140, 45))
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "[Sub one two three four] awaiting read ...")
+	u.wait(t, "[Sub one two three four] awaiting read (1seg/4bytes) ...")
 	var id int64
 	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
 		t.Fatal(err)

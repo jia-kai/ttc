@@ -28,6 +28,9 @@ func (p *pendingProvider) Stream(ctx context.Context, req provider.Request, emit
 	if err := emit(provider.StreamEvent{Kind: "call_start", CallStart: &provider.ToolStart{ID: "write_call", Name: "write"}}); err != nil {
 		return err
 	}
+	if err := emit(provider.StreamEvent{Kind: "call_progress", CallProgress: &provider.ToolProgress{ID: "write_call", Name: "write", Segments: 2, Bytes: 9}}); err != nil {
+		return err
+	}
 	select {
 	case <-p.release:
 	case <-ctx.Done():
@@ -44,7 +47,7 @@ func TestAwaitingToolInspectorAndTransition(t *testing.T) {
 	u := newQuestionTestUI(t, p)
 	u.typeText("write a streamed file")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "awaiting write ...")
+	u.wait(t, "awaiting write (2seg/9bytes) ...")
 	var count int
 	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM tool_calls").Scan(&count); err != nil {
 		t.Fatal(err)

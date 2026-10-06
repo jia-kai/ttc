@@ -248,6 +248,8 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				return r.retryNotice(turn, actor, request, "coding", ev.Retry)
 			case "call_start":
 				return r.toolAnnouncement(turn, actor, request, ev.CallStart)
+			case "call_progress":
+				return r.toolProgress(actor, request, ev.CallProgress)
 			case "completed":
 				usage, responseID, serviceTier = ev.Usage, ev.ResponseID, ev.ServiceTier
 			case "text":

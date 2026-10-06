@@ -458,6 +458,8 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 				return r.retryNotice(turn, "main", request, "coding", event.Retry)
 			case "call_start":
 				return r.toolAnnouncement(turn, "main", request, event.CallStart)
+			case "call_progress":
+				return r.toolProgress("main", request, event.CallProgress)
 			case "text":
 				text.WriteString(event.Text)
 				r.emit(Event{Kind: "delta", Text: render.Clean(event.Text), RequestID: request})

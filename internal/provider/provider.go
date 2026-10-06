@@ -107,6 +107,15 @@ type ToolStart struct {
 	Name string `json:"name"`
 }
 
+// ToolProgress counts argument delta events and their UTF-8 bytes for one
+// announced call. These transport counts do not describe final argument size.
+type ToolProgress struct {
+	ID       string
+	Name     string
+	Segments int
+	Bytes    int
+}
+
 // BinaryFile is either an inline attachment's data URL or a file-backed
 // attachment. File references persist an absolute Path and SHA256. Original encoded
 // bytes live in a disposable filesystem cache; a cache miss verifies the source
@@ -236,13 +245,14 @@ type Retry struct {
 	Reason            string `json:"reason"`
 }
 
-// StreamEvent is a delta, call announcement, complete call, adapter state, completion,
-// or retry notice. A call_start never authorizes execution.
+// StreamEvent is a text delta, tool announcement/progress/completion, adapter
+// state, response completion, or retry notice. A call_start never authorizes execution.
 type StreamEvent struct {
 	Kind         string
 	Text         string
 	Call         *ToolCall
 	CallStart    *ToolStart      // Present for Kind "call_start", before arguments are complete.
+	CallProgress *ToolProgress   // Present for Kind "call_progress"; display only.
 	StateItem    json.RawMessage // Present for Kind "state"; persisted but never executed.
 	StateVersion int             // Adapter's replay codec version for StateItem.
 	Phase        string          // Present for Kind "phase"; adapter maps native assistant phase.

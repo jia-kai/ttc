@@ -133,6 +133,7 @@ func TestInterleavedToolArgumentAssembly(t *testing.T) {
 	}
 	stream.WriteString(sseFrames(map[string]any{"type": "response.completed"}))
 	var calls []provider.ToolCall
+	progress := map[string]provider.ToolProgress{}
 	starts := 0
 	committed, err := parseStream(strings.NewReader(stream.String()), func(ev provider.StreamEvent) error {
 		if ev.Kind == "call_start" {
@@ -144,6 +145,9 @@ func TestInterleavedToolArgumentAssembly(t *testing.T) {
 		if ev.Kind == "call" {
 			calls = append(calls, *ev.Call)
 		}
+		if ev.Kind == "call_progress" {
+			progress[ev.CallProgress.ID] = *ev.CallProgress
+		}
 		return nil
 	})
 	if err != nil || !committed || starts != 2 || len(calls) != 2 {
@@ -153,11 +157,14 @@ func TestInterleavedToolArgumentAssembly(t *testing.T) {
 		if string(c.Arguments) != args[i] {
 			t.Fatal("argument fragment lost or duplicated", c)
 		}
+		if got := progress[c.ID]; got.Segments != 2 || got.Bytes != len(args[i]) {
+			t.Fatal("argument progress count was not per call or byte exact", c.ID, got)
+		}
 	}
 }
 
 func TestMalformedToolStreamNeverEmitsExecutableCall(t *testing.T) {
-	for _, name := range []string{"unknown_item", "wrong_index", "changed_identity", "mismatch", "duplicate_delta", "duplicate_done", "missing_done", "invalid_json", "unfinished", "late_delta"} {
+	for _, name := range []string{"unknown_item", "wrong_index", "changed_identity", "conflicting_final", "duplicate_done", "missing_done", "invalid_json", "unfinished", "late_delta"} {
 		t.Run(name, func(t *testing.T) {
 			events := callEvents(0, "fc", "call", "write", `{"path":"x"}`)
 			switch name {
@@ -167,10 +174,8 @@ func TestMalformedToolStreamNeverEmitsExecutableCall(t *testing.T) {
 				events[1]["output_index"] = 1
 			case "changed_identity":
 				events[4]["item"].(map[string]any)["call_id"] = "other"
-			case "mismatch":
-				events[3]["arguments"] = `{"path":"other"}`
-			case "duplicate_delta":
-				events = append(events[:2], append([]map[string]any{events[1]}, events[2:]...)...)
+			case "conflicting_final":
+				events[4]["item"].(map[string]any)["arguments"] = `{"path":"other"}`
 			case "duplicate_done":
 				events = append(events[:4], append([]map[string]any{events[3]}, events[4:]...)...)
 			case "missing_done":
@@ -201,6 +206,22 @@ func TestMalformedToolStreamNeverEmitsExecutableCall(t *testing.T) {
 				t.Fatal(err, starts, calls)
 			}
 		})
+	}
+}
+
+func TestFinalizedToolArgumentsOverrideDeltas(t *testing.T) {
+	events := callEvents(0, "fc", "call", "read", `{"path":"original"}`)
+	events[3]["arguments"] = `{"path":"final"}`
+	events[4]["item"].(map[string]any)["arguments"] = `{"path":"final"}`
+	var calls []provider.ToolCall
+	_, err := parseStream(strings.NewReader(sseFrames(events[0], events[1], events[2], events[3], events[4], map[string]any{"type": "response.completed"})), func(ev provider.StreamEvent) error {
+		if ev.Kind == "call" {
+			calls = append(calls, *ev.Call)
+		}
+		return nil
+	})
+	if err != nil || len(calls) != 1 || string(calls[0].Arguments) != `{"path":"final"}` {
+		t.Fatal("finalized arguments were not used", err, calls)
 	}
 }
 

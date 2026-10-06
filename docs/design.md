@@ -225,9 +225,10 @@ type LoginUI interface {
   Estimate model-visible occupancy, excluding transport metadata; OpenAI uses a
   coarse decoded-size reasoning estimate. Estimates never change bytes or usage.
 - Compare stored JSON arguments after marshaler normalization, preserving large
-  numbers and allowing RawMessage whitespace/HTML escaping. Stream completion
-  snapshots instead compare exact strings. `ContextFor` strips foreign state from
-  request copies, preserving originals under [model compatibility](models.md#switching-and-replay).
+  numbers and allowing RawMessage whitespace/HTML escaping. The finalized
+  argument event and completed output item compare as exact strings; streamed
+  fragments do not. `ContextFor` strips foreign state from request copies,
+  preserving originals under [model compatibility](models.md#switching-and-replay).
   Compaction drops replay. Unsupported codecs/representations fail.
 - Endpoint `Usage` remains separate from input estimates. The runtime owns copied
   counters; [usage accounting](models.md#usage-accounting) defines their subsets,
@@ -250,8 +251,13 @@ type LoginUI interface {
   outcomes, append a runtime developer warning from
   [prompt/recovery.md](../prompt/recovery.md), then continue through normal admission.
   Keep the exact warning pending across compaction. Do not replay the failed
-  request or automatically repeat side effects. Callback/persistence/protocol,
-  cancellation and permanent failures stop; naming/compaction partials stay final.
+  request or automatically repeat side effects. Callback and persistence
+  failures, other protocol errors, cancellation and permanent failures stop;
+  naming/compaction partials stay final.
+  Finalized tool arguments, rather than streamed fragments, determine executable
+  calls. An invalid finalized argument object or disagreement with the completed
+  output item uses this recovery path under the request's retry policy; unfinished
+  calls never execute.
 - Before each cancellable retry wait, emit a typed event and hidden inspectable
   request-linked notice for main, child or compaction. Callback failure stops retry.
   Backoff starts at one second, doubles with 25% jitter, and caps at 30 seconds.
@@ -403,10 +409,11 @@ The concrete boundaries above are TTC decisions, informed by:
 
 ## Terminal rendering ownership
 
-- The Responses adapter assembles deltas by output index/item ID after call
-  announcement. Completion snapshots must exactly match accumulated arguments,
-  name and call ID, without duplicate completion. Emit calls in output-index
-  order only after `response.completed`; failed/truncated streams execute none.
+- The Responses adapter counts argument delta events and UTF-8 bytes by output
+  index/item ID after call announcement. The completed output item must match
+  finalized arguments, name and call ID, without duplicate completion. Emit calls
+  in output-index order only after `response.completed`; failed/truncated streams
+  execute none.
   `call_start` is inspectable display metadata, not a tool intent. Cap SSE events/
   arguments at 8 MiB and retained response output at 32 MiB. See the
   [streaming contract](https://developers.openai.com/api/docs/guides/function-calling).

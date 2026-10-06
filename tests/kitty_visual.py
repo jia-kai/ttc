@@ -196,7 +196,7 @@ def main():
             assert terminal.returncode == 0
             print(f'PASS: offline Kitty palette/image/math and highlighted multi-term search; tmux={args.tmux}: {root}')
             return
-        pending_text = wait('awaiting read ...')
+        pending_text = wait('awaiting read (0seg/0bytes) ...')
         capture('awaiting-tool')
         pending_row = next(i for i, row in enumerate(pending_text.splitlines(), 1) if 'awaiting read' in row)
         mouse(3, pending_row)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,10 +61,11 @@ func TestCommittedTransientFailuresHandOffWithoutReplay(t *testing.T) {
 				var partial *provider.PartialError
 				var transient *provider.TransientError
 				wantKind := output
+				wantKinds := []string{wantKind}
 				if output == "finished_call" {
-					wantKind = "call_start"
+					wantKinds = []string{"call_start", "call_progress", "call_progress"}
 				}
-				if !errors.As(err, &partial) || !errors.As(err, &transient) || requests.Load() != 1 || len(kinds) != 1 || kinds[0] != wantKind {
+				if !errors.As(err, &partial) || !errors.As(err, &transient) || requests.Load() != 1 || !slices.Equal(kinds, wantKinds) {
 					t.Fatal("missing handoff, replay, wait or leaked executable output", err, requests.Load(), kinds)
 				}
 				retry := partial.Retry
@@ -72,6 +74,50 @@ func TestCommittedTransientFailuresHandOffWithoutReplay(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestInvalidFinalToolArgumentsUsePartialRecovery(t *testing.T) {
+	for _, kind := range []string{"invalid_json", "conflicting_final"} {
+		t.Run(kind, func(t *testing.T) {
+			var requests atomic.Int32
+			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				events := callEvents(0, "item", "call", "read", `{"path":"x"}`)
+				if kind == "invalid_json" {
+					events[3]["arguments"] = `{"path":`
+				} else {
+					events[4]["item"].(map[string]any)["arguments"] = `{"path":"other"}`
+				}
+				io.WriteString(w, sseFrames(events[0], events[1], events[2], events[3], events[4], map[string]any{"type": "response.completed"}))
+			})
+			for _, tc := range []struct {
+				prior, limit int
+				handoff      bool
+			}{{0, 2, true}, {1, 2, false}, {2, 0, true}} {
+				var starts, calls int
+				err := a.Stream(context.Background(), partialRequest(tc.prior, tc.limit), func(ev provider.StreamEvent) error {
+					if ev.Kind == "call_start" {
+						starts++
+					}
+					if ev.Kind == "call" {
+						calls++
+					}
+					return nil
+				})
+				var partial *provider.PartialError
+				var transient *provider.TransientError
+				if starts != 1 || calls != 0 || !errors.As(err, &transient) || errors.As(err, &partial) != tc.handoff {
+					t.Fatal("invalid tool call executed or retry policy was ignored", tc, err, starts, calls)
+				}
+				if partial != nil && (partial.Retry.Attempt != tc.prior+2 || partial.Retry.Reason == "") {
+					t.Fatal("invalid recovery metadata", partial.Retry)
+				}
+			}
+			if requests.Load() != 3 {
+				t.Fatal("unexpected request count", requests.Load())
+			}
+		})
 	}
 }
 

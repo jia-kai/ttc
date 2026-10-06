@@ -168,10 +168,16 @@ func TestCatalogAndStreamToolReasoningContinuity(t *testing.T) {
 	}
 	events := []provider.StreamEvent{}
 	e = a.Stream(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: sel, System: "system", Messages: []provider.Message{{Role: "user", Content: "hello"}}}, func(e provider.StreamEvent) error { events = append(events, e); return nil })
-	if e != nil || len(events) != 7 || events[5].Call.ID != "c" {
+	if e != nil || len(events) != 9 || events[7].Call.ID != "c" {
 		t.Fatal(events, e)
 	}
-	b, e := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: sel, Messages: []provider.Message{{Role: "assistant", State: &provider.ReplayState{Provider: "openai", Model: sel.Model.RequestID(), Version: 1, Items: []json.RawMessage{events[2].StateItem}}}}})
+	var reasoning json.RawMessage
+	for _, event := range events {
+		if strings.Contains(string(event.StateItem), "encrypted_content") {
+			reasoning = event.StateItem
+		}
+	}
+	b, e := wire(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: sel, Messages: []provider.Message{{Role: "assistant", State: &provider.ReplayState{Provider: "openai", Model: sel.Model.RequestID(), Version: 1, Items: []json.RawMessage{reasoning}}}}})
 	if e != nil || !strings.Contains(string(b), "encrypted_content") {
 		t.Fatal(string(b), e)
 	}

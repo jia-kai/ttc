@@ -462,6 +462,10 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 			return ctx.Err()
 		}
 		reason := "temporary stream failure before output"
+		if retryableToolArguments(err) && !callbackFailed {
+			reason = err.Error()
+			err = &provider.TransientError{Err: err}
+		}
 		if errors.Is(err, errStreamLost) && !callbackFailed {
 			err = &provider.TransientError{Err: err}
 			reason = "stream interrupted before output"
@@ -471,7 +475,11 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 			return err
 		}
 		if committed {
-			return &provider.PartialError{Err: err, Retry: retryMetadata(attempt, maxAttempts, "stream interrupted after partial output", retryDelay(attempt, "", time.Now()))}
+			partialReason := "stream interrupted after partial output"
+			if retryableToolArguments(err) {
+				partialReason = reason
+			}
+			return &provider.PartialError{Err: err, Retry: retryMetadata(attempt, maxAttempts, partialReason, retryDelay(attempt, "", time.Now()))}
 		}
 		if e = retryWait(ctx, emit, attempt, maxAttempts, reason, ""); e != nil {
 			return e
@@ -481,6 +489,12 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 }
 
 var errStreamLost = errors.New("Responses stream interrupted before completion")
+var errInvalidToolArguments = errors.New("completed tool arguments are not a JSON object")
+var errConflictingToolArguments = errors.New("completed tool disagrees with finalized arguments")
+
+func retryableToolArguments(err error) bool {
+	return errors.Is(err, errInvalidToolArguments) || errors.Is(err, errConflictingToolArguments)
+}
 
 func parseStream(reader io.Reader, emit func(provider.StreamEvent) error) (bool, error) {
 	scan := bufio.NewScanner(reader)
@@ -544,12 +558,27 @@ func parseStream(reader io.Reader, emit func(provider.StreamEvent) error) (bool,
 					return errors.New("streamed tool arguments exceed 8 MiB")
 				}
 				c.arguments.WriteString(event.Delta)
+				c.segments++
+				c.streamedBytes += len(event.Delta)
 				retainedBytes += len(event.Delta)
-			} else {
-				if event.Arguments != c.arguments.String() || !validArguments(event.Arguments) {
-					return errors.New("streamed tool arguments disagree with completed arguments")
+				now := time.Now()
+				if c.segments == 1 || now.Sub(c.lastProgress) >= 100*time.Millisecond {
+					out = c.progressEvent()
+					c.lastProgress, c.reportedSegments = now, c.segments
 				}
+			} else {
+				if !validArguments(event.Arguments) {
+					return errInvalidToolArguments
+				}
+				// The finalized argument event is authoritative. Deltas are for live
+				// progress and can differ from the completed value.
+				c.arguments.Reset()
+				c.arguments.WriteString(event.Arguments)
 				c.argumentsDone = true
+				if c.reportedSegments != c.segments {
+					out = c.progressEvent()
+					c.reportedSegments = c.segments
+				}
 			}
 		case "response.output_item.done":
 			var item functionItem
@@ -561,8 +590,11 @@ func parseStream(reader io.Reader, emit func(provider.StreamEvent) error) (bool,
 					return errors.New("completed tool missing output index")
 				}
 				c := calls[*event.OutputIndex]
-				if c == nil || c.finished || !c.argumentsDone || c.item.ID != item.ID || c.item.CallID != item.CallID || c.item.Name != item.Name || c.arguments.String() != item.Arguments {
+				if c == nil || c.finished || !c.argumentsDone || c.item.ID != item.ID || c.item.CallID != item.CallID || c.item.Name != item.Name {
 					return errors.New("completed tool disagrees with streamed call")
+				}
+				if c.arguments.String() != item.Arguments {
+					return errConflictingToolArguments
 				}
 				c.finished = true
 			} else if item.Type != "reasoning" && item.Type != "message" {
@@ -723,7 +755,14 @@ type functionItem struct {
 type streamedCall struct {
 	item                    functionItem
 	arguments               strings.Builder
+	segments, streamedBytes int
+	reportedSegments        int
+	lastProgress            time.Time
 	argumentsDone, finished bool
+}
+
+func (c *streamedCall) progressEvent() *provider.StreamEvent {
+	return &provider.StreamEvent{Kind: "call_progress", CallProgress: &provider.ToolProgress{ID: c.item.CallID, Name: c.item.Name, Segments: c.segments, Bytes: c.streamedBytes}}
 }
 
 func validArguments(text string) bool {

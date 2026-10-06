@@ -1091,6 +1091,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				continue
 			case "tool_pending":
 				addActor(line{text: event.Text, id: event.EntryID, callID: event.CallID, awaiting: true, system: true}, event.Actor)
+			case "tool_progress":
+				if index, ok := view.calls[event.CallID]; ok && view.lines[index].awaiting {
+					item := view.lines[index]
+					item.text = event.Text
+					view.replace(index, item)
+				}
 			case "tool_stream_end":
 				for key, index := range view.calls {
 					if strings.HasPrefix(key, event.PendingKey) && view.lines[index].awaiting {
