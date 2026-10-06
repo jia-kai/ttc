@@ -366,6 +366,16 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	attributeWindow := func(window *Window, actor string) {
 		window.actor, window.subagentName = actor, nameForActor(actor)
 	}
+	sourceWindow := func(window *Window, actor string) {
+		attributeWindow(window, actor)
+		name := window.subagentName
+		if actor == "" || actor == "main" {
+			name = "Main agent"
+		} else if name == "" {
+			name = actor
+		}
+		window.SourceAgent = name
+	}
 	plainActor := func(actor, text string) string {
 		if name := nameForActor(actor); name != "" {
 			return render.SubagentBadge(actor, name, 64, false) + " " + render.Clean(text)
@@ -427,7 +437,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				modal.window = NewPagedWindow(page, func(offset int) (history.InspectionPage, error) {
 					return f.Runtime.Store.InspectPage(ctx, id, offset, history.InspectionPageChars)
 				})
-				attributeWindow(modal.window, page.Actor)
+				if inspectionShowsSource(page.Kind, page.Type) {
+					sourceWindow(modal.window, page.Actor)
+				} else {
+					attributeWindow(modal.window, page.Actor)
+				}
 				return
 			}
 		}
@@ -458,13 +472,17 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			fmt.Fprintln(f.Output, render.Clean(text))
 		} else {
 			modal.window = &Window{Title: strings.Split(f.Runtime.Store.Label(v), "\n")[0], Text: text, System: v.Kind == "status" || v.Role == "system" || v.Role == "developer", Markdown: true}
-			attributeWindow(modal.window, v.Actor)
 			var status struct{ Type string }
 			if json.Unmarshal(v.Content, &status) == nil && status.Type == "system_prompt" {
 				modal.window.Markdown = false
 			}
 			if json.Unmarshal(v.Content, &status) == nil && status.Type == "job_completion" {
 				modal.window.Markdown, modal.window.System = true, false
+			}
+			if inspectionShowsSource(v.Kind, status.Type) {
+				sourceWindow(modal.window, v.Actor)
+			} else {
+				attributeWindow(modal.window, v.Actor)
 			}
 			if modal.window.Markdown {
 				title, err := render.TerminalBriefing(modal.window.Title, 512, false)
@@ -880,6 +898,16 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if modal.window != nil && modal.window.JobID != "" && !commandBusy {
 				modal.window.Text = f.Runtime.JobDetail(modal.window.JobID, modal.window.Detail)
 			}
+			if modal.window != nil && modal.window.TimerID != "" && !commandBusy {
+				if detail, err := f.Runtime.TimerDetail(modal.window.TimerID); err == nil {
+					modal.window.Text, modal.window.Header = detail.Text, detail.Header
+					modal.window.HeaderFocus = detail.Focus
+				} else {
+					modal.window.Text = "Timer inspection failed: " + err.Error()
+					modal.window.Header = ""
+					modal.window.HeaderFocus = ""
+				}
+			}
 			drawFocus := focused
 			if fullscreen {
 				drawFocus = copyFocused
@@ -1264,11 +1292,24 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 					if action.jobID != "" && !commandBusy {
 						modal.clear()
+						modal.generation = f.Runtime.Generation()
 						modal.window = &Window{Title: "Running job", Text: f.Runtime.JobDetail(action.jobID, ""), Markdown: true, JobID: action.jobID}
 						if job, err := f.Runtime.Jobs.View("main", action.jobID); err == nil {
-							attributeWindow(modal.window, job.Owner)
+							sourceWindow(modal.window, job.Owner)
 						} else {
 							modal.window.Text = "Job inspection failed: " + err.Error()
+						}
+					}
+					if action.timerID != "" && !commandBusy {
+						modal.clear()
+						modal.generation = f.Runtime.Generation()
+						modal.window = &Window{Title: "Timer", Markdown: true, TimerID: action.timerID}
+						if detail, err := f.Runtime.TimerDetail(action.timerID); err == nil {
+							modal.window.Text, modal.window.Header = detail.Text, detail.Header
+							modal.window.HeaderFocus = detail.Focus
+							sourceWindow(modal.window, detail.Actor)
+						} else {
+							modal.window.Text = "Timer inspection failed: " + err.Error()
 						}
 					}
 					continue
@@ -2083,6 +2124,11 @@ func drawWindow(s tcell.Screen, window *Window) {
 	progress := window.Progress(bodyHeight, width-2)
 	put(s, left+width-1-runewidth.StringWidth(progress), top+height-1, width-2, progress, style.Bold(true))
 	drawScrollBar(s, left+width-1, top+1+len(header), bodyHeight, len(window.cachedLines), window.Scroll, style)
+}
+
+// inspectionShowsSource applies the same provenance policy to small and paged records.
+func inspectionShowsSource(kind, eventType string) bool {
+	return kind == "tool_call" || kind == "tool_result" || eventType == "job_completion"
 }
 
 // windowContentSize accounts for the border and fixed headers in every caller.

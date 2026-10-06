@@ -301,7 +301,7 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			}
 			for range 2 {
 				messages = append(messages, provider.Message{Role: "assistant", Content: strings.Repeat("older work ", 3000)}, provider.Message{Role: "assistant", Content: "recent work"})
-				result, _, err := r.compactChild(context.Background(), task, messages, contextCursor{})
+				result, _, err := r.compactChild(context.Background(), task, messages, contextCursor{}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}

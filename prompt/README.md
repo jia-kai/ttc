@@ -7,6 +7,7 @@ file is git-ignored; the executable needs no prompt files or YAML parser at runt
 - `system.md`: stable coding instructions, shared by main and children.
 - `child.md`: child-only suffix; never duplicate the main instructions.
 - `btw.md`: read-only aside instructions.
+- `recovery.md`: continuation warning after a transient partial coding response.
 - `compaction.yaml`: summary `instructions`, `input` with two `%s` slots
   (focus/transcript), and `links` with three (summary/Markdown/JSONL archives).
 - `naming.yaml`: title instructions and output-token/attempt/deadline limits.

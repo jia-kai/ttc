@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"ttc/internal/tool"
@@ -99,5 +100,39 @@ func TestRetryActivityExcludesBackgroundNaming(t *testing.T) {
 				t.Fatal("retry UI metadata aliases provider-owned memory")
 			}
 		}
+	}
+}
+
+func TestMainFailureDetailsPersistWithoutBecomingModelInput(t *testing.T) {
+	for _, failure := range []error{errors.New("Responses stream interrupted before completion"), context.Canceled} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			p := &childProvider{}
+			p.stream = func(context.Context, provider.Request, func(provider.StreamEvent) error) error { return failure }
+			r.Provider = p
+			message := provider.Message{Role: "user", Content: "Run"}
+			if err := r.Run(&message); !errors.Is(err, failure) {
+				t.Fatal("lost original failure", err)
+			}
+			var requestError, turnError string
+			if err := r.Store.DB.QueryRow("SELECT json_extract(attempts_json,'$[0].error') FROM model_requests WHERE session_id=? AND purpose='coding'", r.Current()).Scan(&requestError); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Store.DB.QueryRow("SELECT json_extract(content_json,'$.error') FROM entries WHERE session_id=? AND json_extract(content_json,'$.type')='turn_end' AND model_visible=0", r.Current()).Scan(&turnError); err != nil {
+				t.Fatal(err)
+			}
+			if requestError != failure.Error() || turnError != failure.Error() {
+				t.Fatal("failure details not saved", requestError, turnError)
+			}
+			messages, err := r.Store.Messages(r.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, message := range messages {
+				if strings.Contains(message.Content, failure.Error()) {
+					t.Fatal("diagnostic entered model context", message)
+				}
+			}
+		})
 	}
 }

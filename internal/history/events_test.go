@@ -294,7 +294,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(source.ID, "handoff", archive, finish, nil, time.Now())
+	next, err := s.Continue(source.ID, "handoff", archive, finish, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

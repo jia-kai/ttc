@@ -117,7 +117,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 			break
 		}
 	}
-	continued, err := r.Store.Continue(original, "Image inspected.", archive, retainFrom, nil, time.Now())
+	continued, err := r.Store.Continue(original, "Image inspected.", archive, retainFrom, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

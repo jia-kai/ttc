@@ -6,6 +6,7 @@ import (
 	"strings"
 	"ttc/internal/render"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
 )
@@ -14,8 +15,9 @@ import (
 type Window struct {
 	actor, subagentName string // Same attribution as the conversation card.
 	Title, Text         string
-	Header              string // Optional fixed header, used for question tabs above scrolling content.
-	HeaderFocus         string // Active header label shown alone when the whole header cannot fit.
+	SourceAgent         string // Display name in a fixed provenance row, separate from view-specific headers.
+	Header              string // Optional fixed view metadata or question tabs above scrolling content.
+	HeaderFocus         string // Compact view summary shown when the whole header cannot fit.
 	Hint                string // Optional title-bar key hint; empty uses "Esc closes".
 	HideHint            bool   // Suppress title-bar hints when controls are described in the body.
 	Scroll              int
@@ -24,6 +26,7 @@ type Window struct {
 	Styled              bool   // Trusted frontend SGR; source text must be sanitized before styling.
 	CallID              string // Transient tool-card identity; cleared when its final record arrives.
 	JobID               string // Live inspector capture; never set when replaying stored history.
+	TimerID             string // Live timer inspector; never recreated from stored history.
 	Detail              string // Base transient detail, without the expanded capture tail.
 	cachedText          string
 	cachedWidth         int
@@ -36,14 +39,28 @@ type Window struct {
 
 // HeaderLines wraps the fixed header, leaving layout ownership with the frontend.
 func (w *Window) HeaderLines(width, limit int) []string {
-	if w.Header == "" || limit <= 0 {
+	if limit <= 0 || width <= 0 {
 		return nil
 	}
-	lines := wrap(render.Clean(w.Header), width)
-	if len(lines) > limit && w.HeaderFocus != "" {
-		lines = wrap(render.Clean(w.HeaderFocus), width)
+	var lines []string
+	if w.SourceAgent != "" {
+		// Provenance must not consume the body viewport in a narrow pane.
+		name := strings.Join(strings.Fields(render.Clean(w.SourceAgent)), " ")
+		lines = append(lines, ansi.Truncate("Source agent: "+name, width, "…"))
 	}
-	return lines[:min(len(lines), limit)]
+	if w.Header != "" && len(lines) < limit {
+		available := limit - len(lines)
+		if w.TimerID != "" {
+			// Reserve useful scrolling space for startup parameters in short panes.
+			available = min(available, max(2, limit/2))
+		}
+		header := wrap(render.Clean(w.Header), width)
+		if len(header) > available && w.HeaderFocus != "" {
+			header = wrap(render.Clean(w.HeaderFocus), width)
+		}
+		lines = append(lines, header[:min(len(header), available)]...)
+	}
+	return lines
 }
 
 // Lines wraps portable Markdown as readable text within a terminal viewport.

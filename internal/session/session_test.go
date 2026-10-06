@@ -135,7 +135,8 @@ func TestQuestionAnswerAndPendingCancellation(t *testing.T) {
 func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Schedule research reminders")
-	wake, e := r.timers.schedule("check", "task", time.Now(), 1)
+	delay, repeat := 0, 1
+	wake, e := r.timers.schedule(wakeupSchedule{Name: "check", Message: "task", Delay: &delay, Repeat: &repeat}, "main", time.Now())
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -238,7 +238,8 @@ preserves them; switching sessions or exiting cancels them. Use tmux for work
 that needs to outlive TTC.
 
 Main, child and aside compaction have a **10-minute timeout** and remain
-cancelable. A failed or interrupted turn pauses automatic notification turns;
+cancelable. Transient model-stream failures retry automatically before output is
+delivered. A failed or interrupted turn pauses automatic notification turns;
 pending messages stay queued. Send a prompt, successfully `/compact` or `/load`,
 or change session/model to resume. `/compact [focus]` while idle uses the same
 handoff as automatic compaction.

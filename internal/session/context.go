@@ -156,12 +156,13 @@ func (r *Runtime) compact(focus string) (string, error) {
 	r.activeCancel = cancel
 	r.mu.Unlock()
 	defer func() { cancel(); r.mu.Lock(); r.activeCancel = nil; r.mu.Unlock() }()
-	return r.compactContext(ctx, focus, r.CurrentSelection())
+	return r.compactContext(ctx, focus, r.CurrentSelection(), nil)
 }
 
 // compactContext shares the manual and automatic handoff. The main loop is
 // paused, but live children/jobs can append a tail until routeMu locks commit.
-func (r *Runtime) compactContext(ctx context.Context, focus string, selection provider.Selection) (result string, err error) {
+// pending is a persisted recovery warning required until coding succeeds.
+func (r *Runtime) compactContext(ctx context.Context, focus string, selection provider.Selection, pending *provider.Message) (result string, err error) {
 	session := r.Current()
 	defer func() { err = r.compactionFailure(session, err) }()
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
@@ -271,6 +272,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 	if visible != len(currentMessages) {
 		return "", errors.New("invalid compaction projection")
 	}
+	assembled, _ = contextbuild.AppendPendingMessage(assembled, pending)
 	var name string
 	e = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
@@ -282,20 +284,20 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		if e != nil {
 			return e
 		}
-		pending := append(append([]provider.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
-		if e = compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, pending, contextMessage); e != nil {
+		notices := append(append([]provider.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
+		if e = compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, notices, contextMessage); e != nil {
 			return e
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		v, e := r.Store.Continue(r.current, text, archive, retainFrom, inputIDs, compactedAt)
+		v, e := r.Store.Continue(r.current, text, archive, retainFrom, inputIDs, compactedAt, pending)
 		if e != nil {
 			return e
 		}
 		r.current = v.ID
 		r.mainContext.project = ""
 		r.mainContext.snapshot = ""
-		input := append(append([]provider.Message(nil), assembled...), pending...)
+		input := append(append([]provider.Message(nil), assembled...), notices...)
 		if contextMessage != nil {
 			input = append(input, *contextMessage)
 		}

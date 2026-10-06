@@ -36,6 +36,7 @@ type sidebar struct {
 }
 type sidebarAction struct {
 	jobID     string
+	timerID   string
 	workspace bool
 }
 
@@ -255,7 +256,7 @@ func (b *sidebar) detail() string {
 	return "Session:\n" + b.sessionName + "\n\n" + b.workspace.Detail()
 }
 
-// mouse consumes sidebar clicks/wheels and returns a live job to inspect.
+// mouse consumes sidebar clicks/wheels and returns a live job or timer to inspect.
 func (b *sidebar) mouse(ev *tcell.EventMouse) (bool, sidebarAction) {
 	x, y := ev.Position()
 	if b.width == 0 || x < b.left || x >= b.left+b.width || y < 0 || y >= b.height {
@@ -280,10 +281,13 @@ func (b *sidebar) mouse(ev *tcell.EventMouse) (bool, sidebarAction) {
 				v.scroll = max(0, v.scroll-3)
 			case ev.Buttons()&tcell.WheelDown != 0:
 				v.scroll = min(max(0, b.sectionCount(i)-v.height), v.scroll+3)
-			case ev.Buttons()&tcell.Button1 != 0 && i == 1:
+			case ev.Buttons()&tcell.Button1 != 0 && (i == 1 || i == 2):
 				index := v.scroll + y - v.top - 1
-				if index < len(b.jobs) {
+				if i == 1 && index < len(b.jobs) {
 					return true, sidebarAction{jobID: b.jobs[index].ID}
+				}
+				if i == 2 && index < len(b.timers) {
+					return true, sidebarAction{timerID: b.timers[index].ID}
 				}
 			}
 			return true, sidebarAction{}

@@ -129,7 +129,8 @@ func TestTimerCancellationCannotBeOverwrittenByEarlierFire(t *testing.T) {
 		}
 	})
 	defer w.close()
-	v, err := w.schedule("race", "Check", time.Now(), 60)
+	delay, repeat := 0, 60
+	v, err := w.schedule(wakeupSchedule{Name: "race", Message: "Check", Delay: &delay, Repeat: &repeat}, "main", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

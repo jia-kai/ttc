@@ -236,18 +236,30 @@ type LoginUI interface {
 ### Request retries
 
 - Main steering waits for a model boundary; children accept idle follow-ups only.
-  Native steering and provider stream recovery are outside v1. Retry transient
-  transport/rate-limit/server failures until interrupted only before text/tool
-  announcements/native items are committed. Positive `MaxAttempts` bounds total
-  attempts; naming limits come from
+  Native steering and resuming the same partial stream are outside v1. Providers
+  retry transient transport/rate-limit/server failures before output is delivered.
+  Parser-private native items, including reasoning, do not block retry and are
+  discarded on failure. Zero `MaxAttempts` retries until cancellation; positive
+  values bound the whole retry/recovery
+  chain; `PriorAttempts` carries failed attempts across continuation requests and
+  resets after a successful response. Naming limits come from
   [prompt/naming.yaml](../prompt/naming.yaml).
+- After partial output, only a provider-issued `PartialError` authorizes a new
+  main/child/aside coding request. Persist canonical partial output without native
+  replay state and settle emitted calls as not executed. Retain earlier tool
+  outcomes, append a runtime developer warning from
+  [prompt/recovery.md](../prompt/recovery.md), then continue through normal admission.
+  Keep the exact warning pending across compaction. Do not replay the failed
+  request or automatically repeat side effects. Callback/persistence/protocol,
+  cancellation and permanent failures stop; naming/compaction partials stay final.
 - Before each cancellable retry wait, emit a typed event and hidden inspectable
   request-linked notice for main, child or compaction. Callback failure stops retry.
   Backoff starts at one second, doubles with 25% jitter, and caps at 30 seconds.
   Numeric/date Retry-After overrides it with that cap; zero/past permits immediate
-  retry. Keep constant-size bookkeeping. Partial output fails without replay;
-  restart never retries unfinished requests. Persist final aggregate metadata and
-  separate notices, not a durable retry queue.
+  retry. Keep constant-size retry bookkeeping; history retains partial output and
+  recovery instructions. Restart never retries unfinished requests. Persist final
+  aggregate metadata and separate notices, not a durable retry queue. Coding request metadata and
+  hidden turn-end records include failure text for inspection.
 
 ## Inspectable request messages
 
@@ -409,7 +421,10 @@ The concrete boundaries above are TTC decisions, informed by:
   Frontend alone owns transcript, screen and Kitty state. Assistant labels align
   left, bodies indent two cells; items own no refresh goroutines.
 - Sidebar sections independently scroll/collapse copied request/job/timer
-  metadata; never scan history or revive job IDs during drawing. A cancelable
+  metadata; job/timer rows open live inspectors with source-agent names. Timer
+  details retain original scheduling parameters and refresh state/countdown on
+  frontend ticks. Names use the frontend's durable-label cache; drawing never
+  scans history or revives job IDs. A cancelable
   joined worker refreshes optional Git root/branch every five seconds with
   two-second deadlines and bounded output. Workspace header uses `Workspace.Root`.
 - Fullscreen uses a frozen transcript snapshot with shared immutable sources and

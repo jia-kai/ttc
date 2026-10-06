@@ -38,7 +38,7 @@ func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
 		}
 		return emit(provider.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
-	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection()); err != nil || calls != 1 || r.Current() == before {
+	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil); err != nil || calls != 1 || r.Current() == before {
 		t.Fatal("UI-only records prevented handoff", err, calls)
 	}
 	files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before, "compactions", "*"))
@@ -81,14 +81,14 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				_, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{})
+				_, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{}, nil)
 			} else {
 				for _, message := range messages {
 					if _, e := r.Store.Append(r.Current(), "", "main", "message", message.Role, true, message); e != nil {
 						t.Fatal(e)
 					}
 				}
-				_, err = r.compactContext(context.Background(), "", r.CurrentSelection())
+				_, err = r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 			}
 			if err != nil || calls != 1 {
 				t.Fatal("raw tool result did not fit", err, calls)
@@ -136,7 +136,7 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{})
+				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
 			}
 			if err != nil || requests != 1 || r.checkContext() != nil {
 				t.Fatal("oversized cycle prevented handoff", err, requests)
@@ -167,7 +167,7 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	}
 	calls := 0
 	r.Provider = &childProvider{stream: func(context.Context, provider.Request, func(provider.StreamEvent) error) error { calls++; return nil }}
-	_, err := r.compactContext(context.Background(), "", r.CurrentSelection())
+	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 	if err == nil || !strings.Contains(err.Error(), "estimated input") || calls != 0 || r.Current() != before || r.checkContext() == nil {
 		t.Fatal("oversized canonical input was admitted", err, calls)
 	}
@@ -229,7 +229,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 				}
 				return &provider.TransientError{Err: errors.New("fixture transport interrupted")}
 			}}
-			_, err := r.compactContext(context.Background(), "", r.CurrentSelection())
+			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 			if err == nil || requests != 1 || r.Current() != before {
 				t.Fatal("unexpected handoff", err, requests, r.Current())
 			}
@@ -273,7 +273,7 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 		r.orderMu.Unlock()
 		return emit(provider.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
-	_, err := r.compactContext(context.Background(), "", r.CurrentSelection())
+	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 	if err == nil || !strings.Contains(err.Error(), "exceed context headroom") || r.Current() != before || summaries != 1 {
 		t.Fatal("oversized steer caused an unusable handoff", err, r.Current(), summaries)
 	}
@@ -320,7 +320,7 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 				return emit(provider.StreamEvent{Kind: "text", Text: "Useful child handoff."})
 			}}
 			task := childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: aside}
-			result, cursor, err := r.compactChild(context.Background(), task, messages, contextCursor{project: "old project", snapshot: "old runtime"})
+			result, cursor, err := r.compactChild(context.Background(), task, messages, contextCursor{project: "old project", snapshot: "old runtime"}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -420,7 +420,7 @@ func TestCanceledChildCompactionPreservesCursorAndPublishesNothing(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cursor := contextCursor{project: "unchanged"}
-	result, next, err := r.compactChild(ctx, childTask{actor: "main/child", tools: r.Tools}, nil, cursor)
+	result, next, err := r.compactChild(ctx, childTask{actor: "main/child", tools: r.Tools}, nil, cursor, nil)
 	if !errors.Is(err, context.Canceled) || result != nil || next.project != cursor.project {
 		t.Fatal("canceled child changed context", result, next, err)
 	}

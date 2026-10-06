@@ -199,7 +199,7 @@ func TestCompactionUsageCountsOnlyAttemptedInferenceDespitePersistenceFailure(t 
 			if _, err := r.Store.DB.Exec(test.trigger); err != nil {
 				t.Fatal(err)
 			}
-			_, err := r.compactContext(context.Background(), "", r.CurrentSelection())
+			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 			if err == nil || !strings.Contains(err.Error(), "fixture compaction persistence failure") || calls != test.calls || r.Current() != before {
 				t.Fatal("wrong failure boundary or provider attempts", err, calls)
 			}

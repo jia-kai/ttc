@@ -22,7 +22,9 @@ import (
 // follows a source/age marker frozen at compactedAt, with its file tip and undo
 // checkpoint rebased to the tip immediately before retainFrom. retainFrom must
 // identify an active-branch entry, or the final entry ID plus one for an empty suffix.
-func (s *Store) Continue(session, summary, archive string, retainFrom int64, inputIDs []int64, compactedAt time.Time) (Session, error) {
+// pending preserves an already-persisted runtime recovery warning, with its
+// original request/source identity, if it is not in the copied visible suffix.
+func (s *Store) Continue(session, summary, archive string, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *provider.Message) (Session, error) {
 	archiveHash, e := filepathHash(archive)
 	if e != nil {
 		return Session{}, fmt.Errorf("validate Markdown compaction archive: %w", e)
@@ -44,6 +46,29 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 	}
 	if retainFrom <= 0 || compactedAt.IsZero() || len(inputIDs) > 4 {
 		return Session{}, errors.New("invalid continuation retention boundary")
+	}
+	var pendingEntry *Entry
+	if pending != nil {
+		if !pending.Runtime || pending.Role != "developer" || pending.RequestID <= 0 {
+			return Session{}, errors.New("invalid continuation recovery warning")
+		}
+		for i := range entries {
+			entry := &entries[i]
+			if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != pending.Role {
+				continue
+			}
+			var message provider.Message
+			if e := json.Unmarshal(entry.Content, &message); e != nil {
+				return Session{}, e
+			}
+			if _, added := ctxmgr.AppendPendingMessage([]provider.Message{message}, pending); !added {
+				pendingEntry = entry
+				break
+			}
+		}
+		if pendingEntry == nil {
+			return Session{}, errors.New("continuation recovery warning is not persisted")
+		}
 	}
 	selected := make(map[int64]bool, len(inputIDs))
 	for i, input := range inputIDs {
@@ -124,6 +149,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			return e
 		}
 		mapping := map[int64]int64{}
+		pendingCopied := false
 		for _, entry := range entries {
 			if entry.ID < retainFrom && !selected[entry.ID] {
 				continue
@@ -163,6 +189,10 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 					}
 				}
 				m.State = nil
+				if pending != nil && entry.Actor == "main" && entry.Role == pending.Role {
+					_, added := ctxmgr.AppendPendingMessage([]provider.Message{m}, pending)
+					pendingCopied = pendingCopied || !added
+				}
 				content, e = json.Marshal(m)
 				if e != nil {
 					return e
@@ -178,6 +208,19 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 				if e != nil {
 					return e
 				}
+			}
+		}
+		if pending != nil && !pendingCopied {
+			data, e := json.Marshal(pending)
+			if e != nil {
+				return e
+			}
+			source := pendingEntry.Source
+			if source == 0 {
+				source = pendingEntry.ID
+			}
+			if _, e = appendTx(tx, id, pendingEntry.TurnID, "main", "message", pending.Role, true, data, source); e != nil {
+				return e
 			}
 		}
 		floor := summaryID

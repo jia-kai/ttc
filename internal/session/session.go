@@ -351,7 +351,11 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 			displayStatus = "complete"
 		}
 		text := fmt.Sprintf("Turn %s · %s · avg %s", displayStatus, turnDuration(elapsed), avg)
-		id, e := r.Store.Append(r.Current(), turn, "main", "status", "", false, map[string]any{"type": "turn_end", "status": status, "text": text, "wall_ms": elapsed.Milliseconds()})
+		result := map[string]any{"type": "turn_end", "status": status, "text": text, "wall_ms": elapsed.Milliseconds()}
+		if err != nil {
+			result["error"] = err.Error()
+		}
+		id, e := r.Store.Append(r.Current(), turn, "main", "status", "", false, result)
 		if err == nil && e != nil {
 			err = e
 		}
@@ -368,6 +372,8 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		}
 		r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, Human: true})
 	}
+	priorAttempts := 0
+	var recovery *provider.Message
 	for {
 		if event, err := r.ApplyModel(turn); err != nil {
 			return err
@@ -382,7 +388,7 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		admitted, contextMessage, e := r.admitMain(ctx, turn, selection)
 		if errors.Is(e, errNeedsCompaction) {
 			r.emit(Event{Kind: "status", Text: "Compacting context…"})
-			result, err := r.compactContext(ctx, "", selection)
+			result, err := r.compactContext(ctx, "", selection, recovery)
 			if err != nil {
 				return fmt.Errorf("automatic compaction failed: %w", err)
 			}
@@ -441,7 +447,9 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		r.mainPrefix = append([]provider.Message(nil), messages...)
 		r.prefixSelection, r.prefixTurn = selection, turn
 		r.mu.Unlock()
-		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance}, func(event provider.StreamEvent) error {
+		callbackFailed := false
+		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event provider.StreamEvent) (err error) {
+			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if e := ctx.Err(); e != nil {
 				return e
 			}
@@ -489,7 +497,11 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		if streamErr != nil {
 			requestStatus = "failed"
 		}
-		if e = r.Store.FinishRequest(request, requestStatus, []any{map[string]any{"duration_ms": elapsed.Milliseconds(), "response_id": responseID, "service_tier": serviceTier, "usage": usage, "status": requestStatus}}); e != nil {
+		attempt := map[string]any{"duration_ms": elapsed.Milliseconds(), "response_id": responseID, "service_tier": serviceTier, "usage": usage, "status": requestStatus}
+		if streamErr != nil {
+			attempt["error"] = streamErr.Error()
+		}
+		if e = r.Store.FinishRequest(request, requestStatus, []any{attempt}); e != nil {
 			return e
 		}
 		if streamErr == nil {
@@ -515,8 +527,19 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		}
 		r.emit(Event{Kind: "usage"})
 		if streamErr != nil {
-			return streamErr
+			var partial *provider.PartialError
+			if callbackFailed || !errors.As(streamErr, &partial) {
+				return streamErr
+			}
+			message, err := r.recoverPartial(ctx, turn, "main", request, priorAttempts, partial)
+			if err != nil {
+				return err
+			}
+			recovery = &message
+			priorAttempts = partial.Retry.Attempt - 1
+			continue
 		}
+		priorAttempts, recovery = 0, nil
 		if !namingChecked && message != nil && r.AutoName {
 			namingChecked = true
 			r.startNaming(turn, selection, *message, reply)

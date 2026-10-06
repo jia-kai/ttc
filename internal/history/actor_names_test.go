@@ -24,7 +24,7 @@ func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, "summary", archive, retained, nil, time.Now())
+	continued, err := s.Continue(session.ID, "summary", archive, retained, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

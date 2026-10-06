@@ -196,6 +196,8 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry})
 	defs := task.tools.Definitions()
 	cursor := task.cursor
+	priorAttempts := 0
+	var recovery *provider.Message
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -208,7 +210,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		admitted, nextContext, err := r.admitChild(ctx, task, messages, cursor)
 		if errors.Is(err, errNeedsCompaction) {
 			r.routeMu.RUnlock()
-			messages, cursor, err = r.compactChild(ctx, task, messages, cursor)
+			messages, cursor, err = r.compactChild(ctx, task, messages, cursor, recovery)
 			if err != nil {
 				return err
 			}
@@ -235,7 +237,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		started := time.Now()
 		var usage *provider.Usage
 		var responseID, serviceTier string
-		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: actor, Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance}, func(ev provider.StreamEvent) error {
+		callbackFailed := false
+		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: actor, Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev provider.StreamEvent) (err error) {
+			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -282,7 +286,11 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		if streamErr != nil {
 			status = "failed"
 		}
-		if err := r.Store.FinishRequest(request, status, []any{map[string]any{"duration_ms": time.Since(started).Milliseconds(), "usage": usage, "response_id": responseID, "service_tier": serviceTier, "status": status}}); err != nil {
+		attempt := map[string]any{"duration_ms": time.Since(started).Milliseconds(), "usage": usage, "response_id": responseID, "service_tier": serviceTier, "status": status}
+		if streamErr != nil {
+			attempt["error"] = streamErr.Error()
+		}
+		if err := r.Store.FinishRequest(request, status, []any{attempt}); err != nil {
 			return err
 		}
 		r.routeMu.RLock()
@@ -313,8 +321,20 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			messages = append(messages, provider.Message{Role: "tool", CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
 		}
 		if streamErr != nil {
-			return streamErr
+			var partial *provider.PartialError
+			if callbackFailed || !errors.As(streamErr, &partial) {
+				return streamErr
+			}
+			message, err := r.recoverPartial(ctx, turn, actor, request, priorAttempts, partial)
+			if err != nil {
+				return err
+			}
+			messages = append(messages, message)
+			recovery = &message
+			priorAttempts = partial.Retry.Attempt - 1
+			continue
 		}
+		priorAttempts, recovery = 0, nil
 		if task.aside && len(reply.Calls) == 0 {
 			_, err := io.WriteString(stdout, reply.Content)
 			return err

@@ -26,6 +26,7 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 - **Ctrl+R** — Search recent prompts across sessions; Enter fills input, Esc cancels.
 - **Alt+Up / Alt+Down** — Focus a conversation message.
 - **Click a message** — Open its details.
+- **Click a sidebar job or timer** — Open its details and source-agent name; timers include original scheduling parameters, current state and a live countdown.
 - **Tab with an empty input** — Inspect the focused message.
 - **Ctrl+U** — Scroll up.
 - **Ctrl+D** — Scroll down; at the bottom, follow new output.

@@ -42,6 +42,7 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 	}
 	u.screen.PostEventWait(tcell.NewEventMouse(150, row, tcell.Button1, 0))
 	u.wait(t, "[Sub shell helper] Running job")
+	u.wait(t, "Source agent: shell helper")
 	u.wait(t, "Command:")
 	u.wait(t, live[0].ID)
 	if err := os.WriteFile(filepath.Join(u.runtime.Workspace.Root, "diagnostic"), []byte("child-stderr\n"), 0600); err != nil {

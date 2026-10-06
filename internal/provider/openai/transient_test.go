@@ -109,3 +109,77 @@ func TestStreamDoesNotRetryCommittedOutputOrCallbackFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestBufferedReasoningTransientFailuresRetryWithoutLeakingState(t *testing.T) {
+	for _, terminal := range []string{"disconnect", "server error"} {
+		t.Run(terminal, func(t *testing.T) {
+			requests, retries, states, completions := 0, 0, 0, 0
+			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if requests > 1 {
+					io.WriteString(w, sseFrames(map[string]any{
+						"type": "response.output_item.done", "output_index": 0,
+						"item": map[string]any{"type": "reasoning", "id": "successful_reasoning", "encrypted_content": "retained", "summary": []any{}},
+					}, map[string]any{"type": "response.completed"}))
+					return
+				}
+				io.WriteString(w, sseFrames(map[string]any{
+					"type": "response.output_item.done", "output_index": 0,
+					"item": map[string]any{"type": "reasoning", "id": "private_reasoning", "encrypted_content": "discarded", "summary": []any{}},
+				}))
+				if terminal == "server error" {
+					io.WriteString(w, sseFrames(map[string]any{"type": "error", "code": "server_error"}))
+				}
+			})
+			err := a.Stream(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: provider.Selection{Provider: "openai", Model: provider.ScriptModel()}, MaxAttempts: 2}, func(ev provider.StreamEvent) error {
+				switch ev.Kind {
+				case "retry":
+					retries++
+				case "completed":
+					completions++
+				case "state":
+					states++
+					if strings.Contains(string(ev.StateItem), "discarded") || !strings.Contains(string(ev.StateItem), "retained") {
+						t.Errorf("failed attempt leaked state: %s", ev.StateItem)
+					}
+				default:
+					t.Errorf("failed attempt leaked output: %s", ev.Kind)
+				}
+				return nil
+			})
+			if err != nil || requests != 2 || retries != 1 || states != 1 || completions != 1 {
+				t.Fatal("buffered reasoning prevented safe retry", err, requests, retries, states, completions)
+			}
+		})
+	}
+}
+
+func TestCompletionCallbackFailuresNeverRetryBufferedOutput(t *testing.T) {
+	for _, kind := range []string{"state", "phase"} {
+		for _, failure := range []error{&provider.TransientError{Err: errors.New("callback failed")}, errStreamLost} {
+			t.Run(kind+"/"+failure.Error(), func(t *testing.T) {
+				requests, retries := 0, 0
+				item := map[string]any{"type": "reasoning", "id": "buffered", "encrypted_content": "private", "summary": []any{}}
+				if kind == "phase" {
+					item = map[string]any{"type": "message", "id": "buffered", "role": "assistant", "phase": "final_answer", "content": []any{}}
+				}
+				a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					io.WriteString(w, sseFrames(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item}, map[string]any{"type": "response.completed"}))
+				})
+				err := a.Stream(context.Background(), provider.Request{ConversationID: "test-conversation", Selection: provider.Selection{Provider: "openai", Model: provider.ScriptModel()}, MaxAttempts: 2}, func(ev provider.StreamEvent) error {
+					if ev.Kind == "retry" {
+						retries++
+					}
+					if ev.Kind == kind {
+						return failure
+					}
+					return nil
+				})
+				if err != failure || requests != 1 || retries != 0 {
+					t.Fatal("callback failure retried or lost", err, requests, retries)
+				}
+			})
+		}
+	}
+}

@@ -404,7 +404,7 @@ func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
 	var parts []session.TokenPart
 	for i := range 40 {
 		js = append(js, jobs.Snapshot{ID: fmt.Sprint(i), Label: "job", Kind: "shell"})
-		timers = append(timers, session.TimerView{Name: "timer"})
+		timers = append(timers, session.TimerView{ID: fmt.Sprint(i), Name: "timer"})
 		parts = append(parts, session.TokenPart{Name: "part", Tokens: i})
 	}
 	b.update(session.ContextUsage{Limit: 100000, Parts: parts}, js, timers)
@@ -423,6 +423,12 @@ func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
 	}
 	if _, id := b.mouse(tcell.NewEventMouse(110, y, tcell.Button1, 0)); id.jobID != "3" {
 		t.Fatal("wrong job clicked", id)
+	}
+	timer := &b.sections[2]
+	b.mouse(tcell.NewEventMouse(110, timer.top+1, tcell.WheelDown, 0))
+	b.draw(s)
+	if _, action := b.mouse(tcell.NewEventMouse(110, timer.top+1, tcell.Button1, 0)); action.timerID != "3" || action.jobID != "" {
+		t.Fatal("wrong scrolled timer clicked", action)
 	}
 	b.mouse(tcell.NewEventMouse(110, job.top, tcell.Button1, 0))
 	if !job.collapsed {

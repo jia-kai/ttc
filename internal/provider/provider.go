@@ -213,7 +213,8 @@ type Request struct {
 	Tools          []ToolDefinition
 	NoTools        bool
 	OutputTokens   int
-	MaxAttempts    int // Zero retries until cancellation; positive values bound total attempts.
+	MaxAttempts    int // Zero means unlimited attempts until cancellation; positive values bound the entire recovery sequence.
+	PriorAttempts  int // Failed attempts already used in that sequence; nonnegative and less than a positive MaxAttempts.
 }
 
 // Usage reports endpoint input/output tokens; output includes reasoning when reported.
@@ -225,7 +226,8 @@ type Usage struct {
 	ReasoningOutputTokens *int `json:"reasoning_output_tokens,omitempty"` // Subset of output; nil if unavailable.
 }
 
-// Retry describes a pending retry of the same immutable request, before its wait.
+// Retry describes the next attempt, before its wait. Pre-output retries reuse the
+// immutable request; PartialError hands off a new request built by the runtime.
 // Reason is a safe explanation without credentials or raw transport errors.
 type Retry struct {
 	Attempt           int    `json:"attempt"`      // Next attempt, numbered from one.
@@ -267,7 +269,9 @@ type LoginUI interface {
 	Present(context.Context, LoginStep) (LoginAnswer, error)
 }
 
-// Provider supplies model metadata and cancellable streams. Emit errors stop a stream.
+// Provider supplies model metadata and cancellable streams. Emit errors stop a stream
+// without authorizing recovery. Only a provider-generated PartialError permits a
+// new continuation request; callers may instead treat it as a final failure.
 type Provider interface {
 	Models(context.Context) ([]ModelSpec, error)
 	Login(context.Context, LoginUI) error

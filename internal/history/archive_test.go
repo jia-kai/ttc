@@ -46,7 +46,7 @@ func TestContinuationRequiresBothArchiveFilesBeforeCommit(t *testing.T) {
 				}
 			}
 			if mode == "corrupt" {
-				continued, err := s.Continue(v.ID, "Summary", archive, retained, nil, time.Now())
+				continued, err := s.Continue(v.ID, "Summary", archive, retained, nil, time.Now(), nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -60,7 +60,7 @@ func TestContinuationRequiresBothArchiveFilesBeforeCommit(t *testing.T) {
 					t.Fatal("corrupt sidecar loaded")
 				}
 			} else {
-				if _, err := s.Continue(v.ID, "Summary", archive, retained, nil, time.Now()); err == nil {
+				if _, err := s.Continue(v.ID, "Summary", archive, retained, nil, time.Now(), nil); err == nil {
 					t.Fatal("invalid required sidecar accepted")
 				}
 				old, err := s.Session(v.ID)
@@ -82,7 +82,7 @@ func TestDeletedExactArchiveFailsReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(v.ID, "Summary", archive, retained, nil, time.Now())
+	continued, err := s.Continue(v.ID, "Summary", archive, retained, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

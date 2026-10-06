@@ -21,6 +21,7 @@ const InspectionPageChars = 16384
 type InspectionPage struct {
 	ID                                int64
 	Actor                             string // Owning actor; the frontend supplies its display badge.
+	Kind, Type                        string // Entry kind and optional status discriminator, for consistent inspector attribution.
 	Title, Text                       string
 	Offset, Total, Limit              int
 	Supported, Markdown, JSON, System bool
@@ -62,6 +63,7 @@ func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (I
 		return page, err
 	}
 	page.Supported = supported
+	page.Kind, page.Type = kind, typ
 	page.System = role == "system" || role == "developer" || typ == "system_prompt"
 	page.JSON = encoded || kind == "tool_call"
 	page.Markdown = !page.System

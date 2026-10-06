@@ -38,7 +38,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 		t.Fatal(err)
 	}
 	ids := append([]int64{original.EntryTip, queued}, admitted.SteerEntries...)
-	source, err := s.Continue(original.ID, "summary", archive, tail, ids, time.Now())
+	source, err := s.Continue(original.ID, "summary", archive, tail, ids, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 		if cut == 2 {
 			boundary = loaded.EntryTip + 1 // Summarize the exact imported floor too.
 		}
-		loaded, err = s.Continue(loaded.ID, "copy summary", archive, boundary, ids, time.Now())
+		loaded, err = s.Continue(loaded.ID, "copy summary", archive, boundary, ids, time.Now(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +164,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Continue(source.ID, "independent source summary", archive, source.EntryTip+1, ids, time.Now()); err != nil {
+	if _, err := s.Continue(source.ID, "independent source summary", archive, source.EntryTip+1, ids, time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.UndoTarget(loaded.ID); err == nil {
@@ -310,7 +310,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		session, err = s.Continue(session.ID, "summary", archive, tail, ids, at)
+		session, err = s.Continue(session.ID, "summary", archive, tail, ids, at, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -371,7 +371,7 @@ func TestContinuationValidatesRetainedInputsBeforeFreezing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, selected := range [][]int64{{ids[0], ids[0]}, {ids[1], ids[0]}, {tail}, {runtime}, {child}, {ids[0], ids[1], ids[2]}, ids, {ids[0] + 1}} {
-		if _, err := s.Continue(session.ID, "summary", archive, tail, selected, time.Now()); err == nil {
+		if _, err := s.Continue(session.ID, "summary", archive, tail, selected, time.Now(), nil); err == nil {
 			t.Fatal("accepted invalid selection", selected)
 		}
 		old, err := s.Session(session.ID)
@@ -391,7 +391,7 @@ func TestContinuationAllowsEmptyModelSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, "summary", archive, old.EntryTip+1, []int64{session.EntryTip}, time.Now())
+	continued, err := s.Continue(session.ID, "summary", archive, old.EntryTip+1, []int64{session.EntryTip}, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, "summary", archive, tail, []int64{first, second, steer.ID}, time.Now())
+	continued, err := s.Continue(session.ID, "summary", archive, tail, []int64{first, second, steer.ID}, time.Now(), nil)
 	if err != nil || continued.FileTip != suffixTip {
 		t.Fatal(continued, err)
 	}

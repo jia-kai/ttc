@@ -60,14 +60,14 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 					return emit(provider.StreamEvent{Kind: "completed"})
 				}}
 				if actor == "main" {
-					_, err = r.compactContext(ctx, "", r.CurrentSelection())
+					_, err = r.compactContext(ctx, "", r.CurrentSelection(), nil)
 				} else {
 					id := "main/" + actor
 					turn, e := r.Store.BeginChildTurn(before, id, r.CurrentSelection())
 					if e != nil {
 						t.Fatal(e)
 					}
-					_, _, err = r.compactChild(ctx, childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{})
+					_, _, err = r.compactChild(ctx, childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
 				}
 				if calls != 1 {
 					t.Fatal("expected one summary request", calls)
@@ -97,7 +97,7 @@ func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	}}
-	if _, err := r.compactContext(ctx, "", r.CurrentSelection()); !errors.Is(err, context.Canceled) {
+	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := r.Command("/load " + before); err != nil {

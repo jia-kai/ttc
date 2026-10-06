@@ -274,7 +274,7 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	if e = s.SaveSelection(latest); e != nil {
 		t.Fatal(e)
 	}
-	continuation, e := s.Continue(v.ID, "summary", archive, retained, nil, time.Now())
+	continuation, e := s.Continue(v.ID, "summary", archive, retained, nil, time.Now(), nil)
 	if e != nil {
 		t.Fatal(e)
 	}

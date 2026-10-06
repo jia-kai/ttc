@@ -370,17 +370,22 @@ type wireEvent struct {
 }
 
 // Stream retries uncommitted transient failures until cancellation or MaxAttempts.
+// Committed transient failures return PartialError when another attempt is allowed;
+// only the runtime may continue them, with a new request and retained partial history.
 // The subscription endpoint has no verified output cap; OutputTokens reserves context only.
 func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-	body, e := wire(ctx, req)
-	if e != nil {
-		return e
-	}
 	maxAttempts := req.MaxAttempts
 	if maxAttempts < 0 {
 		return errors.New("max attempts must be nonnegative")
 	}
-	for attempt := 0; maxAttempts == 0 || attempt < maxAttempts; attempt++ {
+	if req.PriorAttempts < 0 || maxAttempts > 0 && req.PriorAttempts >= maxAttempts {
+		return errors.New("prior attempts must be nonnegative and below max attempts")
+	}
+	body, e := wire(ctx, req)
+	if e != nil {
+		return e
+	}
+	for attempt := req.PriorAttempts; maxAttempts == 0 || attempt < maxAttempts; attempt++ {
 		tokens, e := a.auth(ctx)
 		if e != nil {
 			var transient *provider.TransientError
@@ -447,7 +452,7 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 			}
 			err := emit(event)
 			callbackFailed = callbackFailed || err != nil
-			return err
+			return finalCallbackError(err)
 		})
 		resp.Body.Close()
 		if err == nil {
@@ -462,8 +467,11 @@ func (a *Adapter) Stream(ctx context.Context, req provider.Request, emit func(pr
 			reason = "stream interrupted before output"
 		}
 		var transient *provider.TransientError
-		if callbackFailed || committed || maxAttempts > 0 && attempt == maxAttempts-1 || !errors.As(err, &transient) {
+		if callbackFailed || maxAttempts > 0 && attempt == maxAttempts-1 || !errors.As(err, &transient) {
 			return err
+		}
+		if committed {
+			return &provider.PartialError{Err: err, Retry: retryMetadata(attempt, maxAttempts, "stream interrupted after partial output", retryDelay(attempt, "", time.Now()))}
 		}
 		if e = retryWait(ctx, emit, attempt, maxAttempts, reason, ""); e != nil {
 			return e
@@ -565,7 +573,8 @@ func parseStream(reader io.Reader, emit func(provider.StreamEvent) error) (bool,
 			}
 			nativeItems[*event.OutputIndex] = append(json.RawMessage(nil), event.Item...)
 			retainedBytes += len(event.Item)
-			committed = true
+			// Native items stay private until response.completed. In particular,
+			// buffered reasoning alone must not prevent a safe transport retry.
 		case "response.completed":
 			indices := make([]int, 0, len(calls))
 			for _, c := range calls {

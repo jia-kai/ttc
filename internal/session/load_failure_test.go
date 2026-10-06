@@ -36,7 +36,7 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			target, err := r.Store.Continue(targetID, "Research handoff", archive, retained, nil, time.Now())
+			target, err := r.Store.Continue(targetID, "Research handoff", archive, retained, nil, time.Now(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

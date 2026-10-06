@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,8 +10,17 @@ import (
 	"time"
 	"ttc/internal/history"
 	"ttc/internal/prompts"
+	"ttc/internal/render"
 	"ttc/internal/tool"
 )
+
+type wakeupSchedule struct {
+	Name    string  `json:"name"`
+	Message string  `json:"message"`
+	At      *string `json:"at,omitempty"`
+	Delay   *int    `json:"delay_seconds,omitempty"`
+	Repeat  *int    `json:"repeat_seconds,omitempty"`
+}
 
 type wakeup struct {
 	ID             string `json:"wakeup_id"`
@@ -22,7 +32,10 @@ type wakeup struct {
 	Fired          int    `json:"fired_count"`
 	Last           string `json:"last_result,omitempty"`
 	cancel         context.CancelFunc
-	deliveredCount int // Last admitted firing; later firings remain pending.
+	actor          string    // Immutable scheduler actor ID; names are resolved by the frontend.
+	startupText    string    // Immutable startup Markdown, preserving original option omission.
+	nextAt         time.Time // Exact next deadline, without the display timestamp's second rounding.
+	deliveredCount int       // Last admitted firing; later firings remain pending.
 }
 type wakeups struct {
 	ctx    context.Context
@@ -36,20 +49,31 @@ type wakeups struct {
 func newWakeups(ctx context.Context, notify func(wakeup)) *wakeups {
 	return &wakeups{ctx: ctx, items: map[string]*wakeup{}, notify: notify}
 }
-func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wakeup, error) {
+func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup, error) {
+	// Build the immutable inspection text before publication, independent of the
+	// decoded call's optional-argument pointers and later inspection refreshes.
+	startup, err := json.Marshal(a)
+	if err != nil {
+		return wakeup{}, fmt.Errorf("encode wakeup startup parameters: %w", err)
+	}
+	startupText := "### Original startup parameters\n\n" + render.Fence(string(startup), "json")
+	repeat := 0
+	if a.Repeat != nil {
+		repeat = *a.Repeat
+	}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
 		return wakeup{}, errors.New("runtime ended")
 	}
 	for _, v := range w.items {
-		if v.Name == name && v.Status == "scheduled" {
+		if v.Name == a.Name && v.Status == "scheduled" {
 			w.mu.Unlock()
 			return wakeup{}, errors.New("wakeup name already active; choose another name or cancel the existing reminder with wakeup_cancel first")
 		}
 	}
 	ctx, cancel := context.WithCancel(w.ctx)
-	v := &wakeup{ID: history.NewID("wake"), Name: name, Message: message, Status: "scheduled", NextAt: at.UTC().Format(time.RFC3339), Repeat: repeat, cancel: cancel}
+	v := &wakeup{ID: history.NewID("wake"), Name: a.Name, Message: a.Message, Status: "scheduled", NextAt: at.UTC().Format(time.RFC3339), Repeat: repeat, cancel: cancel, actor: actor, startupText: startupText, nextAt: at}
 	w.items[v.ID] = v
 	w.wg.Add(1)
 	initial := *v
@@ -75,9 +99,11 @@ func (w *wakeups) schedule(name, message string, at time.Time, repeat int) (wake
 			if repeat == 0 {
 				v.Status = "fired"
 				v.NextAt = ""
+				v.nextAt = time.Time{}
 			} else {
 				next = time.Now().Add(time.Duration(repeat) * time.Second)
 				v.NextAt = next.UTC().Format(time.RFC3339)
+				v.nextAt = next
 			}
 			snapshot := *v
 			w.notify(snapshot)
@@ -120,6 +146,7 @@ func (w *wakeups) stop(id, name string) (wakeup, error) {
 			}
 			v.Status = "cancelled"
 			v.NextAt = ""
+			v.nextAt = time.Time{}
 			v.cancel()
 			snapshot := *v
 			w.notify(snapshot)
@@ -143,14 +170,7 @@ func (w *wakeups) close() {
 	w.mu.Unlock()
 }
 func (r *Runtime) addWakeupTools() {
-	type schedule struct {
-		Name    string  `json:"name"`
-		Message string  `json:"message"`
-		At      *string `json:"at,omitempty"`
-		Delay   *int    `json:"delay_seconds,omitempty"`
-		Repeat  *int    `json:"repeat_seconds,omitempty"`
-	}
-	tool.Register(r.Tools, "wakeup_schedule", prompts.ToolDescription("wakeup_schedule"), map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer")}, []string{"name", "message"}, func(a schedule) error {
+	tool.Register(r.Tools, "wakeup_schedule", prompts.ToolDescription("wakeup_schedule"), map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer")}, []string{"name", "message"}, func(a wakeupSchedule) error {
 		if e := tool.Required("name", a.Name); e != nil {
 			return e
 		}
@@ -172,18 +192,14 @@ func (r *Runtime) addWakeupTools() {
 			}
 		}
 		return nil
-	}, func(ctx context.Context, x tool.Execution, a schedule) (any, error) {
+	}, func(ctx context.Context, x tool.Execution, a wakeupSchedule) (any, error) {
 		at := time.Now()
 		if a.At != nil {
 			at, _ = time.Parse(time.RFC3339, *a.At)
 		} else {
 			at = at.Add(time.Duration(*a.Delay) * time.Second)
 		}
-		repeat := 0
-		if a.Repeat != nil {
-			repeat = *a.Repeat
-		}
-		v, e := r.timers.schedule(a.Name, a.Message, at, repeat)
+		v, e := r.timers.schedule(a, x.Actor, at)
 		if e != nil {
 			return nil, e
 		}

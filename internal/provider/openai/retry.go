@@ -52,10 +52,31 @@ func retryWait(ctx context.Context, emit func(provider.StreamEvent) error, attem
 		return err
 	}
 	delay := retryDelay(attempt, header, time.Now())
-	if err := emit(provider.StreamEvent{Kind: "retry", Retry: &provider.Retry{
-		Attempt: attempt + 2, MaxAttempts: limit, DelayMilliseconds: delay.Milliseconds(), Reason: reason,
-	}}); err != nil {
-		return err
+	retry := retryMetadata(attempt, limit, reason, delay)
+	if err := emit(provider.StreamEvent{Kind: "retry", Retry: &retry}); err != nil {
+		return finalCallbackError(err)
 	}
 	return wait(ctx, delay)
+}
+
+func retryMetadata(attempt, limit int, reason string, delay time.Duration) provider.Retry {
+	return provider.Retry{
+		Attempt: attempt + 2, MaxAttempts: limit,
+		DelayMilliseconds: delay.Milliseconds(), Reason: reason,
+	}
+}
+
+// A callback cannot grant provider recovery authorization, even by returning a
+// wrapped PartialError. Keep errors.Is identity without exposing that error chain.
+type callbackError struct{ err error }
+
+func (e *callbackError) Error() string        { return e.err.Error() }
+func (e *callbackError) Is(target error) bool { return errors.Is(e.err, target) }
+
+func finalCallbackError(err error) error {
+	var partial *provider.PartialError
+	if errors.As(err, &partial) {
+		return &callbackError{err: err}
+	}
+	return err
 }

@@ -205,7 +205,8 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 // compactChild replaces only isolated actor input. Shared history, main cursor,
 // file tips and undo ownership remain unchanged; the returned cursor forces full
 // project context on the next request. Aside events never enter main context.
-func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []provider.Message, cursor contextCursor) ([]provider.Message, contextCursor, error) {
+// pending is a persisted recovery warning required until coding succeeds.
+func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []provider.Message, cursor contextCursor, pending *provider.Message) ([]provider.Message, contextCursor, error) {
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -254,6 +255,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 			result = append(updated, result[1:]...)
 		}
 	}
+	result, _ = contextbuild.AppendPendingMessage(result, pending)
 	next := cursor
 	next.project = ""
 	next.snapshot = ""
@@ -270,6 +272,13 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, cursor, err
+	}
+	if pending != nil {
+		// Main compaction may have archived the original child-only entry while
+		// summarization ran. Keep one durable warning in the active branch.
+		if _, err = r.ensureRecovery(task.turn, task.actor, *pending); err != nil {
+			return nil, cursor, err
+		}
 	}
 	if !task.aside {
 		event, _ := json.Marshal(map[string]any{"type": "child_compacted", "child_id": task.actor, "turn_id": task.turn, "archive": archive, "records": records, "context_tokens_estimate": contextbuild.Tokens(result)})
