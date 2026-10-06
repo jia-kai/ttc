@@ -114,7 +114,7 @@ func TestFullscreenQuestionStillWorksWithKeyboard(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Add notes?")
 	u.typeText("Keep units.")
-	u.key(tcell.KeyRight)
+	u.key(tcell.KeyTab)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Done answering.")

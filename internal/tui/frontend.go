@@ -208,6 +208,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	editorDone := make(chan operationResult, 1)
 	editing := false
 	editorSuspended := false
+	var applyEditorResult func(operationResult)
 	displayView := func() *transcript {
 		if fullscreen && copyView != nil {
 			return copyView
@@ -389,20 +390,53 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		}
 	}
 	startEditor := func() {
+		text := draft.text
+		apply := func(result operationResult) {
+			if result.err != nil {
+				add("Editor failed: "+result.err.Error(), 0)
+			} else {
+				draft.set(result.text)
+			}
+		}
+		if question := modal.question; question != nil {
+			if !question.textEntry() {
+				return
+			}
+			tab, generation := question.tab, f.Runtime.Generation()
+			text = question.answers[tab].custom.text
+			apply = func(result operationResult) {
+				pending := f.Runtime.PendingQuestion()
+				if f.Runtime.Generation() != generation || pending == nil || pending.ID != question.form.ID {
+					return // The editor cannot revive a closed question.
+				}
+				question.errorText = ""
+				if result.err != nil {
+					question.errorText = "Editor failed: " + result.err.Error()
+				} else {
+					next := question.answers[tab].custom
+					next.set(result.text)
+					if err := question.acceptText(tab, next); err != nil {
+						question.errorText = err.Error()
+					}
+				}
+				question.manualScroll = false
+				question.update()
+			}
+		}
 		if screen == nil {
 			add("Editor requires the terminal UI", 0)
 			return
 		}
 		if err := screen.Suspend(); err != nil {
-			add("Editor failed: "+err.Error(), 0)
+			apply(operationResult{err: err})
 			return
 		}
 		editing, editorSuspended = true, true
+		applyEditorResult = apply
 		editor := f.EditInput
 		if editor == nil {
 			editor = editDraft
 		}
-		text := draft.text
 		go func() { text, err := editor(ctx, text); editorDone <- operationResult{text: text, err: err} }()
 	}
 	finishPreview := func(confirm bool) {
@@ -663,6 +697,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		}
 		if modal.question != nil && (form == nil || form.ID != modal.question.form.ID || form.Dismissed) {
 			modal.clear()
+			esc, viewChord = false, false
 		}
 		if form == nil || form.ID != deferredQuestionID || form.Dismissed {
 			deferredQuestionID = ""
@@ -1009,11 +1044,8 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			}
 			screen.Sync()
 			dirty = true
-			if result.err != nil {
-				add("Editor failed: "+result.err.Error(), 0)
-			} else {
-				draft.set(result.text)
-			}
+			applyEditorResult(result)
+			applyEditorResult = nil
 		case result := <-done:
 			activity = turnActivity{}
 			if modal.generation != 0 && modal.generation != f.Runtime.Generation() {
@@ -1369,8 +1401,18 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 					continue
 				}
+				if viewChord && ev.Key() == tcell.KeyRune && (ev.Rune() == 'e' || ev.Rune() == 'E') {
+					viewChord = false
+					startEditor()
+					continue
+				}
 				if modal.question != nil {
 					esc = false
+					viewChord = false
+					if !modal.question.pasting && modal.question.textEntry() && ev.Key() == tcell.KeyCtrlX {
+						viewChord = true
+						continue
+					}
 					w, h := screen.Size()
 					_, height := windowContentSize(w, h, modal.window)
 					answers, dismissed := modal.question.key(ev, height)
@@ -1397,10 +1439,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				}
 				if viewChord {
 					viewChord = false
-					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'e' || ev.Rune() == 'E') {
-						startEditor()
-						continue
-					}
 					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'f' || ev.Rune() == 'F') {
 						setFullscreen(!fullscreen)
 						sidebar.overlay = false

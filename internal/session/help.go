@@ -87,6 +87,8 @@ These commands require an idle turn.
 - **Ctrl+X J** or **/jobs** — Inspect jobs.
 - **Ctrl+X T** or **/timers** — Inspect timers.
 - **/btw QUESTION** — Ask a parallel read-only agent; its answer opens in a popup.
+- **Free-form question answers** — Use the cursor, word and line editing keys above, including Ctrl+X E for the editor. Tab/Shift+Tab switches question tabs; Left/Right moves the cursor while editing and switches tabs otherwise.
+- **Enter in a question** — Select an option or finish text and advance; only Enter on Submit sends answers. Shift+Enter/Ctrl+J inserts a newline.
 - **Esc in a question** — Leave text editing, then dismiss without answering. The next message redirects the turn; local commands leave the question pending.
 - **Ctrl+X ?** or **/questions [FORM_ID]** — Reopen the pending round with its drafts.
 - **/answer FORM_ID JSON_ARRAY** — Submit question answers in plain mode.

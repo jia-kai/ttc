@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"unicode"
+	"unicode/utf8"
 
 	"ttc/internal/session"
 
@@ -13,8 +13,7 @@ import (
 type questionAnswer struct {
 	choice             int
 	selected           int // Option index, or -1 when no option is selected.
-	custom             []rune
-	caret              int
+	custom             composer
 	useCustom, editing bool
 }
 
@@ -54,19 +53,28 @@ func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.
 	d.errorText = ""
 	if d.pasting {
 		if d.tab < len(d.answers) {
-			switch ev.Key() {
-			case tcell.KeyEnter:
-				d.insert('\n')
-			case tcell.KeyTab:
-				d.insert('\t')
-			case tcell.KeyRune:
-				if !unicode.IsControl(ev.Rune()) {
-					d.insert(ev.Rune())
-				}
-			}
+			d.editText(ev)
 		}
 		d.update()
 		return nil, false
+	}
+	if d.textEntry() {
+		a := &d.answers[d.tab]
+		handled := true
+		if ev.Key() == tcell.KeyEscape {
+			a.editing = false
+		} else if ev.Key() == tcell.KeyEnter && ev.Modifiers()&tcell.ModShift == 0 {
+			a.editing = false
+			d.tab++
+			d.Window.Scroll = 0
+		} else {
+			handled = d.editText(ev)
+		}
+		if handled {
+			d.manualScroll = false
+			d.update()
+			return nil, false
+		}
 	}
 	switch ev.Key() {
 	case tcell.KeyLeft, tcell.KeyBacktab:
@@ -98,35 +106,7 @@ func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.
 			}
 		} else {
 			q, a := d.form.Questions[d.tab], &d.answers[d.tab]
-			if a.editing {
-				switch ev.Key() {
-				case tcell.KeyEscape:
-					a.editing = false
-				case tcell.KeyHome:
-					a.caret = 0
-				case tcell.KeyEnd:
-					a.caret = len(a.custom)
-				case tcell.KeyBackspace, tcell.KeyBackspace2:
-					if a.caret > 0 {
-						a.custom = append(a.custom[:a.caret-1], a.custom[a.caret:]...)
-						a.caret--
-					}
-				case tcell.KeyDelete:
-					if a.caret < len(a.custom) {
-						a.custom = append(a.custom[:a.caret], a.custom[a.caret+1:]...)
-					}
-				case tcell.KeyEnter:
-					if ev.Modifiers()&tcell.ModShift != 0 {
-						d.insert('\n')
-					} else {
-						a.editing = false
-					}
-				case tcell.KeyRune:
-					if !unicode.IsControl(ev.Rune()) {
-						d.insert(ev.Rune())
-					}
-				}
-			} else {
+			if !a.editing {
 				switch ev.Key() {
 				case tcell.KeyEscape:
 					return nil, true
@@ -160,16 +140,35 @@ func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.
 	return nil, false
 }
 
-func (d *questionDialog) insert(r rune) {
-	a := &d.answers[d.tab]
-	if len(string(a.custom))+len(string(r)) > session.MaxAnswerBytes {
-		d.errorText = fmt.Sprintf("Text is limited to %d bytes.", session.MaxAnswerBytes)
-		return
+func (d *questionDialog) textEntry() bool {
+	return d.tab < len(d.answers) && d.answers[d.tab].editing
+}
+
+// editText applies the shared editing or paste handler transactionally so a
+// rejected insertion cannot change the answer's cursor or kill buffer.
+func (d *questionDialog) editText(ev *tcell.EventKey) bool {
+	next := d.answers[d.tab].custom
+	handled := true
+	if d.pasting {
+		next.pasteKey(ev)
+	} else {
+		handled = next.key(ev)
 	}
-	a.custom = append(a.custom, 0)
-	copy(a.custom[a.caret+1:], a.custom[a.caret:])
-	a.custom[a.caret] = r
-	a.caret++
+	if err := d.acceptText(d.tab, next); err != nil {
+		d.errorText = err.Error()
+	}
+	return handled
+}
+
+func (d *questionDialog) acceptText(tab int, next composer) error {
+	if len(next.text) > session.MaxAnswerBytes {
+		return fmt.Errorf("Text is limited to %d bytes.", session.MaxAnswerBytes)
+	}
+	if !utf8.ValidString(next.text) {
+		return fmt.Errorf("Text must be valid UTF-8.")
+	}
+	d.answers[tab].custom = next
+	return nil
 }
 
 // values validates the whole round and points to the first missing answer.
@@ -179,10 +178,10 @@ func (d *questionDialog) values() ([]session.Answer, int) {
 		q := d.form.Questions[i]
 		values[i].ID = q.ID
 		if a.useCustom {
-			if strings.TrimSpace(string(a.custom)) == "" {
+			if strings.TrimSpace(a.custom.text) == "" {
 				return nil, i
 			}
-			values[i].Source, values[i].Values = "custom", []string{string(a.custom)}
+			values[i].Source, values[i].Values = "custom", []string{a.custom.text}
 		} else {
 			if a.selected < 0 {
 				return nil, i
@@ -219,8 +218,8 @@ func (d *questionDialog) update() {
 		for i, a := range d.answers {
 			q := d.form.Questions[i]
 			answer := "Unanswered"
-			if a.useCustom && strings.TrimSpace(string(a.custom)) != "" {
-				answer = string(a.custom)
+			if a.useCustom && strings.TrimSpace(a.custom.text) != "" {
+				answer = a.custom.text
 			} else if !a.useCustom && a.selected >= 0 {
 				answer = q.Options[a.selected].Label
 			}
@@ -256,17 +255,18 @@ func (d *questionDialog) update() {
 			mark = "(x)"
 		}
 		rows = append(rows, menuRow(mark+" Other · free-text input", a.choice == len(q.Options)))
-		if a.useCustom || len(a.custom) > 0 {
-			text := string(a.custom)
+		if a.useCustom || a.custom.text != "" {
+			text := a.custom.text
 			if a.editing {
-				text = string(a.custom[:a.caret]) + "▏" + string(a.custom[a.caret:])
+				runes := []rune(text)
+				text = string(runes[:a.custom.cursor]) + "▏" + string(runes[a.custom.cursor:])
 				d.focusRow = len(rows) + 1
 			}
 			rows = append(rows, "", "Text: "+text)
 		}
 		rows = append(rows, "")
 		if a.editing {
-			rows = append(rows, "Enter finishes text · Shift+Enter newline · Esc leaves text entry", "←/→ tabs")
+			rows = append(rows, "Enter advances · Shift+Enter/Ctrl+J newline · Esc leaves text entry", "←/→ cursor · Tab/Shift+Tab tabs · Ctrl+X E editor")
 		} else {
 			rows = append(rows, "Up/Down choose · Enter selects and advances · Space selects", "←/→ tabs · Esc dismisses")
 		}

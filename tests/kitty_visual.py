@@ -4,12 +4,13 @@
 Requires kitty (with remote-control screenshot), Xvfb, and a software OpenGL
 implementation. Saves screenshots, terminal text, and complete failure logs.
 """
+from pathlib import Path
 import argparse
 import json
 import os
-from pathlib import Path
-import signal
+import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -18,6 +19,18 @@ import traceback
 
 
 from scratch import private_scratch
+
+def get_version() -> str:
+    """an ad-hoc parser of go source to get the version string"""
+    marker = 'const Version = '
+    with open(Path(__file__).parent.parent / 'internal' / 'version' /
+              'version.go') as fin:
+        for line in fin:
+            if line.startswith(marker):
+                v = line[len(marker):].strip()
+                assert v[0] == v[-1] == '"', f"bad {v=!r}"
+                return v[1:-1]
+    raise RuntimeError("could not find TTC version string")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -142,8 +155,10 @@ def main():
             (root / (name + '.txt')).write_text(remote('get-text', '--extent', 'screen'))
 
         wait('/help')
-        header = wait('TTC 0.1.0').splitlines()[0]
-        assert header.rstrip().endswith('TTC 0.1.0'), 'version header is not at the top right'
+        version = get_version()
+        header = wait(f'TTC {version}').splitlines()[0]
+        assert header.rstrip().endswith(f'TTC {version}'), (
+            'version header is not at the top right')
         send('cursor draft')
         wait('> cursor draft')
         cursor_state = remote('get-text', '--extent', 'screen', '--add-cursor')
@@ -271,7 +286,6 @@ def main():
         key('enter')
         send('Looks good.')
         key('enter')
-        key('right')
         wait('Which evidence should be retained?')
         key('enter')
         review_text = wait('Submit answers')

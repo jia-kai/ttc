@@ -497,16 +497,21 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   value; multiple selections are unsupported. A recommendation identifies
   an existing option ID, with optional explanation in that option's description.
   Invalid recommendation IDs fail validation; omitted recommendations are valid.
-- The terminal dialog shows question tabs and a final Submit tab. Left/Right
-  switches tabs, Up/Down focuses options, and Enter selects and advances to the
-  next tab (Submit after the last question). Space selects without advancing.
-  Selecting an option replaces the previous choice and does not toggle it off.
-  Recommendations start focused but unselected. Other opens
-  custom entry. Custom text and selected options are mutually exclusive answers;
-  drafts survive switching tabs and answer type. Enter finishes text editing,
-  Shift+Enter inserts a newline, and Home/End moves the text caret. Left/Right
-  always changes tabs, including during text editing. Only Enter on Submit sends
-  the round. Missing answers return focus to the first unanswered question.
+- The terminal dialog shows question tabs and a final Submit tab. Tab/Shift+Tab
+  switches tabs; Left/Right also switches tabs outside text editing. Up/Down
+  focuses options.
+  Enter selects an option or finishes text editing and advances to the next tab
+  (Submit after the last question). Choosing Other opens custom entry instead.
+  Space selects without advancing. Selecting an option replaces the previous
+  choice and does not toggle it off. Recommendations start focused but unselected.
+  Custom text and selected options are mutually exclusive answers; drafts survive
+  switching tabs and answer type. Free-form answers use the main input's
+  cursor, word/line and kill/yank keys, plus Ctrl+X E for the external
+  editor. Left/Right moves the text caret; Shift+Enter/Ctrl+J inserts a newline.
+  Each answer has its own draft and kill buffer. Edited text must remain valid
+  UTF-8 and within 16 KiB; rejected edits preserve text, cursor and kill buffer.
+  Only Enter on Submit sends the round. Missing answers return focus to the first
+  unanswered question.
 - Esc leaves custom editing first, then dismisses without answering. `/questions`
   reopens the pending round with its drafts; an optional `FORM_ID` must match it.
   The next normal user message settles a dismissed call and redirects the main

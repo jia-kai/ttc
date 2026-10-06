@@ -44,7 +44,7 @@ func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 	for _, r := range "Looks good 界" {
 		d.key(tcell.NewEventKey(tcell.KeyRune, r, 0), 8)
 	}
-	key(tcell.KeyRight)
+	key(tcell.KeyTab)
 	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
 	key(tcell.KeyDown)
 	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
@@ -52,11 +52,11 @@ func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 	if d.tab != 2 || d.answers[2].selected != 1 {
 		t.Fatal("Space must replace the selection idempotently without advancing", d.tab, d.answers[2])
 	}
-	key(tcell.KeyLeft)
-	if string(d.answers[1].custom) != "Looks good 界" || !d.answers[1].editing {
+	key(tcell.KeyBacktab)
+	if d.answers[1].custom.text != "Looks good 界" || !d.answers[1].editing {
 		t.Fatal("text lost across tabs", d.answers[1])
 	}
-	key(tcell.KeyRight)
+	key(tcell.KeyTab)
 	if answers, _ := key(tcell.KeyEnter); answers != nil || d.tab != 3 {
 		t.Fatal("last question must advance to Submit without sending", answers, d.tab)
 	}
@@ -82,7 +82,7 @@ func TestCustomChoiceDraftAndTextEditing(t *testing.T) {
 	key(tcell.KeyEnd)
 	d.key(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift), 8)
 	d.key(tcell.NewEventKey(tcell.KeyRune, 'Y', 0), 8)
-	if got := string(d.answers[0].custom); got != "Xb\nY" {
+	if got := d.answers[0].custom.text; got != "Xb\nY" {
 		t.Fatal(got)
 	}
 	key(tcell.KeyEscape)
@@ -93,7 +93,7 @@ func TestCustomChoiceDraftAndTextEditing(t *testing.T) {
 	}
 	key(tcell.KeyEnd)
 	key(tcell.KeyEnter)
-	if string(d.answers[0].custom) != "Xb\nY" || !d.answers[0].useCustom {
+	if d.answers[0].custom.text != "Xb\nY" || !d.answers[0].useCustom {
 		t.Fatal("custom draft lost")
 	}
 	if _, dismissed := d.key(tcell.NewEventKey(tcell.KeyEscape, 0, 0), 8); dismissed {
@@ -104,13 +104,120 @@ func TestCustomChoiceDraftAndTextEditing(t *testing.T) {
 	}
 }
 
+func TestQuestionUsesComposerEditing(t *testing.T) {
+	for _, tt := range composerEditingCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
+			d.answers[0].custom.set(tt.text)
+			d.answers[0].custom.cursor = tt.cursor
+			for _, event := range tt.keys {
+				if answers, dismissed := d.key(event, 8); answers != nil || dismissed || d.tab != 0 || !d.textEntry() {
+					t.Fatal("editing key navigated or submitted", event, answers, dismissed, d.tab)
+				}
+			}
+			if c := d.answers[0].custom; c.text != tt.want || c.cursor != tt.at {
+				t.Fatalf("%q at %d; want %q at %d", c.text, c.cursor, tt.want, tt.at)
+			}
+		})
+	}
+}
+
+func TestQuestionTextLimitPreservesDraft(t *testing.T) {
+	key := func(k tcell.Key) *tcell.EventKey { return tcell.NewEventKey(k, 0, 0) }
+	for _, tt := range []struct {
+		name    string
+		event   *tcell.EventKey
+		pasting bool
+	}{
+		{"rune", tcell.NewEventKey(tcell.KeyRune, '界', 0), false},
+		{"yank", key(tcell.KeyCtrlY), false},
+		{"newline", key(tcell.KeyCtrlJ), false},
+		{"shift enter", tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift), false},
+		{"paste", key(tcell.KeyEnter), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
+			d.answers[0].custom.set(strings.Repeat("x", session.MaxAnswerBytes))
+			d.answers[0].custom.cursor = 10
+			d.answers[0].custom.killed = "界"
+			before := d.answers[0].custom
+			d.pasting = tt.pasting
+			if answers, dismissed := d.key(tt.event, 8); answers != nil || dismissed || d.tab != 0 {
+				t.Fatal("oversize edit navigated or submitted")
+			}
+			if after := d.answers[0].custom; !reflect.DeepEqual(before, after) || !strings.Contains(d.errorText, "limited") {
+				t.Fatal("rejected edit changed the draft", after.cursor, d.errorText)
+			}
+			d.pasting = false
+			d.key(key(tcell.KeyBackspace2), 8)
+			d.key(key(tcell.KeyCtrlJ), 8)
+			if len(d.answers[0].custom.text) != session.MaxAnswerBytes || d.errorText != "" {
+				t.Fatal("could not edit at the byte limit", d.errorText)
+			}
+		})
+	}
+}
+
+func TestQuestionFreeTextEnterAdvancesWithoutSubmitting(t *testing.T) {
+	for _, withOptions := range []bool{false, true} {
+		name := "text-only"
+		if withOptions {
+			name = "custom-choice"
+		}
+		t.Run(name, func(t *testing.T) {
+			form := questionFixture()
+			if !withOptions {
+				for i := range form.Questions {
+					form.Questions[i].Options = nil
+					form.Questions[i].RecommendedOptionID = ""
+				}
+			}
+			d := newQuestionDialog(form)
+			key := func(k tcell.Key) ([]session.Answer, bool) {
+				return d.key(tcell.NewEventKey(k, 0, 0), 8)
+			}
+			var want []session.Answer
+			for i, q := range form.Questions {
+				if withOptions {
+					key(tcell.KeyEnd)
+					key(tcell.KeyEnter)
+				}
+				d.key(tcell.NewEventKey(tcell.KeyRune, '界', 0), 8)
+				if answers, dismissed := d.key(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift), 8); answers != nil || dismissed || d.tab != i || !d.answers[i].editing {
+					t.Fatal("Shift+Enter must keep editing the current answer", answers, dismissed, d.tab)
+				}
+				d.key(tcell.NewEventKey(tcell.KeyRune, 'x', 0), 8)
+				d.Window.Scroll = 10
+				if answers, dismissed := key(tcell.KeyEnter); answers != nil || dismissed || d.tab != i+1 || d.Window.Scroll != 0 {
+					t.Fatal("Enter must advance without submitting and reset scroll", answers, dismissed, d.tab, d.Window.Scroll)
+				}
+				if a := d.answers[i]; a.editing || !a.useCustom || a.custom.text != "界\nx" {
+					t.Fatal("Enter must finish editing and preserve the custom answer", a)
+				}
+				want = append(want, session.Answer{ID: q.ID, Source: "custom", Values: []string{"界\nx"}})
+			}
+			if !strings.Contains(d.Window.Header, "[Submit]") {
+				t.Fatal("last answer did not advance to Submit", d.Window.Header)
+			}
+			key(tcell.KeyLeft)
+			if d.answers[len(d.answers)-1].custom.text != "界\nx" {
+				t.Fatal("answer lost on returning to the last question")
+			}
+			key(tcell.KeyRight)
+			if answers, dismissed := key(tcell.KeyEnter); dismissed || !reflect.DeepEqual(answers, want) {
+				t.Fatal("explicit Submit did not send the preserved answers", answers, dismissed)
+			}
+		})
+	}
+}
+
 func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 	d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Describe the result."}}})
 	if !d.answers[0].editing {
 		t.Fatal("text-only form requires unnecessary choice")
 	}
 	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
-	d.key(tcell.NewEventKey(tcell.KeyRight, 0, 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyTab, 0, 0), 8)
 	if values, _ := d.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 8); values != nil {
 		t.Fatal("blank text accepted")
 	}
@@ -122,7 +229,7 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 	if !strings.Contains(view, "▏") {
 		t.Fatal("text caret outside narrow viewport", view)
 	}
-	d.key(tcell.NewEventKey(tcell.KeyRight, 0, 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyTab, 0, 0), 8)
 	d.reveal(12, 3)
 	if view := strings.Join(d.Window.Lines(12, 3), "\n"); !strings.Contains(view, "Submit") {
 		t.Fatal(view)
@@ -140,7 +247,7 @@ func TestQuestionPasteDoesNotNavigateOrSubmit(t *testing.T) {
 			t.Fatal("paste triggered navigation", values, dismissed, d.tab)
 		}
 	}
-	if text := string(d.answers[0].custom); text != "a\t\nb" {
+	if text := d.answers[0].custom.text; text != "a\t\nb" {
 		t.Fatal(text)
 	}
 }
@@ -165,11 +272,9 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 
 	d.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 8)
 	d.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 8)
-	for _, r := range "custom\nanswer" {
-		d.insert(r)
-	}
+	d.answers[0].custom.set("custom\nanswer")
 	d.update()
-	assertOrder("Which method?", "Other · free-text input", "Text: custom\nanswer▏", "Enter finishes text", "←/→ tabs")
+	assertOrder("Which method?", "Other · free-text input", "Text: custom\nanswer▏", "Enter advances", "←/→ cursor", "Tab/Shift+Tab tabs", "Ctrl+X E editor")
 	if strings.Contains(d.Window.Text, "Up/Down choose") {
 		t.Fatal("selection hints shown while editing text", d.Window.Text)
 	}

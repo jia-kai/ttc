@@ -86,12 +86,21 @@ func TestCancelQueueBeforeInitialAdmissionRestoresSnapshots(t *testing.T) {
 		t.Fatal("in-flight unadmitted input did not restore composer", frame)
 	}
 	unlock()
+	// Cancellation restores the input before RunInput finishes. Enter must wait
+	// for the frontend to consume that completion, or it still means steering.
+	deadline := time.After(3 * time.Second)
+	for strings.Contains(frame, "Esc Esc interrupt") {
+		select {
+		case frame = <-u.screen.frames:
+		case <-deadline:
+			t.Fatal("frontend did not become idle after queue cancellation", frame)
+		}
+	}
 	assertNoQueuedInputHistory(t, u)
 	// Resubmission must reuse the original snapshot after its path is gone.
 	releaseRestored := holdQueuedAdmission(t, u.runtime)
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Working")
-	time.Sleep(30 * time.Millisecond)
 	releaseRestored()
 	u.wait(t, "Restored admitted.")
 	req := cancelTestRequest(t, p)

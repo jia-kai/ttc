@@ -5,6 +5,7 @@ Run normally for automated plain PTY validation, --tui for keyboard/menu testing
 or --interactive to inspect the full TUI yourself. No real credentials or tokens.
 """
 import argparse
+import errno
 import fcntl
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 import pty
 import re
 import select
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -273,10 +275,23 @@ def main():
 
     if not args.tui:
         command.append('--plain')
+    else:
+        editor = root / 'question-editor.py'
+        editor.write_text('''import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text()
+assert text == 'Looks bad.', repr(text)
+(Path(__file__).parent / 'editor-original.txt').write_text(text)
+path.write_text('Looks good.')
+''')
     # Fork before starting server threads; forkpty supplies a proper controlling terminal.
     pid, master = pty.fork()
     if pid == 0:
         os.environ['TERM'] = 'xterm-256color'
+        if args.tui:
+            os.environ['VISUAL'] = 'python3 ' + shlex.quote(str(editor))
+            os.environ['EDITOR'] = 'this-editor-must-not-run'
         os.execv(binary, command)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -321,7 +336,11 @@ def main():
             expect('Recommended')
             os.write(master, b'\r')  # Select Yes and advance to Notes.
             expect('Any notes')
-            os.write(master, b'\x1b[B\x1b[B\rLooks good.\r\x1b[C')
+            # Shared Ctrl+W editing and Ctrl+X E must operate on this answer.
+            os.write(master, b'\x1b[B\x1b[B\rLooks obsolete\x17bad.\x18e')
+            expect('Text: Looks good.')
+            assert (root / 'editor-original.txt').read_text() == 'Looks bad.'
+            os.write(master, b'\r')
             expect('Which evidence')
             os.write(master, b'\r')  # Select Data and advance to Submit.
             expect('Submit answers')
@@ -353,7 +372,13 @@ def main():
                 waited = True
                 assert os.waitstatus_to_exitcode(status) == 0, status
                 break
-            time.sleep(0.05)
+            # Drain redraws so PTY output cannot block the frontend before exit.
+            if select.select([master], [], [], 0.05)[0]:
+                try:
+                    output.extend(os.read(master, 65536))
+                except OSError as exc:
+                    if exc.errno != errno.EIO:  # A closed Linux PTY reports EIO.
+                        raise
         assert waited, 'demo process did not stop'
         assert not errors, errors
         assert len(main_requests) == 6 and len(child_requests) == 3, (len(main_requests), len(child_requests))

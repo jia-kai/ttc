@@ -7,16 +7,18 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-func TestComposerEditing(t *testing.T) {
+type composerEditingCase struct {
+	name, text string
+	cursor     int
+	keys       []*tcell.EventKey
+	want       string
+	at         int
+}
+
+func composerEditingCases() []composerEditingCase {
 	key := func(k tcell.Key) *tcell.EventKey { return tcell.NewEventKey(k, 0, 0) }
 	alt := func(r rune) *tcell.EventKey { return tcell.NewEventKey(tcell.KeyRune, r, tcell.ModAlt) }
-	for _, tt := range []struct {
-		name, text string
-		cursor     int
-		keys       []*tcell.EventKey
-		want       string
-		at         int
-	}{
+	return []composerEditingCase{
 		{"word movement", "one two/three", 13, []*tcell.EventKey{alt('b'), alt('b'), alt('f')}, "one two/three", 7},
 		{"whitespace word deletion", "one two/three  ", 15, []*tcell.EventKey{key(tcell.KeyCtrlW)}, "one ", 4},
 		{"middle word deletion", "one two/three", 7, []*tcell.EventKey{key(tcell.KeyCtrlW)}, "one /three", 4},
@@ -34,7 +36,11 @@ func TestComposerEditing(t *testing.T) {
 		{"empty edges", "", 0, []*tcell.EventKey{key(tcell.KeyDelete), key(tcell.KeyBackspace), key(tcell.KeyCtrlW), alt('b'), alt('f'), key(tcell.KeyCtrlK)}, "", 0},
 		{"shift enter", "ab", 1, []*tcell.EventKey{tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift)}, "a\nb", 2},
 		{"ctrl j", "ab", 1, []*tcell.EventKey{key(tcell.KeyCtrlJ)}, "a\nb", 2},
-	} {
+	}
+}
+
+func TestComposerEditing(t *testing.T) {
+	for _, tt := range composerEditingCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newComposer(tt.text)
 			c.cursor = tt.cursor

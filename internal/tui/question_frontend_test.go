@@ -145,6 +145,29 @@ func questionScript() []provider.ScriptResponse {
 	return []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"choice","prompt":"Choose a method?","recommended_option_id":"b","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]},{"id":"notes","prompt":"Add notes?"}]}`)}}}, {Text: "Done answering."}}
 }
 
+func TestQuestionFreeTextEnterAdvancesInFrontend(t *testing.T) {
+	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u.typeText("ask")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Choose a method?")
+	u.key(tcell.KeyEnd)
+	u.key(tcell.KeyEnter)
+	u.typeText("custom method")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Add notes?")
+	u.typeText("custom notes")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "[Submit]")
+	if u.runtime.PendingQuestion() == nil {
+		t.Fatal("finishing the last answer submitted without review")
+	}
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn complete")
+	if u.runtime.PendingQuestion() != nil {
+		t.Fatal("explicit Submit did not finish the question")
+	}
+}
+
 func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
 	for _, modifier := range []tcell.ModMask{0, tcell.ModAlt} {
 		t.Run(fmt.Sprint(modifier), func(t *testing.T) {
@@ -283,7 +306,7 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 	u.key(tcell.KeyEnter)
 	u.typeText("second line")
 	u.screen.PostEventWait(tcell.NewEventPaste(false))
-	u.key(tcell.KeyRight)
+	u.key(tcell.KeyTab)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
@@ -323,7 +346,7 @@ func TestQuestionFrontendSequentialRoundsPreserveNextDraft(t *testing.T) {
 		t.Fatal("first round not pending", first)
 	}
 	u.typeText("first answered")
-	u.key(tcell.KeyRight)
+	u.key(tcell.KeyTab)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Beta?")
@@ -341,7 +364,7 @@ func TestQuestionFrontendSequentialRoundsPreserveNextDraft(t *testing.T) {
 	if frame := u.wait(t, "◆◆"); !strings.Contains(frame, "Text: next draft") {
 		t.Fatal("previous round closure lost the next draft", frame)
 	}
-	u.key(tcell.KeyRight)
+	u.key(tcell.KeyTab)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
