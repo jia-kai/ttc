@@ -278,9 +278,17 @@ func TestTurnsContinueBeyond64Cycles(t *testing.T) {
 }
 
 func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
+	for _, asides := range []int{0, 1} {
+		t.Run(fmt.Sprintf("asides=%d", asides), func(t *testing.T) {
+			testChildParallelAdmissionAndSlotRelease(t, asides)
+		})
+	}
+}
+
+func testChildParallelAdmissionAndSlotRelease(t *testing.T, asides int) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	started := make(chan struct{}, 8)
+	started := make(chan struct{}, maxChildSlots+2)
 	release := make(chan struct{})
 	defer close(release)
 	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
@@ -292,8 +300,15 @@ func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
 			return ctx.Err()
 		}
 	}}
+	seedRuntime(t, r, "shared child capacity")
+	for range asides {
+		if _, err := r.StartBTW("hold"); err != nil {
+			t.Fatal(err)
+		}
+		receive(t, started)
+	}
 	calls := []llm.ToolCall{}
-	for i := range 6 {
+	for i := range maxChildSlots + 2 {
 		calls = append(calls, llm.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"hold","label":"held child","background":true}`)})
 	}
 	turn, ids := batchIntents(t, r, "main", calls)
@@ -321,10 +336,13 @@ func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
 			t.Fatal(string(record.Result))
 		}
 	}
-	if accepted != 4 || denied != 2 {
+	if accepted != maxChildSlots-asides || denied != 2+asides {
 		t.Fatal(accepted, denied)
 	}
-	for range 4 {
+	if _, err := r.StartBTW("overflow"); err == nil {
+		t.Fatal("aside exceeded shared capacity")
+	}
+	for range maxChildSlots - asides {
 		receive(t, started)
 	}
 	if _, err := r.Jobs.Stop("main", jobID); err != nil {
@@ -341,7 +359,7 @@ func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
 		t.Fatal(records, err)
 	}
 	receive(t, started)
-	if len(r.Jobs.List("main", false)) != 4 {
+	if len(r.Jobs.List("main", false)) != maxChildSlots {
 		t.Fatal("released slot did not admit exactly one child")
 	}
 }

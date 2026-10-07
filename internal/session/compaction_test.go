@@ -15,6 +15,7 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
@@ -274,7 +275,7 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
 	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
-	if err == nil || !strings.Contains(err.Error(), "exceed context headroom") || r.Current() != before || summaries != 1 {
+	if err == nil || !strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || summaries != 1 {
 		t.Fatal("oversized steer caused an unusable handoff", err, r.Current(), summaries)
 	}
 	if r.checkContext() == nil {

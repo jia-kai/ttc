@@ -254,9 +254,9 @@ it never replaces or changes model-facing results.
   and retains the child's choice on idle follow-up; it never changes the model ID.
   New assignments get distinct child-turn/job IDs. Running children return
   `child_busy` with wait guidance; closed/unknown handles require a new child.
-- Retain at most four coding-child contexts, including idle children. Close an
-  unused child with `job_stop(child_id=...)` to free its slot. At most four
-  coding children and `/btw` asides run concurrently. Children cannot spawn
+- Coding-child contexts (including idle children) and running `/btw` asides
+  share a limit of 16 slots. Close an unused child with
+  `job_stop(child_id=...)` to free its slot. Children cannot spawn
   children, assign follow-ups or use `question`. When material information is
   missing, they finish useful work, report gaps to main and stop; they do not
   start user dialogs. Their inspectors accept no steering.

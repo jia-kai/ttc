@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,41 @@ func TestSubagentRequiresConciseTitle(t *testing.T) {
 
 func (p *childProvider) Stream(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 	return p.stream(ctx, request, emit)
+}
+
+func TestInitialRequestDescribesSubagentCapacity(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seen := false
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+		for _, definition := range req.Tools {
+			if definition.Name != "subagent" {
+				continue
+			}
+			seen = true
+			for _, want := range []string{
+				fmt.Sprintf("share a limit of %d slots", maxChildSlots),
+				"including idle retained children",
+				"running /btw asides",
+				"job_stop(child_id=...)",
+				"follow-ups reuse the existing slot",
+			} {
+				if !strings.Contains(definition.Description, want) {
+					t.Errorf("subagent description missing %q: %s", want, definition.Description)
+				}
+			}
+			if strings.Contains(definition.Description, "%") {
+				t.Errorf("unresolved formatting in subagent description: %s", definition.Description)
+			}
+		}
+		return emit(llm.StreamEvent{Kind: "text", Text: "done"})
+	}}
+	m := llm.Message{Role: "user", Content: "hello"}
+	if err := r.Run(&m); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("initial request omitted subagent tool")
+	}
 }
 
 func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
@@ -98,7 +134,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	childCycle := 0
 	p := &childProvider{}
 	p.stream = func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		if strings.Contains(req.System, "\nYou are an isolated child agent.") {
+		if strings.HasPrefix(req.ConversationID, "main/child_") {
 			var latest runtimeContext
 			for _, message := range req.Messages {
 				if message.Role == "developer" && message.Runtime {

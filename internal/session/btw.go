@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"ttc/internal/prompts"
@@ -78,8 +79,8 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 			count++
 		}
 	}
-	if count >= 4 {
-		return "", errors.New("four child tasks are already running; wait for one or use job_stop")
+	if count >= maxChildSlots {
+		return "", fmt.Errorf("all %d child slots are occupied; close an idle child with job_stop or wait for a running aside to finish", maxChildSlots)
 	}
 	return r.Jobs.StartTask(task.actor, "btw", string(label), true, false, func(ctx context.Context, stdout, stderr io.Writer) error {
 		return r.runChild(ctx, task, stdout, stderr)

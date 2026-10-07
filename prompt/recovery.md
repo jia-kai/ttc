@@ -9,9 +9,6 @@ changed (for example, an edit's old text no longer matches or a job or timer
 already exists). Use recorded outcomes to distinguish completed, failed, and
 unexecuted work.
 
-Reuse established facts and successful results. Do not repeat reads, analysis,
-checks, or completed actions solely because of the interruption. Recheck only to
-resolve a specific uncertainty or account for relevant state changes. Keep
-checks proportional and do not be overly conservative: when the evidence is
-sufficient, proceed directly with the remaining work. Adapt to actual outcomes
-and verify new results before claiming success.
+Reuse established facts and successful results. Repeat reads, analysis, checks
+or actions only to resolve a specific uncertainty or relevant state change.
+Continue the remaining work and verify new results before claiming success.

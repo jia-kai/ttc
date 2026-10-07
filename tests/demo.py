@@ -416,7 +416,8 @@ path.write_text('Looks good.')
         assert results['question'][0]['answers'][1]['values'] == ['Looks good.']
         assert results['question'][0]['answers'][1]['source'] == 'custom'
         assert results['question'][0]['answers'][2]['values'] == ['data']
-        assert '\nYou are an isolated child agent.' in child_requests[0]['instructions']
+        child_instructions = (Path(__file__).resolve().parent.parent / 'prompt/child.md').read_text()
+        assert child_requests[0]['instructions'].endswith(child_instructions)
         assert len(child_requests[0]['input']) == 2
         assert child_requests[0]['input'][0]['content'][0]['text'] == 'Check fixture observations independently.'
         child_visible = db.execute("SELECT count(*) FROM entries WHERE actor_id != 'main' AND model_visible=1").fetchone()[0]

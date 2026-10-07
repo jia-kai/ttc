@@ -245,8 +245,8 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 						t.Error("child inherited main transcript")
 					}
 				}
-				if !strings.Contains(req.System, "You are an isolated child agent.") {
-					t.Error("child missing isolated system prompt")
+				if req.System != childSystemTemplate {
+					t.Error("child missing child-specific system prompt")
 				}
 				switch step {
 				case 1:

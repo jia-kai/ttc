@@ -104,8 +104,9 @@ Rail reads global `${XDG_CONFIG_HOME:-~/.config}/ttc/rail.json`, then
   `source`. Masks hide contents, including beneath writable mounts, not the same
   data at another independently allowed destination (except SSH-agent aliases).
 - Relative paths resolve against the containing config's directory. Only `~`
-  and `~/` expand; other shell expressions are literal. Paths overlapping `/proc`,
-  `/dev` or `/run/ttc-rail`, and denies covering the entire workdir, are rejected.
+  and `~/` expand; other leading-tilde forms are rejected. Other shell
+  expressions, such as `$HOME`, are literal. Paths overlapping `/proc`, `/dev`
+  or `/run/ttc-rail`, and denies covering the entire workdir, are rejected.
 
 ### Default imports
 

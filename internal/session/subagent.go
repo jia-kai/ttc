@@ -19,6 +19,10 @@ import (
 	"ttc/internal/tool"
 )
 
+// maxChildSlots bounds retained coding children (including idle children) plus
+// running /btw asides in one runtime.
+const maxChildSlots = 16
+
 func (r *Runtime) addSubagentTool() {
 	type args struct {
 		Prompt     string  `json:"prompt"`
@@ -28,7 +32,7 @@ func (r *Runtime) addSubagentTool() {
 		Persistent *bool   `json:"persistent"`
 		Variant    *string `json:"variant,omitempty"`
 	}
-	tool.Register(r.Tools, "subagent", prompts.ToolDescription("subagent"), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "variant": tool.Property("string")}, []string{"prompt", "persistent"}, func(a args) error {
+	tool.Register(r.Tools, "subagent", fmt.Sprintf(prompts.ToolDescription("subagent"), maxChildSlots), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "variant": tool.Property("string")}, []string{"prompt", "persistent"}, func(a args) error {
 		if err := tool.Required("prompt", a.Prompt); err != nil {
 			return err
 		}
@@ -90,9 +94,9 @@ func (r *Runtime) addSubagentTool() {
 					asideCount++
 				}
 			}
-			if len(r.children) >= 4 || len(r.children)+asideCount >= 4 {
+			if len(r.children)+asideCount >= maxChildSlots {
 				r.childStartMu.Unlock()
-				return nil, tool.Fail("capacity", prompts.ChildCapacity)
+				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
 			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "question" })}
 			r.children[child.id] = child

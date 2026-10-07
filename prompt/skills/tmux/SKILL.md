@@ -14,10 +14,15 @@ If it is missing, report the dependency rather than installing it for inspection
 
 Identify TTC's own pane before sending keys. Prefer stable pane IDs (`%75`) and
 window IDs (`@19`); indexes and names can change or be ambiguous. A target may
-also be `session:window.pane`.
+also be `session:window.pane`. Use `$TMUX_PANE` for TTC's own pane; an untargeted
+`display-message` identifies the active pane, which may contain another program.
+If `TMUX_PANE` is absent, inspect the pane list; do not assume the active pane
+contains TTC.
 
 ```sh
-tmux display-message -p '#{pane_id} #{session_name}:#{window_index}.#{pane_index}'
+if [ -n "${TMUX_PANE:-}" ]; then
+    tmux display-message -p -t "$TMUX_PANE" '#{pane_id} #{session_name}:#{window_index}.#{pane_index}'
+fi
 tmux list-panes -a -F '#{pane_id} #{session_name}:#{window_index}.#{pane_index} #{pane_current_command}'
 tmux list-windows -a -F '#{window_id} #{session_name}:#{window_index}:#{window_name}'
 ```

@@ -8,7 +8,7 @@ ChildCannotAssign: children cannot spawn children or assign follow-ups
 ChildUnknownFollowup: unknown or closed child_id; create a fresh child
 ChildFollowupBusy: child is still running; wait for child_turn_finished before assigning a follow-up
 ChildUnsupportedVariant: 'unsupported variant %q for %s; supported variants: %s; choose one or omit variant to retain the current selection'
-ChildCapacity: four child contexts/tasks are retained; close an idle child with job_stop(child_id=...) or wait for an aside
+ChildCapacity: all %d child slots are occupied; close an idle child with job_stop(child_id=...) or wait for a running aside to finish
 ChildResponseTooLarge: child response exceeds %d bytes
 ChildCompletedWithoutText: child completed without assistant text
 ImageClicksUnsupported: image clicks require the Kitty graphics/mouse TUI; omit request_click to display without requesting a point
@@ -40,7 +40,7 @@ SessionSummaryMessageHeader: "\n### %s"
 SessionSummaryCallID: ' · %s'
 SessionSummaryToolCall: "Tool call %s · %s\n%s\n"
 SessionSummaryBinaryAttachment: "Binary attachment (%s): %s\n"
-SessionCompactionHeadroom: compaction summary, retained history (including unread binary results) and pending input/events exceed context headroom; use smaller files or narrower input
+SessionCompactionHeadroom: compaction summary, retained history (including unread binary results) and pending input/events exceed available model context; this context cannot continue. For main-context failure, start/load another session; for child-context failure, have main create a new child. Use smaller files or narrower input.
 SessionCompactionInputTooLarge: compaction input exceeds model context (estimated input %d + output/margin reserve %d, limit %d tokens); no summary was requested
 SessionRecordCompactionResult: 'record compaction result: %w'
 SessionCompactionNoTools: compaction response must not call tools

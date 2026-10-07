@@ -88,7 +88,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 		text := "Parent is waiting for the child."
 		if req.NoTools {
 			text = "A disposable audit is running; consume its completion answer."
-		} else if strings.Contains(req.System, "You are an isolated child agent.") {
+		} else if strings.HasPrefix(req.ConversationID, "main/child_") {
 			close(started)
 			select {
 			case <-release:

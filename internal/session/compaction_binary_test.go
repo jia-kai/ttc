@@ -14,6 +14,7 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
@@ -130,7 +131,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						t.Fatal("expected exactly one bounded summary request", summaries, err)
 					}
 					if !fits {
-						if err == nil || !strings.Contains(err.Error(), "unread binary results") || !strings.Contains(err.Error(), "exceed context headroom") || r.Current() != before || result != nil || coding != 0 {
+						if err == nil || !strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || result != nil || coding != 0 {
 							t.Fatal("unfittable unread original was silently summarized", err, coding)
 						}
 						if actor != "main" && (cursor.project != "old project" || cursor.snapshot != "old runtime") {

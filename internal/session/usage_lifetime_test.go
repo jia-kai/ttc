@@ -35,7 +35,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 	r.Emit = nil
 	parentCalls := 0
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		if !strings.Contains(req.System, "You are an isolated child agent.") {
+		if !strings.HasPrefix(req.ConversationID, "main/child_") {
 			parentCalls++
 			if parentCalls == 1 {
 				call := llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false}`)}

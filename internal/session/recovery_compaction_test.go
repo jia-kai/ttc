@@ -130,7 +130,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 					t.Fatal("expected one summary", summaries, err)
 				}
 				if !fits {
-					if err == nil || !strings.Contains(err.Error(), "exceed context headroom") || r.Current() != before || result != nil || r.HasNotifications() {
+					if err == nil || !strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || result != nil || r.HasNotifications() {
 						t.Fatal("handoff committed before fitting the required warning", err, r.Current(), result)
 					}
 					return

@@ -10,7 +10,7 @@ AttachmentUnsupportedContent: unsupported attachment content
 BinaryInlineUnsupported: inline binary data_url is unsupported; provide an original path and SHA-256 reference
 BinaryUnavailable: 'binary file unavailable: original bytes omitted for %q (expected SHA-256 %s); cache miss and source could not be verified: %v'
 BinaryUnsupportedInput: selected model does not announce %s input; select a model supporting this format, or use shell for explicit inspection/conversion
-BinaryInvalidCapability: provider binary capability must declare a canonical MIME type without parameters and positive MaxBytes; fix the provider's model metadata
+BinaryInvalidCapability: model binary-format configuration is invalid (requires a canonical MIME type without parameters and a positive byte limit); report this configuration error
 BinaryTooLarge: binary file exceeds %s; provide a smaller file
 BinaryEmpty: binary file is empty; provide a nonempty original file
 BinaryInvalidDocument: 'invalid %s document: %v; provide an original file matching its extension and announced MIME type'
@@ -28,14 +28,14 @@ JobSupervisionFailure: "Shell supervision failed: %v\n"
 JobOutputGrepFailure: 'invalid output grep: %w'
 CapturePositiveReadLimit: read limit must be positive
 CaptureEOFCursorFormat: expected eof:-N:bytes or eof:-N:lines
-CaptureEOFOffset: EOF offset must be nonpositive and representable
+CaptureEOFOffset: use eof:-N:bytes or eof:-N:lines with N between 0 and 9223372036854775807
 CaptureEOFUnit: EOF cursor unit must be bytes or lines
 CaptureAbsoluteCursor: invalid absolute byte cursor
 CaptureCursorBeyondOutput: cursor beyond output; use the returned next_cursor or eof:0:bytes for the current end
 CaptureUTF8ReadLimit: read limit is too small for the next UTF-8 character; increase limit_bytes to at least 4
 WorkspaceSymlinkMutation: 'symlink mutation path: %s; resolve the real target and retry with its path'
 WorkspaceNotRegularFile: 'not a regular file: %s'
-WorkspaceMultiplyLinkedFile: 'multiply linked file: %s'
+WorkspaceMultiplyLinkedFile: 'file has multiple hard links; tracked edits are unsupported: %s'
 WorkspaceParentNotDirectory: 'parent is not a directory: %s'
 WorkspaceMutationTooLarge: file exceeds 8 MiB mutation limit
 WorkspaceEmptyMutation: empty mutation

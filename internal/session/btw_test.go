@@ -181,12 +181,12 @@ func TestBTWAdmissionAndCancellation(t *testing.T) {
 			t.Fatal("accepted invalid question")
 		}
 	}
-	for range 4 {
+	for range maxChildSlots {
 		if _, err := r.StartBTW("wait"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := r.StartBTW("fifth"); err == nil {
+	if _, err := r.StartBTW("overflow"); err == nil {
 		t.Fatal("capacity exceeded")
 	}
 	if _, err := r.Command("/new"); err != nil {

@@ -62,7 +62,7 @@ type namedPendingProvider struct {
 }
 
 func (p *namedPendingProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-	if strings.Contains(req.System, "\nYou are an isolated child agent.") && !p.started {
+	if strings.HasPrefix(req.ConversationID, "main/child_") && !p.started {
 		p.started = true
 		if err := emit(llm.StreamEvent{Kind: "call_start", CallStart: &llm.ToolStart{ID: "read", Name: "read"}}); err != nil {
 			return err

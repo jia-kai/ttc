@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-test:
+    name: Full test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Install Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bubblewrap tmux zsh openssh-client ripgrep diffutils python3 kitty \
+            xvfb xauth libgl1 libegl1 libopengl0 libgl1-mesa-dri \
+            libxkbcommon-x11-0 libxcb-cursor0 \
+            fonts-dejavu-core fonts-noto-core fonts-noto-cjk librsvg2-bin
+
+      - name: Verify Kitty tools
+        run: |
+          kitty --version
+          kitten @ screenshot --help
+
+      - name: Enable and verify sandbox namespaces
+        run: |
+          # This is a disposable GitHub-hosted VM, not a developer's host.
+          # Ubuntu's AppArmor restriction otherwise blocks user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+          bwrap --unshare-user --unshare-pid --unshare-uts \
+            --ro-bind / / --proc /proc --dev /dev -- /bin/true
+
+      - name: Check Go formatting
+        run: |
+          mapfile -t files < <(git ls-files '*.go')
+          unformatted="$(gofmt -l "${files[@]}")"
+          if [[ -n "$unformatted" ]]; then
+            printf 'Run gofmt on:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Build and prepare MathJax
+        run: |
+          make build
+          ./ttc --install-math
+
+      - name: Run all tests
+        run: |
+          set -o pipefail
+          make full-test 2>&1 | tee "$RUNNER_TEMP/full-test.log"
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-test-diagnostics
+          path: |
+            ${{ runner.temp }}/full-test.log
+            /tmp/ttc/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

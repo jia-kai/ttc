@@ -21,9 +21,12 @@ Pass the returned `job_id` to `lsp_query`. `definition`, `references` and
 `hover` require `path`, `line` and `column`. Positions use **1-based Unicode
 code points**, including non-ASCII characters. `document_symbols` requires
 only `path`; `workspace_symbols` requires `query` (empty means all symbols).
-For unknown file extensions, provide `language_id`. Files are synchronized
-from disk on each query. Locations and symbols support zero-based `offset` and
-`limit` (default 100, maximum 500); use `next_offset` to request another page.
+For unknown file extensions, provide `language_id`. Each file query synchronizes
+only its requested file from disk; workspace-symbol queries synchronize none.
+After editing previously queried files, synchronize them with file queries before
+relying on cross-file results. Restart if the server does not support text changes.
+Locations and symbols support zero-based `offset` and `limit` (default 100,
+maximum 500); use `next_offset` to request another page.
 Hover does not accept pagination. For example, substitute the returned job ID:
 
 ```json

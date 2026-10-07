@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"ttc/internal/jobs"
+	"ttc/internal/prompts"
 	"ttc/internal/workspace"
 )
 
@@ -75,7 +76,7 @@ func TestDiffCaptureIsBoundedAndIgnoresUnappliedPaths(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result = presentFiles(ctx, nil, changes)
-	if !strings.Contains(result.detail, "budget exhausted") {
+	if !strings.Contains(result.detail, prompts.ToolDiffBudgetExhausted) {
 		t.Fatal(result.detail)
 	}
 }

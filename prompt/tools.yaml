@@ -103,16 +103,23 @@ skill:
     the skills listed in runtime context and load it before following its procedure.
 subagent:
   description: >-
-    Assign prompt to an isolated coding child. New children do not inherit your
-    transcript: include needed context and choose a concise label of 1–4 words.
+    Assign prompt to a coding child with a separate conversation but shared
+    workspace and undo history. New children do not inherit your transcript:
+    include needed context and choose a concise label of 1–4 words.
+    Coding children (including idle retained children) and running /btw asides
+    share a limit of %d slots. Close unused retained children with
+    job_stop(child_id=...) to free slots; follow-ups reuse the existing slot.
     Set persistent on every assignment: false closes context and owned jobs
     afterward; true retains successful context for follow-ups. Supply child_id
     to follow up on an idle retained child. Calls wait for the answer by default;
     background=true returns a job_id immediately and delivers the answer on
     completion. variant selects a supported reasoning variant; omit it to
     inherit the parent setting at creation or retain the child's setting.
-    Failures return the last assistant text with a partial-work/side-effect
-    warning and durable full-transcript paths, or an explicit export error.
+    Check status, not ok, for the assignment outcome: completed means the child
+    finished without a runtime error, not that its claims are verified.
+    Failed or cancelled assignments return the last assistant text with a
+    partial-work/side-effect warning and durable full-transcript paths, or an
+    explicit export error.
     Inspect the transcript before continuing failed work or for a full failed
     answer. Use job_read for bounded raw output and job_stop to close an idle child.
 wakeup_cancel:

@@ -20,6 +20,7 @@ import (
 	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 func documentCapability(extension string) llm.BinaryFileType {
@@ -259,7 +260,7 @@ func TestReadUsesAnnouncedCatalogForNewFormatsAndMIMEValidation(t *testing.T) {
 	for _, maximum := range []int{0, -1} {
 		x.BinaryFiles[0].MaxBytes = maximum
 		record := invoke(t, r, w, x, req, "read", `{"path":"source.FoO"}`)
-		if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"invalid_binary_capability"`) || !strings.Contains(string(record.Result), "positive MaxBytes") {
+		if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"invalid_binary_capability"`) || !strings.Contains(string(record.Result), prompts.BinaryInvalidCapability) {
 			t.Fatalf("invalid provider byte limit silently defaulted: %s", record.Result)
 		}
 	}
