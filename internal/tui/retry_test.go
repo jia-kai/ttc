@@ -6,16 +6,16 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
-type retryUIProvider struct{ provider.Script }
+type retryUIProvider struct{ llm.Script }
 
-func (p *retryUIProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-	if err := emit(provider.StreamEvent{Kind: "retry", Retry: &provider.Retry{Attempt: 5, DelayMilliseconds: 1500, Reason: "HTTP 429"}}); err != nil {
+func (p *retryUIProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+	if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 5, DelayMilliseconds: 1500, Reason: "HTTP 429"}}); err != nil {
 		return err
 	}
-	return emit(provider.StreamEvent{Kind: "text", Text: "Recovered"})
+	return emit(llm.StreamEvent{Kind: "text", Text: "Recovered"})
 }
 
 func TestRetrySystemMessageOpensInspector(t *testing.T) {
@@ -41,12 +41,12 @@ func TestComposerCursorTracksWidthAndHidesForWindow(t *testing.T) {
 	}
 	defer s.Fini()
 	s.SetSize(20, 10)
-	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", nil, provider.Selection{})
+	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", nil, llm.Selection{})
 	x, y, visible := s.GetCursor()
 	if !visible || x != 5 || y != 8 {
 		t.Fatal(x, y, visible)
 	}
-	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", &Window{Title: "Inspector"}, provider.Selection{})
+	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", &Window{Title: "Inspector"}, llm.Selection{})
 	_, _, visible = s.GetCursor()
 	if visible {
 		t.Fatal("composer cursor visible inside viewer")

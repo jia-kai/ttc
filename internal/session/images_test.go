@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -45,13 +45,13 @@ func TestChildImageEventRoutesToCurrentContinuation(t *testing.T) {
 	r.EnableImageClicks(true)
 	showTestImage(t, r, "fixture", "main", false)
 	old := r.Current()
-	_, ids := batchIntents(t, r, "main/child", []provider.ToolCall{{ID: "old_child_call", Name: "image_show", Arguments: json.RawMessage(`{"path":"field.png","request_click":true}`)}})
+	_, ids := batchIntents(t, r, "main/child", []llm.ToolCall{{ID: "old_child_call", Name: "image_show", Arguments: json.RawMessage(`{"path":"field.png","request_click":true}`)}})
 	for _, text := range []string{strings.Repeat("old research ", 3000), "Continue the child task."} {
-		if _, err := r.Store.Append(old, "", "main", "message", "user", true, provider.Message{Role: "user", Content: text}); err != nil {
+		if _, err := r.Store.Append(old, "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r.Provider = &provider.Script{Responses: []provider.ScriptResponse{{Text: "Continue the active child and its pending display."}}}
+	r.Provider = &llm.Script{Responses: []llm.ScriptResponse{{Text: "Continue the active child and its pending display."}}}
 	if _, err := r.Command("/compact"); err != nil {
 		t.Fatal(err)
 	}
@@ -222,11 +222,11 @@ func TestContextUsageMatchesFitAndFrozenModel(t *testing.T) {
 
 func TestImagePendingSurvivesCompactionButNeverReplay(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	r.Provider = &provider.Script{Responses: []provider.ScriptResponse{{Text: "Preserve the displayed image and pending click."}}}
+	r.Provider = &llm.Script{Responses: []llm.ScriptResponse{{Text: "Preserve the displayed image and pending click."}}}
 	r.EnableImageClicks(true)
 	v := showTestImage(t, r, "pending", "main", true)
 	for _, text := range []string{strings.Repeat("old research ", 700), "recent question"} {
-		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: text}); err != nil {
+		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}

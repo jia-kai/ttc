@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestMutationReadsRejectShellGrownFile(t *testing.T) {
@@ -44,9 +44,9 @@ func fixture(t *testing.T) (*Manager, history.Session, string, int64) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	model := provider.Selection{Model: provider.ScriptModel()}
+	model := llm.Selection{Model: llm.ScriptModel()}
 	id := history.NewID("session")
-	turn, _, e := s.StartSession(id, root, model, provider.Message{Role: "user", Content: "edit"})
+	turn, _, e := s.StartSession(id, root, model, llm.Message{Role: "user", Content: "edit"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -62,7 +62,7 @@ func fixture(t *testing.T) (*Manager, history.Session, string, int64) {
 }
 func intent(t *testing.T, w *Manager, v history.Session, turn string, req int64) string {
 	t.Helper()
-	id, e := w.Store.CallIntent(v.ID, turn, "main", req, provider.ToolCall{ID: history.NewID("p"), Name: "write", Arguments: []byte(`{"path":"x","content":"data"}`)})
+	id, e := w.Store.CallIntent(v.ID, turn, "main", req, llm.ToolCall{ID: history.NewID("p"), Name: "write", Arguments: []byte(`{"path":"x","content":"data"}`)})
 	if e != nil {
 		t.Fatal(e)
 	}

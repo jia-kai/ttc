@@ -12,7 +12,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -79,9 +79,9 @@ func TestPromptSearchBoundedRowsAndWrappedMouse(t *testing.T) {
 }
 
 func TestPromptRecallAndSearchSavedSessionInNewFrontend(t *testing.T) {
-	u := newQuestionTestUIWithSetup(t, &provider.Script{}, nil, func(r *session.Runtime) {
+	u := newQuestionTestUIWithSetup(t, &llm.Script{}, nil, func(r *session.Runtime) {
 		id := history.NewID("session")
-		turn, _, err := r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), provider.Message{Role: "user", Content: "older saved α prompt"})
+		turn, _, err := r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: "older saved α prompt"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestPromptRecallAndSearchSavedSessionInNewFrontend(t *testing.T) {
 			t.Fatal(err)
 		}
 		id = history.NewID("session")
-		turn, _, err = r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), provider.Message{Role: "user", Content: "newer saved β prompt"})
+		turn, _, err = r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: "newer saved β prompt"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,7 +158,7 @@ func BenchmarkPromptSearch(b *testing.B) {
 }
 
 func TestPromptHistoryStartupCancellation(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{})
+	u := newQuestionTestUI(t, &llm.Script{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	f := Frontend{Runtime: u.runtime}
@@ -168,9 +168,9 @@ func TestPromptHistoryStartupCancellation(t *testing.T) {
 }
 
 func TestRecalledCommandsAndPathsKeepHistoryNavigation(t *testing.T) {
-	u := newQuestionTestUIWithSetup(t, &provider.Script{}, nil, func(r *session.Runtime) {
+	u := newQuestionTestUIWithSetup(t, &llm.Script{}, nil, func(r *session.Runtime) {
 		for _, text := range []string{"old prompt", "@README.md", "/help"} {
-			turn, _, err := r.Store.StartSession(history.NewID("session"), r.Workspace.Root, r.CurrentSelection(), provider.Message{Role: "user", Content: text})
+			turn, _, err := r.Store.StartSession(history.NewID("session"), r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: text})
 			if err != nil {
 				t.Fatal(err)
 			}

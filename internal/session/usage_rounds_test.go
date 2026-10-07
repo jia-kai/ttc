@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestUsageAcrossToolRoundsAndTurns(t *testing.T) {
@@ -13,27 +13,27 @@ func TestUsageAcrossToolRoundsAndTurns(t *testing.T) {
 	r.Emit = nil
 	cached := []int{15, 70, 120}
 	reasoning := []int{3, 10, 0}
-	usages := []provider.Usage{
+	usages := []llm.Usage{
 		{InputTokens: 100, OutputTokens: 10, CachedInputTokens: &cached[0], ReasoningOutputTokens: &reasoning[0]},
 		{InputTokens: 200, OutputTokens: 40, CachedInputTokens: &cached[1], ReasoningOutputTokens: &reasoning[1]},
 		{InputTokens: 300, OutputTokens: 70, CachedInputTokens: &cached[2], ReasoningOutputTokens: &reasoning[2]},
 	}
 	rounds := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		round := rounds
 		rounds++
 		if round >= len(usages) {
 			t.Fatal("unexpected extra inference round", rounds)
 		}
 		if round == 0 {
-			call := provider.ToolCall{ID: "read", Name: "read", Arguments: []byte(`{"path":"."}`)}
-			if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+			call := llm.ToolCall{ID: "read", Name: "read", Arguments: []byte(`{"path":"."}`)}
+			if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 				return err
 			}
-		} else if err := emit(provider.StreamEvent{Kind: "text", Text: "Done."}); err != nil {
+		} else if err := emit(llm.StreamEvent{Kind: "text", Text: "Done."}); err != nil {
 			return err
 		}
-		return emit(provider.StreamEvent{Kind: "completed", Usage: &usages[round]})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &usages[round]})
 	}}
 	for turn, want := range []struct {
 		rounds, input, cached, output, reasoning int
@@ -41,7 +41,7 @@ func TestUsageAcrossToolRoundsAndTurns(t *testing.T) {
 		{2, 300, 85, 50, 13},
 		{3, 600, 205, 120, 13},
 	} {
-		if err := r.Run(&provider.Message{Role: "user", Content: "Continue"}); err != nil {
+		if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
 			t.Fatal(err)
 		}
 		got := r.UsageSnapshot()

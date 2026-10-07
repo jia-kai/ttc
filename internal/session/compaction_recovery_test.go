@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -27,13 +27,13 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 				var finish, result int64
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
-				r.Provider = &childProvider{stream: func(ctx context.Context, _ provider.Request, _ func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(ctx context.Context, _ llm.Request, _ func(llm.StreamEvent) error) error {
 					actor := "main/child_completed"
 					turn, err := r.Store.BeginChildTurn(source, actor, r.CurrentSelection())
 					if err != nil {
 						return err
 					}
-					result, err = r.Store.Append(source, turn, actor, "message", "assistant", false, provider.Message{Role: "assistant", Content: "Storage verified; 35 tests passed."})
+					result, err = r.Store.Append(source, turn, actor, "message", "assistant", false, llm.Message{Role: "assistant", Content: "Storage verified; 35 tests passed."})
 					if err != nil {
 						return err
 					}
@@ -68,10 +68,10 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 				}
 				var summaries, coding int
 				var delivered int64
-				r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 					if req.NoTools {
 						summaries++
-						return emit(provider.StreamEvent{Kind: "text", Text: "Earlier evidence summarized."})
+						return emit(llm.StreamEvent{Kind: "text", Text: "Earlier evidence summarized."})
 					}
 					coding++
 					found := 0
@@ -91,7 +91,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 					if found != 1 {
 						t.Fatal("child answer was not delivered exactly once", found)
 					}
-					return emit(provider.StreamEvent{Kind: "text", Text: "Continuing after storage verification."})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Continuing after storage verification."})
 				}}
 				if manual {
 					if _, err := r.Command("/compact"); err != nil {

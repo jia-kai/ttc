@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -34,7 +34,7 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	if err := r.queueNotification(`{"type":"job_exit","job_id":"job"}`); err != nil {
 		t.Fatal(err)
 	}
-	before := append([]provider.Message(nil), r.notifications...)
+	before := append([]llm.Message(nil), r.notifications...)
 	cursor := r.mainContext
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestCommittedNoticeRejectsCopiedSourceAndDuplicatePending(t *testing.T) {
 }
 
 func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Text: "Recovered"}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Recovered"}})
 	seedRuntime(t, r, "First human instruction")
 	var before string
 	if err := r.Store.DB.QueryRow("SELECT metadata_json FROM sessions WHERE id=?", r.Current()).Scan(&before); err != nil {
@@ -214,7 +214,7 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_human BEFORE INSERT ON entries WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'forced user append failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Rejected instruction"}); err == nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Rejected instruction"}); err == nil {
 		t.Fatal("forced append failure succeeded")
 	}
 	var after string
@@ -231,7 +231,7 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	if _, err := r.Store.DB.Exec("DROP TRIGGER fail_human"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Retry instruction"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Retry instruction"}); err != nil {
 		t.Fatal("main admission did not recover", err)
 	}
 }
@@ -306,17 +306,17 @@ func TestClosingChildJoinsItsBackgroundCommands(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			r.Emit = nil
 			step := 0
-			r.Provider = &childProvider{stream: func(ctx context.Context, request provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 				step++
 				if step == 1 {
-					return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "background", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}})
+					return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "background", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}})
 				}
 				if failed {
 					return errors.New("synthetic child failure")
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Background task started"})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Background task started"})
 			}}
-			_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start a background task","label":"fixture"}`)}})
+			_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start a background task","label":"fixture"}`)}})
 			record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main", CallID: ids[0]}, "subagent", []byte(`{"persistent":true,"prompt":"start a background task","label":"fixture"}`))
 			var result map[string]any
 			if err := json.Unmarshal(record.Result, &result); err != nil {

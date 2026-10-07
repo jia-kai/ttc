@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -33,23 +33,23 @@ func TestModelSwitchAtToolBoundaryPreservesPerRequestState(t *testing.T) {
 			return nil, ctx.Err()
 		}
 	})
-	requests := make(chan provider.Request, 3)
+	requests := make(chan llm.Request, 3)
 	step := 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests <- req
 		if step == 2 {
-			return emit(provider.StreamEvent{Kind: "text", Text: "finished"})
+			return emit(llm.StreamEvent{Kind: "text", Text: "finished"})
 		}
 		item := json.RawMessage(fmt.Sprintf(`{"type":"reasoning","encrypted_content":"%s"}`, req.Selection.Model.ID))
-		if err := emit(provider.StreamEvent{Kind: "state", StateVersion: 1, StateItem: item}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "state", StateVersion: 1, StateItem: item}); err != nil {
 			return err
 		}
-		call := provider.ToolCall{ID: fmt.Sprint(step), Name: "shell", Arguments: []byte(`{}`)}
+		call := llm.ToolCall{ID: fmt.Sprint(step), Name: "shell", Arguments: []byte(`{}`)}
 		step++
-		return emit(provider.StreamEvent{Kind: "call", Call: &call})
+		return emit(llm.StreamEvent{Kind: "call", Call: &call})
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&provider.Message{Role: "user", Content: "switch at tools"}) }()
+	go func() { done <- r.Run(&llm.Message{Role: "user", Content: "switch at tools"}) }()
 	waitEntered := func() {
 		t.Helper()
 		select {
@@ -221,19 +221,19 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 	fast.Model.BaseID = normal.Model.ID
 	fast.Model.ID += "/fast"
 	fast.Model.ServiceTier = "priority"
-	requests := make(chan provider.Request, 3)
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	requests := make(chan llm.Request, 3)
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests <- req
-		if err := emit(provider.StreamEvent{Kind: "state", StateVersion: 1, StateItem: json.RawMessage(`{"type":"reasoning","encrypted_content":"same-base"}`)}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "state", StateVersion: 1, StateItem: json.RawMessage(`{"type":"reasoning","encrypted_content":"same-base"}`)}); err != nil {
 			return err
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "done"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "done"})
 	}}
-	for i, choice := range []provider.Selection{normal, fast, normal} {
+	for i, choice := range []llm.Selection{normal, fast, normal} {
 		if err := r.RequestModel(choice); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Run(&provider.Message{Role: "user", Content: "same base"}); err != nil {
+		if err := r.Run(&llm.Message{Role: "user", Content: "same base"}); err != nil {
 			t.Fatal(err)
 		}
 		req := <-requests
@@ -250,7 +250,7 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 	other := normal
 	other.Model.ID = "saved-other"
 	savedID := history.NewID("session")
-	turn, _, err := r.Store.StartSession(savedID, r.Workspace.Root, other, provider.Message{Role: "user", Content: "Saved earlier work"})
+	turn, _, err := r.Store.StartSession(savedID, r.Workspace.Root, other, llm.Message{Role: "user", Content: "Saved earlier work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,12 +271,12 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 }
 
 func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "after-failed-load", Name: "shell", Arguments: []byte(`{"command":"printf still-working"}`)}}}, {Text: "done"}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "after-failed-load", Name: "shell", Arguments: []byte(`{"command":"printf still-working"}`)}}}, {Text: "done"}})
 	old := r.Current()
 	other := r.CurrentSelection()
 	other.Model.ID = "different"
 	target := history.NewID("session")
-	turn, _, err := r.Store.StartSession(target, r.Workspace.Root, other, provider.Message{Role: "user", Content: "Saved target work"})
+	turn, _, err := r.Store.StartSession(target, r.Workspace.Root, other, llm.Message{Role: "user", Content: "Saved target work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
 	if r.Current() != old {
 		t.Fatal("failed load changed session")
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "continue after failed load"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "continue after failed load"}); err != nil {
 		t.Fatal(err)
 	}
 	var result string

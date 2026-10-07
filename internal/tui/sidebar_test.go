@@ -9,7 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 	"ttc/internal/version"
 )
@@ -43,7 +43,7 @@ func TestSidebarVersionHeader(t *testing.T) {
 
 func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 	cached := 800
-	u := session.ContextUsage{Limit: 10000, Input: 1000, Reported: &session.ReportedUsage{Tokens: provider.Usage{InputTokens: 1000, CachedInputTokens: &cached}}, Totals: session.UsageTotals{Requests: 1, ReportedRequests: 1, Tokens: provider.Usage{InputTokens: 1000, CachedInputTokens: &cached}}}
+	u := session.ContextUsage{Limit: 10000, Input: 1000, Reported: &session.ReportedUsage{Tokens: llm.Usage{InputTokens: 1000, CachedInputTokens: &cached}}, Totals: session.UsageTotals{Requests: 1, ReportedRequests: 1, Tokens: llm.Usage{InputTokens: 1000, CachedInputTokens: &cached}}}
 	b := newSidebar()
 	b.update(u, nil, nil)
 	text := strings.Join(b.sections[0].rows, "\n")
@@ -492,11 +492,11 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 		v.append(line{text: fmt.Sprintf("message %d", i), id: int64(i + 1)})
 	}
 	b := newSidebar()
-	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{})
+	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{})
 	v.scroll(-50, 27)
-	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{})
+	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{})
 	anchor := v.entryAt(0)
-	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{})
+	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{})
 	if v.entryAt(0) != anchor {
 		t.Fatal("fullscreen changed anchor")
 	}
@@ -504,12 +504,12 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 	if visible || b.width != 0 {
 		t.Fatal("fullscreen left composer/sidebar")
 	}
-	draw(s, v, b, true, nil, nil, -1, newComposer("draft"), 0, nil, nil, "", nil, provider.Selection{})
+	draw(s, v, b, true, nil, nil, -1, newComposer("draft"), 0, nil, nil, "", nil, llm.Selection{})
 	_, _, visible = s.GetCursor()
 	if !visible {
 		t.Fatal("typing did not show composer")
 	}
-	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "Working · 0s", nil, provider.Selection{})
+	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "Working · 0s", nil, llm.Selection{})
 	var status string
 	for x := range 40 {
 		r, _, _, _ := s.GetContent(x, 29)
@@ -523,7 +523,7 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 func TestSidebarReportedCountersRemainSeparateFromEstimates(t *testing.T) {
 	b := newSidebar()
 	cached, reasoning := 0, 70
-	u := session.ContextUsage{Model: "new model", Limit: 10000, Input: 345, Reported: &session.ReportedUsage{Model: "old model", Tokens: provider.Usage{InputTokens: 1000, OutputTokens: 100, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}}
+	u := session.ContextUsage{Model: "new model", Limit: 10000, Input: 345, Reported: &session.ReportedUsage{Model: "old model", Tokens: llm.Usage{InputTokens: 1000, OutputTokens: 100, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
 	for _, want := range []string{"Last input · reported", "old model", "Input 1000 · cached 0", "Context 3.5%", "Input 345", "345 / 10000 tokens", "Breakdown · estimated"} {
@@ -542,7 +542,7 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 	b := newSidebar()
 	cached, written, reasoning := 600, 100, 2
 	lastCached, lastReasoning := 50, 1
-	u := session.ContextUsage{Limit: 10000, Input: 200, Reported: &session.ReportedUsage{Tokens: provider.Usage{InputTokens: 200, OutputTokens: 3, CachedInputTokens: &lastCached, ReasoningOutputTokens: &lastReasoning}}, Totals: session.UsageTotals{Requests: 3, ReportedRequests: 2, Tokens: provider.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}}}
+	u := session.ContextUsage{Limit: 10000, Input: 200, Reported: &session.ReportedUsage{Tokens: llm.Usage{InputTokens: 200, OutputTokens: 3, CachedInputTokens: &lastCached, ReasoningOutputTokens: &lastReasoning}}, Totals: session.UsageTotals{Requests: 3, ReportedRequests: 2, Tokens: llm.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
 	for _, want := range []string{"Last input · reported", "Input 200 · cached 50", "Uncached input 150", "Run output · all agents", "Reported 2/3 requests", "Output 10 · reasoning 2"} {
@@ -585,7 +585,7 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 
 func TestSidebarUsesReportedInputOnlyForMatchingRequest(t *testing.T) {
 	b := newSidebar()
-	u := session.ContextUsage{Model: "model", RequestID: 3, Limit: 10000, Input: 900, Reserved: 100, Reported: &session.ReportedUsage{Model: "model", RequestID: 3, Tokens: provider.Usage{InputTokens: 2000}}}
+	u := session.ContextUsage{Model: "model", RequestID: 3, Limit: 10000, Input: 900, Reserved: 100, Reported: &session.ReportedUsage{Model: "model", RequestID: 3, Tokens: llm.Usage{InputTokens: 2000}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
 	if !strings.Contains(rows, "Context 21.0%") || !strings.Contains(rows, "2100 / 10000") || !strings.Contains(rows, "reported input + reserve") {

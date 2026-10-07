@@ -3,7 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -17,7 +17,7 @@ func streamState(err error) string {
 
 // toolAnnouncement records inspectable display metadata, never an executable
 // intent. Completed calls are committed only after the response stream settles.
-func (r *Runtime) toolAnnouncement(turn, actor string, request int64, start *provider.ToolStart) error {
+func (r *Runtime) toolAnnouncement(turn, actor string, request int64, start *llm.ToolStart) error {
 	if start == nil || start.ID == "" || start.Name == "" {
 		return errors.New("provider emitted invalid tool announcement")
 	}
@@ -25,10 +25,10 @@ func (r *Runtime) toolAnnouncement(turn, actor string, request int64, start *pro
 	r.routeMu.RLock()
 	session := r.Current()
 	id, err := r.Store.Append(session, turn, actor, "status", "", false, struct {
-		Type      string              `json:"type"`
-		RequestID int64               `json:"request_id"`
-		Call      *provider.ToolStart `json:"call"`
-		Text      string              `json:"text"`
+		Type      string         `json:"type"`
+		RequestID int64          `json:"request_id"`
+		Call      *llm.ToolStart `json:"call"`
+		Text      string         `json:"text"`
 	}{"tool_stream", request, start, text})
 	r.routeMu.RUnlock()
 	if err != nil {
@@ -40,7 +40,7 @@ func (r *Runtime) toolAnnouncement(turn, actor string, request int64, start *pro
 }
 
 // toolProgress updates the live announcement without adding history entries.
-func (r *Runtime) toolProgress(actor string, request int64, progress *provider.ToolProgress) error {
+func (r *Runtime) toolProgress(actor string, request int64, progress *llm.ToolProgress) error {
 	if progress == nil || progress.ID == "" || progress.Name == "" || progress.Segments < 0 || progress.Bytes < 0 {
 		return errors.New("provider emitted invalid tool progress")
 	}

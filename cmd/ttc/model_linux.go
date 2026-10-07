@@ -2,14 +2,14 @@ package main
 
 import (
 	"fmt"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 // startupSelection resolves saved IDs against current catalog metadata. CLI
 // choices override saved values; unavailable saved choices get a visible notice.
-func startupSelection(providerID string, models []provider.ModelSpec, saved *provider.Selection, modelID, variant string) (provider.Selection, string, error) {
+func startupSelection(providerID string, models []llm.ModelSpec, saved *llm.Selection, modelID, variant string) (llm.Selection, string, error) {
 	if len(models) == 0 {
-		return provider.Selection{}, "", fmt.Errorf("provider returned an empty model catalog")
+		return llm.Selection{}, "", fmt.Errorf("provider returned an empty model catalog")
 	}
 	notice := ""
 	if modelID == "" {
@@ -39,6 +39,6 @@ func startupSelection(providerID string, models []provider.ModelSpec, saved *pro
 			}
 		}
 	}
-	selection, err := provider.Resolve(providerID, models, modelID, variant)
+	selection, err := llm.Resolve(providerID, models, modelID, variant)
 	return selection, notice, err
 }

@@ -21,15 +21,16 @@ import (
 	"testing"
 
 	"ttc/internal/assets"
+	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestReadImagesStoreOnlyOriginalPathAndChecksum(t *testing.T) {
 	for _, format := range []string{"png", "jpeg", "gif"} {
 		t.Run(format, func(t *testing.T) {
 			r, w, x, req := toolFixture(t)
-			x.BinaryFiles = (provider.ModelSpec{Images: true}).BinaryFileTypes()
+			x.BinaryFiles = (llm.ModelSpec{Images: true}).BinaryFileTypes()
 			var data bytes.Buffer
 			im := image.NewNRGBA(image.Rect(0, 0, 2051, 3))
 			var err error
@@ -73,7 +74,7 @@ func TestReadImagesStoreOnlyOriginalPathAndChecksum(t *testing.T) {
 			if metadata.Kind != "image" || metadata.Path != path || metadata.SHA256 != checksum || metadata.Width != 2051 || metadata.Height != 3 || metadata.Bytes != data.Len() || metadata.Truncated || mime != "image/"+format {
 				t.Fatalf("wrong image metadata: %s", record.Result)
 			}
-			if len(record.Files) != 1 || record.Files[0].Path != path || record.Files[0].SHA256 != checksum || record.Files[0].MIMEType != mime || record.Files[0].Bytes != data.Len() || record.Files[0].DataURL != "" {
+			if len(record.Files) != 1 || record.Files[0].Path != path || record.Files[0].SHA256 != checksum || record.Files[0].MIMEType != mime || record.Files[0].Bytes != data.Len() {
 				t.Fatalf("image must be a file reference, not stored pixels: %+v", record.Files)
 			}
 			cache, err := blobcache.Default()
@@ -106,7 +107,7 @@ func TestReadImagesStoreOnlyOriginalPathAndChecksum(t *testing.T) {
 
 func TestReadImageCacheFailureHasNoAttachment(t *testing.T) {
 	r, w, x, req := toolFixture(t)
-	x.BinaryFiles = (provider.ModelSpec{Images: true}).BinaryFileTypes()
+	x.BinaryFiles = (llm.ModelSpec{Images: true}).BinaryFileTypes()
 	var data bytes.Buffer
 	if err := png.Encode(&data, image.NewNRGBA(image.Rect(0, 0, 2, 3))); err != nil {
 		t.Fatal(err)
@@ -143,13 +144,13 @@ func TestReadImageErrorsAndTextDetection(t *testing.T) {
 		{`{"path":"image.png","offset":1}`, "invalid_input", true},
 		{`{"path":"image.png","limit":200}`, "invalid_input", true},
 	} {
-		x.BinaryFiles = (provider.ModelSpec{Images: test.vision}).BinaryFileTypes()
+		x.BinaryFiles = (llm.ModelSpec{Images: test.vision}).BinaryFileTypes()
 		record := invoke(t, r, w, x, req, "read", test.args)
 		if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"`+test.code+`"`) {
 			t.Fatalf("missing %s or error carried image: %s", test.code, record.Result)
 		}
 	}
-	x.BinaryFiles = (provider.ModelSpec{Images: true}).BinaryFileTypes()
+	x.BinaryFiles = (llm.ModelSpec{Images: true}).BinaryFileTypes()
 	for _, test := range []struct {
 		name string
 		data []byte
@@ -189,7 +190,7 @@ func TestReadImageErrorsAndTextDetection(t *testing.T) {
 	}
 	// Change the PNG IHDR dimensions and CRC without allocating its pixels.
 	pixels := append([]byte(nil), encoded.Bytes()...)
-	binary.BigEndian.PutUint32(pixels[16:20], assets.MaxPixels)
+	binary.BigEndian.PutUint32(pixels[16:20], binaryinput.MaxImagePixels)
 	binary.BigEndian.PutUint32(pixels[20:24], 2)
 	binary.BigEndian.PutUint32(pixels[29:33], crc32.ChecksumIEEE(pixels[12:29]))
 	if err := os.WriteFile(filepath.Join(w.Root, "pixels"), pixels, 0600); err != nil {
@@ -227,19 +228,19 @@ func TestImageReadUsesOpenedDescriptor(t *testing.T) {
 	if err := syscall.Mkfifo(path, 0600); err != nil {
 		t.Fatal(err)
 	}
-	value, err := readOpenedPage(context.Background(), f, path, 1, 200, (provider.ModelSpec{Images: true}).BinaryFileTypes())
+	value, err := readOpenedPage(context.Background(), f, path, 1, 200, (llm.ModelSpec{Images: true}).BinaryFileTypes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	im, ok := value.(binaryRead)
-	if !ok || !bytes.Equal(im.data, original.Bytes()) {
+	im, ok := value.(*binaryinput.Result)
+	if !ok || !bytes.Equal(im.Data, original.Bytes()) {
 		t.Fatal("image read reopened replaced source", value)
 	}
 }
 
 func TestReadNonAnimatedGIFCanvasAndContainer(t *testing.T) {
 	r, w, x, req := toolFixture(t)
-	x.BinaryFiles = (provider.ModelSpec{Images: true}).BinaryFileTypes()
+	x.BinaryFiles = (llm.ModelSpec{Images: true}).BinaryFileTypes()
 	palette := color.Palette{color.Black, color.White}
 	frame := image.NewPaletted(image.Rect(2, 3, 4, 5), palette)
 	var encoded bytes.Buffer
@@ -262,13 +263,6 @@ func TestReadNonAnimatedGIFCanvasAndContainer(t *testing.T) {
 	hash := sha256.Sum256(encoded.Bytes())
 	if record.Files[0].SHA256 != hex.EncodeToString(hash[:]) {
 		t.Fatal("GIF was flattened or recompressed")
-	}
-	// Every proper prefix lacks the required trailer or an earlier container
-	// boundary, including the complete first-frame data without its trailer.
-	for length := 0; length < encoded.Len(); length++ {
-		if _, err := validateReadImage(encoded.Bytes()[:length]); err == nil {
-			t.Fatalf("accepted incomplete GIF prefix of %d bytes", length)
-		}
 	}
 	var animation bytes.Buffer
 	if err := gif.EncodeAll(&animation, &gif.GIF{

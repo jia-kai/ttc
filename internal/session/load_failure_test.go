@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) {
@@ -21,14 +21,14 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			targetID := history.NewID("session")
 			selection := r.CurrentSelection()
 			selection.Model.ID = "other-model"
-			turn, _, err := r.Store.StartSession(targetID, r.Workspace.Root, selection, provider.Message{Role: "user", Content: "Archived research"})
+			turn, _, err := r.Store.StartSession(targetID, r.Workspace.Root, selection, llm.Message{Role: "user", Content: "Archived research"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 				t.Fatal(err)
 			}
-			retained, err := r.Store.Append(targetID, "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue research"})
+			retained, err := r.Store.Append(targetID, "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue research"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +74,7 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			r.questions.pending = &questionForm{view: QuestionForm{ID: "question", Questions: []Question{{ID: "answer", Prompt: "Choose?"}}}, reply: make(chan questionReply, 1)}
 			r.questions.mu.Unlock()
 			r.images.mu.Lock()
-			r.images.pending["click"] = pendingImage{view: ImageSnapshot{ID: "click", Actor: "main", Width: 8, Height: 8}, reply: make(chan provider.Message, 1)}
+			r.images.pending["click"] = pendingImage{view: ImageSnapshot{ID: "click", Actor: "main", Width: 8, Height: 8}, reply: make(chan llm.Message, 1)}
 			r.images.actors["main"] = "click"
 			r.images.mu.Unlock()
 			jobs, generation := r.Jobs, r.Generation()

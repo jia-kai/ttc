@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/skills"
 	"ttc/internal/tool"
 	"ttc/internal/workspace"
 )
 
-func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime, chan Event) {
+func runtimeFixture(t *testing.T, responses []llm.ScriptResponse) (*Runtime, chan Event) {
 	t.Helper()
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	scratch.Verify()
@@ -31,14 +31,14 @@ func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime
 	if e != nil {
 		t.Fatal(e)
 	}
-	model := provider.ScriptModel()
-	selection := provider.Selection{Provider: "script", Model: model, Variant: "none"}
+	model := llm.ScriptModel()
+	selection := llm.Selection{Provider: "script", Model: model, Variant: "none"}
 	catalog, e := skills.Discover(context.Background(), w.Root, "")
 	if e != nil {
 		t.Fatal(e)
 	}
 	events := make(chan Event, 256)
-	r, e := New(context.Background(), store, w, &provider.Script{Responses: responses}, selection, "", catalog, tool.WebSearchConfig{}, func(e Event) { events <- e })
+	r, e := New(context.Background(), store, w, &llm.Script{Responses: responses}, selection, "", catalog, tool.WebSearchConfig{}, func(e Event) { events <- e })
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -49,7 +49,7 @@ func runtimeFixture(t *testing.T, responses []provider.ScriptResponse) (*Runtime
 
 func seedRuntime(t *testing.T, r *Runtime, content string) {
 	t.Helper()
-	turn, _, err := r.Store.StartSession(r.Current(), r.Workspace.Root, r.CurrentSelection(), provider.Message{Role: "user", Content: content})
+	turn, _, err := r.Store.StartSession(r.Current(), r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: content})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +61,8 @@ func seedRuntime(t *testing.T, r *Runtime, content string) {
 	r.mu.Unlock()
 }
 func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
-	r, events := runtimeFixture(t, []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"verified\n"}`)}}}, {Text: "Saved result."}})
-	m := provider.Message{Role: "user", Content: "Write a result"}
+	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"verified\n"}`)}}}, {Text: "Saved result."}})
+	m := llm.Message{Role: "user", Content: "Write a result"}
 	if e := r.Run(&m); e != nil {
 		t.Fatal(e)
 	}
@@ -106,9 +106,9 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 	}
 }
 func TestQuestionAnswerAndPendingCancellation(t *testing.T) {
-	r, events := runtimeFixture(t, []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"color","prompt":"Color?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}]}]}`)}}}, {Text: "Red selected."}})
+	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"color","prompt":"Color?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}]}]}`)}}}, {Text: "Red selected."}})
 	done := make(chan error, 1)
-	go func() { m := provider.Message{Role: "user", Content: "Ask"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Role: "user", Content: "Ask"}; done <- r.Run(&m) }()
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
@@ -170,8 +170,8 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 	}
 }
 func TestPartialFailureLeavesUndoableAndWellFormedHistory(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"x","content":"data"}`)}}}})
-	m := provider.Message{Role: "user", Content: "write"}
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"x","content":"data"}`)}}}})
+	m := llm.Message{Role: "user", Content: "write"}
 	if e := r.Run(&m); e == nil {
 		t.Fatal("expected script exhaustion")
 	}
@@ -199,18 +199,14 @@ func TestPartialFailureLeavesUndoableAndWellFormedHistory(t *testing.T) {
 }
 
 type gatedNamingProvider struct {
-	naming  chan provider.Request
+	naming  chan llm.Request
 	release chan struct{}
 }
 
-func (p *gatedNamingProvider) Models(context.Context) ([]provider.ModelSpec, error) {
-	return []provider.ModelSpec{provider.ScriptModel()}, nil
+func (p *gatedNamingProvider) EstimateReplay(m llm.Message) int {
+	return llm.ReplayTokens(m.State)
 }
-func (p *gatedNamingProvider) Login(context.Context, provider.LoginUI) error { return nil }
-func (p *gatedNamingProvider) EstimateReplay(m provider.Message) int {
-	return provider.ReplayTokens(m.State)
-}
-func (p *gatedNamingProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *gatedNamingProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	if req.NoTools {
 		p.naming <- req
 		select {
@@ -218,22 +214,22 @@ func (p *gatedNamingProvider) Stream(ctx context.Context, req provider.Request, 
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		if e := emit(provider.StreamEvent{Kind: "text", Text: "Small Test Session"}); e != nil {
+		if e := emit(llm.StreamEvent{Kind: "text", Text: "Small Test Session"}); e != nil {
 			return e
 		}
 	} else {
-		if e := emit(provider.StreamEvent{Kind: "text", Text: "Completed"}); e != nil {
+		if e := emit(llm.StreamEvent{Kind: "text", Text: "Completed"}); e != nil {
 			return e
 		}
 	}
-	return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 10, OutputTokens: 3}})
+	return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 10, OutputTokens: 3}})
 }
 func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	p := &gatedNamingProvider{naming: make(chan provider.Request, 2), release: make(chan struct{})}
+	p := &gatedNamingProvider{naming: make(chan llm.Request, 2), release: make(chan struct{})}
 	r.Provider = p
 	r.AutoName = true
-	m := provider.Message{Role: "user", Content: "first prompt"}
+	m := llm.Message{Role: "user", Content: "first prompt"}
 	if e := r.Run(&m); e != nil {
 		t.Fatal(e)
 	}
@@ -253,7 +249,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 		t.Fatal("naming not started")
 	}
 	done := make(chan error, 1)
-	go func() { m := provider.Message{Role: "user", Content: "second prompt"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Role: "user", Content: "second prompt"}; done <- r.Run(&m) }()
 	select {
 	case e := <-done:
 		if e != nil {
@@ -309,7 +305,7 @@ func TestBackgroundWithoutWakeStillPersistsOutput(t *testing.T) {
 }
 
 func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "early", Name: "shell", Arguments: []byte(`{}`)}}}, {Text: "launched"}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "early", Name: "shell", Arguments: []byte(`{}`)}}}, {Text: "launched"}})
 	completed := make(chan struct{})
 	r.Emit = func(e Event) {
 		if e.Kind == "job" {
@@ -350,7 +346,7 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 		}
 		return initial, nil // Preserve the running launch snapshot after completion.
 	})
-	if err := r.Run(&provider.Message{Role: "user", Content: "background"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "background"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.HasNotifications() {

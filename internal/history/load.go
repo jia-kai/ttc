@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 // Load snapshots a writable conversation into an independent session, with an
@@ -38,7 +38,7 @@ func (s *Store) Load(id string) (Session, error) {
 		end := 0
 		for i, entry := range entries {
 			if entry.Visible && entry.Role == "assistant" {
-				var message provider.Message
+				var message llm.Message
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					return err
 				}
@@ -99,7 +99,7 @@ func (s *Store) Load(id string) (Session, error) {
 			source := entry.EventSeq()
 			visible := entry.Visible
 			if visible && entry.Kind == "message" {
-				var message provider.Message
+				var message llm.Message
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					return err
 				}

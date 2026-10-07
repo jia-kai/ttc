@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/skills"
 	"ttc/internal/tool"
@@ -45,32 +45,32 @@ type stateChange struct {
 	FiredCount int    `json:"fired_count,omitempty"` // Total timer firings observed; a repeat can remain live after firing.
 }
 type runtimeContext struct {
-	Type        string                    `json:"type"`
-	Actor       string                    `json:"actor"`
-	Changes     []stateChange             `json:"changes_since_previous_request"`
-	Cwd         string                    `json:"cwd"`
-	IsRepo      bool                      `json:"is_repo"`
-	Branch      string                    `json:"branch,omitempty"` // "detached" when HEAD has no branch.
-	Scratch     string                    `json:"scratch_directory"`
-	Date        string                    `json:"date_utc"`
-	Model       string                    `json:"model"`
-	ImageInput  bool                      `json:"image_input"`
-	BinaryFiles []provider.BinaryFileType `json:"binary_files"` // Effective native read formats for this frozen selection.
-	ImageClick  bool                      `json:"image_click"`
-	Children    []tool.ChildView          `json:"children"`
-	Jobs        []jobs.Snapshot           `json:"live_jobs"`
-	Timers      []TimerView               `json:"live_timers"`
-	Project     *projectContext           `json:"project,omitempty"` // Absent when unchanged; empty lists explicitly clear it.
+	Type        string               `json:"type"`
+	Actor       string               `json:"actor"`
+	Changes     []stateChange        `json:"changes_since_previous_request"`
+	Cwd         string               `json:"cwd"`
+	IsRepo      bool                 `json:"is_repo"`
+	Branch      string               `json:"branch,omitempty"` // "detached" when HEAD has no branch.
+	Scratch     string               `json:"scratch_directory"`
+	Date        string               `json:"date_utc"`
+	Model       string               `json:"model"`
+	ImageInput  bool                 `json:"image_input"`
+	BinaryFiles []llm.BinaryFileType `json:"binary_files"` // Effective native read formats for this frozen selection.
+	ImageClick  bool                 `json:"image_click"`
+	Children    []tool.ChildView     `json:"children"`
+	Jobs        []jobs.Snapshot      `json:"live_jobs"`
+	Timers      []TimerView          `json:"live_timers"`
+	Project     *projectContext      `json:"project,omitempty"` // Absent when unchanged; empty lists explicitly clear it.
 }
 
 // runtimeContext returns nil when this actor's last admitted state is unchanged.
 // The returned cursor is committed only after successful request admission.
-func (r *Runtime) runtimeContext(ctx context.Context, actor string, selection provider.Selection, previous contextCursor) (*provider.Message, contextCursor, error) {
+func (r *Runtime) runtimeContext(ctx context.Context, actor string, selection llm.Selection, previous contextCursor) (*llm.Message, contextCursor, error) {
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
 	return r.runtimeContextLocked(ctx, actor, selection, previous)
 }
-func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, selection provider.Selection, previous contextCursor) (*provider.Message, contextCursor, error) {
+func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, selection llm.Selection, previous contextCursor) (*llm.Message, contextCursor, error) {
 	path, err := scratch.Verify()
 	if err != nil {
 		return nil, previous, err
@@ -159,10 +159,10 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 	if err != nil {
 		return nil, previous, err
 	}
-	return &provider.Message{Role: "developer", Runtime: true, Content: string(data)}, next, nil
+	return &llm.Message{Role: "developer", Runtime: true, Content: string(data)}, next, nil
 }
 
-func contextLabel(m provider.Message) string {
+func contextLabel(m llm.Message) string {
 	var v runtimeContext
 	if json.Unmarshal([]byte(m.Content), &v) != nil {
 		return "Runtime context · inspect"

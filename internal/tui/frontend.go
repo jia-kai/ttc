@@ -12,10 +12,11 @@ import (
 	"time"
 	"ttc/internal/workspace"
 
+	"ttc/internal/catalog"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/graphics"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/session"
 
@@ -25,16 +26,23 @@ import (
 
 // Frontend wires a runtime into either a full terminal view or redirected plain I/O.
 type Frontend struct {
-	Screen    tcell.Screen    // Optional injected terminal screen for deterministic UI tests.
-	Graphics  *graphics.Kitty // Optional protocol sink for deterministic graphics tests.
-	Runtime   *session.Runtime
-	Events    <-chan session.Event
-	Input     io.Reader
-	Output    io.Writer
-	Plain     bool
-	Login     provider.LoginUI
+	Screen   tcell.Screen    // Optional injected terminal screen for deterministic UI tests.
+	Graphics *graphics.Kitty // Optional protocol sink for deterministic graphics tests.
+	Runtime  *session.Runtime
+	Events   <-chan session.Event
+	Input    io.Reader
+	Output   io.Writer
+	Plain    bool
+	// Login authorizes and returns a fresh catalog. The owner must cancel/join
+	// old discovery and discard stale deliveries before returning, even on error.
+	// Nil disables interactive authorization; errors leave the picker unavailable.
+	Login     func(context.Context) ([]llm.ModelSpec, error)
 	EditInput func(context.Context, string) (string, error) // Optional editor override for embedding/tests.
-	Models    []provider.ModelSpec                          // Provider catalog snapshot fetched at startup; picker actions stay local.
+	Models    []llm.ModelSpec                               // Initial catalog; owned by the event loop during Run.
+	// ModelUpdates optionally delivers externally refreshed catalogs. Nil disables
+	// delivery; closure disables further receives. Open pickers retain their snapshot,
+	// but submitted choices resolve against the latest catalog and may return an error.
+	ModelUpdates <-chan catalog.Update
 }
 type line struct {
 	actor, subagentName string // Presentation attribution; never part of the model message.
@@ -112,6 +120,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		screen.SetCursorStyle(tcell.CursorStyleBlinkingBar)
 	}
 	inputs := make(chan input, 32)
+	modelUpdates := f.ModelUpdates
 	keys := make(chan tcell.Event, 32)
 	stop := make(chan struct{})
 	defer close(stop)
@@ -305,6 +314,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	attachmentDone := make(chan attachmentResult, 1)
 	attaching := false
+	var cancelAttachment context.CancelFunc
 	defer func() {
 		cancelRun()
 		if editing {
@@ -324,10 +334,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			return
 		}
 		attaching = true
-		generation, images := f.Runtime.Generation(), f.Runtime.CurrentSelection().Model.Images
+		generation, types := f.Runtime.Generation(), f.Runtime.CurrentSelection().Model.BinaryFileTypes()
+		attachmentCtx, cancel := context.WithCancel(ctx)
+		cancelAttachment = cancel
 		path = f.Runtime.Workspace.Path(path)
 		go func() {
-			a, err := contextbuild.Snapshot(ctx, path, images)
+			a, err := contextbuild.Snapshot(attachmentCtx, path, types)
 			attachmentDone <- attachmentResult{a, generation, err}
 		}()
 	}
@@ -581,13 +593,13 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				item.markdown, item.brief, item.system = true, true, false
 			}
 			if v.Kind == "message" && v.Role == "user" && v.Actor == "main" && v.Visible {
-				var message provider.Message
+				var message llm.Message
 				if err := json.Unmarshal(v.Content, &message); err == nil {
 					item.human = !message.Runtime
 				}
 			}
 			if (v.Kind == "message" || v.Kind == "summary") && v.Role == "assistant" {
-				var message provider.Message
+				var message llm.Message
 				if err := json.Unmarshal(v.Content, &message); err == nil {
 					title := "assistant"
 					item.text, item.speaker, item.markdown, item.complete, item.requestID = message.Content, title, true, true, message.RequestID
@@ -786,7 +798,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		modal.window = &modal.background.Window
 	}
 	selectModel := func(id, variant string) {
-		selection, err := provider.Resolve(f.Runtime.CurrentSelection().Provider, f.Models, id, variant)
+		selection, err := llm.Resolve(f.Runtime.CurrentSelection().Provider, f.Models, id, variant)
 		if err != nil {
 			add("Error: "+err.Error(), 0)
 			return
@@ -804,6 +816,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	defer ticker.Stop()
 	for {
 		if generation := f.Runtime.Generation(); generation != queueGeneration {
+			if cancelAttachment != nil {
+				// Keep ownership until the event loop drains completion; a replacement
+				// cannot race the canceled worker or its shutdown join.
+				cancelAttachment()
+			}
 			queue = nil
 			pendingInput = nil
 			notificationPaused = false
@@ -980,6 +997,19 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				busy = false
 			}
 			return ctx.Err()
+		case update, ok := <-modelUpdates:
+			if !ok {
+				modelUpdates = nil
+				continue
+			}
+			if update.Err != nil {
+				add("Warning: model catalog refresh failed; retaining cached catalog: "+update.Err.Error(), 0)
+			} else {
+				// Replace rather than mutate: an open menu owns the old snapshot.
+				// Runtime selection (including in-flight metadata) changes only on
+				// an explicit selectModel request, never on refresh delivery.
+				f.Models = update.Models
+			}
 		case result := <-renderResults:
 			if result.source {
 				if modal.loading != nil && modal.loading.snapshot.ID == result.key && modal.loading.generation == f.Runtime.Generation() {
@@ -1021,6 +1051,8 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			}
 		case result := <-attachmentDone:
 			attaching = false
+			cancelAttachment()
+			cancelAttachment = nil
 			if result.generation == f.Runtime.Generation() {
 				if result.err != nil {
 					add("Attachment failed: "+result.err.Error(), 0)
@@ -1867,8 +1899,15 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				add("Login requires plain mode: ttc --login", 0)
 				continue
 			}
-			if e = f.Runtime.Provider.Login(ctx, f.Login); e != nil {
-				add("Error: "+e.Error(), 0)
+			// Authorization and discovery belong to the injected lifecycle owner.
+			// Keep the frozen active selection, but never expose old-account choices.
+			f.Models = nil
+			models, err := f.Login(ctx)
+			if err != nil {
+				add("Error: authorization or model discovery failed: "+err.Error(), 0)
+			} else {
+				f.Models = models
+				add("Login complete; use /model to select from the current account's catalog", 0)
 			}
 			continue
 		}
@@ -1962,7 +2001,7 @@ func put(s tcell.Screen, x, y, width int, text string, style tcell.Style) {
 		width -= cells
 	}
 }
-func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue []contextbuild.Input, steers []string, indicator string, window *Window, selection provider.Selection) error {
+func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue []contextbuild.Input, steers []string, indicator string, window *Window, selection llm.Selection) error {
 	s.Clear()
 	w, h := s.Size()
 	paneWidth := sidebar.bounds(w, h, fullscreen)

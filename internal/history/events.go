@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type historyReader interface {
@@ -31,7 +31,7 @@ type Admission struct {
 	RequestID, ContextEntry, Cutoff int64
 	NoticeEntries                   []int64
 	SteerEntries                    []int64
-	Messages                        []provider.Message
+	Messages                        []llm.Message
 }
 
 // requestInputMetadata describes an admitted input without duplicating its
@@ -45,7 +45,7 @@ type requestInputMetadata struct {
 // context and notification acknowledgments, and admits a request before network I/O.
 // Messages contains the admitted main projection or the caller's isolated child
 // input, with any new runtime context appended.
-func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selection, contextMessage *provider.Message, notices, childInput []provider.Message, steers ...provider.Message) (v Admission, err error) {
+func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, contextMessage *llm.Message, notices, childInput []llm.Message, steers ...llm.Message) (v Admission, err error) {
 	if contextMessage != nil && (contextMessage.Role != "developer" || !contextMessage.Runtime || contextMessage.Content == "") {
 		return v, errors.New("runtime context must be a nonempty developer runtime message")
 	}
@@ -152,7 +152,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 		if actor == "main" {
 			v.Messages, err = messagesWith(tx, session)
 		} else {
-			v.Messages = append([]provider.Message(nil), childInput...)
+			v.Messages = append([]llm.Message(nil), childInput...)
 			if contextMessage != nil {
 				message := *contextMessage
 				message.RequestID = v.RequestID
@@ -162,7 +162,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 		if err != nil {
 			return err
 		}
-		v.Messages = provider.ContextFor(model, v.Messages)
+		v.Messages = llm.ContextFor(model, v.Messages)
 		// Foreground children carry their finish event in an immutable tool
 		// result rather than producing an extra notification message.
 		for _, m := range v.Messages {
@@ -220,7 +220,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model provider.Selecti
 
 // BeginChildTurn records an isolated assignment without changing main turn or
 // human undo ownership. The caller serializes follow-up admission per child.
-func (s *Store) BeginChildTurn(session, actor string, model provider.Selection) (string, error) {
+func (s *Store) BeginChildTurn(session, actor string, model llm.Selection) (string, error) {
 	id := NewID("ct")
 	b, err := json.Marshal(model)
 	if err != nil {

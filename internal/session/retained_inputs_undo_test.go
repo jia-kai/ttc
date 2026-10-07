@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
@@ -21,9 +21,9 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 	r.selection.Model.Budget.RecentTokensMax = 700
 	r.selection.Model.Budget.ContextLimit = 1 << 20
 	step := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
-			return emit(provider.StreamEvent{Kind: "text", Text: "File baseline established; only the suffix is undoable."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "File baseline established; only the suffix is undoable."})
 		}
 		step++
 		if step == 1 {
@@ -34,19 +34,19 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 			}
 		}
 		if step == 4 {
-			return emit(provider.StreamEvent{Kind: "text", Text: "Suffix complete."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Suffix complete."})
 		}
 		text := "Recent suffix edit"
 		if step <= 2 {
 			text = strings.Repeat("completed prefix work ", 500)
 		}
-		if err := emit(provider.StreamEvent{Kind: "text", Text: text}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: text}); err != nil {
 			return err
 		}
 		arguments, _ := json.Marshal(map[string]string{"path": "result.txt", "content": fmt.Sprintf("version %d\n", step)})
-		return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: fmt.Sprintf("write-%d", step), Name: "write", Arguments: arguments}})
+		return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: fmt.Sprintf("write-%d", step), Name: "write", Arguments: arguments}})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Second ordinary prompt", InputSource: "queue"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Second ordinary prompt", InputSource: "queue"}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 4 {
@@ -64,7 +64,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 	}
 	for _, entry := range entries {
 		if entry.Role == "user" && entry.Kind == "message" {
-			var message provider.Message
+			var message llm.Message
 			if err := json.Unmarshal(entry.Content, &message); err != nil {
 				t.Fatal(err)
 			}
@@ -84,7 +84,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 		count := 0
 		for _, entry := range entries {
 			if entry.Role == "user" && entry.Kind == "message" {
-				var message provider.Message
+				var message llm.Message
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					t.Fatal(err)
 				}

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
@@ -30,20 +30,20 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						t.Fatal(err)
 					}
 					sum := sha256.Sum256(data)
-					file := provider.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf", Bytes: len(data)}
+					file := llm.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf", Bytes: len(data)}
 					if fits {
 						r.selection.Model.Budget.ContextLimit += file.EstimatedTokens()
 					}
 					r.selection.Model.BinaryFiles = pdfCapability()
-					messages := []provider.Message{
+					messages := []llm.Message{
 						{Role: "user", Content: "Earlier research instruction", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 						{Role: "assistant", Content: strings.Repeat("Older completed cycle. ", 1000)},
 						{Role: "user", Content: "Read the original document", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
-						{Role: "assistant", Calls: []provider.ToolCall{{ID: "unread-document", Name: "read", Arguments: []byte(`{"path":"unread.pdf"}`)}}},
-						{Role: "tool", CallID: "unread-document", Content: `{"ok":true,"kind":"document"}`, Files: []provider.BinaryFile{file}},
+						{Role: "assistant", Calls: []llm.ToolCall{{ID: "unread-document", Name: "read", Arguments: []byte(`{"path":"unread.pdf"}`)}}},
+						{Role: "tool", CallID: "unread-document", Content: `{"ok":true,"kind":"document"}`, Files: []llm.BinaryFile{file}},
 					}
 					if trailingInput {
-						messages = append(messages, provider.Message{Role: "user", Content: "Keep reading before answering", InputTimeMS: time.Now().UnixMilli()})
+						messages = append(messages, llm.Message{Role: "user", Content: "Keep reading before answering", InputTimeMS: time.Now().UnixMilli()})
 					}
 					if contextbuild.Tokens(messages[3:]) <= r.selection.Model.Budget.RecentTokensMax {
 						t.Fatal("fixture did not exceed the recent-cycle target")
@@ -53,7 +53,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					assertNative := func(result []provider.Message) {
+					assertNative := func(result []llm.Message) {
 						t.Helper()
 						calls, files, inputs := 0, 0, 0
 						for _, message := range result {
@@ -83,14 +83,14 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						}
 					}
 					summaries, coding := 0, 0
-					r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+					r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 						if req.NoTools {
 							summaries++
 							input := req.Messages[0].Content
 							if !strings.Contains(input, "Older completed cycle.") || strings.Contains(input, "unread.pdf") || strings.Contains(input, "unread-document") || strings.Contains(input, file.SHA256) {
 								t.Fatal("summary consumed metadata instead of preserving the never-consumed original", input)
 							}
-							return emit(provider.StreamEvent{Kind: "text", Text: "Earlier research completed; inspect the retained original next."})
+							return emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed; inspect the retained original next."})
 						}
 						coding++
 						if !fits {
@@ -100,9 +100,9 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						if !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
 							t.Fatal("oversized coding request admitted")
 						}
-						return emit(provider.StreamEvent{Kind: "text", Text: "Original document consumed."})
+						return emit(llm.StreamEvent{Kind: "text", Text: "Original document consumed."})
 					}}
-					var result []provider.Message
+					var result []llm.Message
 					cursor := contextCursor{project: "old project", snapshot: "old runtime"}
 					if actor == "main" {
 						for _, message := range messages {

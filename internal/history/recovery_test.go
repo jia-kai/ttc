@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -25,7 +25,7 @@ func appendRecoveryRuntime(t *testing.T, s *Store, session, body string) int64 {
 
 func appendRecoveryChild(t *testing.T, s *Store, session string) int64 {
 	t.Helper()
-	turn, err := s.BeginChildTurn(session, "main/child", provider.Selection{})
+	turn, err := s.BeginChildTurn(session, "main/child", llm.Selection{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func appendRecoveryChild(t *testing.T, s *Store, session string) int64 {
 	return id
 }
 
-func recoveryNotices(t *testing.T, s *Store, session string) []provider.Message {
+func recoveryNotices(t *testing.T, s *Store, session string) []llm.Message {
 	t.Helper()
 	m, err := s.PendingRecoveryNotifications(context.Background(), session)
 	if err != nil {
@@ -107,7 +107,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			s, source, turn, _ := historyFixture(t)
 			delivered := appendRecoveryRuntime(t, s, source.ID, `{"type":"job_exit","job_id":"delivered"}`)
-			admitted, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []provider.Message{{Role: "user", Runtime: true, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil)
+			admitted, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Role: "user", Runtime: true, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,7 +290,7 @@ func TestLoadRecoverySelectedBranchAndBoundaryOnly(t *testing.T) {
 func TestLoadRecoverySkipsChildFinishCarriedByVisibleTool(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
 	finish := appendRecoveryChild(t, s, source.ID)
-	_, calls, err := s.Assistant(source.ID, turn, "main", request, provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
+	_, calls, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

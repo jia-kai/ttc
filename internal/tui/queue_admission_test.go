@@ -12,7 +12,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -56,14 +56,14 @@ func assertNoQueuedInputHistory(t *testing.T, u *questionTestUI) {
 }
 
 func TestCancelQueueBeforeInitialAdmissionRestoresSnapshots(t *testing.T) {
-	p := &cancelInputProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Restored admitted."}}}, requests: make(chan provider.Request, 8), release: make(chan struct{})}
+	p := &cancelInputProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Restored admitted."}}}, requests: make(chan llm.Request, 8), release: make(chan struct{})}
 	close(p.release)
 	u := newQuestionTestUI(t, p)
 	path := filepath.Join(u.runtime.Workspace.Root, "original.txt")
 	if err := os.WriteFile(path, []byte("snapshot before admission"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := contextbuild.Snapshot(context.Background(), path, false)
+	snapshot, err := contextbuild.Snapshot(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestCancelQueueBeforeInitialAdmissionRestoresSnapshots(t *testing.T) {
 }
 
 func TestCancelQueueNewerQueuedInputPrecedesAdmissionTicket(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{})
+	u := newQuestionTestUI(t, &llm.Script{})
 	unlock := holdQueuedAdmission(t, u.runtime)
 	u.typeText("oldest waiting for admission")
 	u.key(tcell.KeyEnter)
@@ -140,7 +140,7 @@ func TestCancelQueueNewerQueuedInputPrecedesAdmissionTicket(t *testing.T) {
 }
 
 func TestCancelQueueDoesNotInterruptAdmittedInput(t *testing.T) {
-	u, p := newCancelInputUI(t, []provider.ScriptResponse{{Text: "Active turn completed."}})
+	u, p := newCancelInputUI(t, []llm.ScriptResponse{{Text: "Active turn completed."}})
 	u.typeText("/cancel-queue")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "no queued prompt to cancel")

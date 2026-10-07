@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ttc/internal/privatefile"
 )
 
 func TestIncompatibleSchemaIsRejectedWithoutDeletingData(t *testing.T) {
@@ -95,7 +97,7 @@ func TestHistoryDatabaseSymlinkDoesNotModifyOutsideDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(t.TempDir(), "data")
-	if err = PrivateDir(root); err != nil {
+	if err = privatefile.PrivateDir(root); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.Symlink(source, filepath.Join(root, "history.sqlite")); err != nil {

@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"ttc/internal/history"
+	"ttc/internal/privatefile"
 )
 
 // MaxFileBytes bounds each mutation's original and resulting file contents.
@@ -221,7 +222,7 @@ func apply(path string, s State) error {
 		if e := os.Remove(path); e != nil && !os.IsNotExist(e) {
 			return e
 		}
-		return history.SyncDir(filepath.Dir(path))
+		return privatefile.SyncDir(filepath.Dir(path))
 	}
 	data, e := readFile(s.Blob)
 	if e != nil {
@@ -233,7 +234,7 @@ func apply(path string, s State) error {
 	if e = os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 		return e
 	}
-	return history.AtomicFile(path, data, os.FileMode(s.Mode))
+	return privatefile.AtomicFile(path, data, os.FileMode(s.Mode))
 }
 
 // Apply serializes read, validation, filesystem writes and history commit locally.

@@ -14,7 +14,7 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
@@ -23,20 +23,20 @@ func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
 	seedCompactionHistory(t, r, strings.Repeat("Old coding facts. ", 700))
 	before := r.Current()
 	hidden := strings.Repeat("UI_ONLY_CHILD_DIAGNOSTIC ", 10000)
-	if _, err := r.Store.Append(before, "", "main/child_fixture", "message", "assistant", false, provider.Message{Role: "assistant", Content: hidden}); err != nil {
+	if _, err := r.Store.Append(before, "", "main/child_fixture", "message", "assistant", false, llm.Message{Role: "assistant", Content: hidden}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.Append(before, "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		calls++
 		input := req.Messages[0].Content
 		if !strings.Contains(input, "Old coding facts.") || strings.Contains(input, "UI_ONLY_CHILD_DIAGNOSTIC") {
 			t.Fatal("summary does not match main model projection")
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Concise handoff."})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
 	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil); err != nil || calls != 1 || r.Current() == before {
 		t.Fatal("UI-only records prevented handoff", err, calls)
@@ -60,19 +60,19 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 			compactionBudget(t, r)
 			seedRuntime(t, r, "Research arrays.")
 			payload := "[" + strings.Repeat("0,", 7000) + "0]"
-			messages := []provider.Message{
+			messages := []llm.Message{
 				{Role: "user", Content: "Inspect this array.", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
-				{Role: "assistant", Calls: []provider.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
+				{Role: "assistant", Calls: []llm.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
 				{Role: "tool", CallID: "array", Content: payload},
 				{Role: "user", Content: "Continue.", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 			}
 			calls := 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				calls++
 				if !strings.Contains(req.Messages[0].Content, payload) || !strings.Contains(req.Messages[0].Content, `{"path":"data.json"}`) {
 					t.Fatal("tool payload was expanded or omitted")
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Array inspected."})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Array inspected."})
 			}}
 			var err error
 			if child {
@@ -104,22 +104,22 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 			compactionBudget(t, r)
 			seedRuntime(t, r, "Earlier research.")
 			payload := strings.Repeat("large recent tool output ", 100)
-			messages := []provider.Message{
+			messages := []llm.Message{
 				{Role: "user", Content: "Earlier task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 				{Role: "assistant", Content: "Earlier result"},
 				{Role: "user", Content: "Continue the current task", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
-				{Role: "assistant", Calls: []provider.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}}},
+				{Role: "assistant", Calls: []llm.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}}},
 				{Role: "tool", CallID: "read", Content: payload},
 			}
 			requests := 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
 				if !req.NoTools || !strings.Contains(req.Messages[0].Content, payload) || !strings.Contains(req.Messages[0].Content, `{"path":"fixture.txt"}`) {
 					t.Fatal("summary lost the complete oversized cycle")
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Recent output was inspected; continue the task."})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Recent output was inspected; continue the task."})
 			}}
-			var result []provider.Message
+			var result []llm.Message
 			var err error
 			if actor == "main" {
 				for _, message := range messages {
@@ -162,11 +162,11 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Actual model history. ", 10000))
 	before := r.Current()
-	if _, err := r.Store.Append(before, "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
-	r.Provider = &childProvider{stream: func(context.Context, provider.Request, func(provider.StreamEvent) error) error { calls++; return nil }}
+	r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { calls++; return nil }}
 	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 	if err == nil || !strings.Contains(err.Error(), "estimated input") || calls != 0 || r.Current() != before || r.checkContext() == nil {
 		t.Fatal("oversized canonical input was admitted", err, calls)
@@ -178,8 +178,8 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 }
 
 func TestChildArchivePreservesModelVisibleJobOutput(t *testing.T) {
-	messages := []provider.Message{
-		{Role: "assistant", Calls: []provider.ToolCall{{ID: "shell", Name: "shell", Arguments: json.RawMessage(`{"command":"printf diagnostic"}`)}}},
+	messages := []llm.Message{
+		{Role: "assistant", Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: json.RawMessage(`{"command":"printf diagnostic"}`)}}},
 		{Role: "tool", CallID: "shell", Content: `{"job_id":"job_fixture","stdout":"diagnostic sentinel","stderr":"warning sentinel","status":"completed"}`},
 	}
 	text := childTranscript(messages)
@@ -191,7 +191,7 @@ func TestChildArchivePreservesModelVisibleJobOutput(t *testing.T) {
 }
 
 func TestCompactionFailureClassification(t *testing.T) {
-	transient := &provider.TransientError{Err: errors.New("service unavailable")}
+	transient := &llm.TransientError{Err: errors.New("service unavailable")}
 	for _, test := range []struct {
 		name        string
 		err         error
@@ -217,17 +217,17 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
 			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
-			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue the research."}); err != nil {
+			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue the research."}); err != nil {
 				t.Fatal(err)
 			}
 			before := r.Current()
 			requests := 0
-			r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
 				if fatal {
-					return emit(provider.StreamEvent{Kind: "text", Text: "   "})
+					return emit(llm.StreamEvent{Kind: "text", Text: "   "})
 				}
-				return &provider.TransientError{Err: errors.New("fixture transport interrupted")}
+				return &llm.TransientError{Err: errors.New("fixture transport interrupted")}
 			}}
 			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 			if err == nil || requests != 1 || r.Current() != before {
@@ -244,7 +244,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 				t.Fatal("runtime guard", got)
 			}
 			if fatal {
-				if err := r.Run(&provider.Message{Role: "user", Content: "continue"}); err == nil {
+				if err := r.Run(&llm.Message{Role: "user", Content: "continue"}); err == nil {
 					t.Fatal("fatal context admitted inference")
 				}
 				if requests != 1 {
@@ -259,19 +259,19 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Earlier notes. ", 700))
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	before := r.Current()
 	summaries := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		summaries++
 		// A user may steer while the summarizer is running. Admission must not
 		// repeatedly compact a handoff that still cannot fit that instruction.
 		r.orderMu.Lock()
 		r.steers = append(r.steers, contextbuild.Input{Text: strings.Repeat("pending research instruction ", 3000)})
 		r.orderMu.Unlock()
-		return emit(provider.StreamEvent{Kind: "text", Text: "Concise handoff."})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
 	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
 	if err == nil || !strings.Contains(err.Error(), "exceed context headroom") || r.Current() != before || summaries != 1 {
@@ -305,19 +305,19 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			messages := []provider.Message{
+			messages := []llm.Message{
 				{Role: "user", Content: "Earlier child task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 				{Role: "assistant", Content: strings.Repeat("Old child research notes. ", 350)},
 				{Role: "user", Content: "Read the fixture", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
-				{Role: "assistant", Calls: []provider.ToolCall{{ID: "read_fixture", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.go"}`)}}, State: &provider.ReplayState{Provider: "script", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"private":"replay"}`)}}},
+				{Role: "assistant", Calls: []llm.ToolCall{{ID: "read_fixture", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.go"}`)}}, State: &llm.ReplayState{Provider: "script", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"private":"replay"}`)}}},
 				{Role: "tool", CallID: "read_fixture", Content: `{"content":"package fixture"}`},
 			}
 			exactOriginal, _ := json.Marshal(messages)
-			r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if !req.NoTools || len(req.Tools) != 0 || !strings.Contains(req.Messages[0].Content, "Old child research notes") {
 					t.Fatal("invalid summarization request", req)
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Useful child handoff."})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Useful child handoff."})
 			}}
 			task := childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: aside}
 			result, cursor, err := r.compactChild(context.Background(), task, messages, contextCursor{project: "old project", snapshot: "old runtime"}, nil)
@@ -377,7 +377,7 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 				t.Fatal("invalid Markdown archive", err)
 			}
 			r.orderMu.Lock()
-			notices := append([]provider.Message(nil), r.notifications...)
+			notices := append([]llm.Message(nil), r.notifications...)
 			r.orderMu.Unlock()
 			if aside && len(notices) != 0 {
 				t.Fatal("aside leaked parent notification", notices)

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestModelPreferencesRestartIsolationAndNoSessions(t *testing.T) {
@@ -23,24 +23,24 @@ func TestModelPreferencesRestartIsolationAndNoSessions(t *testing.T) {
 	if got, err := s.LastSelection("openai"); err != nil || got != nil {
 		t.Fatal(got, err)
 	}
-	a := provider.Selection{Provider: "openai", Model: provider.ScriptModel(), Variant: "low"}
+	a := llm.Selection{Provider: "openai", Model: llm.ScriptModel(), Variant: "low"}
 	a.Model.ID = "a"
 	b := a
 	b.Model.ID, b.Model.BaseID, b.Model.ServiceTier, b.Variant = "b/fast", "b", "priority", "high"
-	script := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
-	assertSelection := func(want provider.Selection) {
+	script := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
+	assertSelection := func(want llm.Selection) {
 		t.Helper()
 		got, err := s.LastSelection(want.Provider)
 		if err != nil || got == nil {
 			t.Fatal(got, err)
 		}
 		actual, _ := json.Marshal(got)
-		expected, _ := json.Marshal(provider.Selection{Provider: want.Provider, Model: provider.ModelSpec{ID: want.Model.ID}, Variant: want.Variant})
+		expected, _ := json.Marshal(llm.Selection{Provider: want.Provider, Model: llm.ModelSpec{ID: want.Model.ID}, Variant: want.Variant})
 		if !bytes.Equal(actual, expected) {
 			t.Fatalf("preference retained catalog metadata: %s; want %s", actual, expected)
 		}
 	}
-	for _, selection := range []provider.Selection{a, b, script} {
+	for _, selection := range []llm.Selection{a, b, script} {
 		if err := s.SaveSelection(selection); err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestModelPreferencesRejectInvalidFilesAndChoices(t *testing.T) {
 			if _, err := s.LastSelection("openai"); err == nil {
 				t.Fatal("invalid preferences accepted")
 			}
-			if err := s.SaveSelection(provider.Selection{Provider: "openai", Model: provider.ModelSpec{ID: "m"}, Variant: "low"}); err == nil {
+			if err := s.SaveSelection(llm.Selection{Provider: "openai", Model: llm.ModelSpec{ID: "m"}, Variant: "low"}); err == nil {
 				t.Fatal("invalid preferences silently overwritten")
 			}
 			got, err := os.ReadFile(path)
@@ -107,10 +107,10 @@ func TestModelPreferencesRejectInvalidFilesAndChoices(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	for _, selection := range []provider.Selection{
-		{}, {Provider: "openai", Model: provider.ModelSpec{ID: "m"}},
-		{Provider: " openai", Model: provider.ModelSpec{ID: "m"}, Variant: "low"},
-		{Provider: "openai", Model: provider.ModelSpec{ID: string([]byte{0xff})}, Variant: "low"},
+	for _, selection := range []llm.Selection{
+		{}, {Provider: "openai", Model: llm.ModelSpec{ID: "m"}},
+		{Provider: " openai", Model: llm.ModelSpec{ID: "m"}, Variant: "low"},
+		{Provider: "openai", Model: llm.ModelSpec{ID: string([]byte{0xff})}, Variant: "low"},
 	} {
 		if err := s.SaveSelection(selection); err == nil {
 			t.Fatal("invalid choice accepted", selection)
@@ -152,7 +152,7 @@ func TestModelPreferencesRejectUnsafeAndOversizedFiles(t *testing.T) {
 			if _, err := s.LastSelection("openai"); err == nil {
 				t.Fatal("unsafe preferences accepted")
 			}
-			if err := s.SaveSelection(provider.Selection{Provider: "openai", Model: provider.ModelSpec{ID: "m"}, Variant: "low"}); err == nil {
+			if err := s.SaveSelection(llm.Selection{Provider: "openai", Model: llm.ModelSpec{ID: "m"}, Variant: "low"}); err == nil {
 				t.Fatal("unsafe preferences replaced")
 			}
 		})
@@ -170,7 +170,7 @@ func TestModelPreferencesWriteBoundAndConcurrentProviders(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.SaveSelection(provider.Selection{Provider: fmt.Sprintf("provider-%d", i), Model: provider.ModelSpec{ID: "m"}, Variant: "low"}); err != nil {
+			if err := s.SaveSelection(llm.Selection{Provider: fmt.Sprintf("provider-%d", i), Model: llm.ModelSpec{ID: "m"}, Variant: "low"}); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -183,7 +183,7 @@ func TestModelPreferencesWriteBoundAndConcurrentProviders(t *testing.T) {
 	}
 	choices := modelChoices{Version: 1, Choices: map[string]modelChoice{}}
 	var before []byte
-	var next provider.Selection
+	var next llm.Selection
 	for i := 0; ; i++ {
 		providerID := fmt.Sprintf("provider-%d", i)
 		choice := modelChoice{ID: strings.Repeat("m", 512), Variant: strings.Repeat("v", 128)}
@@ -193,7 +193,7 @@ func TestModelPreferencesWriteBoundAndConcurrentProviders(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(data) > modelChoicesBytes {
-			next = provider.Selection{Provider: providerID, Model: provider.ModelSpec{ID: choice.ID}, Variant: choice.Variant}
+			next = llm.Selection{Provider: providerID, Model: llm.ModelSpec{ID: choice.ID}, Variant: choice.Variant}
 			break
 		}
 		before = data
@@ -217,9 +217,9 @@ func TestSwitchModelDatabaseRollbackDoesNotChangePreference(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	previous := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	previous := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	id := NewID("session")
-	if _, _, err := s.StartSession(id, t.TempDir(), previous, provider.Message{Role: "user", Content: "hello"}); err != nil {
+	if _, _, err := s.StartSession(id, t.TempDir(), previous, llm.Message{Role: "user", Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.LastSelection(previous.Provider); err != nil || got != nil {

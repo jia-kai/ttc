@@ -9,26 +9,26 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
 func TestSidebarTimerInspectionShowsStartupAndSourceAfterChildCloses(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		name := "Main agent"
-		responses := []provider.ScriptResponse{}
+		responses := []llm.ScriptResponse{}
 		if child {
 			name = "timer helper"
-			responses = append(responses, provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":false,"prompt":"schedule timer","label":"timer helper"}`)}}})
+			responses = append(responses, llm.ScriptResponse{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":false,"prompt":"schedule timer","label":"timer helper"}`)}}})
 		}
 		responses = append(responses,
-			provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "schedule", Name: "wakeup_schedule", Arguments: []byte(`{"name":"inspect-timer","message":"Check the detailed timer parameters.","delay_seconds":86400,"repeat_seconds":180}`)}}},
-			provider.ScriptResponse{Text: "Timer scheduled."})
+			llm.ScriptResponse{Calls: []llm.ToolCall{{ID: "schedule", Name: "wakeup_schedule", Arguments: []byte(`{"name":"inspect-timer","message":"Check the detailed timer parameters.","delay_seconds":86400,"repeat_seconds":180}`)}}},
+			llm.ScriptResponse{Text: "Timer scheduled."})
 		if child {
-			responses = append(responses, provider.ScriptResponse{Text: "Parent finished."})
+			responses = append(responses, llm.ScriptResponse{Text: "Parent finished."})
 		}
 		t.Run(name, func(t *testing.T) {
-			u := newQuestionTestUI(t, &provider.Script{Responses: responses})
+			u := newQuestionTestUI(t, &llm.Script{Responses: responses})
 			u.screen.SetSize(180, 60)
 			u.screen.PostEventWait(tcell.NewEventResize(180, 60))
 			u.typeText("schedule a timer")
@@ -132,8 +132,8 @@ func TestTimerHeaderRefreshKeepsMarkdownLayoutCached(t *testing.T) {
 }
 
 func TestOpenTimerInspectorCountsDownAndSurvivesOneShotFiring(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "schedule", Name: "wakeup_schedule", Arguments: []byte(`{"name":"one-shot-inspect","message":"Firing observed.","delay_seconds":4}`)}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "schedule", Name: "wakeup_schedule", Arguments: []byte(`{"name":"one-shot-inspect","message":"Firing observed.","delay_seconds":4}`)}}},
 		{Text: "Timer scheduled."}, {Text: "Timer fired."},
 	}}
 	u := newQuestionTestUI(t, p)

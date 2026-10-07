@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
 func TestQuestionEditorMultilineAnswersPreserveMainDraft(t *testing.T) {
-	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
 	inputs := make(chan string, 2)
 	other, notes := "edited method\nαβ", "edited notes\nsecond line"
 	u := newQuestionTestUIWithEditor(t, p, func(_ context.Context, draft string) (string, error) {
@@ -83,7 +83,7 @@ func TestQuestionEditorRejectedResultPreservesEditingState(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inputs := make(chan string, 1)
-			u := newQuestionTestUIWithEditor(t, &provider.Script{Responses: questionScript()}, func(_ context.Context, draft string) (string, error) {
+			u := newQuestionTestUIWithEditor(t, &llm.Script{Responses: questionScript()}, func(_ context.Context, draft string) (string, error) {
 				inputs <- draft
 				return tc.text, tc.err
 			})
@@ -130,7 +130,7 @@ func TestQuestionEditorRejectedResultPreservesEditingState(t *testing.T) {
 
 func TestQuestionEditorDiscardsResultAfterQuestionCloses(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	u := newQuestionTestUIWithEditor(t, &provider.Script{Responses: questionScript()}, func(ctx context.Context, _ string) (string, error) {
+	u := newQuestionTestUIWithEditor(t, &llm.Script{Responses: questionScript()}, func(ctx context.Context, _ string) (string, error) {
 		close(entered)
 		select {
 		case <-release:
@@ -176,7 +176,7 @@ func TestQuestionEditorDiscardsResultAfterQuestionCloses(t *testing.T) {
 
 func TestQuestionEditorPrefixDoesNotLeakAfterClosure(t *testing.T) {
 	entered := make(chan string, 1)
-	u := newQuestionTestUIWithEditor(t, &provider.Script{Responses: questionScript()}, func(_ context.Context, draft string) (string, error) {
+	u := newQuestionTestUIWithEditor(t, &llm.Script{Responses: questionScript()}, func(_ context.Context, draft string) (string, error) {
 		entered <- draft
 		return "unexpected main replacement", nil
 	})
@@ -213,7 +213,7 @@ func TestQuestionEditorPrefixDoesNotLeakAfterClosure(t *testing.T) {
 func TestHeldQuestionEditorDrainsEventsAndJoinsOnCancellation(t *testing.T) {
 	entered, canceled, exited := make(chan string, 1), make(chan struct{}), make(chan struct{})
 	release := make(chan struct{})
-	u := newQuestionTestUIWithEditor(t, &provider.Script{Responses: questionScript()}, func(ctx context.Context, draft string) (string, error) {
+	u := newQuestionTestUIWithEditor(t, &llm.Script{Responses: questionScript()}, func(ctx context.Context, draft string) (string, error) {
 		entered <- draft
 		<-ctx.Done()
 		close(canceled)

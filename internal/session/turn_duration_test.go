@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestTurnDuration(t *testing.T) {
@@ -43,13 +43,13 @@ func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			r, events := runtimeFixture(t, nil)
 			if status == "completed" {
-				r.Provider = &provider.Script{Responses: []provider.ScriptResponse{{Text: "Done."}}}
+				r.Provider = &llm.Script{Responses: []llm.ScriptResponse{{Text: "Done."}}}
 			} else if status == "interrupted" {
-				r.Provider = &childProvider{stream: func(context.Context, provider.Request, func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error {
 					return context.Canceled
 				}}
 			}
-			message := provider.Message{Role: "user", Content: "A short request"}
+			message := llm.Message{Role: "user", Content: "A short request"}
 			err := r.Run(&message)
 			if (err == nil) != (status == "completed") {
 				t.Fatalf("unexpected turn error: %v", err)

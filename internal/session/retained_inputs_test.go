@@ -12,12 +12,12 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 // assertRetainedProjection compares the complete canonical replacement, not
 // just human text. The persisted marker supplies the exact frozen cut time.
-func assertRetainedProjection(t *testing.T, original, got []provider.Message, selection provider.Selection) {
+func assertRetainedProjection(t *testing.T, original, got []llm.Message, selection llm.Selection) {
 	t.Helper()
 	canonical := canonicalCompaction(original)
 	retention, err := contextbuild.Retain(canonical, selection.Model.Budget.RecentTokensMin, selection.Model.Budget.RecentTokensMax)
@@ -35,7 +35,7 @@ func assertRetainedProjection(t *testing.T, original, got []provider.Message, se
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append([]provider.Message{got[0]}, inputs...)
+	want := append([]llm.Message{got[0]}, inputs...)
 	want = append(want, canonical[retention.Start:]...)
 	if !strings.HasPrefix(got[0].Content, "Policy handoff.") || !reflect.DeepEqual(got, want) {
 		t.Fatalf("assembled and persisted projections differ:\ngot %#v\nwant %#v", got, want)
@@ -71,7 +71,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 					hold()
 				}
 			}
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				var committed int64
 				if err := r.Store.DB.QueryRow("SELECT created_ms FROM entries WHERE actor_id=? AND role='user' ORDER BY id LIMIT 1", task.actor).Scan(&committed); err != nil {
 					return err
@@ -92,7 +92,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 				if found != 1 {
 					return fmt.Errorf("isolated input occurred %d times, want once", found)
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Finished."})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Finished."})
 			}}
 			done := make(chan error, 1)
 			go func() { done <- r.runChild(context.Background(), task, io.Discard, io.Discard) }()
@@ -131,9 +131,9 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 				message := (contextbuild.Input{Text: "  " + text + "\n\tλ  ", Source: source, Attachments: []contextbuild.Attachment{
 					{Kind: "text", Path: "notes.txt", Text: "immutable original\n"},
 				}}).Message()
-				// One real image snapshot is enough to catch canonical-copy loss.
+				// One native image reference is enough to catch canonical-copy loss.
 				if text == "ordinary two" {
-					message.Files = []provider.BinaryFile{{Path: "original.png", DataURL: "data:image/png;base64,b3JpZ2luYWw="}}
+					message.Files = []llm.BinaryFile{{Path: "/snapshot/original.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8}}
 				}
 				var turn string
 				var id int64
@@ -157,7 +157,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			for _, input := range [][2]string{{"steer", "old steer"}, {"queue", "old ordinary"}, {"steer", "steer one"}, {"normal", "ordinary one"}, {"steer", "steer two"}, {"queue", "ordinary two"}} {
 				admit(input[0], input[1])
 			}
-			appendMessage := func(message provider.Message, visible bool) {
+			appendMessage := func(message llm.Message, visible bool) {
 				t.Helper()
 				if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role, visible, message); err != nil {
 					t.Fatal(err)
@@ -168,12 +168,12 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					admit("queue", "new ordinary")
 					admit("steer", "new steer")
 				}
-				appendMessage(provider.Message{Role: "assistant", Content: strings.Repeat("completed older work ", 1200)}, true)
-				appendMessage(provider.Message{Role: "user", Runtime: true, InputSource: "steer", Content: "runtime notice is not a steer"}, true)
-				appendMessage(provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "a", Name: "read", Arguments: []byte(`{}`)}, {ID: "b", Name: "read", Arguments: []byte(`{}`)}}, State: &provider.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"native":true}`)}}}, true)
-				appendMessage(provider.Message{Role: "tool", CallID: "b", Content: "second result first"}, true)
-				appendMessage(provider.Message{Role: "tool", CallID: "a", Content: "first result second"}, true)
-				appendMessage(provider.Message{Role: "assistant", Content: "UI-only child output"}, false)
+				appendMessage(llm.Message{Role: "assistant", Content: strings.Repeat("completed older work ", 1200)}, true)
+				appendMessage(llm.Message{Role: "user", Runtime: true, InputSource: "steer", Content: "runtime notice is not a steer"}, true)
+				appendMessage(llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "a", Name: "read", Arguments: []byte(`{}`)}, {ID: "b", Name: "read", Arguments: []byte(`{}`)}}, State: &llm.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"native":true}`)}}}, true)
+				appendMessage(llm.Message{Role: "tool", CallID: "b", Content: "second result first"}, true)
+				appendMessage(llm.Message{Role: "tool", CallID: "a", Content: "first result second"}, true)
+				appendMessage(llm.Message{Role: "assistant", Content: "UI-only child output"}, false)
 				original, err := r.Store.Messages(r.Current())
 				if err != nil {
 					t.Fatal(err)
@@ -187,17 +187,17 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					r.selection.Model.Budget.ContextLimit = usage.Input + usage.Reserved - 1000
 				}
 				selection := r.selection
-				var replacement []provider.Message
+				var replacement []llm.Message
 				assertImmediateOccupancy := func() {
 					t.Helper()
 					r.orderMu.Lock()
-					pending := append(append([]provider.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
+					pending := append(append([]llm.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
 					fresh, _, err := r.runtimeContextLocked(context.Background(), "main", selection, r.mainContext)
 					r.orderMu.Unlock()
 					if err != nil {
 						t.Fatal(err)
 					}
-					input := append(append([]provider.Message(nil), replacement...), pending...)
+					input := append(append([]llm.Message(nil), replacement...), pending...)
 					if fresh != nil {
 						input = append(input, *fresh)
 					}
@@ -222,7 +222,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 				}
 				summaries := 0
 				var tailID int64
-				r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 					if req.NoTools {
 						summaries++
 						var err error
@@ -235,9 +235,9 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 							r.steers = []contextbuild.Input{{Text: "pending one"}, {Text: "pending two"}, {Text: "pending three"}}
 							r.orderMu.Unlock()
 						}
-						return emit(provider.StreamEvent{Kind: "text", Text: "Policy handoff."})
+						return emit(llm.StreamEvent{Kind: "text", Text: "Policy handoff."})
 					}
-					return emit(provider.StreamEvent{Kind: "text", Text: "Continued."})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Continued."})
 				}}
 				if automatic {
 					err = r.Run(nil)
@@ -264,7 +264,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 				for _, entry := range entries {
 					foundTail = foundTail || entry.EventSeq() == tailID
 					if entry.Role == "user" && entry.Visible {
-						var message provider.Message
+						var message llm.Message
 						if err := json.Unmarshal(entry.Content, &message); err != nil {
 							t.Fatal(err)
 						}
@@ -292,15 +292,15 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-				return emit(provider.StreamEvent{Kind: "text", Text: "Policy handoff."})
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+				return emit(llm.StreamEvent{Kind: "text", Text: "Policy handoff."})
 			}}
-			var messages []provider.Message
+			var messages []llm.Message
 			for i, source := range []string{"task", "steer", "queue", "steer", "btw", "steer"} {
-				messages = append(messages, provider.Message{Role: "user", InputSource: source, InputTimeMS: time.Now().Add(-time.Duration(10-i) * time.Minute).UnixMilli(), Content: fmt.Sprintf("original %d", i)})
+				messages = append(messages, llm.Message{Role: "user", InputSource: source, InputTimeMS: time.Now().Add(-time.Duration(10-i) * time.Minute).UnixMilli(), Content: fmt.Sprintf("original %d", i)})
 			}
 			for range 2 {
-				messages = append(messages, provider.Message{Role: "assistant", Content: strings.Repeat("older work ", 3000)}, provider.Message{Role: "assistant", Content: "recent work"})
+				messages = append(messages, llm.Message{Role: "assistant", Content: strings.Repeat("older work ", 3000)}, llm.Message{Role: "assistant", Content: "recent work"})
 				result, _, err := r.compactChild(context.Background(), task, messages, contextCursor{}, nil)
 				if err != nil {
 					t.Fatal(err)
@@ -310,7 +310,7 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					if result[1].Content != btwInstruction {
 						t.Fatal("aside policy lost")
 					}
-					projection = append([]provider.Message{result[0]}, result[2:]...)
+					projection = append([]llm.Message{result[0]}, result[2:]...)
 				}
 				assertRetainedProjection(t, messages, projection, task.selection)
 				messages = result

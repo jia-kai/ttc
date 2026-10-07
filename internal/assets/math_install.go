@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"ttc/internal/history"
+	"ttc/internal/privatefile"
 
 	"golang.org/x/sys/unix"
 )
@@ -55,7 +55,7 @@ func ensureMath(ctx context.Context) (string, error) {
 		return "", err
 	}
 	parent := filepath.Dir(root)
-	if err = history.PrivateDir(parent); err != nil {
+	if err = privatefile.PrivateDir(parent); err != nil {
 		return "", fmt.Errorf("prepare MathJax cache: %w", err)
 	}
 	lock, err := os.OpenFile(filepath.Join(parent, "install.lock"), os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
@@ -102,7 +102,7 @@ func ensureMath(ctx context.Context) (string, error) {
 		}
 	}
 	downloadCache := filepath.Join(parent, "npm")
-	if err = history.PrivateDir(downloadCache); err != nil {
+	if err = privatefile.PrivateDir(downloadCache); err != nil {
 		return "", err
 	}
 	cmd := exec.CommandContext(ctx, "npm", "ci", "--prefix", stage, "--cache", downloadCache,
@@ -126,7 +126,7 @@ func ensureMath(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if _, err = os.Lstat(root); err == nil {
-		if err = history.PrivateDir(root); err != nil {
+		if err = privatefile.PrivateDir(root); err != nil {
 			return "", err
 		}
 		if err = os.RemoveAll(root); err != nil {

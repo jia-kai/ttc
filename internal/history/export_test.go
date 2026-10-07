@@ -2,6 +2,9 @@ package history
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"image"
 	"image/png"
@@ -9,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -47,7 +50,7 @@ func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
 	s, v, turn, request := historyFixture(t)
 	content := "## Handoff\n\n- Keep the current experiment.\n"
 	for _, purpose := range []string{"compaction", "naming"} {
-		id, err := s.RequestMessage(v.ID, turn, purpose, "assistant", request, provider.Message{Role: "assistant", Content: content})
+		id, err := s.RequestMessage(v.ID, turn, purpose, "assistant", request, llm.Message{Role: "assistant", Content: content})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +82,9 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := provider.Message{Role: "user", Files: []provider.BinaryFile{{Path: path, DataURL: "data:image/png;base64,exact-image-payload"}}}
+	sum := sha256.Sum256(encoded.Bytes())
+	file := llm.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:]), MIMEType: "image/png", Bytes: encoded.Len()}
+	message := llm.Message{Role: "user", Files: []llm.BinaryFile{file}}
 	id, err := s.Append(v.ID, turn, "main", "message", "user", true, message)
 	if err != nil {
 		t.Fatal(err)
@@ -101,8 +106,12 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 		t.Fatal("image absent from compaction Markdown", err)
 	}
 	exact, err := os.ReadFile(archive + ".jsonl")
-	if err != nil || !strings.Contains(string(exact), message.Files[0].DataURL) {
-		t.Fatal("exact image absent from sidecar", err)
+	if err != nil || !bytes.Contains(exact, []byte(file.SHA256)) || bytes.Contains(exact, []byte("data_url")) || bytes.Contains(exact, []byte(base64.StdEncoding.EncodeToString(encoded.Bytes()))) {
+		t.Fatal("sidecar lost reference or persisted inline image bytes", err)
+	}
+	var reloaded llm.Message
+	if err := json.Unmarshal(entry.Content, &reloaded); err != nil || len(reloaded.Files) != 1 || reloaded.Files[0] != file {
+		t.Fatal("history lost native image metadata", reloaded, err)
 	}
 }
 
@@ -113,10 +122,10 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	native := json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque<private>"}`)
-	call := provider.ToolCall{ID: "provider_call", Name: "read", Arguments: json.RawMessage(`{"path":"original<input>"}`)}
-	_, calls, err := s.Assistant(v.ID, turn, "main", request, provider.Message{
-		Role: "assistant", Content: "Inspect the file", Calls: []provider.ToolCall{call},
-		State: &provider.ReplayState{Provider: "script", Model: v.Model.Model.ID, Version: 1, Items: []json.RawMessage{native}},
+	call := llm.ToolCall{ID: "provider_call", Name: "read", Arguments: json.RawMessage(`{"path":"original<input>"}`)}
+	_, calls, err := s.Assistant(v.ID, turn, "main", request, llm.Message{
+		Role: "assistant", Content: "Inspect the file", Calls: []llm.ToolCall{call},
+		State: &llm.ReplayState{Provider: "script", Model: v.Model.Model.ID, Version: 1, Items: []json.RawMessage{native}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +159,7 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 			foundPrompt = true
 		}
 		if row.Entry.Kind == "message" && row.Entry.Role == "assistant" {
-			var message provider.Message
+			var message llm.Message
 			if err := json.Unmarshal(row.Entry.Content, &message); err != nil {
 				t.Fatal(err)
 			}

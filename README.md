@@ -72,7 +72,8 @@ Build on Linux with Go 1.26.5 or later. `make` generates embedded
 and GNU `diff` (`diffutils` on Arch) for edit previews. If `diff` is unavailable,
 edits still work, but previews are unavailable.
 
-TTC currently uses OpenAI's ChatGPT subscription authentication, not API keys.
+OpenAI is the only compiled production provider and the default (`--provider
+openai`). TTC uses ChatGPT subscription authentication, not API keys.
 Device-code login prints a URL and code that you can authorize from another
 device; the server does not need a browser:
 
@@ -216,12 +217,13 @@ case-insensitive substring, in any order; matches are highlighted. Enter fills
 the input and Esc cancels.
 
 Multiple TTC instances can share the default data directory and the same
-workspace. Each starts an independent conversation; workspace conflicts are
-your responsibility. `/load ID` or `--session ID` copies writable history into a
-new session at its last complete tool exchange, with only new work undoable.
+workspace. Each starts an independent conversation; workspace conflicts are your
+responsibility. `/load ID` or `--session ID` copies writable history into a new
+session at its last complete tool exchange, with only new work undoable.
 Archived predecessors open read-only. Loading never restores files or live jobs.
 TTC does not repair interrupted work; files can be ahead of saved history after
-a crash. Incompatible history schemas are rejected; use a new `--data-dir`.
+a crash. Incompatible history schemas and obsolete inline-binary attachment
+records are rejected; no automatic migration is performed.
 
 At a compaction boundary, loading also recovers saved, undelivered notifications
 (including completed subagent answers) and automatically resumes their delivery.

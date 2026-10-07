@@ -3,11 +3,12 @@ package session
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func enableCancelTestSteering(r *Runtime) {
@@ -75,7 +76,7 @@ func TestCancelSteerRestoresNewestOriginalInput(t *testing.T) {
 	latest := contextbuild.Input{Text: "  original\n\tλ text  ", Attachments: []contextbuild.Attachment{
 		{Path: "/snapshot/text", Kind: "text", Text: "saved contents", Truncated: true},
 		{Path: "/snapshot/directory", Kind: "directory", Text: "a\nb"},
-		{Path: "/snapshot/image", Kind: "image", Image: &provider.BinaryFile{Path: "/snapshot/image", DataURL: "data:image/png;base64,c25hcHNob3Q="}},
+		{Path: "/snapshot/image", Kind: "image", File: &llm.BinaryFile{Path: "/snapshot/image", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8}},
 	}}
 	for _, input := range []contextbuild.Input{older, latest} {
 		if err := r.Steer(input); err != nil {

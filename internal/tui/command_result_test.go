@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func assertNoCommandWindow(t *testing.T, frame string) {
@@ -16,8 +16,8 @@ func assertNoCommandWindow(t *testing.T, frame string) {
 }
 
 func TestUndoRedoConfirmInConversationAndLoadErrorsRemainVisible(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"saved"}`)}}},
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"saved"}`)}}},
 		{Text: "Saved the result."},
 	}})
 	u.typeText("write a result")

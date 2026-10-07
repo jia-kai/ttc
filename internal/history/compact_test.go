@@ -8,7 +8,7 @@ import (
 	"time"
 
 	ctxmgr "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *testing.T) {
@@ -16,17 +16,17 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err := s.FinishTurn(firstTurn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	queue := provider.Message{Role: "user", Content: "queued with snapshot", InputSource: "queue", Files: []provider.BinaryFile{{Path: "plot.png", DataURL: "data:image/png;base64,snapshot"}}}
+	queue := llm.Message{Role: "user", Content: "queued with snapshot", InputSource: "queue", Files: []llm.BinaryFile{{Path: "/snapshot/plot.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8}}}
 	turn, queued, err := s.AdmitTurn(original.ID, "user", original.Model, &queue)
 	if err != nil {
 		t.Fatal(err)
 	}
 	admitted, err := s.AdmitRequest(original.ID, turn, "main", original.Model, nil, nil, nil,
-		provider.Message{Role: "user", Content: "first steer"}, provider.Message{Role: "user", Content: "second steer"})
+		llm.Message{Role: "user", Content: "first steer"}, llm.Message{Role: "user", Content: "second steer"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tail, err := s.Append(original.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "balanced completed suffix"})
+	tail, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "balanced completed suffix"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,14 +57,14 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if got, err := s.Messages(loaded.ID); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatal("load lost historical input markers or snapshots", got, want, err)
 	}
-	originalInputs := map[int64]provider.Message{}
+	originalInputs := map[int64]llm.Message{}
 	entries, err := s.Branch(source.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
 		if entry.Role == "user" && entry.Visible {
-			var message provider.Message
+			var message llm.Message
 			if err := json.Unmarshal(entry.Content, &message); err != nil {
 				t.Fatal(err)
 			}
@@ -119,7 +119,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 		}
 		for _, entry := range entries {
 			if entry.Role == "user" && entry.Visible {
-				var message provider.Message
+				var message llm.Message
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					t.Fatal(err)
 				}
@@ -216,7 +216,7 @@ func TestMessagesUsesOriginalHumanInputMetadata(t *testing.T) {
 	if err := s.FinishTurn(initialTurn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	queue := provider.Message{Role: "user", Content: "queued", InputSource: "queue", InputTimeMS: 1}
+	queue := llm.Message{Role: "user", Content: "queued", InputSource: "queue", InputTimeMS: 1}
 	queuedTurn, queued, err := s.AdmitTurn(session.ID, "user", session.Model, &queue)
 	if err != nil {
 		t.Fatal(err)
@@ -228,11 +228,11 @@ func TestMessagesUsesOriginalHumanInputMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := s.Append(session.ID, legacyTurn, "main", "message", "user", true, provider.Message{Role: "user", Content: "legacy steer"})
+	legacy, err := s.Append(session.ID, legacyTurn, "main", "message", "user", true, llm.Message{Role: "user", Content: "legacy steer"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(session.ID, legacyTurn, "main", session.Model, nil, nil, nil, provider.Message{Role: "user", Content: "new steer"})
+	admitted, err := s.AdmitRequest(session.ID, legacyTurn, "main", session.Model, nil, nil, nil, llm.Message{Role: "user", Content: "new steer"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,11 +240,11 @@ func TestMessagesUsesOriginalHumanInputMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var persisted provider.Message
+	var persisted llm.Message
 	if err := json.Unmarshal(steer.Content, &persisted); err != nil || persisted.InputSource != "steer" {
 		t.Fatal("admission did not persist steer source", persisted, err)
 	}
-	if _, err := s.Append(session.ID, "", "main", "message", "user", true, provider.Message{Role: "user", Runtime: true, Content: "notice"}); err != nil {
+	if _, err := s.Append(session.ID, "", "main", "message", "user", true, llm.Message{Role: "user", Runtime: true, Content: "notice"}); err != nil {
 		t.Fatal(err)
 	}
 	messages, err := s.Messages(session.ID)
@@ -274,7 +274,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		t.Fatal(err)
 	}
 	ids := []int64{original.ID}
-	steer, err := s.AdmitRequest(session.ID, turn, "main", session.Model, nil, nil, nil, provider.Message{Role: "user", Content: "steer one"})
+	steer, err := s.AdmitRequest(session.ID, turn, "main", session.Model, nil, nil, nil, llm.Message{Role: "user", Content: "steer one"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,19 +283,19 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		t.Fatal(err)
 	}
 	authored := "original user text"
-	queue := provider.Message{Role: "user", Content: "expanded immutable input", UserText: &authored, InputSource: "queue", Files: []provider.BinaryFile{{DataURL: "data:image/png;base64,eA=="}}}
+	queue := llm.Message{Role: "user", Content: "expanded immutable input", UserText: &authored, InputSource: "queue", Files: []llm.BinaryFile{{Path: "/snapshot/queued.png", SHA256: strings.Repeat("b", 64), MIMEType: "image/png", Bytes: 1}}}
 	turn, queued, err := s.AdmitTurn(session.ID, "user", session.Model, &queue)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ids = append(ids, queued)
-	steer, err = s.AdmitRequest(session.ID, turn, "main", session.Model, nil, nil, nil, provider.Message{Role: "user", Content: "steer two"})
+	steer, err = s.AdmitRequest(session.ID, turn, "main", session.Model, nil, nil, nil, llm.Message{Role: "user", Content: "steer two"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ids = append(ids, steer.SteerEntries[0])
 	originalIDs := append([]int64(nil), ids...)
-	tail, err := s.Append(session.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "retained model tail"})
+	tail, err := s.Append(session.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "retained model tail"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs := append([]provider.Message(nil), messages[:4]...)
+	inputs := append([]llm.Message(nil), messages[:4]...)
 	at := time.Now().Add(time.Hour)
 	for iteration := range 2 {
 		archive, err := s.ArchiveTranscript(session.ID, 0)
@@ -348,21 +348,21 @@ func TestContinuationValidatesRetainedInputsBeforeFreezing(t *testing.T) {
 	s, session, turn, _ := historyFixture(t)
 	ids := []int64{session.EntryTip}
 	for range 4 {
-		id, err := s.Append(session.ID, turn, "main", "message", "user", true, provider.Message{Role: "user", Content: "normal"})
+		id, err := s.Append(session.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: "normal"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, id)
 	}
-	runtime, err := s.Append(session.ID, turn, "main", "message", "user", true, provider.Message{Role: "user", Runtime: true, Content: "notice"})
+	runtime, err := s.Append(session.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Runtime: true, Content: "notice"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := s.Append(session.ID, turn, "main/child", "message", "user", true, provider.Message{Role: "user", Content: "child"})
+	child, err := s.Append(session.ID, turn, "main/child", "message", "user", true, llm.Message{Role: "user", Content: "child"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tail, err := s.Append(session.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "tail"})
+	tail, err := s.Append(session.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "tail"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	s, session, initialTurn, request := historyFixture(t)
 	change := func(turn string) int64 {
 		t.Helper()
-		call, err := s.CallIntent(session.ID, turn, "main", request, provider.ToolCall{ID: NewID("provider"), Name: "write", Arguments: json.RawMessage(`{}`)})
+		call, err := s.CallIntent(session.ID, turn, "main", request, llm.ToolCall{ID: NewID("provider"), Name: "write", Arguments: json.RawMessage(`{}`)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,7 +419,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err := s.FinishTurn(initialTurn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	firstMessage := provider.Message{Role: "user", Content: "first"}
+	firstMessage := llm.Message{Role: "user", Content: "first"}
 	firstTurn, first, err := s.AdmitTurn(session.ID, "user", session.Model, &firstMessage)
 	if err != nil {
 		t.Fatal(err)
@@ -427,12 +427,12 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err := s.FinishTurn(firstTurn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	secondMessage := provider.Message{Role: "user", Content: "second", InputSource: "queue"}
+	secondMessage := llm.Message{Role: "user", Content: "second", InputSource: "queue"}
 	secondTurn, second, err := s.AdmitTurn(session.ID, "user", session.Model, &secondMessage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(session.ID, secondTurn, "main", session.Model, nil, nil, nil, provider.Message{Role: "user", Content: "steer"})
+	admitted, err := s.AdmitRequest(session.ID, secondTurn, "main", session.Model, nil, nil, nil, llm.Message{Role: "user", Content: "steer"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseline := change(secondTurn)
-	tail, err := s.Append(session.ID, secondTurn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "tail"})
+	tail, err := s.Append(session.ID, secondTurn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "tail"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	suffixMessage := provider.Message{Role: "user", Content: "suffix input"}
+	suffixMessage := llm.Message{Role: "user", Content: "suffix input"}
 	suffixTurn, suffixInput, err := s.AdmitTurn(session.ID, "user", session.Model, &suffixMessage)
 	if err != nil {
 		t.Fatal(err)

@@ -8,20 +8,20 @@ import (
 	"testing"
 	"ttc/internal/tool"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	p := &childProvider{}
-	p.stream = func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-		if err := emit(provider.StreamEvent{Kind: "retry", Retry: &provider.Retry{Attempt: 4, DelayMilliseconds: 1250, Reason: "HTTP 503"}}); err != nil {
+	p.stream = func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+		if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 4, DelayMilliseconds: 1250, Reason: "HTTP 503"}}); err != nil {
 			return err
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Finished"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Finished"})
 	}
 	r.Provider = p
-	message := provider.Message{Role: "user", Content: "Run"}
+	message := llm.Message{Role: "user", Content: "Run"}
 	if err := r.Run(&message); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.ToolCall{ID: "child_retry", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"Run child","label":"retry test"}`)}
+	call := llm.ToolCall{ID: "child_retry", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"Run child","label":"retry test"}`)}
 	id, err := r.Store.CallIntent(r.Current(), "", "main", request, call)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestRetryActivityExcludesBackgroundNaming(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		retry := provider.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}
+		retry := llm.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}
 		if err := r.retryNotice("", "main", request, purpose, &retry); err != nil {
 			t.Fatal(err)
 		}
@@ -108,9 +108,9 @@ func TestMainFailureDetailsPersistWithoutBecomingModelInput(t *testing.T) {
 		t.Run(failure.Error(), func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			p := &childProvider{}
-			p.stream = func(context.Context, provider.Request, func(provider.StreamEvent) error) error { return failure }
+			p.stream = func(context.Context, llm.Request, func(llm.StreamEvent) error) error { return failure }
 			r.Provider = p
-			message := provider.Message{Role: "user", Content: "Run"}
+			message := llm.Message{Role: "user", Content: "Run"}
 			if err := r.Run(&message); !errors.Is(err, failure) {
 				t.Fatal("lost original failure", err)
 			}

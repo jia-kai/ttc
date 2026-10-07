@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
@@ -18,7 +18,7 @@ func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
 			r.AutoName = true
 			ready := make(chan struct{})
 			var coding atomic.Int32
-			r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.NoTools {
 					if !strings.Contains(req.Messages[0].Content, "Tool: glob") {
 						return errors.New("naming omitted first tool")
@@ -26,24 +26,24 @@ func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
 					if fail {
 						return errors.New("controlled naming failure")
 					}
-					if err := emit(provider.StreamEvent{Kind: "text", Text: "Small Research Tool Session"}); err != nil {
+					if err := emit(llm.StreamEvent{Kind: "text", Text: "Small Research Tool Session"}); err != nil {
 						return err
 					}
-					return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 20, OutputTokens: 4}})
+					return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 20, OutputTokens: 4}})
 				}
 				if coding.Add(1) == 1 {
-					call := provider.ToolCall{ID: "glob", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)}
-					if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+					call := llm.ToolCall{ID: "glob", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)}
+					if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 						return err
 					}
-					return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 100, OutputTokens: 10}})
+					return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 				}
 				close(ready)
 				<-ctx.Done()
 				return ctx.Err()
 			}}
 			done := make(chan error, 1)
-			go func() { m := provider.Message{Role: "user", Content: "Study local source"}; done <- r.Run(&m) }()
+			go func() { m := llm.Message{Role: "user", Content: "Study local source"}; done <- r.Run(&m) }()
 			select {
 			case <-ready:
 			case <-time.After(3 * time.Second):
@@ -90,7 +90,7 @@ func TestCompactionCancellationDoesNotWaitForBackgroundNaming(t *testing.T) {
 	namingStarted := make(chan struct{})
 	namingStopped := make(chan struct{})
 	var summaryCalls atomic.Int32
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if strings.HasPrefix(req.System, "Name this coding session") {
 			close(namingStarted)
 			defer close(namingStopped)
@@ -101,12 +101,12 @@ func TestCompactionCancellationDoesNotWaitForBackgroundNaming(t *testing.T) {
 			summaryCalls.Add(1)
 			return errors.New("canceled compaction must not start inference")
 		}
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "Checked the project."}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Checked the project."}); err != nil {
 			return err
 		}
-		return emit(provider.StreamEvent{Kind: "completed"})
+		return emit(llm.StreamEvent{Kind: "completed"})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Check the project."}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Check the project."}); err != nil {
 		t.Fatal(err)
 	}
 	select {

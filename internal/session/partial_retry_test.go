@@ -13,29 +13,29 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/llm"
 	"ttc/internal/prompts"
-	"ttc/internal/provider"
 	"ttc/internal/tool"
 )
 
-func partialRetryFailure(req provider.Request) *provider.PartialError {
-	return &provider.PartialError{
+func partialRetryFailure(req llm.Request) *llm.PartialError {
+	return &llm.PartialError{
 		Err:   errors.New("synthetic stream interruption"),
-		Retry: provider.Retry{Attempt: req.PriorAttempts + 2, DelayMilliseconds: 0, Reason: "stream interrupted", MaxAttempts: 0},
+		Retry: llm.Retry{Attempt: req.PriorAttempts + 2, DelayMilliseconds: 0, Reason: "stream interrupted", MaxAttempts: 0},
 	}
 }
 
-func partialRetryText(emit func(provider.StreamEvent) error, text string) error {
-	if err := emit(provider.StreamEvent{Kind: "text", Text: text}); err != nil {
+func partialRetryText(emit func(llm.StreamEvent) error, text string) error {
+	if err := emit(llm.StreamEvent{Kind: "text", Text: text}); err != nil {
 		return err
 	}
 	// An interrupted response must retain canonical text, not native replay.
-	return emit(provider.StreamEvent{Kind: "state", StateVersion: 1, StateItem: json.RawMessage(`{"type":"message","id":"partial-native"}`)})
+	return emit(llm.StreamEvent{Kind: "state", StateVersion: 1, StateItem: json.RawMessage(`{"type":"message","id":"partial-native"}`)})
 }
 
-func partialRetryWarning(t *testing.T, req provider.Request) provider.Message {
+func partialRetryWarning(t *testing.T, req llm.Request) llm.Message {
 	t.Helper()
-	var found provider.Message
+	var found llm.Message
 	for _, m := range req.Messages {
 		if m.Content == prompts.Recovery {
 			if m.Role != "developer" || !m.Runtime || m.RequestID == 0 || m.InputSource != "" || m.InputTimeMS != 0 {
@@ -50,7 +50,7 @@ func partialRetryWarning(t *testing.T, req provider.Request) provider.Message {
 	return found
 }
 
-func partialRetryMessage(t *testing.T, req provider.Request, role, content string) provider.Message {
+func partialRetryMessage(t *testing.T, req llm.Request, role, content string) llm.Message {
 	t.Helper()
 	for _, m := range req.Messages {
 		if m.Role == role && m.Content == content {
@@ -58,10 +58,10 @@ func partialRetryMessage(t *testing.T, req provider.Request, role, content strin
 		}
 	}
 	t.Errorf("request omitted %s message %q", role, content)
-	return provider.Message{}
+	return llm.Message{}
 }
 
-func partialRetryResult(t *testing.T, req provider.Request, callID string, ok bool, code string) {
+func partialRetryResult(t *testing.T, req llm.Request, callID string, ok bool, code string) {
 	t.Helper()
 	for _, m := range req.Messages {
 		if m.Role != "tool" || m.CallID != callID {
@@ -86,7 +86,7 @@ func partialRetryResult(t *testing.T, req provider.Request, callID string, ok bo
 func partialRetryRunActor(t *testing.T, r *Runtime, actor string, stdout io.Writer) error {
 	t.Helper()
 	if actor == "main" {
-		return r.Run(&provider.Message{Role: "user", Content: "Recover this task"})
+		return r.Run(&llm.Message{Role: "user", Content: "Recover this task"})
 	}
 	seedRuntime(t, r, "Private main context")
 	turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.CurrentSelection())
@@ -124,16 +124,16 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 		return map[string]any{"ok": true, "executions": executions.Add(1)}, nil
 	})
 	step := 0
-	var warning provider.Message
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	var warning llm.Message
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		step++
 		switch step {
 		case 1:
 			if req.PriorAttempts != 0 {
 				t.Errorf("initial prior attempts = %d", req.PriorAttempts)
 			}
-			call := provider.ToolCall{ID: "earlier", Name: "partial_counter", Arguments: []byte(`{}`)}
-			return emit(provider.StreamEvent{Kind: "call", Call: &call})
+			call := llm.ToolCall{ID: "earlier", Name: "partial_counter", Arguments: []byte(`{}`)}
+			return emit(llm.StreamEvent{Kind: "call", Call: &call})
 		case 2:
 			if req.PriorAttempts != 0 || executions.Load() != 1 {
 				t.Error("successful tool response did not reset attempt accounting")
@@ -142,8 +142,8 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 			if err := partialRetryText(emit, "Partial main evidence"); err != nil {
 				return err
 			}
-			call := provider.ToolCall{ID: "interrupted", Name: "partial_counter", Arguments: []byte(`{}`)}
-			if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+			call := llm.ToolCall{ID: "interrupted", Name: "partial_counter", Arguments: []byte(`{}`)}
+			if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 				return err
 			}
 			return partialRetryFailure(req)
@@ -161,12 +161,12 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 			if warning.RequestID != m.RequestID {
 				t.Error("warning not linked to failed producing request")
 			}
-			return emit(provider.StreamEvent{Kind: "text", Text: "Recovered final answer"})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Recovered final answer"})
 		default:
 			return errors.New("unexpected extra request")
 		}
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Execute once, then recover"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Execute once, then recover"}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 3 || executions.Load() != 1 {
@@ -182,7 +182,7 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 	if turns != 1 || completed != 1 || distinctTurns != 1 || failedRequests != 1 {
 		t.Fatal("recovery did not complete original turn", turns, completed, distinctTurns, failedRequests)
 	}
-	var recorded provider.Message
+	var recorded llm.Message
 	var raw string
 	if err := r.Store.DB.QueryRow("SELECT content_json FROM entries WHERE role='developer' AND json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&raw); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestPartialRetryAttemptsContinueAndSuccessfulToolResponseResets(t *testing.
 			r, _ := runtimeFixture(t, nil)
 			want := []int{0, 1, 2, 0, 1}
 			step := 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if step >= len(want) {
 					return errors.New("unexpected extra request")
 				}
@@ -207,13 +207,13 @@ func TestPartialRetryAttemptsContinueAndSuccessfulToolResponseResets(t *testing.
 				}
 				step++
 				if step == 3 {
-					call := provider.ToolCall{ID: "successful", Name: "glob", Arguments: []byte(`{"pattern":"*.txt"}`)}
-					return emit(provider.StreamEvent{Kind: "call", Call: &call})
+					call := llm.ToolCall{ID: "successful", Name: "glob", Arguments: []byte(`{"pattern":"*.txt"}`)}
+					return emit(llm.StreamEvent{Kind: "call", Call: &call})
 				}
 				if step == 5 {
 					partialRetryWarning(t, req)
 					partialRetryResult(t, req, "successful", true, "")
-					return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 				}
 				if err := partialRetryText(emit, fmt.Sprintf("Partial attempt %d", step)); err != nil {
 					return err
@@ -238,7 +238,7 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 			seedRuntime(t, r, "Private main context")
 			step := 0
 			var actor string
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				step++
 				for _, m := range req.Messages {
 					if m.Content == "Private main context" {
@@ -257,8 +257,8 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 					if err := partialRetryText(emit, "Isolated partial evidence"); err != nil {
 						return err
 					}
-					call := provider.ToolCall{ID: "child-interrupted", Name: "write", Arguments: []byte(`{"path":"must-not-exist.txt","content":"bad"}`)}
-					if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+					call := llm.ToolCall{ID: "child-interrupted", Name: "write", Arguments: []byte(`{"path":"must-not-exist.txt","content":"bad"}`)}
+					if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 						return err
 					}
 					return partialRetryFailure(req)
@@ -271,19 +271,19 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 						t.Error("child partial retained replay state")
 					}
 					partialRetryResult(t, req, "child-interrupted", false, "interrupted")
-					return emit(provider.StreamEvent{Kind: "text", Text: "Recovered child answer"})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Recovered child answer"})
 				case 3:
 					if !persistent || req.ConversationID != actor || req.PriorAttempts != 0 {
 						t.Error("retained follow-up lost identity/reset")
 					}
 					partialRetryMessage(t, req, "assistant", "Recovered child answer")
-					return emit(provider.StreamEvent{Kind: "text", Text: "Follow-up answer"})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Follow-up answer"})
 				default:
 					return errors.New("unexpected child request")
 				}
 			}}
 			args := fmt.Sprintf(`{"persistent":%t,"prompt":"Isolated task","label":"recovery child"}`, persistent)
-			turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(args)}})
+			turn, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(args)}})
 			result := childInvocation(t, r, ids[0], args)
 			if result["status"] != "completed" || result["answer"] != "Recovered child answer" || step != 2 {
 				t.Fatal(result, step)
@@ -315,7 +315,7 @@ func TestPartialRetryAsideRecoversWithoutLeakingOrPublishingPartialAnswer(t *tes
 	seedRuntime(t, r, "Private main context")
 	step := 0
 	var actor string
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		step++
 		partialRetryMessage(t, req, "user", "Private main context")
 		partialRetryMessage(t, req, "developer", btwInstruction)
@@ -342,7 +342,7 @@ func TestPartialRetryAsideRecoversWithoutLeakingOrPublishingPartialAnswer(t *tes
 		if m := partialRetryMessage(t, req, "assistant", "Isolated partial evidence"); m.State != nil {
 			t.Error("aside partial retained replay state")
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Recovered aside answer"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Recovered aside answer"})
 	}}
 	id, err := r.StartBTW("Answer privately")
 	if err != nil {
@@ -365,10 +365,10 @@ func TestPartialRetryCallStartDoesNotInventToolOutcome(t *testing.T) {
 		t.Run(actor, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			step := 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				step++
 				if step == 1 {
-					if err := emit(provider.StreamEvent{Kind: "call_start", CallStart: &provider.ToolStart{ID: "announced-only", Name: "write"}}); err != nil {
+					if err := emit(llm.StreamEvent{Kind: "call_start", CallStart: &llm.ToolStart{ID: "announced-only", Name: "write"}}); err != nil {
 						return err
 					}
 					return partialRetryFailure(req)
@@ -382,7 +382,7 @@ func TestPartialRetryCallStartDoesNotInventToolOutcome(t *testing.T) {
 						t.Error("announcement invented executable call or outcome", m)
 					}
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 			}}
 			if err := partialRetryRunActor(t, r, actor, io.Discard); err != nil {
 				t.Fatal(err)
@@ -410,7 +410,7 @@ func TestPartialRetryCancellationDuringWaitStopsNewRequest(t *testing.T) {
 		}
 	}
 	var requests atomic.Int32
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests.Add(1)
 		if err := partialRetryText(emit, "Partial before cancellation"); err != nil {
 			return err
@@ -420,7 +420,7 @@ func TestPartialRetryCancellationDuringWaitStopsNewRequest(t *testing.T) {
 		return failure
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&provider.Message{Role: "user", Content: "Cancel recovery wait"}) }()
+	go func() { done <- r.Run(&llm.Message{Role: "user", Content: "Cancel recovery wait"}) }()
 	receive(t, waiting)
 	r.Interrupt()
 	if err := receive(t, done); !errors.Is(err, context.Canceled) {
@@ -437,12 +437,12 @@ func TestPartialRetryCancellationDuringWaitStopsNewRequest(t *testing.T) {
 
 func TestPartialRetryUnclassifiedFailuresRemainFinal(t *testing.T) {
 	permanent := errors.New("permanent provider failure")
-	for _, failure := range []error{permanent, &provider.TransientError{Err: errors.New("unclassified transient failure")}} {
+	for _, failure := range []error{permanent, &llm.TransientError{Err: errors.New("unclassified transient failure")}} {
 		for _, actor := range []string{"main", "main/child_final"} {
 			t.Run(actor+"/"+failure.Error(), func(t *testing.T) {
 				r, _ := runtimeFixture(t, nil)
 				requests := 0
-				r.Provider = &childProvider{stream: func(_ context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 					requests++
 					if err := partialRetryText(emit, "Final partial evidence"); err != nil {
 						return err
@@ -474,12 +474,12 @@ func TestPartialRetryCallbackErrorsCannotAuthorizeRecovery(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			requests := 0
 			var callbackErr error
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
 				if strings.HasSuffix(mode, "stdout") {
-					callbackErr = emit(provider.StreamEvent{Kind: "text", Text: "Writer must reject this"})
+					callbackErr = emit(llm.StreamEvent{Kind: "text", Text: "Writer must reject this"})
 				} else {
-					callbackErr = emit(provider.StreamEvent{Kind: "call"})
+					callbackErr = emit(llm.StreamEvent{Kind: "call"})
 				}
 				if callbackErr == nil {
 					return errors.New("expected callback failure")
@@ -511,7 +511,7 @@ func TestPartialRetryCallbackErrorsCannotAuthorizeRecovery(t *testing.T) {
 }
 
 func TestPartialRetryMalformedMetadataIsFinal(t *testing.T) {
-	cases := map[string]provider.Retry{
+	cases := map[string]llm.Retry{
 		"attempt":           {Attempt: 1, Reason: "stream interrupted"},
 		"negative maximum":  {Attempt: 2, MaxAttempts: -1, Reason: "stream interrupted"},
 		"exhausted maximum": {Attempt: 3, MaxAttempts: 2, Reason: "stream interrupted"},
@@ -522,7 +522,7 @@ func TestPartialRetryMalformedMetadataIsFinal(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			requests := 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
 				if err := partialRetryText(emit, "Malformed recovery metadata"); err != nil {
 					return err
@@ -531,7 +531,7 @@ func TestPartialRetryMalformedMetadataIsFinal(t *testing.T) {
 				failure.Retry = retry
 				return failure
 			}}
-			if err := r.Run(&provider.Message{Role: "user", Content: "Reject malformed retry"}); err == nil {
+			if err := r.Run(&llm.Message{Role: "user", Content: "Reject malformed retry"}); err == nil {
 				t.Fatal("malformed retry succeeded")
 			}
 			if requests != 1 {
@@ -548,10 +548,10 @@ func TestPartialRetryCompactionPreservesExactDeveloperWarning(t *testing.T) {
 			compactionBudget(t, r)
 			coding, summaries := 0, 0
 			var failedRequest int64
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.NoTools {
 					summaries++
-					return emit(provider.StreamEvent{Kind: "text", Text: "Earlier partial research was interrupted; continue the original task."})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Earlier partial research was interrupted; continue the original task."})
 				}
 				coding++
 				if coding == 1 {
@@ -576,7 +576,7 @@ func TestPartialRetryCompactionPreservesExactDeveloperWarning(t *testing.T) {
 				if !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
 					t.Error("oversized recovery request bypassed admission")
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Recovered after compaction"})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Recovered after compaction"})
 			}}
 			if err := partialRetryRunActor(t, r, actor, io.Discard); err != nil {
 				t.Fatal(err)

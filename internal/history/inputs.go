@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type inputMetadata struct {
@@ -54,13 +54,13 @@ func inputMetadataWith(q historyReader, entries []Entry) (map[int64]inputMetadat
 
 // enrichInput derives human input metadata from the original immutable entry,
 // not the physical continuation copy or a caller-supplied timestamp.
-func enrichInput(metadata map[int64]inputMetadata, entry Entry, message provider.Message) (provider.Message, error) {
+func enrichInput(metadata map[int64]inputMetadata, entry Entry, message llm.Message) (llm.Message, error) {
 	if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != "user" || message.Role != "user" || message.Runtime {
 		return message, nil
 	}
 	input, ok := metadata[entry.EventSeq()]
 	if !ok {
-		return provider.Message{}, fmt.Errorf("original human input #%d: %w", entry.EventSeq(), sql.ErrNoRows)
+		return llm.Message{}, fmt.Errorf("original human input #%d: %w", entry.EventSeq(), sql.ErrNoRows)
 	}
 	source := input.source
 	if input.trigger == "steer" {
@@ -69,7 +69,7 @@ func enrichInput(metadata map[int64]inputMetadata, entry Entry, message provider
 		source = "normal"
 	}
 	if source != "normal" && source != "queue" && source != "steer" {
-		return provider.Message{}, fmt.Errorf("original human input #%d has invalid source %q", entry.EventSeq(), source)
+		return llm.Message{}, fmt.Errorf("original human input #%d has invalid source %q", entry.EventSeq(), source)
 	}
 	message.InputSource = source
 	message.InputTimeMS = input.committedMS

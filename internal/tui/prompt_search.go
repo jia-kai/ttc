@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -36,23 +35,12 @@ func newPromptSearch(entries []string) *promptSearch {
 }
 
 func (m *promptSearch) filter() {
-	m.terms = strings.Fields(strings.ToLower(m.query.text))
-	slices.SortFunc(m.terms, func(a, b string) int {
-		if size := len(b) - len(a); size != 0 {
-			return size
-		}
-		return strings.Compare(a, b)
-	})
-	m.terms = slices.Compact(m.terms)
+	m.terms = searchTerms(m.query.text)
 	m.matches = m.matches[:0]
-search:
 	for i := len(m.entries) - 1; i >= 0; i-- {
-		for _, term := range m.terms {
-			if !strings.Contains(m.folded[i], term) {
-				continue search
-			}
+		if matchesSearchTerms(m.folded[i], m.terms) {
+			m.matches = append(m.matches, i)
 		}
-		m.matches = append(m.matches, i)
 	}
 	m.selected, m.start, m.Window.Scroll = 0, 0, 0
 	m.update()

@@ -13,7 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
+	"ttc/internal/privatefile"
 	"ttc/internal/render"
 )
 
@@ -80,7 +81,7 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 	}
 	var status struct {
 		Type    string
-		Message provider.Message
+		Message llm.Message
 	}
 	if entry.Kind == "status" {
 		if err := json.Unmarshal(entry.Content, &status); err != nil {
@@ -94,7 +95,7 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 		}
 	}
 	if entry.Kind == "message" || entry.Kind == "summary" {
-		var message provider.Message
+		var message llm.Message
 		if err := json.Unmarshal(entry.Content, &message); err != nil {
 			return "", err
 		}
@@ -282,7 +283,7 @@ func (s *Store) Export(session, path string) error {
 			return fmt.Errorf("symlink in managed export assets: %s", source)
 		}
 		if d.IsDir() {
-			return PrivateDir(target)
+			return privatefile.PrivateDir(target)
 		}
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("unsupported managed export asset: %s", source)
@@ -304,7 +305,7 @@ func (s *Store) Export(session, path string) error {
 			}
 			raw = []byte(strings.ReplaceAll(string(raw), lineage+string(filepath.Separator), relativeRoot+"/"))
 		}
-		return AtomicFile(target, raw, 0600)
+		return privatefile.AtomicFile(target, raw, 0600)
 	})
 	if e != nil {
 		return e

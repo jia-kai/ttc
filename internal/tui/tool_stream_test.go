@@ -8,27 +8,27 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type pendingProvider struct {
-	provider.Script
+	llm.Script
 	release  chan struct{}
 	requests int
 }
 
-func (p *pendingProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *pendingProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	p.requests++
 	if p.requests > 1 {
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "Streamed write finished."}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Streamed write finished."}); err != nil {
 			return err
 		}
-		return emit(provider.StreamEvent{Kind: "completed"})
+		return emit(llm.StreamEvent{Kind: "completed"})
 	}
-	if err := emit(provider.StreamEvent{Kind: "call_start", CallStart: &provider.ToolStart{ID: "write_call", Name: "write"}}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "call_start", CallStart: &llm.ToolStart{ID: "write_call", Name: "write"}}); err != nil {
 		return err
 	}
-	if err := emit(provider.StreamEvent{Kind: "call_progress", CallProgress: &provider.ToolProgress{ID: "write_call", Name: "write", Segments: 2, Bytes: 9}}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "call_progress", CallProgress: &llm.ToolProgress{ID: "write_call", Name: "write", Segments: 2, Bytes: 9}}); err != nil {
 		return err
 	}
 	select {
@@ -37,10 +37,10 @@ func (p *pendingProvider) Stream(ctx context.Context, req provider.Request, emit
 		return ctx.Err()
 	}
 	args := json.RawMessage(`{"path":"stream.txt","content":"assembled\n"}`)
-	if err := emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "write_call", Name: "write", Arguments: args}}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "write_call", Name: "write", Arguments: args}}); err != nil {
 		return err
 	}
-	return emit(provider.StreamEvent{Kind: "completed"})
+	return emit(llm.StreamEvent{Kind: "completed"})
 }
 func TestAwaitingToolInspectorAndTransition(t *testing.T) {
 	p := &pendingProvider{release: make(chan struct{})}

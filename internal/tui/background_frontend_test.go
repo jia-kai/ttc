@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestBackgroundMenuSelectsForegroundShell(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; while [ ! -e release ]; do sleep 0.01; done; printf done","wake_on_exit":false}`)}}},
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; while [ ! -e release ]; do sleep 0.01; done; printf done","wake_on_exit":false}`)}}},
 		{Text: "Foreground released"},
 	}})
 	u.typeText("start")
@@ -46,8 +46,8 @@ func TestBackgroundMenuSelectsForegroundShell(t *testing.T) {
 }
 
 func TestCtrlBPromotesForegroundShellWithoutSubmittingDraft(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; sleep 30","wake_on_exit":false}`)}}},
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; sleep 30","wake_on_exit":false}`)}}},
 		{Text: "Shortcut released"},
 	}})
 	u.typeText("start")

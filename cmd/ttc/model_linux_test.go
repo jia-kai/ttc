@@ -4,29 +4,29 @@ import (
 	"reflect"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestStartupSelection(t *testing.T) {
-	first := provider.ScriptModel()
+	first := llm.ScriptModel()
 	first.ID, first.DefaultVariant, first.Variants = "first", "low", []string{"low", "high"}
 	second := first
 	second.ID, second.DefaultVariant, second.Images, second.Revision = "second", "high", true, "fresh"
 	fast := second
 	fast.ID, fast.BaseID, fast.ServiceTier = "second/fast", "second", "priority"
-	models := []provider.ModelSpec{first, second, fast}
-	saved := func(id, variant string) *provider.Selection {
+	models := []llm.ModelSpec{first, second, fast}
+	saved := func(id, variant string) *llm.Selection {
 		// Only saved IDs and the variant should survive catalog refresh.
-		return &provider.Selection{Provider: "openai", Model: provider.ModelSpec{ID: id}, Variant: variant}
+		return &llm.Selection{Provider: "openai", Model: llm.ModelSpec{ID: id}, Variant: variant}
 	}
 	foreign := saved("second", "high")
 	foreign.Provider = "other"
 	for _, tt := range []struct {
 		name           string
-		models         []provider.ModelSpec
-		saved          *provider.Selection
+		models         []llm.ModelSpec
+		saved          *llm.Selection
 		model, variant string
-		want           provider.ModelSpec
+		want           llm.ModelSpec
 		wantVariant    string
 		notice, fails  bool
 	}{

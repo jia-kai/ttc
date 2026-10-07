@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {
@@ -35,7 +35,7 @@ func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {
 func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Inspect runtime state")
-	decode := func(m *provider.Message) runtimeContext {
+	decode := func(m *llm.Message) runtimeContext {
 		t.Helper()
 		var v runtimeContext
 		if m == nil || m.Role != "developer" || !m.Runtime {
@@ -167,7 +167,7 @@ func TestAncestorInstructionsAreOrderedAndRefreshAtRequestBoundary(t *testing.T)
 func TestReportedUsageSnapshotOwnershipAndModelBoundary(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	cached, reasoning := 0, 15
-	source := &ReportedUsage{Model: "previous model", Tokens: provider.Usage{InputTokens: 100, OutputTokens: 20, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}
+	source := &ReportedUsage{Model: "previous model", Tokens: llm.Usage{InputTokens: 100, OutputTokens: 20, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}
 	r.reported = copyReported(source)
 	cached = 99
 	r.usage = ContextUsage{Model: "next model", Parts: []TokenPart{{Name: "Instructions", Tokens: 100}}}
@@ -191,13 +191,13 @@ func TestReportedUsageSnapshotOwnershipAndModelBoundary(t *testing.T) {
 func TestInterruptedNativeCompletionResumesCanonicalHistory(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	step := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		step++
 		if step == 1 {
-			if err := emit(provider.StreamEvent{Kind: "text", Text: "Partial"}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "text", Text: "Partial"}); err != nil {
 				return err
 			}
-			if err := emit(provider.StreamEvent{Kind: "state", StateVersion: 1, StateItem: []byte(`{"type":"function_call","call_id":"c","name":"read","arguments":"{}"}`)}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "state", StateVersion: 1, StateItem: []byte(`{"type":"function_call","call_id":"c","name":"read","arguments":"{}"}`)}); err != nil {
 				return err
 			}
 			return context.Canceled
@@ -207,12 +207,12 @@ func TestInterruptedNativeCompletionResumesCanonicalHistory(t *testing.T) {
 				t.Fatal("interrupted native state was replayed")
 			}
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Resumed"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Resumed"})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Start"}); err != context.Canceled {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Start"}); err != context.Canceled {
 		t.Fatal(err)
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Continue"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -243,19 +243,19 @@ func TestRepeatingTimerContextHighlightsFiring(t *testing.T) {
 func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	step := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		step++
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "Done"}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Done"}); err != nil {
 			return err
 		}
-		var usage *provider.Usage
+		var usage *llm.Usage
 		if step == 1 {
-			usage = &provider.Usage{InputTokens: 100, OutputTokens: 10}
+			usage = &llm.Usage{InputTokens: 100, OutputTokens: 10}
 		}
-		return emit(provider.StreamEvent{Kind: "completed", Usage: usage})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: usage})
 	}}
 	for _, prompt := range []string{"First", "Second"} {
-		if err := r.Run(&provider.Message{Role: "user", Content: prompt}); err != nil {
+		if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 		if (r.UsageSnapshot().Reported != nil) != (prompt == "First") {
@@ -266,15 +266,15 @@ func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
 
 func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
-	var requests []provider.Request
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	var requests []llm.Request
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests = append(requests, req)
 		if len(requests) == 1 {
-			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "read", Name: "glob", Arguments: []byte(`{"pattern":"*.txt"}`)}})
+			return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "read", Name: "glob", Arguments: []byte(`{"pattern":"*.txt"}`)}})
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Inspect"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Inspect"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 || requests[0].System != systemTemplate || requests[1].System != requests[0].System {
@@ -318,12 +318,12 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	coding := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
 			if req.ConversationID != r.Current()+"/compaction" {
 				t.Fatal("incorrect compaction identity", req.ConversationID)
 			}
-			return emit(provider.StreamEvent{Kind: "text", Text: "Continue with the retained task."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Continue with the retained task."})
 		}
 		coding++
 		if req.ConversationID != r.Current() {
@@ -337,13 +337,13 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 		if err := json.Unmarshal([]byte(last.Content), &v); err != nil || v.Project == nil {
 			t.Fatal("missing project context", last, err)
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Initial"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Initial"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{strings.Repeat("old research ", 700), "Recent task"} {
-		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: text}); err != nil {
+		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -354,7 +354,7 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 	if before == r.Current() {
 		t.Fatal("no continuation")
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Continue"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 	if coding != 2 {

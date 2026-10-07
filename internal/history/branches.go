@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -184,7 +184,7 @@ func (s *Store) BranchSelectionTarget(session string, id int64) (RestoreTarget, 
 		if entry.Role != "assistant" {
 			continue
 		}
-		var message provider.Message
+		var message llm.Message
 		if err = json.Unmarshal(entry.Content, &message); err != nil {
 			return RestoreTarget{}, err
 		}

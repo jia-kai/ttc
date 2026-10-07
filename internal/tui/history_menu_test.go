@@ -12,7 +12,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestHistoryMenuSerialInputsStayFlatAndKeepCheckpoints(t *testing.T) {
@@ -173,7 +173,7 @@ func TestHistoryMenuLongHistoryHasBoundedWindow(t *testing.T) {
 }
 
 func TestHistoryPickerInspectionPreservesDraft(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Original branch reply"}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Original branch reply"}}})
 	u.typeText("Start research")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
@@ -227,10 +227,10 @@ func TestHistoryMenuProjectsHumanBranchesAndCheckpointRestrictions(t *testing.T)
 }
 
 func TestHistoryPickerRestoresUserCheckpointAndRedoFiles(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "first", Name: "write", Arguments: []byte(`{"path":"note.txt","content":"first"}`)}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "first", Name: "write", Arguments: []byte(`{"path":"note.txt","content":"first"}`)}}},
 		{Text: "First input result."},
-		{Calls: []provider.ToolCall{{ID: "second", Name: "write", Arguments: []byte(`{"path":"note.txt","content":"second"}`)}}},
+		{Calls: []llm.ToolCall{{ID: "second", Name: "write", Arguments: []byte(`{"path":"note.txt","content":"second"}`)}}},
 		{Text: "Second input result."},
 	}}
 	u := newQuestionTestUI(t, p)

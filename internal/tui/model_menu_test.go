@@ -10,7 +10,7 @@ import (
 	"ttc/internal/tool"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/session"
 	"ttc/internal/skills"
@@ -19,19 +19,19 @@ import (
 	"github.com/gdamore/tcell/v2"
 )
 
-func menuModels() []provider.ModelSpec {
-	a, b := provider.ScriptModel(), provider.ScriptModel()
+func menuModels() []llm.ModelSpec {
+	a, b := llm.ScriptModel(), llm.ScriptModel()
 	a.ID, a.Name = "family-a", "Family A"
 	a.Variants, a.DefaultVariant = []string{"low", "high"}, "low"
 	b.ID, b.Name = "family-b", "Family B"
 	b.Variants, b.DefaultVariant = []string{"low", "high", "max"}, "high"
 	b.VariantDescriptions = map[string]string{"high": "Deeper reasoning"}
-	return []provider.ModelSpec{a, b}
+	return []llm.ModelSpec{a, b}
 }
 
 func TestModelMenuChoicesAndCancellation(t *testing.T) {
 	models := menuModels()
-	current := provider.Selection{Provider: "script", Model: models[0], Variant: "high"}
+	current := llm.Selection{Provider: "script", Model: models[0], Variant: "high"}
 	m := newModelMenu(models, current)
 	key := func(k tcell.Key) (string, string, bool) {
 		return m.key(tcell.NewEventKey(k, 0, 0), 20)
@@ -63,7 +63,7 @@ func TestModelMenuChoicesAndCancellation(t *testing.T) {
 
 func TestModelMenuNarrowViewportKeepsSelectionVisible(t *testing.T) {
 	models := menuModels()
-	m := newModelMenu(models, provider.Selection{Model: models[0], Variant: "low"})
+	m := newModelMenu(models, llm.Selection{Model: models[0], Variant: "low"})
 	m.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 20)
 	m.reveal(16, 2)
 	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> Family B") {
@@ -83,19 +83,15 @@ func TestModelMenuNarrowViewportKeepsSelectionVisible(t *testing.T) {
 }
 
 type gatedModelProvider struct {
-	requests chan provider.Request
+	requests chan llm.Request
 	release  chan struct{}
 	step     int // Stream calls are serial in this fixture, matching Runtime ownership.
 }
 
-func (p *gatedModelProvider) Models(context.Context) ([]provider.ModelSpec, error) {
-	return menuModels(), nil
+func (p *gatedModelProvider) EstimateReplay(m llm.Message) int {
+	return llm.ReplayTokens(m.State)
 }
-func (p *gatedModelProvider) Login(context.Context, provider.LoginUI) error { return nil }
-func (p *gatedModelProvider) EstimateReplay(m provider.Message) int {
-	return provider.ReplayTokens(m.State)
-}
-func (p *gatedModelProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *gatedModelProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	p.requests <- req
 	select {
 	case <-ctx.Done():
@@ -103,15 +99,15 @@ func (p *gatedModelProvider) Stream(ctx context.Context, req provider.Request, e
 	case <-p.release:
 	}
 	if p.step == 0 {
-		call := provider.ToolCall{ID: "timers", Name: "wakeup_list", Arguments: []byte(`{}`)}
-		if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+		call := llm.ToolCall{ID: "timers", Name: "wakeup_list", Arguments: []byte(`{}`)}
+		if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 			return err
 		}
-	} else if err := emit(provider.StreamEvent{Kind: "text", Text: "Finished turn."}); err != nil {
+	} else if err := emit(llm.StreamEvent{Kind: "text", Text: "Finished turn."}); err != nil {
 		return err
 	}
 	p.step++
-	return emit(provider.StreamEvent{Kind: "completed"})
+	return emit(llm.StreamEvent{Kind: "completed"})
 }
 
 func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
@@ -129,14 +125,14 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	}
 
 	models := menuModels()
-	selection := provider.Selection{Provider: "script", Model: models[0], Variant: "low"}
+	selection := llm.Selection{Provider: "script", Model: models[0], Variant: "low"}
 	catalog, err := skills.Discover(context.Background(), w.Root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
-	p := &gatedModelProvider{requests: make(chan provider.Request, 4), release: make(chan struct{})}
+	p := &gatedModelProvider{requests: make(chan llm.Request, 4), release: make(chan struct{})}
 	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
@@ -182,14 +178,14 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 		}
 	}
 	key := func(k tcell.Key) { screen.InjectKey(k, 0, 0) }
-	request := func() provider.Request {
+	request := func() llm.Request {
 		t.Helper()
 		select {
 		case req := <-p.requests:
 			return req
 		case <-time.After(3 * time.Second):
 			t.Fatal("model request did not arrive")
-			return provider.Request{}
+			return llm.Request{}
 		}
 	}
 	waitFrame("/help")

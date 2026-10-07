@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func assertStoredSessions(t *testing.T, r *Runtime, want int) {
@@ -19,7 +19,7 @@ func assertStoredSessions(t *testing.T, r *Runtime, want int) {
 }
 
 func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Text: "First answer"}, {Text: "Second answer"}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "First answer"}, {Text: "Second answer"}})
 	initial := r.Current()
 	for _, command := range []string{"/help", "/sessions", "/new", "/clear"} {
 		if _, err := r.Command(command); err != nil {
@@ -60,7 +60,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 		t.Fatal(choice, err)
 	}
 	id := r.Current()
-	if err := r.Run(&provider.Message{Role: "user", Content: "First submission"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "First submission"}); err != nil {
 		t.Fatal(err)
 	}
 	assertStoredSessions(t, r, 1)
@@ -87,7 +87,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 	if _, err := r.Command("/load " + id); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Second submission"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Second submission"}); err != nil {
 		t.Fatal(err)
 	}
 	var users int
@@ -99,18 +99,18 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 func TestBlankFirstSaveFailurePreservesIdentityAndCanRetry(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	called := 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		called++
 		if req.ConversationID != r.Current() {
 			t.Fatal("request identity differs from saved session")
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "saved"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "saved"})
 	}}
 	id := r.Current()
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_first BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'injected first save failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	message := &provider.Message{Role: "user", Content: "Keep this first submission"}
+	message := &llm.Message{Role: "user", Content: "Keep this first submission"}
 	if err := r.Run(message); err == nil || !strings.Contains(err.Error(), "save first message") {
 		t.Fatal(err)
 	}

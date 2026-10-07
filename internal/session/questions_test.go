@@ -8,7 +8,7 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -43,7 +43,7 @@ func TestQuestionRecommendationValidation(t *testing.T) {
 func TestQuestionRejectsConcurrentMainInvocation(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	argument := json.RawMessage(`{"questions":[{"id":"first","prompt":"First?"},{"id":"second","prompt":"Second?"},{"id":"third","prompt":"Third?"}]}`)
-	_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "first", Name: "question", Arguments: argument}, {ID: "second", Name: "question", Arguments: argument}})
+	_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "first", Name: "question", Arguments: argument}, {ID: "second", Name: "question", Arguments: argument}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan tool.Record, 1)
@@ -137,9 +137,9 @@ func TestQuestionAnswerRejectsDuplicateAfterChannelConsumed(t *testing.T) {
 }
 
 func TestTypedQuestionLifecycleAndCancellation(t *testing.T) {
-	r, events := runtimeFixture(t, []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Pick?","recommended_option_id":"b","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]}`)}}}})
+	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Pick?","recommended_option_id":"b","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]}`)}}}})
 	done := make(chan error, 1)
-	go func() { m := provider.Message{Role: "user", Content: "ask"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Role: "user", Content: "ask"}; done <- r.Run(&m) }()
 	var view *QuestionForm
 	deadline := time.After(3 * time.Second)
 	for view == nil {
@@ -186,18 +186,18 @@ func TestTypedQuestionLifecycleAndCancellation(t *testing.T) {
 
 func TestDismissedQuestionRedirectIncludesResultAndHumanInputAtNextRequest(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
-	requests := make(chan provider.Request, 2)
+	requests := make(chan llm.Request, 2)
 	calls := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		calls++
 		requests <- req
 		if calls == 1 {
-			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Choose?"}]}`)}})
+			return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Choose?"}]}`)}})
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Redirect received"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Redirect received"})
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&provider.Message{Role: "user", Content: "ask"}) }()
+	go func() { done <- r.Run(&llm.Message{Role: "user", Content: "ask"}) }()
 	<-requests
 	var form QuestionForm
 	for form.ID == "" {

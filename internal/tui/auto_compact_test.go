@@ -7,15 +7,15 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type compactUIProvider struct {
-	provider.Script
+	llm.Script
 	ready, release chan struct{}
 }
 
-func (p *compactUIProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *compactUIProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	if req.NoTools {
 		close(p.ready)
 		select {
@@ -28,7 +28,7 @@ func (p *compactUIProvider) Stream(ctx context.Context, req provider.Request, em
 }
 
 func TestAutomaticCompactionRefreshesConversationWithoutPopupAndPreservesDraft(t *testing.T) {
-	p := &compactUIProvider{Script: provider.Script{Responses: []provider.ScriptResponse{
+	p := &compactUIProvider{Script: llm.Script{Responses: []llm.ScriptResponse{
 		{Text: "Initial task complete."},
 		{Text: "## Compact checkpoint\n\nOlder notes summarized."},
 		{Text: "Continued after automatic compaction."},
@@ -38,7 +38,7 @@ func TestAutomaticCompactionRefreshesConversationWithoutPopupAndPreservesDraft(t
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
 	before := u.runtime.Current()
-	for _, message := range []provider.Message{
+	for _, message := range []llm.Message{
 		{Role: "user", Content: "Older research task"},
 		{Role: "assistant", Content: strings.Repeat("older evidence ", 6000)},
 	} {

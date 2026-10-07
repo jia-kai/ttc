@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 
 	"github.com/gdamore/tcell/v2"
 )
@@ -13,8 +13,8 @@ import (
 // Its content uses the same Window as message inspectors; it owns only selection state.
 type modelMenu struct {
 	Window       Window
-	models       []provider.ModelSpec
-	current      provider.Selection
+	models       []llm.ModelSpec
+	current      llm.Selection
 	modelIndex   int
 	variantIndex int
 	variants     bool
@@ -22,7 +22,7 @@ type modelMenu struct {
 	manualScroll bool
 }
 
-func newModelMenu(models []provider.ModelSpec, current provider.Selection) *modelMenu {
+func newModelMenu(models []llm.ModelSpec, current llm.Selection) *modelMenu {
 	m := &modelMenu{models: models, current: current}
 	for i, model := range models {
 		if model.ID == current.Model.ID {

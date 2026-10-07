@@ -9,17 +9,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/llm"
 	"ttc/internal/prompts"
-	"ttc/internal/provider"
 )
 
 func TestRecentCycleRetentionAndBudgets(t *testing.T) {
-	m := []provider.Message{{Role: "user", Content: strings.Repeat("a", 600)}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "new"}, {Role: "assistant", Calls: []provider.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{"path":"x"}`)}}}, {Role: "tool", CallID: "c", Content: `{"ok":true}`}}
+	m := []llm.Message{{Role: "user", Content: strings.Repeat("a", 600)}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "new"}, {Role: "assistant", Calls: []llm.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{"path":"x"}`)}}}, {Role: "tool", CallID: "c", Content: `{"ok":true}`}}
 	cut, e := Retain(m, 0, 200)
 	if e != nil || cut.Start != 3 || !reflect.DeepEqual(cut.Inputs, []int{0, 2}) {
 		t.Fatalf("cut=%+v err=%v", cut, e)
 	}
-	sel := provider.Selection{Model: provider.ScriptModel()}
+	sel := llm.Selection{Model: llm.ScriptModel()}
 	if !Fits(sel, "instructions", nil, m, false) {
 		t.Fatal("small request did not fit")
 	}
@@ -29,15 +29,15 @@ func TestRecentCycleRetentionAndBudgets(t *testing.T) {
 }
 
 func TestRetentionKeepsFittingRecentCyclesAndBalancedParallelTools(t *testing.T) {
-	messages := []provider.Message{
+	messages := []llm.Message{
 		{Role: "user", Content: "Keep researching."},
-		{Role: "assistant", Content: strings.Repeat("old ", 1000), Calls: []provider.ToolCall{{ID: "a"}, {ID: "b"}}},
+		{Role: "assistant", Content: strings.Repeat("old ", 1000), Calls: []llm.ToolCall{{ID: "a"}, {ID: "b"}}},
 		{Role: "tool", CallID: "b", Content: "second result"},
 		{Role: "tool", CallID: "a", Content: "first result"},
-		{Role: "assistant", Content: "Recent reasoning", Calls: []provider.ToolCall{{ID: "c"}}},
+		{Role: "assistant", Content: "Recent reasoning", Calls: []llm.ToolCall{{ID: "c"}}},
 		{Role: "tool", CallID: "c", Content: "recent result"},
 		{Role: "user", Runtime: true, Content: "A background job completed."},
-		{Role: "assistant", Content: "Latest reasoning", Calls: []provider.ToolCall{{ID: "d"}}},
+		{Role: "assistant", Content: "Latest reasoning", Calls: []llm.ToolCall{{ID: "d"}}},
 		{Role: "tool", CallID: "d", Content: "latest result"},
 	}
 	for _, minimum := range []int{0, 200} {
@@ -49,24 +49,24 @@ func TestRetentionKeepsFittingRecentCyclesAndBalancedParallelTools(t *testing.T)
 	if _, err := Retain(messages[:len(messages)-1], 0, 200); err == nil {
 		t.Fatal("unresolved call was discarded")
 	}
-	if _, err := Retain([]provider.Message{{Role: "user", Content: "Only a prompt."}}, 0, 200); err == nil {
+	if _, err := Retain([]llm.Message{{Role: "user", Content: "Only a prompt."}}, 0, 200); err == nil {
 		t.Fatal("compaction without model work reported progress")
 	}
 }
 func TestRetentionCompactsEarlierHistoryWhenNewestTurnHasNoOlderCycle(t *testing.T) {
 	for _, cycles := range []int{0, 1, 2} {
 		for _, summary := range []bool{false, true} {
-			prefix := []provider.Message{{Role: "assistant", Content: "Continuation summary"}}
+			prefix := []llm.Message{{Role: "assistant", Content: "Continuation summary"}}
 			if !summary {
-				prefix = []provider.Message{{Role: "user", Content: "Earlier task"}, {Role: "assistant", Content: "Earlier result"}}
+				prefix = []llm.Message{{Role: "user", Content: "Earlier task"}, {Role: "assistant", Content: "Earlier result"}}
 			}
-			messages := append(prefix, provider.Message{Role: "user", Content: strings.Repeat("new prompt ", 50)})
+			messages := append(prefix, llm.Message{Role: "user", Content: strings.Repeat("new prompt ", 50)})
 			for i := range cycles {
 				id := string(rune('a' + i))
 				messages = append(messages,
-					provider.Message{Role: "developer", Runtime: true, Content: "Live metadata"},
-					provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: id}}},
-					provider.Message{Role: "tool", CallID: id, Content: strings.Repeat("recent result ", 50)})
+					llm.Message{Role: "developer", Runtime: true, Content: "Live metadata"},
+					llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: id}}},
+					llm.Message{Role: "tool", CallID: id, Content: strings.Repeat("recent result ", 50)})
 			}
 			wantStart := len(messages)
 			if cycles > 0 {
@@ -93,14 +93,14 @@ func TestRetentionCompactsEarlierHistoryWhenNewestTurnHasNoOlderCycle(t *testing
 }
 
 func TestRetentionClampsTokenTargetAtCompleteCycleBoundaries(t *testing.T) {
-	messages := []provider.Message{{Role: "user", Content: "Keep researching."}}
+	messages := []llm.Message{{Role: "user", Content: "Keep researching."}}
 	starts := []int{}
 	for i := range 5 {
 		id := string(rune('a' + i))
 		starts = append(starts, len(messages))
 		messages = append(messages,
-			provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: id}}},
-			provider.Message{Role: "tool", CallID: id, Content: strings.Repeat("result ", 40)})
+			llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: id}}},
+			llm.Message{Role: "tool", CallID: id, Content: strings.Repeat("result ", 40)})
 	}
 	last := Tokens(messages[starts[4]:])
 	for _, test := range []struct {
@@ -132,15 +132,15 @@ func TestRetentionClampsTokenTargetAtCompleteCycleBoundaries(t *testing.T) {
 }
 
 func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
-	messages := []provider.Message{
+	messages := []llm.Message{
 		{Role: "user", Content: "Earlier task"},
 		{Role: "assistant", Content: "Earlier observations"},
 		{Role: "user", Content: "Read a document"},
-		{Role: "assistant", Calls: []provider.ToolCall{{ID: "document"}}},
-		{Role: "tool", CallID: "document", Files: []provider.BinaryFile{{Path: "/document.pdf", MIMEType: "application/pdf", Bytes: 20 << 10}}},
+		{Role: "assistant", Calls: []llm.ToolCall{{ID: "document"}}},
+		{Role: "tool", CallID: "document", Files: []llm.BinaryFile{{Path: "/document.pdf", MIMEType: "application/pdf", Bytes: 20 << 10}}},
 	}
-	for _, trailing := range [][]provider.Message{nil, {{Role: "user", Content: "Continue"}}, {{Role: "developer", Runtime: true, Content: "Live state"}}} {
-		input := append(append([]provider.Message(nil), messages...), trailing...)
+	for _, trailing := range [][]llm.Message{nil, {{Role: "user", Content: "Continue"}}, {{Role: "developer", Runtime: true, Content: "Live state"}}} {
+		input := append(append([]llm.Message(nil), messages...), trailing...)
 		retained, err := Retain(input, 0, 100)
 		if err != nil || retained.Start != 3 {
 			t.Fatal("unconsumed attachment was summarized", retained, err)
@@ -151,7 +151,7 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 			}
 		}
 	}
-	consumed := append(messages, provider.Message{Role: "assistant", Content: "Document inspected"})
+	consumed := append(messages, llm.Message{Role: "assistant", Content: "Document inspected"})
 	retained, err := Retain(consumed, 0, 100)
 	if err != nil || retained.Start <= 3 {
 		t.Fatal("consumed attachment remained pinned", retained, err)
@@ -162,10 +162,10 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 	}
 	// Overlapping calls require retaining the earlier safe boundary, not just
 	// the latest assistant message inside that still-open cycle.
-	overlapping := append(append([]provider.Message(nil), messages[:4]...),
-		provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "extra"}}},
+	overlapping := append(append([]llm.Message(nil), messages[:4]...),
+		llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "extra"}}},
 		messages[4],
-		provider.Message{Role: "tool", CallID: "extra", Content: "Extra result"})
+		llm.Message{Role: "tool", CallID: "extra", Content: "Extra result"})
 	retained, err = Retain(overlapping, 0, 100)
 	if err != nil || retained.Start != 3 {
 		t.Fatal("overlapping tool calls lost the unread original or its complete cycle", retained, err)
@@ -173,7 +173,7 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 }
 
 func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
-	messages := []provider.Message{
+	messages := []llm.Message{
 		{Role: "user", Content: "old normal"},
 		{Role: "assistant", Content: "old work"},
 		{Role: "user", InputSource: "steer", Content: "old steer"},
@@ -209,7 +209,7 @@ func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
 }
 
 func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
-	messages := []provider.Message{
+	messages := []llm.Message{
 		{Role: "developer", Runtime: true, Content: "retained input metadata"},
 		{Role: "user", Content: "first ordinary"},
 		{Role: "user", InputSource: "steer", Content: "first steer"},
@@ -223,7 +223,7 @@ func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
 			t.Fatal("selected inputs/runtime alone were treated as summary progress")
 		}
 	}
-	messages = append([]provider.Message{{Role: "user", Content: "unselected old ordinary"}}, messages...)
+	messages = append([]llm.Message{{Role: "user", Content: "unselected old ordinary"}}, messages...)
 	retention, err := Retain(messages, 0, 1000)
 	if err != nil || retention.Start != 7 || !reflect.DeepEqual(retention.Inputs, []int{2, 3, 4, 6}) {
 		t.Fatal("unselected human input was not valid summary progress", retention, err)
@@ -233,7 +233,7 @@ func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
 func TestInputMarkerSourceAndOriginalAge(t *testing.T) {
 	at := time.UnixMilli(123456789)
 	for _, source := range []string{"", "normal", "queue", "steer", "task", "btw"} {
-		message := provider.Message{Role: "user", Content: "unchanged", InputSource: source, InputTimeMS: at.UnixMilli() - 98765}
+		message := llm.Message{Role: "user", Content: "unchanged", InputSource: source, InputTimeMS: at.UnixMilli() - 98765}
 		marker, err := InputMarker(message, at)
 		if err != nil || marker.Role != "developer" || marker.Runtime || !strings.HasPrefix(marker.Content, prompts.RetainedInput+"\n") {
 			t.Fatal(marker, err)
@@ -265,18 +265,18 @@ func TestInputMarkerSourceAndOriginalAge(t *testing.T) {
 
 func TestInputMarkerRejectsInvalidMetadata(t *testing.T) {
 	at := time.UnixMilli(1000)
-	valid := provider.Message{Role: "user", InputTimeMS: 500}
+	valid := llm.Message{Role: "user", InputTimeMS: 500}
 	for _, test := range []struct {
 		name    string
-		message provider.Message
+		message llm.Message
 		at      time.Time
 	}{
-		{"missing commit", provider.Message{Role: "user"}, at},
-		{"negative commit", provider.Message{Role: "user", InputTimeMS: -1}, at},
-		{"future commit", provider.Message{Role: "user", InputTimeMS: 1001}, at},
-		{"invalid source", provider.Message{Role: "user", InputSource: "invalid", InputTimeMS: 500}, at},
-		{"runtime notice", provider.Message{Role: "user", Runtime: true, InputTimeMS: 500}, at},
-		{"assistant", provider.Message{Role: "assistant", InputTimeMS: 500}, at},
+		{"missing commit", llm.Message{Role: "user"}, at},
+		{"negative commit", llm.Message{Role: "user", InputTimeMS: -1}, at},
+		{"future commit", llm.Message{Role: "user", InputTimeMS: 1001}, at},
+		{"invalid source", llm.Message{Role: "user", InputSource: "invalid", InputTimeMS: 500}, at},
+		{"runtime notice", llm.Message{Role: "user", Runtime: true, InputTimeMS: 500}, at},
+		{"assistant", llm.Message{Role: "assistant", InputTimeMS: 500}, at},
 		{"zero compaction time", valid, time.Time{}},
 		{"epoch compaction time", valid, time.UnixMilli(0)},
 	} {
@@ -295,12 +295,12 @@ func TestInputMarkerRejectsInvalidMetadata(t *testing.T) {
 func TestRetainedInputMessagesPreserveExactOriginals(t *testing.T) {
 	input := Input{Text: "original\n\nuser text", Source: "queue", Attachments: []Attachment{
 		{Path: "notes.txt", Kind: "text", Text: "snapshot\ntext", Truncated: true},
-		{Path: "image.png", Image: &provider.BinaryFile{Path: "image.png", DataURL: "data:image/png;base64,original"}},
+		{Path: "/snapshot/image.png", Kind: "image", File: &llm.BinaryFile{Path: "/snapshot/image.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8}},
 	}}
 	original := input.Message()
 	original.InputTimeMS = 500
-	original.State = &provider.ReplayState{Provider: "test", Model: "model", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"original":true}`)}}
-	messages := []provider.Message{{Role: "assistant", Content: "not retained"}, original, {Role: "user", Content: "steer", InputSource: "steer", InputTimeMS: 700}}
+	original.State = &llm.ReplayState{Provider: "test", Model: "model", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"original":true}`)}}
+	messages := []llm.Message{{Role: "assistant", Content: "not retained"}, original, {Role: "user", Content: "steer", InputSource: "steer", InputTimeMS: 700}}
 	before, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +335,7 @@ func TestInputMessagePreservesSourceAndJSONMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var decoded provider.Message
+			var decoded llm.Message
 			if err := json.Unmarshal(encoded, &decoded); err != nil || !reflect.DeepEqual(message, decoded) {
 				t.Fatal("input metadata JSON round trip changed message", decoded, err)
 			}
@@ -353,7 +353,7 @@ func TestAttachmentsSnapshotAndDirectoryNoSymlinkTraversal(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "x.txt")
 	os.WriteFile(p, []byte("before"), 0600)
-	a, e := Snapshot(stdcontext.Background(), p, false)
+	a, e := Snapshot(stdcontext.Background(), p, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -364,30 +364,30 @@ func TestAttachmentsSnapshotAndDirectoryNoSymlinkTraversal(t *testing.T) {
 	outside := t.TempDir()
 	os.WriteFile(filepath.Join(outside, "secret"), []byte("x"), 0600)
 	os.Symlink(outside, filepath.Join(root, "link"))
-	dir, e := Snapshot(stdcontext.Background(), root, false)
+	dir, e := Snapshot(stdcontext.Background(), root, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
 	if strings.Contains(dir.Text, "secret") {
 		t.Fatal("followed symlink")
 	}
-	os.WriteFile(filepath.Join(root, "image.png"), []byte("image"), 0600)
-	if _, e = Snapshot(stdcontext.Background(), filepath.Join(root, "image.png"), false); e == nil {
+	os.WriteFile(filepath.Join(root, "image.png"), []byte("\x89PNG\r\n\x1a\n"), 0600)
+	if _, e = Snapshot(stdcontext.Background(), filepath.Join(root, "image.png"), nil); e == nil {
 		t.Fatal("silently accepted unsupported image")
 	}
 }
 
 func TestNativeReplayIsCountedOnce(t *testing.T) {
 	native := []byte(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"result"}]}`)
-	m := provider.Message{Role: "assistant", Content: "result", Calls: []provider.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{}`)}}, State: &provider.ReplayState{Provider: "openai", Model: "test", Version: 1, Items: []json.RawMessage{native}}}
-	if got := Tokens([]provider.Message{m}); got != Estimate(string(native)) {
+	m := llm.Message{Role: "assistant", Content: "result", Calls: []llm.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{}`)}}, State: &llm.ReplayState{Provider: "openai", Model: "test", Version: 1, Items: []json.RawMessage{native}}}
+	if got := Tokens([]llm.Message{m}); got != Estimate(string(native)) {
 		t.Fatalf("native payload counted twice: %d", got)
 	}
 }
 
 func TestAttachmentDisplayKeepsAuthoredTextAndExactModelInput(t *testing.T) {
 	for _, text := range []string{"Inspect the attached file.", "", "Attachment (text): this is authored text"} {
-		m := (Input{Text: text, Attachments: []Attachment{{Kind: "text", Path: "notes.txt", Text: "immutable snapshot", Truncated: true}, {Path: "field.png", Image: &provider.BinaryFile{Path: "field.png", DataURL: "data:image/png;base64,snapshot"}}}}).Message()
+		m := (Input{Text: text, Attachments: []Attachment{{Kind: "text", Path: "notes.txt", Text: "immutable snapshot", Truncated: true}, {Path: "/snapshot/field.png", Kind: "image", File: &llm.BinaryFile{Path: "/snapshot/field.png", SHA256: strings.Repeat("b", 64), MIMEType: "image/png", Bytes: 8}}}}).Message()
 		if m.DisplayText() != text || !strings.Contains(m.Content, "immutable snapshot") || !strings.Contains(m.Content, "[attachment truncated]") || len(m.Files) != 1 {
 			t.Fatal("presentation lost authored text or model attachments", m)
 		}
@@ -395,7 +395,7 @@ func TestAttachmentDisplayKeepsAuthoredTextAndExactModelInput(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var reloaded provider.Message
+		var reloaded llm.Message
 		if err := json.Unmarshal(encoded, &reloaded); err != nil || reloaded.DisplayText() != text || reloaded.Content != m.Content {
 			t.Fatal("round trip changed attachment input", reloaded, err)
 		}

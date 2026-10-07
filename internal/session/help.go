@@ -54,7 +54,7 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 - **/** — Show command suggestions at the start of input.
 - **@** — Show file attachment suggestions.
 - **Tab in suggestions** — Accept the selected suggestion.
-- **/attach PATH** — Attach a snapshot of a file, directory, or image.
+- **/attach PATH** — Snapshot text, directories, or supported native images/documents.
 
 ## Sessions and history
 

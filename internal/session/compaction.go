@@ -12,7 +12,7 @@ import (
 	"ttc/internal/prompts"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -25,7 +25,7 @@ const compactionTimeout = 10 * time.Minute
 // Recoverable failures leave the existing context usable. Unknown errors,
 // malformed summaries and broken persistence conservatively invalidate it.
 func recoverableCompaction(err error) bool {
-	if _, ok := err.(*provider.TransientError); ok {
+	if _, ok := err.(*llm.TransientError); ok {
 		return true
 	}
 	if _, ok := err.(net.Error); ok {
@@ -69,8 +69,8 @@ func (r *Runtime) compactionFailure(session string, err error) error {
 	return fmt.Errorf("context unusable after compaction: %w; inspect/export history or start/load another session", err)
 }
 
-func canonicalCompaction(messages []provider.Message) []provider.Message {
-	result := append([]provider.Message(nil), messages...)
+func canonicalCompaction(messages []llm.Message) []llm.Message {
+	result := append([]llm.Message(nil), messages...)
 	for i := range result {
 		result[i].State = nil
 	}
@@ -80,7 +80,7 @@ func canonicalCompaction(messages []provider.Message) []provider.Message {
 // summaryTranscript preserves model text and raw tool payloads without display
 // expansion, replay state or attachment bytes. Durable archives keep the exact
 // records; summarization uses only the compacting actor's admitted messages.
-func summaryTranscript(messages []provider.Message) string {
+func summaryTranscript(messages []llm.Message) string {
 	var out strings.Builder
 	for _, message := range messages {
 		fmt.Fprintf(&out, "\n### %s", message.Role)
@@ -104,8 +104,8 @@ func compactionLinks(summary, archive, exact string) string {
 	return fmt.Sprintf(prompts.CompactionLinks, summary, archive, exact)
 }
 
-func compactionFits(selection provider.Selection, system string, tools []provider.ToolDefinition, retained, notices []provider.Message, runtime *provider.Message) error {
-	messages := append(append([]provider.Message(nil), retained...), notices...)
+func compactionFits(selection llm.Selection, system string, tools []llm.ToolDefinition, retained, notices []llm.Message, runtime *llm.Message) error {
+	messages := append(append([]llm.Message(nil), retained...), notices...)
 	if runtime != nil {
 		messages = append(messages, *runtime)
 	}
@@ -117,13 +117,13 @@ func compactionFits(selection provider.Selection, system string, tools []provide
 
 // summarize shares one request across main, coding children and asides using
 // the compaction operation's context. Persistence follows the current continuation.
-func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection provider.Selection, prefix, focus string) (text string, err error) {
-	input := provider.Message{Role: "user", Content: fmt.Sprintf(prompts.CompactionInput, focus, prefix)}
+func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection llm.Selection, prefix, focus string) (text string, err error) {
+	input := llm.Message{Role: "user", Content: fmt.Sprintf(prompts.CompactionInput, focus, prefix)}
 	budget := selection
 	budget.Model.Budget.OutputAllowance = budget.Model.Budget.SummaryOutputAllowance
-	if !contextbuild.Fits(budget, summaryInstructions, nil, []provider.Message{input}, false) {
+	if !contextbuild.Fits(budget, summaryInstructions, nil, []llm.Message{input}, false) {
 		b := budget.Model.Budget
-		return "", fmt.Errorf("compaction input exceeds model context (estimated input %d + output/margin reserve %d, limit %d tokens); no summary was requested", contextbuild.Estimate(summaryInstructions)+contextbuild.Tokens([]provider.Message{input}), b.OutputAllowance+b.EstimationMargin, b.ContextLimit)
+		return "", fmt.Errorf("compaction input exceeds model context (estimated input %d + output/margin reserve %d, limit %d tokens); no summary was requested", contextbuild.Estimate(summaryInstructions)+contextbuild.Tokens([]llm.Message{input}), b.OutputAllowance+b.EstimationMargin, b.ContextLimit)
 	}
 	r.routeMu.RLock()
 	session := r.Current()
@@ -132,7 +132,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 	if err != nil {
 		return "", err
 	}
-	var usage *provider.Usage
+	var usage *llm.Usage
 	defer func() {
 		status := "completed"
 		if err != nil {
@@ -152,7 +152,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 		return "", err
 	}
 	r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · compaction", EntryID: id})
-	persist := func(message provider.Message, label string) error {
+	persist := func(message llm.Message, label string) error {
 		r.routeMu.RLock()
 		id, e := r.Store.RequestMessage(r.Current(), turn, "compaction", message.Role, request, message)
 		r.routeMu.RUnlock()
@@ -169,7 +169,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 	if actor != "main" {
 		conversation = session + "/" + actor + "/compaction"
 	}
-	err = r.Provider.Stream(ctx, provider.Request{ConversationID: conversation, Selection: selection, System: summaryInstructions, Messages: []provider.Message{input}, NoTools: true, OutputTokens: selection.Model.Budget.SummaryOutputAllowance}, func(ev provider.StreamEvent) error {
+	err = r.Provider.Stream(ctx, llm.Request{ConversationID: conversation, Selection: selection, System: summaryInstructions, Messages: []llm.Message{input}, NoTools: true, OutputTokens: selection.Model.Budget.SummaryOutputAllowance}, func(ev llm.StreamEvent) error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
@@ -189,7 +189,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 		return nil
 	})
 	r.recordUsage(usage)
-	if failure := persist(provider.Message{Role: "assistant", Content: summary.String()}, "Compaction reply · inspect"); failure != nil {
+	if failure := persist(llm.Message{Role: "assistant", Content: summary.String()}, "Compaction reply · inspect"); failure != nil {
 		err = errors.Join(err, failure)
 	}
 	if err != nil {
@@ -206,7 +206,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection p
 // file tips and undo ownership remain unchanged; the returned cursor forces full
 // project context on the next request. Aside events never enter main context.
 // pending is a persisted recovery warning required until coding succeeds.
-func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []provider.Message, cursor contextCursor, pending *provider.Message) ([]provider.Message, contextCursor, error) {
+func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor, pending *llm.Message) ([]llm.Message, contextCursor, error) {
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -239,7 +239,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 		return nil, cursor, err
 	}
 	summary = compactionLinks(summary, archive, records)
-	result := []provider.Message{{Role: "assistant", Content: summary}}
+	result := []llm.Message{{Role: "assistant", Content: summary}}
 	result = append(result, retainedInputs...)
 	result = append(result, canonical[retention.Start:]...)
 	if task.aside {
@@ -251,7 +251,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 			}
 		}
 		if !present {
-			updated := []provider.Message{result[0], {Role: "developer", Runtime: true, Content: btwInstruction}}
+			updated := []llm.Message{result[0], {Role: "developer", Runtime: true, Content: btwInstruction}}
 			result = append(updated, result[1:]...)
 		}
 	}
@@ -289,8 +289,8 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []p
 	return result, next, nil
 }
 
-func childTranscript(messages []provider.Message) string {
-	calls := map[string]provider.ToolCall{}
+func childTranscript(messages []llm.Message) string {
+	calls := map[string]llm.ToolCall{}
 	finished := map[string]bool{}
 	for _, message := range messages {
 		for _, call := range message.Calls {

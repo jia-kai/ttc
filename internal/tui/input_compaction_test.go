@@ -13,23 +13,23 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
 // inputCompactionProvider gates the real summarizer and first continuation
 // request independently, so input can be inspected before and after handoff.
 type inputCompactionProvider struct {
-	provider.Script
+	llm.Script
 	mu                            sync.Mutex
-	selection                     provider.Selection
-	requests                      []provider.Request
+	selection                     llm.Selection
+	requests                      []llm.Request
 	summaries                     int
 	summarizing, finishSummary    chan struct{}
 	continued, finishContinuation chan struct{}
 }
 
-func (p *inputCompactionProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *inputCompactionProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	p.mu.Lock()
 	if req.NoTools {
 		p.summaries++
@@ -44,7 +44,7 @@ func (p *inputCompactionProvider) Stream(ctx context.Context, req provider.Reque
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Research handoff completed."})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Research handoff completed."})
 	}
 	p.requests = append(p.requests, req)
 	step := len(p.requests) - 1 // The initial request seeds old history before the UI starts.
@@ -57,7 +57,7 @@ func (p *inputCompactionProvider) Stream(ctx context.Context, req provider.Reque
 		}
 		for _, message := range req.Messages {
 			if message.Role != "user" || message.Runtime {
-				base += contextbuild.Tokens([]provider.Message{message})
+				base += contextbuild.Tokens([]llm.Message{message})
 			}
 		}
 		selection.Model.Budget.ContextLimit = base + 3000
@@ -80,9 +80,9 @@ func (p *inputCompactionProvider) Stream(ctx context.Context, req provider.Reque
 		return fmt.Errorf("unexpected extra coding request %d", step)
 	}
 	if step == 0 {
-		return emit(provider.StreamEvent{Kind: "text", Text: strings.Repeat("Earlier research notes. ", 700)})
+		return emit(llm.StreamEvent{Kind: "text", Text: strings.Repeat("Earlier research notes. ", 700)})
 	}
-	return emit(provider.StreamEvent{Kind: "text", Text: fmt.Sprintf("Input compaction response %d.", step)})
+	return emit(llm.StreamEvent{Kind: "text", Text: fmt.Sprintf("Input compaction response %d.", step)})
 }
 
 func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testing.T) {
@@ -107,7 +107,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := contextbuild.Snapshot(context.Background(), path, false)
+	snapshot, err := contextbuild.Snapshot(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,14 +154,14 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	u.wait(t, "Input compaction response 3.")
 	u.wait(t, "Turn complete")
 	p.mu.Lock()
-	requests := append([]provider.Request(nil), p.requests...)
+	requests := append([]llm.Request(nil), p.requests...)
 	summaries := p.summaries
 	p.mu.Unlock()
 	if len(requests) != 4 || summaries != 1 {
 		t.Fatal("pending inputs lost or replayed", len(requests), summaries)
 	}
 	committedTimes := make(map[string]int64)
-	want := func(text string, got provider.Message) provider.Message {
+	want := func(text string, got llm.Message) llm.Message {
 		source := "queue"
 		if strings.HasPrefix(text, "Steered ") {
 			source = "steer"
@@ -178,7 +178,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		return message
 	}
 	for i, request := range requests[1:] {
-		var found []provider.Message
+		var found []llm.Message
 		for _, message := range request.Messages {
 			if message.Role == "user" && !message.Runtime && (strings.HasPrefix(message.Content, "Steered ") || strings.HasPrefix(message.Content, "Queued ")) {
 				found = append(found, message)
@@ -194,7 +194,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		if len(found) != len(expectedTexts) {
 			t.Fatalf("request %d: got %d pending inputs, want %d", i+1, len(found), len(expectedTexts))
 		}
-		var expected []provider.Message
+		var expected []llm.Message
 		for j, text := range expectedTexts {
 			expected = append(expected, want(text, found[j]))
 		}
@@ -206,7 +206,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var humans []provider.Message
+	var humans []llm.Message
 	for _, message := range messages {
 		if message.Role == "user" && !message.Runtime && (strings.HasPrefix(message.Content, "Steered ") || strings.HasPrefix(message.Content, "Queued ")) {
 			humans = append(humans, message)
@@ -215,7 +215,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	if len(humans) != 4 {
 		t.Fatal("wrong persisted pending input count", humans)
 	}
-	expected := []provider.Message{want(texts[2], humans[0]), want(texts[3], humans[1]), want(texts[0], humans[2]), want(texts[1], humans[3])}
+	expected := []llm.Message{want(texts[2], humans[0]), want(texts[3], humans[1]), want(texts[0], humans[2]), want(texts[1], humans[3])}
 	if !reflect.DeepEqual(humans, expected) {
 		t.Fatal("pending inputs were not persisted exactly once", humans)
 	}

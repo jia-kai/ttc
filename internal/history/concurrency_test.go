@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -33,11 +33,11 @@ func TestConcurrentStartupAndIndependentSessionCommits(t *testing.T) {
 			}
 			defer s.Close()
 			id := NewID("session")
-			model := provider.Selection{Provider: fmt.Sprintf("provider-%d", i), Model: provider.ScriptModel(), Variant: "none"}
-			turn, _, err := s.StartSession(id, work, model, provider.Message{Role: "user", Content: fmt.Sprint(i)})
+			model := llm.Selection{Provider: fmt.Sprintf("provider-%d", i), Model: llm.ScriptModel(), Variant: "none"}
+			turn, _, err := s.StartSession(id, work, model, llm.Message{Role: "user", Content: fmt.Sprint(i)})
 			if err == nil {
 				for j := 0; j < 10; j++ {
-					_, err = s.Append(id, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: fmt.Sprint(j)})
+					_, err = s.Append(id, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: fmt.Sprint(j)})
 					if err != nil {
 						break
 					}
@@ -83,7 +83,7 @@ func TestConcurrentStartupAndIndependentSessionCommits(t *testing.T) {
 
 func TestOpeningSharedHistoryDoesNotSettleLiveOrCrashedWork(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
-	call, err := s.CallIntent(source.ID, turn, "main", request, provider.ToolCall{ID: "pending", Name: "shell", Arguments: []byte(`{"command":"never rerun"}`)})
+	call, err := s.CallIntent(source.ID, turn, "main", request, llm.ToolCall{ID: "pending", Name: "shell", Arguments: []byte(`{"command":"never rerun"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,8 +107,8 @@ func TestOpeningSharedHistoryDoesNotSettleLiveOrCrashedWork(t *testing.T) {
 
 func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
-	call := provider.ToolCall{ID: "done", Name: "read", Arguments: []byte(`{"path":"file"}`)}
-	_, ids, err := s.Assistant(source.ID, turn, "main", request, provider.Message{Role: "assistant", Calls: []provider.ToolCall{call}})
+	call := llm.ToolCall{ID: "done", Name: "read", Arguments: []byte(`{"path":"file"}`)}
+	_, ids, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{call}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	if _, err := s.CallResult(source.ID, turn, "main", ids[0], result, nil, map[string]string{"name": "read"}, md, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Append(source.ID, turn, "main", "message", "developer", true, provider.Message{Role: "developer", Runtime: true, Content: "old live jobs"}); err != nil {
+	if _, err := s.Append(source.ID, turn, "main", "message", "developer", true, llm.Message{Role: "developer", Runtime: true, Content: "old live jobs"}); err != nil {
 		t.Fatal(err)
 	}
 	want, err := s.Messages(source.ID)
@@ -126,7 +126,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	}
 	want = want[:len(want)-1] // The new runtime supplies its own environment.
 	call.ID = "unfinished"
-	if _, _, err := s.Assistant(source.ID, turn, "main", request, provider.Message{Role: "assistant", Content: "incomplete", Calls: []provider.ToolCall{call}}); err != nil {
+	if _, _, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Content: "incomplete", Calls: []llm.ToolCall{call}}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := s.Session(source.ID)
@@ -162,7 +162,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 			}
 		}
 	}
-	newTurn, _, err := s.AdmitTurn(a.ID, "user", a.Model, &provider.Message{Role: "user", Content: "independent"})
+	newTurn, _, err := s.AdmitTurn(a.ID, "user", a.Model, &llm.Message{Role: "user", Content: "independent"})
 	if err != nil {
 		t.Fatal(err)
 	}

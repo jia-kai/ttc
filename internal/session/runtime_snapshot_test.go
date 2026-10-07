@@ -8,7 +8,7 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -100,7 +100,7 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 		{"variant", func() { selection.Variant = "fast" }},
 		{"image input", func() { selection.Model.Images = !selection.Model.Images }},
 		{"binary formats", func() {
-			selection.Model.BinaryFiles = []provider.BinaryFileType{{MIMEType: "application/pdf", Extensions: []string{".pdf"}, Kind: "document", MaxBytes: 32 << 20}}
+			selection.Model.BinaryFiles = []llm.BinaryFileType{{MIMEType: "application/pdf", Extensions: []string{".pdf"}, Kind: "document", MaxBytes: 32 << 20}}
 		}},
 		{"image click", func() {
 			r.images.mu.Lock()
@@ -215,7 +215,7 @@ func TestChildAdmissionsOwnIndependentSnapshotCursors(t *testing.T) {
 			t.Fatal(err)
 		}
 		task := childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools}
-		messages := []provider.Message{{Role: "user", Content: "Inspect units"}}
+		messages := []llm.Message{{Role: "user", Content: "Inspect units"}}
 		first, cursor, err := r.admitChild(context.Background(), task, messages, contextCursor{})
 		if err != nil || first.ContextEntry == 0 {
 			t.Fatal(first, err)
@@ -232,11 +232,11 @@ func TestChildAdmissionsOwnIndependentSnapshotCursors(t *testing.T) {
 
 func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	r.Provider = &childProvider{stream: func(_ context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
-		return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
+		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
 	for _, prompt := range []string{"Initial request", "Same runtime state"} {
-		if err := r.Run(&provider.Message{Role: "user", Content: prompt}); err != nil {
+		if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -246,7 +246,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 	if r.mainContext.snapshot != "" || r.mainContext.project != "" {
 		t.Fatal("reload retained runtime cursor")
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "After reload"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "After reload"}); err != nil {
 		t.Fatal(err)
 	}
 	var snapshots int

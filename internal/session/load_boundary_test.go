@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -15,7 +15,7 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Current task")
 	target := history.Session{ID: history.NewID("session")}
-	turn, _, err := r.Store.StartSession(target.ID, r.Workspace.Root, r.selection, provider.Message{Role: "user", Content: "Target history"})
+	turn, _, err := r.Store.StartSession(target.ID, r.Workspace.Root, r.selection, llm.Message{Role: "user", Content: "Target history"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,27 +36,27 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 		return map[string]any{"change_id": change}, err
 	})
 	mainStep := 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.ConversationID != r.Current() {
 			for _, m := range req.Messages {
 				if m.Role == "tool" {
-					return emit(provider.StreamEvent{Kind: "text", Text: "Finished"})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Finished"})
 				}
 			}
-			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "late", Name: "late_change", Arguments: json.RawMessage(`{}`)}})
+			return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "late", Name: "late_change", Arguments: json.RawMessage(`{}`)}})
 		}
 		mainStep++
 		if mainStep == 1 {
-			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "child", Name: "subagent", Arguments: json.RawMessage(`{"persistent":true,"prompt":"Write later","label":"Late mutation","background":true}`)}})
+			return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "child", Name: "subagent", Arguments: json.RawMessage(`{"persistent":true,"prompt":"Write later","label":"Late mutation","background":true}`)}})
 		}
 		select {
 		case <-started:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Child remains running"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Child remains running"})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Start child"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Start child"}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

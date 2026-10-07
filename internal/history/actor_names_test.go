@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
@@ -16,7 +16,7 @@ func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	retained, err := s.Append(session.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "Retain this"})
+	retained, err := s.Append(session.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "Retain this"})
 	if err != nil {
 		t.Fatal(err)
 	}

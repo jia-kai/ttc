@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"ttc/internal/filelock"
-	"ttc/internal/history"
+	"ttc/internal/privatefile"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
@@ -361,7 +361,7 @@ func Serve(ctx context.Context) (err error) {
 		return err
 	}
 	for _, path := range []string{spec.DataDir, spec.CacheDir} {
-		if err = history.PrivateDir(path); err != nil {
+		if err = privatefile.PrivateDir(path); err != nil {
 			return err
 		}
 	}

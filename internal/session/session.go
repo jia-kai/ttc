@@ -14,7 +14,7 @@ import (
 	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/skills"
 	"ttc/internal/tool"
@@ -27,16 +27,25 @@ type Event struct {
 	Kind, Text string
 	SessionID  string // Runtime conversation at emission; the frontend discards stale-view events.
 	EntryID    int64
-	RequestID  int64           // Producing model request for streamed/completed assistant text.
-	Actor      string          // Producing actor for any event; empty means the main actor.
-	CallID     string          // Stable tool-card identity across transient updates and the final record.
-	PendingKey string          // Request-scoped streamed announcement to replace when intent is committed.
-	JobID      string          // Optional live job for bounded inspector polling; never revived from history.
-	Detail     string          // Bounded detail for a transient tool update; final detail is loaded from history.
-	Human      bool            // True only for a submitted human instruction.
-	Image      *ImageSnapshot  // Immutable image_show snapshot, not a live interaction handle.
-	Question   *QuestionForm   // Snapshot for question lifecycle events; never persisted as a live handle.
-	Retry      *provider.Retry // Foreground retry backoff metadata; nil for background session naming.
+	RequestID  int64          // Producing model request for streamed/completed assistant text.
+	Actor      string         // Producing actor for any event; empty means the main actor.
+	CallID     string         // Stable tool-card identity across transient updates and the final record.
+	PendingKey string         // Request-scoped streamed announcement to replace when intent is committed.
+	JobID      string         // Optional live job for bounded inspector polling; never revived from history.
+	Detail     string         // Bounded detail for a transient tool update; final detail is loaded from history.
+	Human      bool           // True only for a submitted human instruction.
+	Image      *ImageSnapshot // Immutable image_show snapshot, not a live interaction handle.
+	Question   *QuestionForm  // Snapshot for question lifecycle events; never persisted as a live handle.
+	Retry      *llm.Retry     // Foreground retry backoff metadata; nil for background session naming.
+}
+
+// Inference is the protocol dependency consumed by sessions. Catalog discovery,
+// authorization, credentials and cache lifecycle are supplied to their own owners,
+// not required of every inference backend. Callback errors terminate a stream;
+// only a backend PartialError authorizes an application continuation request.
+type Inference interface {
+	Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
+	EstimateReplay(llm.Message) int
 }
 
 // Runtime owns exactly one main session, and joins transient work before switching it.
@@ -45,9 +54,9 @@ type Event struct {
 type Runtime struct {
 	Store             *history.Store
 	Workspace         *workspace.Manager
-	Provider          provider.Provider
-	selection         provider.Selection
-	pendingModel      *provider.Selection
+	Provider          Inference
+	selection         llm.Selection
+	pendingModel      *llm.Selection
 	Skills            *skills.Catalog
 	Tools             *tool.Registry
 	searchConfig      tool.WebSearchConfig // Operator settings, excluded from model context/history.
@@ -71,7 +80,7 @@ type Runtime struct {
 	persisted         bool   // False until the first user turn/message is committed atomically.
 	generation        uint64 // Advances on explicit transient resets, never compaction.
 	activeCancel      context.CancelFunc
-	notifications     []provider.Message
+	notifications     []llm.Message
 	steers            []contextbuild.Input // Original transient human inputs, admitted only at a model boundary.
 	activeTurn        string               // Main inference turn, distinct from steering undo checkpoints.
 	AutoName          bool
@@ -79,11 +88,11 @@ type Runtime struct {
 	questions         questions
 	images            imageInteractions
 	usage             ContextUsage
-	reported          *ReportedUsage     // Protected by mu; cleared with the main session's transient state.
-	totals            UsageTotals        // All inference usage since construction or /new, protected by mu.
-	mainContext       contextCursor      // Owned by serial Run/Command; reset on explicit session changes.
-	mainPrefix        []provider.Message // Latest balanced main request input, immutable after publication under mu.
-	prefixSelection   provider.Selection
+	reported          *ReportedUsage // Protected by mu; cleared with the main session's transient state.
+	totals            UsageTotals    // All inference usage since construction or /new, protected by mu.
+	mainContext       contextCursor  // Owned by serial Run/Command; reset on explicit session changes.
+	mainPrefix        []llm.Message  // Latest balanced main request input, immutable after publication under mu.
+	prefixSelection   llm.Selection
 	prefixTurn        string
 	namingCtx         context.Context
 	namingCancel      context.CancelFunc
@@ -93,10 +102,10 @@ type Runtime struct {
 // New constructs an active runtime. An empty session ID starts an in-memory
 // blank conversation; a nonempty ID must refer to an already persisted session.
 // Loaded compaction-boundary notifications are queued before any work starts.
-func New(ctx context.Context, store *history.Store, w *workspace.Manager, p provider.Provider, selection provider.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) (*Runtime, error) {
+func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Inference, selection llm.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	persisted := session != ""
-	var notices []provider.Message
+	var notices []llm.Message
 	if persisted {
 		var err error
 		notices, err = store.PendingRecoveryNotifications(ctx, session)
@@ -256,11 +265,11 @@ func (r *Runtime) HasNotifications() bool {
 }
 
 // Run executes one user or notification turn through complete tool/result cycles.
-func (r *Runtime) Run(message *provider.Message) (err error) {
+func (r *Runtime) Run(message *llm.Message) (err error) {
 	return r.run(message, nil)
 }
 
-func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err error) {
+func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
 	if e := r.checkContext(); e != nil {
@@ -373,7 +382,7 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, Human: true})
 	}
 	priorAttempts := 0
-	var recovery *provider.Message
+	var recovery *llm.Message
 	for {
 		if event, err := r.ApplyModel(turn); err != nil {
 			return err
@@ -408,7 +417,7 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 			if e != nil {
 				return e
 			}
-			var m provider.Message
+			var m llm.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
 				return e
 			}
@@ -419,7 +428,7 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 			if e != nil {
 				return e
 			}
-			var m provider.Message
+			var m llm.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
 				return e
 			}
@@ -437,18 +446,18 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 			return e
 		}
 		r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
-		reply := provider.Message{Role: "assistant"}
+		reply := llm.Message{Role: "assistant"}
 		var text strings.Builder
-		var usage *provider.Usage
+		var usage *llm.Usage
 		responseID := ""
 		serviceTier := ""
 		requestStart := time.Now()
 		r.mu.Lock()
-		r.mainPrefix = append([]provider.Message(nil), messages...)
+		r.mainPrefix = append([]llm.Message(nil), messages...)
 		r.prefixSelection, r.prefixTurn = selection, turn
 		r.mu.Unlock()
 		callbackFailed := false
-		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event provider.StreamEvent) (err error) {
+		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if e := ctx.Err(); e != nil {
 				return e
@@ -529,7 +538,7 @@ func (r *Runtime) run(message *provider.Message, input *InputAdmission) (err err
 		}
 		r.emit(Event{Kind: "usage"})
 		if streamErr != nil {
-			var partial *provider.PartialError
+			var partial *llm.PartialError
 			if callbackFailed || !errors.As(streamErr, &partial) {
 				return streamErr
 			}

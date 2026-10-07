@@ -14,7 +14,7 @@ import (
 
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v2"
@@ -152,8 +152,8 @@ func TestPreviewCoordinatesPanZoomAndExplicitConfirm(t *testing.T) {
 
 func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 	isolatedImageFrontend(t)
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png","request_click":true}`)}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png","request_click":true}`)}}},
 		{Text: "Select the image."}, {Text: "The image selection is still pending."}, {Prefix: "user: {", Text: "Archived image selection received."},
 	}}
 	var output bytes.Buffer
@@ -175,7 +175,7 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, text := range []string{strings.Repeat("old research result ", 3000), "Continue the pending image interaction."} {
-		if _, err = u.runtime.Store.Append(u.runtime.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: text}); err != nil {
+		if _, err = u.runtime.Store.Append(u.runtime.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -204,8 +204,8 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 
 func TestConfirmOlderImageFollowsResumedReply(t *testing.T) {
 	isolatedImageFrontend(t)
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte("{\"path\":\"field.png\",\"request_click\":true}")}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte("{\"path\":\"field.png\",\"request_click\":true}")}}},
 		{Text: strings.Repeat("More research results.\n", 60)},
 		{Prefix: "user: {", Text: "Confirmed point response visible."},
 	}}
@@ -461,7 +461,7 @@ func TestCellMeasurementFallbackWarningAndRecovery(t *testing.T) {
 
 func TestFallbackWarningIsVisibleAndNotModelContext(t *testing.T) {
 	isolatedImageFrontend(t)
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Warning check complete."}}}, graphics.New(&bytes.Buffer{}, false))
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Warning check complete."}}}, graphics.New(&bytes.Buffer{}, false))
 	u.typeText("draw marker")
 	frame := u.wait(t, "draw marker")
 	if strings.Count(frame, "Warning: using estimated") != 1 || !strings.Contains(frame, "8×16") {
@@ -505,7 +505,7 @@ func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
 }
 func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 	isolatedImageFrontend(t)
-	p := &provider.Script{Responses: []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png","request_click":true}`)}}}, {Text: "Click the image."}, {Prefix: "user: {", Text: "Coordinate received."}}}
+	p := &llm.Script{Responses: []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png","request_click":true}`)}}}, {Text: "Click the image."}, {Prefix: "user: {", Text: "Coordinate received."}}}
 	var output bytes.Buffer
 	g := graphics.New(&output, false)
 	u := newQuestionTestUI(t, p, g)
@@ -570,8 +570,8 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 
 func TestPastePreservesImagePreviewWithDismissedQuestion(t *testing.T) {
 	isolatedImageFrontend(t)
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png"}`)}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "show", Name: "image_show", Arguments: []byte(`{"path":"field.png"}`)}}},
 		questionScript()[0],
 		{Text: "Answered."},
 	}}

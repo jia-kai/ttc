@@ -4,11 +4,11 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestBlankSessionPickerDoesNotCreateWorkspaceOrSession(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{})
+	u := newQuestionTestUI(t, &llm.Script{})
 	u.typeText("Unsent research draft")
 	u.key(tcell.KeyCtrlX)
 	u.typeText("l")

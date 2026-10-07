@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -103,7 +103,7 @@ func TestExportPreservesImageMetadataBytes(t *testing.T) {
 func TestChildToolLabelKeepsActorSeparateFromMarkdown(t *testing.T) {
 	s, v, turn, request := historyFixture(t)
 	actor := "main/child_a-_x_-bcdefghijk"
-	call := provider.ToolCall{ID: "provider_child", Name: "read", Arguments: []byte(`{"path":"x"}`)}
+	call := llm.ToolCall{ID: "provider_child", Name: "read", Arguments: []byte(`{"path":"x"}`)}
 	id, err := s.CallIntent(v.ID, turn, actor, request, call)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func historyFixture(t *testing.T) (*Store, Session, string, int64) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { s.Close() })
-	model := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	model := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	v, turn := startHistorySession(t, s, t.TempDir(), model, "hello")
 	req, e := s.StartRequest(v.ID, turn, "main", "coding", model)
 	if e != nil {
@@ -140,10 +140,10 @@ func historyFixture(t *testing.T) (*Store, Session, string, int64) {
 	return s, v, turn, req
 }
 
-func startHistorySession(t *testing.T, s *Store, path string, model provider.Selection, text string) (Session, string) {
+func startHistorySession(t *testing.T, s *Store, path string, model llm.Selection, text string) (Session, string) {
 	t.Helper()
 	id := NewID("session")
-	turn, _, err := s.StartSession(id, path, model, provider.Message{Role: "user", Content: text})
+	turn, _, err := s.StartSession(id, path, model, llm.Message{Role: "user", Content: text})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +166,8 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			id, path := NewID("session"), t.TempDir()
-			model := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
-			if _, _, err := s.StartSession(id, path, model, provider.Message{Role: "user", Content: "first message"}); err == nil || !strings.Contains(err.Error(), "injected first-save failure") {
+			model := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
+			if _, _, err := s.StartSession(id, path, model, llm.Message{Role: "user", Content: "first message"}); err == nil || !strings.Contains(err.Error(), "injected first-save failure") {
 				t.Fatal(err)
 			}
 			for _, table := range []string{"workspaces", "sessions", "turns", "entries"} {
@@ -179,7 +179,7 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 			if _, err := s.DB.Exec("DROP TRIGGER reject_first"); err != nil {
 				t.Fatal(err)
 			}
-			turn, entry, err := s.StartSession(id, path, model, provider.Message{Role: "user", Content: "first message"})
+			turn, entry, err := s.StartSession(id, path, model, llm.Message{Role: "user", Content: "first message"})
 			if err != nil || turn == "" || entry == 0 {
 				t.Fatal("same blank identity could not retry", turn, entry, err)
 			}
@@ -196,7 +196,7 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 }
 func TestHistoryImmutableResultsBranchAndSystemInspection(t *testing.T) {
 	s, v, turn, req := historyFixture(t)
-	call := provider.ToolCall{ID: "provider_call", Name: "read", Arguments: json.RawMessage(`{"path":"x"}`)}
+	call := llm.ToolCall{ID: "provider_call", Name: "read", Arguments: json.RawMessage(`{"path":"x"}`)}
 	id, e := s.CallIntent(v.ID, turn, "main", req, call)
 	if e != nil {
 		t.Fatal(e)
@@ -254,16 +254,16 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	s, v, first, req := historyFixture(t)
 	s.FinishRequest(req, "completed", nil)
 	s.FinishTurn(first, "completed")
-	s.Append(v.ID, first, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "old"})
+	s.Append(v.ID, first, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "old"})
 	second, e := s.BeginTurn(v.ID, "user", v.Model)
 	if e != nil {
 		t.Fatal(e)
 	}
-	retained, e := s.Append(v.ID, second, "main", "message", "user", true, provider.Message{Role: "user", Content: "retain this"})
+	retained, e := s.Append(v.ID, second, "main", "message", "user", true, llm.Message{Role: "user", Content: "retain this"})
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.Append(v.ID, second, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "reply", State: &provider.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"old"}`)}}})
+	s.Append(v.ID, second, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "reply", State: &llm.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"old"}`)}}})
 	s.FinishTurn(second, "completed")
 	archive, e := s.ArchiveTranscript(v.ID, 0)
 	if e != nil {

@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
-func batchIntents(t *testing.T, r *Runtime, actor string, calls []provider.ToolCall) (string, []string) {
+func batchIntents(t *testing.T, r *Runtime, actor string, calls []llm.ToolCall) (string, []string) {
 	t.Helper()
 	r.mu.Lock()
 	persisted := r.persisted
@@ -33,7 +33,7 @@ func batchIntents(t *testing.T, r *Runtime, actor string, calls []provider.ToolC
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ids, err := r.Store.Assistant(r.Current(), turn, actor, request, provider.Message{Role: "assistant", Calls: calls})
+	_, ids, err := r.Store.Assistant(r.Current(), turn, actor, request, llm.Message{Role: "assistant", Calls: calls})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,9 +89,9 @@ func TestToolBatchOverlapsReadsShellsAndOrderedWrites(t *testing.T) {
 			return map[string]any{"value": a.ID}, nil
 		})
 	}
-	calls := []provider.ToolCall{}
+	calls := []llm.ToolCall{}
 	for _, pair := range [][2]string{{"write", "write1"}, {"shell", "slow"}, {"read", "read1"}, {"missing", "unknown"}, {"write", "write2"}, {"shell", "fast"}, {"read", "read2"}} {
-		calls = append(calls, provider.ToolCall{ID: pair[1], Name: pair[0], Arguments: []byte(fmt.Sprintf(`{"id":%q}`, pair[1]))})
+		calls = append(calls, llm.ToolCall{ID: pair[1], Name: pair[0], Arguments: []byte(fmt.Sprintf(`{"id":%q}`, pair[1]))})
 	}
 	turn, ids := batchIntents(t, r, "main", calls)
 	type outcome struct {
@@ -165,7 +165,7 @@ func TestToolBatchCancellationSkipsQueuedWritesAndJoins(t *testing.T) {
 	})
 	var writes atomic.Int32
 	tool.Register(r.Tools, "write", "must not execute", nil, nil, func(struct{}) error { return nil }, func(context.Context, tool.Execution, struct{}) (any, error) { writes.Add(1); return nil, nil })
-	calls := []provider.ToolCall{{ID: "w", Name: "write", Arguments: []byte(`{}`)}, {ID: "r", Name: "read", Arguments: []byte(`{}`)}}
+	calls := []llm.ToolCall{{ID: "w", Name: "write", Arguments: []byte(`{}`)}, {ID: "r", Name: "read", Arguments: []byte(`{}`)}}
 	turn, ids := batchIntents(t, r, "main", calls)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -191,7 +191,7 @@ func TestToolBatchCancellationSkipsQueuedWritesAndJoins(t *testing.T) {
 func TestToolBatchInterruptedStreamExecutesNothing(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	calls := []provider.ToolCall{{ID: "w", Name: "write", Arguments: []byte(`{"path":"x","content":"wrong"}`)}, {ID: "s", Name: "shell", Arguments: []byte(`{"command":"touch should-not-exist"}`)}}
+	calls := []llm.ToolCall{{ID: "w", Name: "write", Arguments: []byte(`{"path":"x","content":"wrong"}`)}, {ID: "s", Name: "shell", Arguments: []byte(`{"command":"touch should-not-exist"}`)}}
 	turn, ids := batchIntents(t, r, "main", calls)
 	records, err := r.runToolBatch(context.Background(), turn, "main", r.Tools, calls, ids, errors.New("broken SSE"))
 	if err != nil {
@@ -225,7 +225,7 @@ func TestToolBatchStorageFailureCancelsSiblingsAndQueuedWrites(t *testing.T) {
 		writes.Add(1)
 		return nil, nil
 	})
-	calls := []provider.ToolCall{{ID: "first", Name: "write", Arguments: []byte(`{}`)}, {ID: "second", Name: "write", Arguments: []byte(`{}`)}, {ID: "sibling", Name: "shell", Arguments: []byte(`{}`)}}
+	calls := []llm.ToolCall{{ID: "first", Name: "write", Arguments: []byte(`{}`)}, {ID: "second", Name: "write", Arguments: []byte(`{}`)}, {ID: "sibling", Name: "shell", Arguments: []byte(`{}`)}}
 	turn, ids := batchIntents(t, r, "main", calls)
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_first_result BEFORE UPDATE OF result_json ON tool_calls WHEN OLD.provider_call_id='first' BEGIN SELECT RAISE(ABORT,'injected storage failure'); END`); err != nil {
 		t.Fatal(err)
@@ -252,20 +252,20 @@ func TestToolBatchStorageFailureCancelsSiblingsAndQueuedWrites(t *testing.T) {
 func TestTurnsContinueBeyond64Cycles(t *testing.T) {
 	for _, child := range []bool{false, true} {
 		t.Run(fmt.Sprintf("child=%t", child), func(t *testing.T) {
-			responses := []provider.ScriptResponse{}
+			responses := []llm.ScriptResponse{}
 			if child {
-				responses = append(responses, provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"continue","label":"long child"}`)}}})
+				responses = append(responses, llm.ScriptResponse{Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"continue","label":"long child"}`)}}})
 			}
 			for i := range 70 {
-				responses = append(responses, provider.ScriptResponse{Calls: []provider.ToolCall{{ID: fmt.Sprintf("cycle%d", i), Name: "wakeup_list", Arguments: []byte(`{}`)}}})
+				responses = append(responses, llm.ScriptResponse{Calls: []llm.ToolCall{{ID: fmt.Sprintf("cycle%d", i), Name: "wakeup_list", Arguments: []byte(`{}`)}}})
 			}
-			responses = append(responses, provider.ScriptResponse{Text: "Finished after 70 cycles."})
+			responses = append(responses, llm.ScriptResponse{Text: "Finished after 70 cycles."})
 			if child {
-				responses = append(responses, provider.ScriptResponse{Text: "Parent finished."})
+				responses = append(responses, llm.ScriptResponse{Text: "Parent finished."})
 			}
 			r, _ := runtimeFixture(t, responses)
 			r.Emit = nil
-			m := provider.Message{Role: "user", Content: "continue"}
+			m := llm.Message{Role: "user", Content: "continue"}
 			if err := r.Run(&m); err != nil {
 				t.Fatal(err)
 			}
@@ -283,18 +283,18 @@ func TestChildParallelAdmissionAndSlotRelease(t *testing.T) {
 	started := make(chan struct{}, 8)
 	release := make(chan struct{})
 	defer close(release)
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		started <- struct{}{}
 		select {
 		case <-release:
-			return emit(provider.StreamEvent{Kind: "text", Text: "done"})
+			return emit(llm.StreamEvent{Kind: "text", Text: "done"})
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}}
-	calls := []provider.ToolCall{}
+	calls := []llm.ToolCall{}
 	for i := range 6 {
-		calls = append(calls, provider.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"hold","label":"held child","background":true}`)})
+		calls = append(calls, llm.ToolCall{ID: fmt.Sprint(i), Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"hold","label":"held child","background":true}`)})
 	}
 	turn, ids := batchIntents(t, r, "main", calls)
 	records, err := r.runToolBatch(context.Background(), turn, "main", r.Tools, calls, ids, nil)
@@ -410,11 +410,11 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 		}
 	}
 	cycle := 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		cycle++
 		if cycle == 1 {
-			for _, call := range []provider.ToolCall{{ID: "slow", Name: "shell", Arguments: []byte(`{"slow":true}`)}, {ID: "fast", Name: "shell", Arguments: []byte(`{"slow":false}`)}} {
-				if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+			for _, call := range []llm.ToolCall{{ID: "slow", Name: "shell", Arguments: []byte(`{"slow":true}`)}, {ID: "fast", Name: "shell", Arguments: []byte(`{"slow":false}`)}} {
+				if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 					return err
 				}
 			}
@@ -423,7 +423,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 		if len(req.Messages) != 5 || req.Messages[3].CallID != "slow" || req.Messages[4].CallID != "fast" {
 			return fmt.Errorf("child context lost call order: %+v", req.Messages)
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "done"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "done"})
 	}}
 	turn, err := r.Store.BeginTurn(r.Current(), "user", r.selection)
 	if err != nil {

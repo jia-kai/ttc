@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -93,14 +93,14 @@ func TestPendingInputDrawPreservesOriginalsAndGraphemes(t *testing.T) {
 	original := "e\u0301界" + strings.Repeat(" word\n\t", 1<<17) + " original suffix  "
 	input := contextbuild.Input{Text: original, Attachments: []contextbuild.Attachment{
 		{Path: "snapshot.txt", Kind: "text", Text: "immutable snapshot\n", Truncated: true},
-		{Path: "snapshot.png", Image: &provider.BinaryFile{DataURL: "data:image/png;base64,snapshot"}},
+		{Path: "/snapshot/snapshot.png", Kind: "image", File: &llm.BinaryFile{Path: "/snapshot/snapshot.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8}},
 	}}
 	before := input.Message()
 	queue := []contextbuild.Input{input}
 	steers := []string{"👩‍💻e\u0301suffix"}
 	view, sidebar := newTranscript(), newSidebar()
 	for range 3 {
-		if err := draw(s, view, sidebar, false, nil, nil, -1, newComposer(""), 0, queue, steers, "", nil, provider.Selection{}); err != nil {
+		if err := draw(s, view, sidebar, false, nil, nil, -1, newComposer(""), 0, queue, steers, "", nil, llm.Selection{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,7 +145,7 @@ func TestPendingInputBoundedPreviewCancellationAndAdmission(t *testing.T) {
 			name, command, label = "steer", "/cancel-steer", "Steer · "
 		}
 		t.Run(name, func(t *testing.T) {
-			u, p := newCancelInputUI(t, []provider.ScriptResponse{{Text: "Initial settled."}, {Text: "Original admitted."}})
+			u, p := newCancelInputUI(t, []llm.ScriptResponse{{Text: "Initial settled."}, {Text: "Original admitted."}})
 			original := "  original " + strings.Repeat("word \t", pendingPreviewBytes/6+1) + "\n e\u0301👩‍💻 final suffix  "
 			pasteCancelInput(u, original)
 			submitCancelInput(u, steer)

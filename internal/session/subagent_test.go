@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 	"ttc/internal/workspace"
 )
 
 // childProvider retains the fixture's catalog/login behavior and controls streams.
 type childProvider struct {
-	provider.Script
-	stream func(context.Context, provider.Request, func(provider.StreamEvent) error) error
+	llm.Script
+	stream func(context.Context, llm.Request, func(llm.StreamEvent) error) error
 }
 
 func TestSubagentRequiresConciseTitle(t *testing.T) {
@@ -31,17 +31,17 @@ func TestSubagentRequiresConciseTitle(t *testing.T) {
 	}
 }
 
-func (p *childProvider) Stream(ctx context.Context, request provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *childProvider) Stream(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 	return p.stream(ctx, request, emit)
 }
 
 func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
-	r, events := runtimeFixture(t, []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write the result","label":"writer"}`)}}},
-		{Calls: []provider.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"result\n"}`)}}},
+	r, events := runtimeFixture(t, []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write the result","label":"writer"}`)}}},
+		{Calls: []llm.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"result\n"}`)}}},
 		{Text: "Child finished."}, {Text: "Parent finished."},
 	})
-	m := provider.Message{Role: "user", Content: "Private parent context"}
+	m := llm.Message{Role: "user", Content: "Private parent context"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	childCycle := 0
 	p := &childProvider{}
-	p.stream = func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	p.stream = func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if strings.Contains(req.System, "\nYou are an isolated child agent.") {
 			var latest runtimeContext
 			for _, message := range req.Messages {
@@ -121,30 +121,30 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 				case <-ctx.Done():
 					return ctx.Err()
 				}
-				if err := emit(provider.StreamEvent{Kind: "retry", Retry: &provider.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}}); err != nil {
+				if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}}); err != nil {
 					return err
 				}
-				call := provider.ToolCall{ID: "write", Name: "write", Arguments: []byte(`{"path":"child-after-compact.txt","content":"safe\n"}`)}
-				return emit(provider.StreamEvent{Kind: "call", Call: &call})
+				call := llm.ToolCall{ID: "write", Name: "write", Arguments: []byte(`{"path":"child-after-compact.txt","content":"safe\n"}`)}
+				return emit(llm.StreamEvent{Kind: "call", Call: &call})
 			}
-			return emit(provider.StreamEvent{Kind: "text", Text: "Done after compaction."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Done after compaction."})
 		}
 		if req.NoTools {
-			if err := emit(provider.StreamEvent{Kind: "retry", Retry: &provider.Retry{Attempt: 2, Reason: "HTTP 429"}}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, Reason: "HTTP 429"}}); err != nil {
 				return err
 			}
-			return emit(provider.StreamEvent{Kind: "text", Text: "Keep the child task and research state."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Keep the child task and research state."})
 		}
 		last := req.Messages[len(req.Messages)-2]
 		if last.Role == "user" && strings.HasPrefix(last.Content, "Private parent") {
-			call := provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write after gate","label":"background writer","background":true}`)}
-			return emit(provider.StreamEvent{Kind: "call", Call: &call})
+			call := llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write after gate","label":"background writer","background":true}`)}
+			return emit(llm.StreamEvent{Kind: "call", Call: &call})
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Parent done."})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Parent done."})
 	}
 	r.Provider = p
 	// Keep compaction pressure independent of generated identifier lengths.
-	m := provider.Message{Role: "user", Content: "Private parent starts a child\n" + strings.Repeat("research context ", 128)}
+	m := llm.Message{Role: "user", Content: "Private parent starts a child\n" + strings.Repeat("research context ", 128)}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}

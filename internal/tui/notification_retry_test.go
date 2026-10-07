@@ -10,23 +10,23 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
 // notificationRetryProvider gates a failed request without using real deadlines
 // or network calls. Requests after the failure use the successful offline script.
 type notificationRetryProvider struct {
-	provider.Script
+	llm.Script
 	mu        sync.Mutex
-	requests  []provider.Request
+	requests  []llm.Request
 	failures  map[int]bool // One-based request indexes; initialized before use.
 	ready     chan struct{}
 	release   chan struct{}
 	interrupt bool
 }
 
-func (p *notificationRetryProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *notificationRetryProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	p.mu.Lock()
 	p.requests = append(p.requests, req)
 	call := len(p.requests)
@@ -49,16 +49,16 @@ func (p *notificationRetryProvider) Stream(ctx context.Context, req provider.Req
 	return p.Script.Stream(ctx, req, emit)
 }
 
-func (p *notificationRetryProvider) snapshot() []provider.Request {
+func (p *notificationRetryProvider) snapshot() []llm.Request {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]provider.Request(nil), p.requests...)
+	return append([]llm.Request(nil), p.requests...)
 }
 
 func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionTestUI, *notificationRetryProvider) {
 	t.Helper()
 	p := &notificationRetryProvider{
-		Script: provider.Script{Responses: []provider.ScriptResponse{
+		Script: llm.Script{Responses: []llm.ScriptResponse{
 			{Text: "Seed completed."},
 			{Text: "Research handoff completed."},
 			{Text: "Pending notices delivered."},
@@ -67,12 +67,12 @@ func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionT
 		failures: map[int]bool{2: true}, ready: make(chan struct{}), release: make(chan struct{}), interrupt: interrupt,
 	}
 	u := newQuestionTestUIWithSetup(t, p, nil, func(r *session.Runtime) {
-		seed := provider.Message{Role: "user", Content: "Seed research history"}
+		seed := llm.Message{Role: "user", Content: "Seed research history"}
 		if err := r.Run(&seed); err != nil {
 			t.Fatal(err)
 		}
 		if oversized {
-			for _, message := range []provider.Message{
+			for _, message := range []llm.Message{
 				{Role: "user", Content: "Older research task"},
 				{Role: "assistant", Content: strings.Repeat("older evidence ", 6000)},
 			} {
@@ -124,7 +124,7 @@ func assertNotificationRetryPaused(t *testing.T, u *questionTestUI, p *notificat
 	}
 }
 
-func assertNotificationDelivered(t *testing.T, u *questionTestUI, req provider.Request, id string) {
+func assertNotificationDelivered(t *testing.T, u *questionTestUI, req llm.Request, id string) {
 	t.Helper()
 	found := 0
 	for _, message := range req.Messages {
@@ -261,7 +261,7 @@ func TestForegroundFailurePausesFreshNotificationsUntilUserPrompt(t *testing.T) 
 }
 
 func TestAutomaticNotificationsContinueNormallyAfterSuccessfulTurn(t *testing.T) {
-	p := &notificationRetryProvider{Script: provider.Script{Responses: []provider.ScriptResponse{
+	p := &notificationRetryProvider{Script: llm.Script{Responses: []llm.ScriptResponse{
 		{Text: "User turn succeeded."}, {Text: "First notification succeeded."}, {Text: "Second notification succeeded."},
 	}}}
 	u := newQuestionTestUI(t, p)

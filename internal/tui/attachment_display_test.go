@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestAttachmentPayloadIsInspectableWithoutConversationExpansion(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{{Text: "Snapshot inspected."}}}
+	p := &llm.Script{Responses: []llm.ScriptResponse{{Text: "Snapshot inspected."}}}
 	u := newQuestionTestUI(t, p)
 	path := filepath.Join(u.runtime.Workspace.Root, "notes.txt")
 	const snapshot = "ATTACHED SNAPSHOT CONTENT"
@@ -81,7 +81,7 @@ func TestAttachmentPayloadIsInspectableWithoutConversationExpansion(t *testing.T
 }
 
 func TestAttachedQueueAndSteeringShowAuthoredText(t *testing.T) {
-	u, p := gatedComposerUI(t, []provider.ScriptResponse{{Text: "First settled."}, {Text: "Steer settled."}, {Text: "Queued settled."}})
+	u, p := gatedComposerUI(t, []llm.ScriptResponse{{Text: "First settled."}, {Text: "Steer settled."}, {Text: "Queued settled."}})
 	path := filepath.Join(u.runtime.Workspace.Root, "queued.txt")
 	const snapshot = "QUEUED ATTACHMENT PAYLOAD"
 	if err := os.WriteFile(path, []byte(snapshot), 0600); err != nil {

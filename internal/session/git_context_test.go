@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {
@@ -33,7 +33,7 @@ func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.Workspace.Root = nested
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.System != systemTemplate {
 					t.Fatal("missing system instructions")
 				}
@@ -57,9 +57,9 @@ func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {
 				if !found {
 					t.Fatal("missing initial runtime environment")
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 			}}
-			if err := r.Run(&provider.Message{Role: "user", Content: "Inspect environment"}); err != nil {
+			if err := r.Run(&llm.Message{Role: "user", Content: "Inspect environment"}); err != nil {
 				t.Fatal(err)
 			}
 		})

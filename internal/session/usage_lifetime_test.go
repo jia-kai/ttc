@@ -7,13 +7,13 @@ import (
 	"sync"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
-func lifetimeUsage() provider.Usage {
+func lifetimeUsage() llm.Usage {
 	cached, written, reasoning := 40, 10, 5
-	return provider.Usage{InputTokens: 100, OutputTokens: 20, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}
+	return llm.Usage{InputTokens: 100, OutputTokens: 20, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}
 }
 
 func assertLifetimeTotals(t *testing.T, r *Runtime, requests int) {
@@ -34,23 +34,23 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	parentCalls := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if !strings.Contains(req.System, "You are an isolated child agent.") {
 			parentCalls++
 			if parentCalls == 1 {
-				call := provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false}`)}
-				if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+				call := llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false}`)}
+				if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 					return err
 				}
 			}
 		}
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "Audit complete."}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Audit complete."}); err != nil {
 			return err
 		}
 		u := lifetimeUsage()
-		return emit(provider.StreamEvent{Kind: "completed", Usage: &u})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &u})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Run an audit"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Run an audit"}); err != nil {
 		t.Fatal(err)
 	}
 	assertLifetimeTotals(t, r, 3) // Parent tool request, child answer, parent answer.
@@ -71,7 +71,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 		t.Fatal("invalid session loaded")
 	}
 	assertLifetimeTotals(t, r, 3)
-	if err := r.Run(&provider.Message{Role: "user", Content: "Continue after loading"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Continue after loading"}); err != nil {
 		t.Fatal(err)
 	}
 	assertLifetimeTotals(t, r, 4)
@@ -87,16 +87,16 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 	if got := r.UsageSnapshot().Totals; !reflect.DeepEqual(got, UsageTotals{}) {
 		t.Fatal("loading history rebuilt totals after /new", got)
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Start counting again"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Start counting again"}); err != nil {
 		t.Fatal(err)
 	}
 	assertLifetimeTotals(t, r, 1)
 }
 
 func TestUsageLifetimeRestartDoesNotRestoreHistory(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Text: "Durable answer"}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Durable answer"}})
 	r.Emit = nil
-	if err := r.Run(&provider.Message{Role: "user", Content: "Save a response"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Save a response"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.UsageSnapshot().Totals.ReportedRequests != 1 {
@@ -135,24 +135,24 @@ func TestUsageLifetimeCompactionPreservesEveryCounter(t *testing.T) {
 			compactionBudget(t, r)
 			seedCompactionHistory(t, r, strings.Repeat("Earlier research notes. ", 700))
 			if !automatic {
-				if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue"}); err != nil {
+				if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue"}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			u := lifetimeUsage()
 			r.recordUsage(&u)
 			before := r.Current()
-			r.Provider = &childProvider{stream: func(_ context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
-				if err := emit(provider.StreamEvent{Kind: "text", Text: "Earlier research completed; continue the task."}); err != nil {
+			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
+				if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed; continue the task."}); err != nil {
 					return err
 				}
 				u := lifetimeUsage()
-				return emit(provider.StreamEvent{Kind: "completed", Usage: &u})
+				return emit(llm.StreamEvent{Kind: "completed", Usage: &u})
 			}}
 			requests := 2
 			if automatic {
 				requests++ // Summary plus the coding response after handoff.
-				if err := r.Run(&provider.Message{Role: "user", Content: "Continue"}); err != nil {
+				if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
 					t.Fatal(err)
 				}
 			} else if _, err := r.Command("/compact"); err != nil {
@@ -181,20 +181,20 @@ func TestCompactionUsageCountsOnlyAttemptedInferenceDespitePersistenceFailure(t 
 			r.Emit = nil
 			compactionBudget(t, r)
 			seedCompactionHistory(t, r, "Earlier research")
-			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue"}); err != nil {
+			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue"}); err != nil {
 				t.Fatal(err)
 			}
 			before := r.Current()
 			u := lifetimeUsage()
 			r.recordUsage(&u)
 			calls := 0
-			r.Provider = &childProvider{stream: func(_ context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 				calls++
-				if err := emit(provider.StreamEvent{Kind: "text", Text: "Earlier research completed."}); err != nil {
+				if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed."}); err != nil {
 					return err
 				}
 				u := lifetimeUsage()
-				return emit(provider.StreamEvent{Kind: "completed", Usage: &u})
+				return emit(llm.StreamEvent{Kind: "completed", Usage: &u})
 			}}
 			if _, err := r.Store.DB.Exec(test.trigger); err != nil {
 				t.Fatal(err)

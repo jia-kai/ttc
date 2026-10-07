@@ -24,8 +24,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ttc/internal/provider"
-	"ttc/internal/provider/openai"
+	"ttc/internal/binaryinput"
+	"ttc/internal/llm"
+	"ttc/internal/providers/openai"
 	"ttc/internal/tool"
 )
 
@@ -348,19 +349,24 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		}
 		streamMockResponse(w, identity, step, calls, text)
 	}))
-	path := filepath.Join(t.TempDir(), "auth.json")
-	credentials, _ := json.Marshal(openai.Credentials{AuthMode: "chatgpt", Tokens: openai.Tokens{Access: "mock-token", AccountID: "mock-account"}, LastRefresh: time.Now()})
-	if err := os.WriteFile(path, credentials, 0600); err != nil {
-		t.Fatal(err)
-	}
-	adapter := openai.New(path)
-	adapter.BaseURL = "http://mock.invalid"
-	adapter.Client = client
+	adapter := openai.NewAdapter(openai.Config{Client: client, BaseURL: "http://mock.invalid", ResolveBinary: binaryinput.Resolve,
+		TokenSource: func(context.Context) (openai.AccessTokens, error) {
+			return openai.AccessTokens{Access: "mock-token", AccountID: "mock-account"}, nil
+		},
+	})
 	models, err := adapter.Models(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection, err := provider.Resolve("openai", models, "mock", "high")
+	// Discovery returns protocol metadata; this fixture supplies the runtime's
+	// application budget explicitly rather than making the adapter own policy.
+	specs := make([]llm.ModelSpec, 0, len(models))
+	for _, m := range models {
+		budget := llm.ScriptModel().Budget
+		budget.ContextLimit, budget.MaxOutputTokens = m.Limits.ContextLimit, m.Limits.MaxOutputTokens
+		specs = append(specs, llm.ModelSpec{ID: m.ID, BaseID: m.BaseID, ServiceTier: m.ServiceTier, Description: m.Description, Name: m.Name, Variants: m.Variants, VariantDescriptions: m.VariantDescriptions, DefaultVariant: m.DefaultVariant, Images: m.Images, BinaryFiles: m.BinaryFiles, SupportsReasoning: m.SupportsReasoning, Budget: budget, Revision: m.Revision})
+	}
+	selection, err := llm.Resolve("openai", specs, "mock", "high")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +402,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() { r.Close(); stopEvents() })
-	if err := r.Run(&provider.Message{Role: "user", Content: "Exercise the reproducible HTTP fixture"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Exercise the reproducible HTTP fixture"}); err != nil {
 		t.Fatal(err)
 	}
 	// End-to-end persistence and shared file queue assertions.

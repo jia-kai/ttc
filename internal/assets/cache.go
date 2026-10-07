@@ -10,40 +10,22 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/gif"
-	_ "image/jpeg"
 	"image/png"
 	"io"
 	"os"
 	"strings"
 	"syscall"
 
+	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
 )
 
-// Limits bound encoded source bytes and decoded pixel allocation.
+// MaxBytes bounds encoded source bytes and rendered blobs.
 const MaxBytes = blobcache.MaxBytes
-const MaxPixels = 16 << 20
-
-// Config validates encoded size and canvas dimensions without allocating pixels.
-// It returns the decoder format (png, jpeg or gif) alongside the header metadata.
-func Config(data []byte) (image.Config, string, error) {
-	if len(data) > MaxBytes {
-		return image.Config{}, "", fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", MaxBytes)
-	}
-	c, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return image.Config{}, "", fmt.Errorf("cannot decode image header; provide a valid PNG, JPEG or GIF: %w", err)
-	}
-	if c.Width <= 0 || c.Height <= 0 || c.Width > MaxPixels/c.Height {
-		return image.Config{}, "", fmt.Errorf("image dimensions are invalid or exceed %d pixels; provide a valid image with fewer pixels", MaxPixels)
-	}
-	return c, format, nil
-}
 
 // Decode rejects oversized or malformed images before allocating their pixels.
 func Decode(data []byte) (image.Image, error) {
-	if _, _, err := Config(data); err != nil {
+	if _, _, err := binaryinput.ImageConfig(data); err != nil {
 		return nil, err
 	}
 	m, _, err := image.Decode(bytes.NewReader(data))
@@ -136,8 +118,8 @@ func (c *Cache) Get(ctx context.Context, key string, create func(context.Context
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	if m == nil || m.Bounds().Dx() <= 0 || m.Bounds().Dy() <= 0 || m.Bounds().Dx() > MaxPixels/m.Bounds().Dy() {
-		return nil, fmt.Errorf("render dimensions are invalid or exceed %d pixels", MaxPixels)
+	if m == nil || m.Bounds().Dx() <= 0 || m.Bounds().Dy() <= 0 || m.Bounds().Dx() > binaryinput.MaxImagePixels/m.Bounds().Dy() {
+		return nil, fmt.Errorf("render dimensions are invalid or exceed %d pixels", binaryinput.MaxImagePixels)
 	}
 	b := limitedBuffer{limit: MaxBytes}
 	if err = png.Encode(contextWriter{ctx: ctx, writer: &b}, encodingImage(ctx, m)); err != nil {

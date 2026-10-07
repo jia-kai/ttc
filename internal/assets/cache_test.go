@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"ttc/internal/binaryinput"
 )
 
 func TestRendererCaptureBoundsCopyFastPaths(t *testing.T) {
@@ -382,7 +384,7 @@ func TestDecodeAndAspectBounds(t *testing.T) {
 	}
 	// DecodeConfig sees oversized dimensions without needing decoded pixels.
 	oversized := append([]byte(nil), b.Bytes()...)
-	binary.BigEndian.PutUint32(oversized[16:20], MaxPixels+1)
+	binary.BigEndian.PutUint32(oversized[16:20], binaryinput.MaxImagePixels+1)
 	binary.BigEndian.PutUint32(oversized[20:24], 1)
 	binary.BigEndian.PutUint32(oversized[29:33], crc32.ChecksumIEEE(oversized[12:29]))
 	if _, err := Decode(oversized); err == nil || !strings.Contains(err.Error(), "pixels") {

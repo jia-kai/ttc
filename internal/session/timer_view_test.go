@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -231,7 +231,7 @@ func TestTimerDetailOwnsStartupParameters(t *testing.T) {
 }
 
 func TestTimerDetailSurvivesCompaction(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{{Text: "Earlier research completed."}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Earlier research completed."}})
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Old experiment notes. ", 700))
 	before, generation := r.Current(), r.Generation()

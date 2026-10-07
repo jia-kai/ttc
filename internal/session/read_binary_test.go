@@ -13,11 +13,11 @@ import (
 
 	"ttc/internal/blobcache"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
-func pdfCapability() []provider.BinaryFileType {
-	return []provider.BinaryFileType{{MIMEType: "application/pdf", Extensions: []string{".pdf"}, Kind: "document", MaxBytes: 32 << 20}}
+func pdfCapability() []llm.BinaryFileType {
+	return []llm.BinaryFileType{{MIMEType: "application/pdf", Extensions: []string{".pdf"}, Kind: "document", MaxBytes: 32 << 20}}
 }
 
 func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
@@ -32,7 +32,7 @@ func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
 			if supported {
 				r.selection.Model.BinaryFiles = pdfCapability()
 			}
-			calls := []provider.ToolCall{{ID: "pdf-call", Name: "read", Arguments: json.RawMessage(`{"path":"source.pdf"}`)}}
+			calls := []llm.ToolCall{{ID: "pdf-call", Name: "read", Arguments: json.RawMessage(`{"path":"source.pdf"}`)}}
 			turn, ids := batchIntents(t, r, "main", calls)
 			// Tool execution must use admission, not the current model picker.
 			if supported {
@@ -51,8 +51,8 @@ func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
 				return
 			}
 			sum := sha256.Sum256(data)
-			want := provider.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf", Bytes: len(data)}
-			if !reflect.DeepEqual(records[0].Files, []provider.BinaryFile{want}) {
+			want := llm.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:]), MIMEType: "application/pdf", Bytes: len(data)}
+			if !reflect.DeepEqual(records[0].Files, []llm.BinaryFile{want}) {
 				t.Fatalf("lost original document identity: %+v", records[0])
 			}
 			cache, err := blobcache.Default()
@@ -73,12 +73,12 @@ func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
 					if message.Role != "tool" || message.CallID != "pdf-call" {
 						continue
 					}
-					if !reflect.DeepEqual(message.Files, []provider.BinaryFile{want}) || strings.Contains(message.Content, "base64") {
+					if !reflect.DeepEqual(message.Files, []llm.BinaryFile{want}) || strings.Contains(message.Content, "base64") {
 						t.Fatal("history changed binary reference", message)
 					}
 					without := message
 					without.Files = nil
-					if delta := contextbuild.Tokens([]provider.Message{message}) - contextbuild.Tokens([]provider.Message{without}); delta != want.EstimatedTokens() || delta <= 0 {
+					if delta := contextbuild.Tokens([]llm.Message{message}) - contextbuild.Tokens([]llm.Message{without}); delta != want.EstimatedTokens() || delta <= 0 {
 						t.Fatal("document reserve missing", delta)
 					}
 					return

@@ -11,13 +11,13 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start background shell","label":"shell helper"}`)}}},
-		{Calls: []provider.ToolCall{{ID: "background", Name: "shell", Arguments: []byte(`{"command":"while [ ! -e release ]; do sleep 0.01; done; cat release; cat diagnostic >&2; sleep 30","background":true,"wake_on_exit":false}`)}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start background shell","label":"shell helper"}`)}}},
+		{Calls: []llm.ToolCall{{ID: "background", Name: "shell", Arguments: []byte(`{"command":"while [ ! -e release ]; do sleep 0.01; done; cat release; cat diagnostic >&2; sleep 30","background":true,"wake_on_exit":false}`)}}},
 		{Text: "Child started shell"}, {Text: "Parent finished"},
 	}}
 	u := newQuestionTestUI(t, p)
@@ -56,18 +56,18 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 }
 
 type namedPendingProvider struct {
-	provider.Script
+	llm.Script
 	release chan struct{}
 	started bool
 }
 
-func (p *namedPendingProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *namedPendingProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	if strings.Contains(req.System, "\nYou are an isolated child agent.") && !p.started {
 		p.started = true
-		if err := emit(provider.StreamEvent{Kind: "call_start", CallStart: &provider.ToolStart{ID: "read", Name: "read"}}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "call_start", CallStart: &llm.ToolStart{ID: "read", Name: "read"}}); err != nil {
 			return err
 		}
-		if err := emit(provider.StreamEvent{Kind: "call_progress", CallProgress: &provider.ToolProgress{ID: "read", Name: "read", Segments: 1, Bytes: 4}}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "call_progress", CallProgress: &llm.ToolProgress{ID: "read", Name: "read", Segments: 1, Bytes: 4}}); err != nil {
 			return err
 		}
 		select {
@@ -80,9 +80,9 @@ func (p *namedPendingProvider) Stream(ctx context.Context, req provider.Request,
 }
 
 func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
-	p := &namedPendingProvider{release: make(chan struct{}), Script: provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"read missing file","label":"one two three four"}`)}}},
-		{Calls: []provider.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"missing.txt"}`)}}},
+	p := &namedPendingProvider{release: make(chan struct{}), Script: llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"read missing file","label":"one two three four"}`)}}},
+		{Calls: []llm.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"missing.txt"}`)}}},
 		{Text: "Child handled missing file"}, {Text: "Parent finished"},
 	}}}
 	u := newQuestionTestUI(t, p)
@@ -132,9 +132,9 @@ func TestSubagentBadgeRowsPreserveGeometryAndIdentity(t *testing.T) {
 }
 
 func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write file","label":"  research  helper "}`)}}},
-		{Calls: []provider.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"child result"}`)}}},
+	p := &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write file","label":"  research  helper "}`)}}},
+		{Calls: []llm.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"child result"}`)}}},
 		{Text: "Named child answer"}, {Text: "Parent answer"},
 	}}
 	u := newQuestionTestUI(t, p)

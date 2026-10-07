@@ -10,7 +10,7 @@ import (
 
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -30,7 +30,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	}
 	r.mu.Lock()
 	persisted, active := r.persisted, r.activeCancel != nil
-	prefix := append([]provider.Message(nil), r.mainPrefix...)
+	prefix := append([]llm.Message(nil), r.mainPrefix...)
 	selection, turn := r.prefixSelection, r.prefixTurn
 	sessionID := r.current
 	if !active {
@@ -62,7 +62,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		prefix = provider.ContextFor(selection, prefix)
+		prefix = llm.ContextFor(selection, prefix)
 		turn = "" // Idle asides belong to the session, not a completed turn.
 	}
 	label := []rune(strings.Join(strings.Fields(render.Clean(question)), " "))

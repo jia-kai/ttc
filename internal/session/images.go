@@ -11,7 +11,7 @@ import (
 	"ttc/internal/prompts"
 
 	"ttc/internal/assets"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -28,13 +28,13 @@ type ImageSnapshot struct {
 }
 type pendingImage struct {
 	view  ImageSnapshot
-	reply chan provider.Message
+	reply chan llm.Message
 }
 type imageInteractions struct {
 	mu           sync.Mutex
 	enabled      bool
 	pending      map[string]pendingImage
-	childReplies map[string]chan provider.Message
+	childReplies map[string]chan llm.Message
 	actors       map[string]string // Reserved from admission through child reply consumption.
 }
 
@@ -57,7 +57,7 @@ func (r *Runtime) ImageClickPending(id string) bool {
 func (r *Runtime) addImageTool() {
 	r.images.mu.Lock()
 	r.images.pending = map[string]pendingImage{}
-	r.images.childReplies = map[string]chan provider.Message{}
+	r.images.childReplies = map[string]chan llm.Message{}
 	r.images.actors = map[string]string{}
 	r.images.mu.Unlock()
 	type args struct {
@@ -106,7 +106,7 @@ func (r *Runtime) addImageTool() {
 				r.images.mu.Unlock()
 				return nil, context.Canceled
 			}
-			reply := make(chan provider.Message, 1)
+			reply := make(chan llm.Message, 1)
 			r.images.pending[v.ID] = pendingImage{v, reply}
 			if x.Actor != "main" {
 				r.images.childReplies[x.Actor] = reply
@@ -174,7 +174,7 @@ func (r *Runtime) ConfirmImage(id string, point *[2]int) error {
 		r.images.mu.Unlock()
 		return err
 	}
-	m := provider.Message{Role: "user", Content: string(b), Runtime: true}
+	m := llm.Message{Role: "user", Content: string(b), Runtime: true}
 	delete(r.images.pending, id)
 	if v.Actor != "main" {
 		p.reply <- m
@@ -186,14 +186,14 @@ func (r *Runtime) ConfirmImage(id string, point *[2]int) error {
 	return r.queueNotification(m.Content)
 }
 
-func (r *Runtime) childImageReply(ctx context.Context, actor string, wait bool) (*provider.Message, error) {
+func (r *Runtime) childImageReply(ctx context.Context, actor string, wait bool) (*llm.Message, error) {
 	r.images.mu.Lock()
 	ch := r.images.childReplies[actor]
 	r.images.mu.Unlock()
 	if ch == nil {
 		return nil, nil
 	}
-	var m provider.Message
+	var m llm.Message
 	if wait {
 		select {
 		case m = <-ch:
@@ -217,7 +217,7 @@ func (r *Runtime) childImageReply(ctx context.Context, actor string, wait bool) 
 func (r *Runtime) clearImages() {
 	r.images.mu.Lock()
 	r.images.pending = map[string]pendingImage{}
-	r.images.childReplies = map[string]chan provider.Message{}
+	r.images.childReplies = map[string]chan llm.Message{}
 	r.images.actors = map[string]string{}
 	r.images.mu.Unlock()
 }

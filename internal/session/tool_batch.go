@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sync"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/tool"
 )
@@ -23,7 +23,7 @@ func readOnlyTool(name string) bool {
 	return false
 }
 
-func failedTool(call provider.ToolCall, code, message string) tool.Record {
+func failedTool(call llm.ToolCall, code, message string) tool.Record {
 	result, _ := json.Marshal(map[string]any{"ok": false, "error": tool.Fail(code, message)})
 	return tool.Record{Name: call.Name, Arguments: call.Arguments, Result: result, Markdown: render.Tool(call.Name, call.Arguments, result)}
 }
@@ -33,7 +33,7 @@ func failedTool(call provider.ToolCall, code, message string) tool.Record {
 // caller drains completions and persists them as they arrive. Returned records
 // retain model call order, independent of completion order. Routing locks cover
 // child file mutations/commits so compaction can advance their continuation.
-func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry *tool.Registry, calls []provider.ToolCall, ids []string, streamErr error) ([]tool.Record, error) {
+func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry *tool.Registry, calls []llm.ToolCall, ids []string, streamErr error) ([]tool.Record, error) {
 	if len(calls) != len(ids) {
 		return nil, errors.New("tool call/intent count mismatch")
 	}
@@ -47,7 +47,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 	done := make(chan completion)
 	entryIDs := make([]int64, len(ids))
 	requestIDs := make([]int64, len(ids))
-	binaryFiles := make([][]provider.BinaryFileType, len(ids))
+	binaryFiles := make([][]llm.BinaryFileType, len(ids))
 	for i, id := range ids {
 		// Call IDs are globally unique. A continuation may archive rather than copy
 		// this intent; its historical entry is still inspectable while the call runs.
@@ -55,7 +55,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 		if err := r.Store.DB.QueryRow("SELECT e.id,c.request_id,m.model_json FROM entries e JOIN tool_calls c ON c.id=json_extract(e.content_json,'$.call_id') JOIN model_requests m ON m.id=c.request_id WHERE e.kind='tool_call' AND c.id=? ORDER BY e.id DESC LIMIT 1", id).Scan(&entryIDs[i], &requestIDs[i], &modelJSON); err != nil {
 			return nil, err
 		}
-		var selection provider.Selection
+		var selection llm.Selection
 		if err := json.Unmarshal([]byte(modelJSON), &selection); err != nil {
 			return nil, err
 		}

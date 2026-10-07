@@ -15,7 +15,7 @@ import (
 
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -59,7 +59,7 @@ func (r *Runtime) addSubagentTool() {
 		if err := r.Store.DB.QueryRow("SELECT q.model_json FROM tool_calls c JOIN model_requests q ON q.id=c.request_id WHERE c.id=?", x.CallID).Scan(&modelJSON); err != nil {
 			return nil, err
 		}
-		var selection provider.Selection
+		var selection llm.Selection
 		if err := json.Unmarshal([]byte(modelJSON), &selection); err != nil {
 			return nil, err
 		}
@@ -153,8 +153,8 @@ func (r *Runtime) addSubagentTool() {
 // childTask freezes one child request's context, capabilities and model selection.
 type childTask struct {
 	actor, turn, prompt string
-	selection           provider.Selection
-	prefix              []provider.Message
+	selection           llm.Selection
+	prefix              []llm.Message
 	tools               *tool.Registry
 	aside               bool
 	child               *codingChild
@@ -166,10 +166,10 @@ type childTask struct {
 func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr io.Writer) error {
 	actor, turn, prompt, selection := task.actor, task.turn, task.prompt, task.selection
 	defer r.clearActorImage(actor, "")
-	messages := append([]provider.Message(nil), task.prefix...)
+	messages := append([]llm.Message(nil), task.prefix...)
 	r.routeMu.RLock()
 	if task.aside {
-		instruction := provider.Message{Role: "developer", Content: btwInstruction, Runtime: true}
+		instruction := llm.Message{Role: "developer", Content: btwInstruction, Runtime: true}
 		id, err := r.Store.Append(r.Current(), turn, actor, "message", "developer", false, instruction)
 		if err != nil {
 			r.routeMu.RUnlock()
@@ -178,7 +178,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Aside instructions · inspect", EntryID: id})
 		messages = append(messages, instruction)
 	}
-	question := provider.Message{Role: "user", Content: prompt, InputSource: "task"}
+	question := llm.Message{Role: "user", Content: prompt, InputSource: "task"}
 	if task.aside {
 		question.InputSource = "btw"
 	}
@@ -197,7 +197,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	defs := task.tools.Definitions()
 	cursor := task.cursor
 	priorAttempts := 0
-	var recovery *provider.Message
+	var recovery *llm.Message
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -232,13 +232,13 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return err
 		}
 		r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · inspect", EntryID: entry})
-		reply := provider.Message{Role: "assistant"}
+		reply := llm.Message{Role: "assistant"}
 		var text strings.Builder
 		started := time.Now()
-		var usage *provider.Usage
+		var usage *llm.Usage
 		var responseID, serviceTier string
 		callbackFailed := false
-		streamErr := r.Provider.Stream(ctx, provider.Request{ConversationID: actor, Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev provider.StreamEvent) (err error) {
+		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: actor, Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if err := ctx.Err(); err != nil {
 				return err
@@ -320,10 +320,10 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			if _, err := fmt.Fprintln(stderr, record.Markdown.Summary); err != nil {
 				return err
 			}
-			messages = append(messages, provider.Message{Role: "tool", CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
+			messages = append(messages, llm.Message{Role: "tool", CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
 		}
 		if streamErr != nil {
-			var partial *provider.PartialError
+			var partial *llm.PartialError
 			if callbackFailed || !errors.As(streamErr, &partial) {
 				return streamErr
 			}

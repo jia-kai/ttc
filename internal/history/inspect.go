@@ -3,7 +3,7 @@ package history
 import (
 	"encoding/json"
 	"fmt"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -80,7 +80,7 @@ func (s *Store) Label(v Entry) string {
 		}
 	}
 	if v.Visible || v.Kind == "message" {
-		var m provider.Message
+		var m llm.Message
 		if json.Unmarshal(v.Content, &m) == nil {
 			if m.Runtime && m.Role == "developer" {
 				return "Runtime context · inspect"
@@ -122,7 +122,7 @@ func (s *Store) ValidateArchive(session string) error {
 
 // RequestMessage records internal naming/summary messages outside the coding
 // context, attributed to the owning request actor. Purpose controls inspection.
-func (s *Store) RequestMessage(session, turn, purpose, role string, request int64, message provider.Message) (int64, error) {
+func (s *Store) RequestMessage(session, turn, purpose, role string, request int64, message llm.Message) (int64, error) {
 	var actor string
 	if err := s.DB.QueryRow("SELECT actor_id FROM model_requests WHERE id=?", request).Scan(&actor); err != nil {
 		return 0, err

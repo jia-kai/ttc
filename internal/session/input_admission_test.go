@@ -8,7 +8,7 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func holdInputAdmission(t *testing.T, r *Runtime) func() {
@@ -110,11 +110,11 @@ func TestInputCancellationBeforeInitialAdmissionLeavesNoHistory(t *testing.T) {
 }
 
 type inputAdmissionProvider struct {
-	provider.Script
+	llm.Script
 	ready, release chan struct{}
 }
 
-func (p *inputAdmissionProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *inputAdmissionProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	close(p.ready)
 	select {
 	case <-p.release:
@@ -126,7 +126,7 @@ func (p *inputAdmissionProvider) Stream(ctx context.Context, req provider.Reques
 
 func TestInputCancellationAfterInitialAdmissionDoesNotInterruptTurn(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	p := &inputAdmissionProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Completed normally."}}}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &inputAdmissionProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Completed normally."}}}, ready: make(chan struct{}), release: make(chan struct{})}
 	r.Provider = p
 	input := r.PrepareInput(contextbuild.Input{Text: "admit me"})
 	done := make(chan error, 1)
@@ -150,7 +150,7 @@ func TestInputCancellationAfterInitialAdmissionDoesNotInterruptTurn(t *testing.T
 
 func TestInputCancellationRacesInitialAdmission(t *testing.T) {
 	for i := 0; i < 24; i++ {
-		r, _ := runtimeFixture(t, []provider.ScriptResponse{{Text: "Admitted."}})
+		r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Admitted."}})
 		unlock := holdInputAdmission(t, r)
 		input := r.PrepareInput(contextbuild.Input{Text: "race"})
 		done := make(chan error, 1)
@@ -175,7 +175,7 @@ func TestInputCancellationRacesInitialAdmission(t *testing.T) {
 func TestInputCancellationDoesNotInterruptNotificationTurn(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "prior human input")
-	p := &inputAdmissionProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Notification completed."}}}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &inputAdmissionProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Notification completed."}}}, ready: make(chan struct{}), release: make(chan struct{})}
 	r.Provider = p
 	done := make(chan error, 1)
 	go func() { done <- r.Run(nil) }()

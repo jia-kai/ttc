@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -23,7 +23,7 @@ func TestTurnActivityUsesPhaseDurationsAndIgnoresChildren(t *testing.T) {
 	}
 	check(now, "Working · 30s")
 	activity.observe(session.Event{Actor: "main/child", Kind: "assistant"}, now)
-	activity.observe(session.Event{Actor: "main/child", Retry: &provider.Retry{DelayMilliseconds: 10000}}, now)
+	activity.observe(session.Event{Actor: "main/child", Retry: &llm.Retry{DelayMilliseconds: 10000}}, now)
 	check(now, "Working · 30s")
 	activity.syncQuestion(&session.QuestionForm{ID: "first"}, now)
 	check(now.Add(time.Second), "Waiting for answer · 1s")
@@ -35,7 +35,7 @@ func TestTurnActivityUsesPhaseDurationsAndIgnoresChildren(t *testing.T) {
 	check(now.Add(3*time.Second), "Waiting for answer · 2s")
 	activity.syncQuestion(nil, now.Add(3*time.Second))
 	check(now.Add(3*time.Second), "Working · 33s")
-	activity.observe(session.Event{Actor: "main", Retry: &provider.Retry{DelayMilliseconds: 10000}}, now.Add(3*time.Second))
+	activity.observe(session.Event{Actor: "main", Retry: &llm.Retry{DelayMilliseconds: 10000}}, now.Add(3*time.Second))
 	check(now.Add(5*time.Second), "Retrying · 2s")
 	check(now.Add(13*time.Second), "Working · 43s")
 	activity.observe(session.Event{Actor: "main", Kind: "delta"}, now.Add(6*time.Second))
@@ -66,12 +66,12 @@ func TestQuestionActivitySyncReopenAndIgnoresStaleEvents(t *testing.T) {
 }
 
 type activityRetryProvider struct {
-	provider.Script
+	llm.Script
 	release, finish chan struct{}
 }
 
-func (p *activityRetryProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-	if err := emit(provider.StreamEvent{Kind: "retry", Retry: &provider.Retry{Attempt: 2, DelayMilliseconds: 10000, Reason: "HTTP 503"}}); err != nil {
+func (p *activityRetryProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+	if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, DelayMilliseconds: 10000, Reason: "HTTP 503"}}); err != nil {
 		return err
 	}
 	select {
@@ -79,7 +79,7 @@ func (p *activityRetryProvider) Stream(ctx context.Context, req provider.Request
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if err := emit(provider.StreamEvent{Kind: "text", Text: "Recovered"}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "text", Text: "Recovered"}); err != nil {
 		return err
 	}
 	select {
@@ -104,7 +104,7 @@ func TestRetryActivityFrontendReturnsToWorkingOnOutput(t *testing.T) {
 }
 
 func TestQuestionActivityFrontendSurvivesDismissal(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")
@@ -124,7 +124,7 @@ func TestQuestionActivityFrontendSurvivesDismissal(t *testing.T) {
 }
 
 func TestSessionNameEventReadsPersistedManualTitle(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Done."}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Done."}}})
 	u.typeText("name this")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")

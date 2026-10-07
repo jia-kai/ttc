@@ -2,18 +2,19 @@ package session
 
 import (
 	"fmt"
-	"ttc/internal/provider"
+	"reflect"
+	"ttc/internal/llm"
 )
 
 // CurrentSelection returns the immutable selection used by the most recent request.
-func (r *Runtime) CurrentSelection() provider.Selection {
+func (r *Runtime) CurrentSelection() llm.Selection {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.selection
 }
 
 // ModelChoice returns the latest queued selection, or the current selection.
-func (r *Runtime) ModelChoice() provider.Selection {
+func (r *Runtime) ModelChoice() llm.Selection {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.pendingModel != nil {
@@ -25,7 +26,7 @@ func (r *Runtime) ModelChoice() provider.Selection {
 // RequestModel remembers and queues a validated catalog choice. The latest
 // explicit choice wins, even if applying its history record later fails.
 // ApplyModel is called by the turn owner at a request boundary, or by an idle frontend.
-func (r *Runtime) RequestModel(selection provider.Selection) error {
+func (r *Runtime) RequestModel(selection llm.Selection) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.Store.SaveSelection(selection); err != nil {
@@ -47,7 +48,9 @@ func (r *Runtime) ApplyModel(turn string) (Event, error) {
 		return Event{}, nil
 	}
 	next, previous := *r.pendingModel, r.selection
-	if next.Provider == previous.Provider && next.Model.ID == previous.Model.ID && next.Variant == previous.Variant {
+	// An explicit re-selection can adopt refreshed catalog metadata even when
+	// the model ID and reasoning variant have not changed.
+	if reflect.DeepEqual(next, previous) {
 		r.pendingModel = nil
 		r.mu.Unlock()
 		return Event{}, nil

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type countingHistoryReader struct {
@@ -32,11 +32,11 @@ func TestHumanProvenanceQueryCountIsConstant(t *testing.T) {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			s, session, turn, _ := historyFixture(t)
 			for i := 1; i < count; i++ {
-				if _, err := s.Append(session.ID, turn, "main", "message", "user", true, provider.Message{Role: "user", Content: "queued", InputSource: "queue", InputTimeMS: 1}); err != nil {
+				if _, err := s.Append(session.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: "queued", InputSource: "queue", InputTimeMS: 1}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			check := func(reader historyReader) []provider.Message {
+			check := func(reader historyReader) []llm.Message {
 				t.Helper()
 				q := &countingHistoryReader{historyReader: reader}
 				messages, err := messagesWith(q, session.ID)
@@ -80,7 +80,7 @@ func TestBatchedHumanProvenanceSeesUncommittedAdmissions(t *testing.T) {
 	}
 	rollback := errors.New("rollback fixture")
 	err = s.transact(func(tx *sql.Tx) error {
-		content, err := json.Marshal(provider.Message{Role: "user", Content: "pending", InputSource: "queue", InputTimeMS: 1})
+		content, err := json.Marshal(llm.Message{Role: "user", Content: "pending", InputSource: "queue", InputTimeMS: 1})
 		if err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func TestBatchedHumanProvenanceUsesOriginalNotCopyMetadata(t *testing.T) {
 	}
 	var copyID int64
 	if err := s.transact(func(tx *sql.Tx) error {
-		content, err := json.Marshal(provider.Message{Role: "user", Content: "copied", InputSource: "invalid caller metadata", InputTimeMS: 1})
+		content, err := json.Marshal(llm.Message{Role: "user", Content: "copied", InputSource: "invalid caller metadata", InputTimeMS: 1})
 		if err != nil {
 			return err
 		}
@@ -147,10 +147,10 @@ func TestBatchedHumanProvenanceUsesOriginalNotCopyMetadata(t *testing.T) {
 
 func TestHumanProvenanceRejectsMissingOriginal(t *testing.T) {
 	entry := Entry{ID: 2, Source: 1, Visible: true, Actor: "main", Kind: "message", Role: "user"}
-	if _, err := enrichInput(nil, entry, provider.Message{Role: "user"}); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := enrichInput(nil, entry, llm.Message{Role: "user"}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal("accepted missing original", err)
 	}
-	if _, err := enrichInput(nil, entry, provider.Message{Role: "user", Runtime: true}); err != nil {
+	if _, err := enrichInput(nil, entry, llm.Message{Role: "user", Runtime: true}); err != nil {
 		t.Fatal("runtime notice required human provenance", err)
 	}
 }

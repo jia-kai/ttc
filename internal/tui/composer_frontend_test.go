@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
 func TestComposerFrontendEditingRecallAndModelWindow(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Edited accepted."}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Edited accepted."}}})
 	u.typeText("alpha obsolete omega")
 	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyRune, 'b', tcell.ModAlt))
 	u.key(tcell.KeyCtrlW)
@@ -41,7 +41,7 @@ func TestComposerFrontendEditingRecallAndModelWindow(t *testing.T) {
 }
 
 func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Paste accepted."}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Paste accepted."}}})
 	u.typeText("prefix suffix")
 	u.key(tcell.KeyHome)
 	for range 7 {
@@ -64,7 +64,7 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 }
 
 func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Multiline accepted."}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Multiline accepted."}}})
 	u.typeText("first")
 	u.key(tcell.KeyCtrlJ)
 	u.typeText("second")
@@ -79,7 +79,7 @@ func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
 }
 
 func TestComposerPasteResetsModelChord(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{})
+	u := newQuestionTestUI(t, &llm.Script{})
 	u.key(tcell.KeyCtrlX)
 	u.screen.PostEventWait(tcell.NewEventPaste(true))
 	u.typeText("x")
@@ -88,9 +88,9 @@ func TestComposerPasteResetsModelChord(t *testing.T) {
 	u.wait(t, "> xm")
 }
 
-func gatedComposerUI(t *testing.T, responses []provider.ScriptResponse) (*questionTestUI, *questionTestProvider) {
+func gatedComposerUI(t *testing.T, responses []llm.ScriptResponse) (*questionTestUI, *questionTestProvider) {
 	t.Helper()
-	p := &questionTestProvider{Script: provider.Script{Responses: responses}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: responses}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.typeText("run")
 	u.key(tcell.KeyEnter)
@@ -103,7 +103,7 @@ func gatedComposerUI(t *testing.T, responses []provider.ScriptResponse) (*questi
 }
 
 func TestComposerPasteResetsInterruptPrefix(t *testing.T) {
-	u, p := gatedComposerUI(t, []provider.ScriptResponse{{Text: "Not interrupted."}})
+	u, p := gatedComposerUI(t, []llm.ScriptResponse{{Text: "Not interrupted."}})
 	u.key(tcell.KeyEscape)
 	u.screen.PostEventWait(tcell.NewEventPaste(true))
 	u.typeText("draft")
@@ -183,7 +183,7 @@ func assertComposerSubmission(t *testing.T, u *questionTestUI, want string) {
 	var messages []string
 	for _, entry := range entries {
 		if entry.Kind == "message" && entry.Role == "user" {
-			var message provider.Message
+			var message llm.Message
 			if err := json.Unmarshal(entry.Content, &message); err != nil {
 				t.Fatal(err)
 			}
@@ -204,7 +204,7 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	s.SetSize(20, 10)
 	c := newComposer("é界x")
 	c.cursor = 2
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, provider.Selection{}); err != nil {
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
 		t.Fatal(err)
 	}
 	x, y, visible := s.GetCursor()
@@ -214,7 +214,7 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	}
 	s.SetSize(6, 10)
 	c.set("abcdef")
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, provider.Selection{}); err != nil {
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
 		t.Fatal(err)
 	}
 	x, y, visible = s.GetCursor()

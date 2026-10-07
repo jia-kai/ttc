@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestManualRenameWinsPendingAutomaticNaming(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
-	p := &gatedNamingProvider{naming: make(chan provider.Request, 1), release: make(chan struct{})}
+	p := &gatedNamingProvider{naming: make(chan llm.Request, 1), release: make(chan struct{})}
 	r.Provider, r.AutoName = p, true
-	message := provider.Message{Role: "user", Content: "Inspect this project"}
+	message := llm.Message{Role: "user", Content: "Inspect this project"}
 	if err := r.Run(&message); err != nil {
 		t.Fatal(err)
 	}

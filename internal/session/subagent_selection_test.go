@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -33,13 +33,13 @@ func TestSubagentVariantInheritanceAndIdleSelection(t *testing.T) {
 	r.selection.Model.Variants = []string{"none", "low", "high"}
 	r.selection.Variant = "high"
 	frozen := r.CurrentSelection()
-	selections := make(chan provider.Selection, 4)
-	r.Provider = &childProvider{stream: func(ctx context.Context, request provider.Request, emit func(provider.StreamEvent) error) error {
+	selections := make(chan llm.Selection, 4)
+	r.Provider = &childProvider{stream: func(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 		selections <- request.Selection
-		return emit(provider.StreamEvent{Kind: "text", Text: "Audit answer"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Audit answer"})
 	}}
 	firstArgs := `{"prompt":"first","label":"auditor","persistent":true}`
-	turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "create", Name: "subagent", Arguments: []byte(firstArgs)}})
+	turn, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "create", Name: "subagent", Arguments: []byte(firstArgs)}})
 	// Creation inherits the issuing request, even if the parent subsequently
 	// switches its model/variant before this tool is executed.
 	r.selection.Model.ID = "other-model"
@@ -65,7 +65,7 @@ func TestSubagentVariantInheritanceAndIdleSelection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		turn, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "follow-up", Name: "subagent", Arguments: encoded}})
+		turn, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "follow-up", Name: "subagent", Arguments: encoded}})
 		result := childInvocation(t, r, ids[0], string(encoded))
 		if result["ok"] != true || result["child_id"] != childID {
 			t.Fatal(result)
@@ -93,7 +93,7 @@ func TestSubagentUnsupportedVariantDoesNotCreateChild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "invalid", Name: "subagent", Arguments: args}})
+			_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "invalid", Name: "subagent", Arguments: args}})
 			result := childInvocation(t, r, ids[0], string(args))
 			encoded, _ := json.Marshal(result)
 			if result["ok"] == true || len(r.ChildViews("main")) != 0 || len(r.Jobs.List("main", true)) != 0 {
@@ -117,13 +117,13 @@ func TestSubagentExplicitCreationVariant(t *testing.T) {
 			r.Emit = nil
 			r.selection.Model.Variants = []string{"none", "low", "high"}
 			r.selection.Variant = "high"
-			selections := make(chan provider.Selection, 1)
-			r.Provider = &childProvider{stream: func(ctx context.Context, request provider.Request, emit func(provider.StreamEvent) error) error {
+			selections := make(chan llm.Selection, 1)
+			r.Provider = &childProvider{stream: func(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 				selections <- request.Selection
-				return emit(provider.StreamEvent{Kind: "text", Text: "Answer"})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Answer"})
 			}}
 			args, _ := json.Marshal(map[string]any{"prompt": "audit", "label": "auditor", "persistent": false, "variant": variant})
-			_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "create", Name: "subagent", Arguments: args}})
+			_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "create", Name: "subagent", Arguments: args}})
 			result := childInvocation(t, r, ids[0], string(args))
 			if result["ok"] != true {
 				t.Fatal(result)
@@ -144,13 +144,13 @@ func TestSubagentInvalidVariantPreservesIdleChild(t *testing.T) {
 	r.Emit = nil
 	r.selection.Model.Variants = []string{"low", "high"}
 	r.selection.Variant = "high"
-	selections := make(chan provider.Selection, 2)
-	r.Provider = &childProvider{stream: func(ctx context.Context, request provider.Request, emit func(provider.StreamEvent) error) error {
+	selections := make(chan llm.Selection, 2)
+	r.Provider = &childProvider{stream: func(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 		selections <- request.Selection
-		return emit(provider.StreamEvent{Kind: "text", Text: "Retained answer"})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Retained answer"})
 	}}
 	firstArgs := `{"prompt":"first","label":"auditor","persistent":true}`
-	_, ids := batchIntents(t, r, "main", []provider.ToolCall{{ID: "create", Name: "subagent", Arguments: []byte(firstArgs)}})
+	_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "create", Name: "subagent", Arguments: []byte(firstArgs)}})
 	first := childInvocation(t, r, ids[0], firstArgs)
 	if first["ok"] != true {
 		t.Fatal(first)

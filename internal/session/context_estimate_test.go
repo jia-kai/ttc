@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
-	"ttc/internal/provider/openai"
+	"ttc/internal/llm"
+	"ttc/internal/providers/openai"
 )
 
 func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
@@ -21,7 +21,7 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := provider.Message{Role: "assistant", State: &provider.ReplayState{Provider: "openai", Model: r.selection.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
+	m := llm.Message{Role: "assistant", State: &llm.ReplayState{Provider: "openai", Model: r.selection.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
 	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, m); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []provider.Message{messages[0], *cm})
+	base := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []llm.Message{messages[0], *cm})
 	r.selection.Model.Budget.ContextLimit = base.Input + base.Reserved + 3000
 	if contextbuild.Fits(r.selection, systemTemplate, r.Tools.Definitions(), append(messages, *cm), false) {
 		t.Fatal("fixture did not expose transport inflation")
@@ -59,7 +59,7 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childMessages := []provider.Message{{Role: "user", Content: "Continue reasoning."}, m}
+	childMessages := []llm.Message{{Role: "user", Content: "Continue reasoning."}, m}
 	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: childTurn, selection: r.selection, tools: r.Tools}, childMessages, contextCursor{}); err != nil {
 		t.Fatal("child compacted due to transport size", err)
 	}
@@ -69,17 +69,17 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Earlier notes. ", 700))
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, provider.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	r.usage = ContextUsage{RequestID: 87, Input: 9000, Limit: r.selection.Model.Budget.ContextLimit}
-	r.reported = &ReportedUsage{RequestID: 87, Model: "previous", Tokens: provider.Usage{InputTokens: 9000, OutputTokens: 50}}
+	r.reported = &ReportedUsage{RequestID: 87, Model: "previous", Tokens: llm.Usage{InputTokens: 9000, OutputTokens: 50}}
 	r.recordUsage(&r.reported.Tokens)
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "Earlier task completed."}); err != nil {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier task completed."}); err != nil {
 			return err
 		}
-		return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 4000, OutputTokens: 80}})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 4000, OutputTokens: 80}})
 	}}
 	if _, err := r.compact(""); err != nil {
 		t.Fatal(err)

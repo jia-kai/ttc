@@ -14,7 +14,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestMarkdownWindowRefreshesPendingMathAndRequestsOnlyVisibleAssets(t *testing.T) {
@@ -36,7 +36,7 @@ func TestMarkdownWindowRefreshesPendingMathAndRequestsOnlyVisibleAssets(t *testi
 	frame := func() {
 		t.Helper()
 		g.Begin()
-		if err := draw(s, view, newSidebar(), false, nil, r, -1, newComposer(""), 0, nil, nil, "", w, provider.Selection{}); err != nil {
+		if err := draw(s, view, newSidebar(), false, nil, r, -1, newComposer(""), 0, nil, nil, "", w, llm.Selection{}); err != nil {
 			t.Fatal(err)
 		}
 		if err := g.End(); err != nil {
@@ -144,7 +144,7 @@ func TestInlineMathPaintsKittyIdentityAndCoordinates(t *testing.T) {
 				}
 				defer s.Fini()
 				s.SetSize(width, 30)
-				if err := draw(s, v, newSidebar(), false, nil, r, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{}); err != nil {
+				if err := draw(s, v, newSidebar(), false, nil, r, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{}); err != nil {
 					t.Fatal(err)
 				}
 				// Compare against a clean standalone grid, independently of prose

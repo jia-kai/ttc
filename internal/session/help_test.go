@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestHelpSendShortcuts(t *testing.T) {
@@ -24,11 +24,11 @@ func TestHelpSendShortcuts(t *testing.T) {
 }
 
 type helpGatedProvider struct {
-	provider.Script
+	llm.Script
 	ready, release chan struct{}
 }
 
-func (p *helpGatedProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *helpGatedProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	close(p.ready)
 	select {
 	case <-p.release:
@@ -40,13 +40,13 @@ func (p *helpGatedProvider) Stream(ctx context.Context, req provider.Request, em
 
 func TestHelpCommandDoesNotWaitForActiveTurn(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	p := &helpGatedProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Completed."}}}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &helpGatedProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Completed."}}}, ready: make(chan struct{}), release: make(chan struct{})}
 	r.Provider = p
 	done := make(chan error, 1)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		m := provider.Message{Role: "user", Content: "start"}
+		m := llm.Message{Role: "user", Content: "start"}
 		done <- r.Run(&m)
 	}()
 	t.Cleanup(func() {

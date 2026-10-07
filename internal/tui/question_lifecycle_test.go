@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -14,7 +14,7 @@ func TestQuestionDismissReopenDoesNotBlockOnFullEventSink(t *testing.T) {
 	saturated, release := make(chan struct{}), make(chan struct{})
 	sink := make(chan session.Event, 1)
 	sink <- session.Event{Kind: "status", Text: "occupies the bounded sink"}
-	u := newQuestionTestUIWithSetup(t, &provider.Script{Responses: questionScript()}, nil, func(r *session.Runtime) {
+	u := newQuestionTestUIWithSetup(t, &llm.Script{Responses: questionScript()}, nil, func(r *session.Runtime) {
 		emit := r.Emit
 		r.Emit = func(e session.Event) {
 			select {
@@ -50,7 +50,7 @@ func TestQuestionDismissReopenDoesNotBlockOnFullEventSink(t *testing.T) {
 
 func TestDelayedInitialQuestionEventDoesNotReopenDismissal(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	u := newQuestionTestUIWithSetup(t, &provider.Script{Responses: questionScript()}, nil, func(r *session.Runtime) {
+	u := newQuestionTestUIWithSetup(t, &llm.Script{Responses: questionScript()}, nil, func(r *session.Runtime) {
 		emit := r.Emit
 		r.Emit = func(e session.Event) {
 			if e.Kind == "question" {
@@ -112,7 +112,7 @@ func TestClosedQuestionHasNoLiveStatus(t *testing.T) {
 			name = "redirected"
 		}
 		t.Run(name, func(t *testing.T) {
-			u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+			u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 			u.typeText("ask")
 			u.key(tcell.KeyEnter)
 			u.wait(t, "Choose a method?")

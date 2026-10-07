@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 // TokenPart is one disjoint estimate in tokens, never endpoint-reported usage.
@@ -33,7 +33,7 @@ type ContextUsage struct {
 // Cached reads and cache writes are input subsets; reasoning is an output subset.
 type UsageTotals struct {
 	Requests, ReportedRequests int
-	Tokens                     provider.Usage
+	Tokens                     llm.Usage
 }
 
 // ReportedUsage contains endpoint counters for one completed parent request.
@@ -42,7 +42,7 @@ type UsageTotals struct {
 type ReportedUsage struct {
 	Model     string
 	RequestID int64 // Producing request; permits matching exact input to its estimate.
-	Tokens    provider.Usage
+	Tokens    llm.Usage
 }
 
 func copyReported(u *ReportedUsage) *ReportedUsage {
@@ -54,7 +54,7 @@ func copyReported(u *ReportedUsage) *ReportedUsage {
 	return &v
 }
 
-func copyUsage(u provider.Usage) provider.Usage {
+func copyUsage(u llm.Usage) llm.Usage {
 	v := u
 	if p := u.CachedInputTokens; p != nil {
 		n := *p
@@ -71,7 +71,7 @@ func copyUsage(u provider.Usage) provider.Usage {
 	return v
 }
 
-func (r *Runtime) recordUsage(u *provider.Usage) {
+func (r *Runtime) recordUsage(u *llm.Usage) {
 	r.mu.Lock()
 	r.totals.Requests++
 	if u != nil {
@@ -98,7 +98,7 @@ func (r *Runtime) recordUsage(u *provider.Usage) {
 	r.emit(Event{Kind: "usage"})
 }
 
-func estimateUsage(selection provider.Selection, system string, defs []provider.ToolDefinition, messages []provider.Message) ContextUsage {
+func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefinition, messages []llm.Message) ContextUsage {
 	counts := make([]int, 6)
 	counts[0] = contextbuild.Estimate(system)
 	for _, d := range defs {
@@ -106,7 +106,7 @@ func estimateUsage(selection provider.Selection, system string, defs []provider.
 	}
 	for _, m := range messages {
 		if m.State != nil {
-			counts[4] += provider.ReplayTokens(m.State)
+			counts[4] += llm.ReplayTokens(m.State)
 			continue
 		}
 		i := 2
@@ -133,8 +133,8 @@ func estimateUsage(selection provider.Selection, system string, defs []provider.
 
 // contextMessages copies the selected provider projection and annotates replay
 // occupancy without changing durable history or the payload sent to the model.
-func (r *Runtime) contextMessages(selection provider.Selection, messages []provider.Message) []provider.Message {
-	out := provider.ContextFor(selection, messages)
+func (r *Runtime) contextMessages(selection llm.Selection, messages []llm.Message) []llm.Message {
+	out := llm.ContextFor(selection, messages)
 	for i, m := range out {
 		if m.State != nil {
 			state := *m.State

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 
 	"github.com/gdamore/tcell/v2"
@@ -37,7 +37,7 @@ func TestNarrowScreenDraw(t *testing.T) {
 	}
 	defer s.Fini()
 	s.SetSize(20, 8)
-	draw(s, transcriptOf([]line{{text: "System prompt · inspect", id: 1}}), newSidebar(), false, nil, nil, 0, newComposer("draft"), 0, nil, nil, "", &Window{Title: "Inspector", Text: "hello\x1bworld"}, provider.Selection{})
+	draw(s, transcriptOf([]line{{text: "System prompt · inspect", id: 1}}), newSidebar(), false, nil, nil, 0, newComposer("draft"), 0, nil, nil, "", &Window{Title: "Inspector", Text: "hello\x1bworld"}, llm.Selection{})
 	cells, _, _ := s.GetContents()
 	if len(cells) != 160 {
 		t.Fatal(len(cells))
@@ -53,7 +53,7 @@ func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
 	s.SetSize(60, 16)
 	w := &Window{Title: "System prompt", Text: strings.TrimSuffix(strings.Repeat("row\n", 100), "\n"), System: true}
 	frame := func() string {
-		draw(s, newTranscript(), newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", w, provider.Selection{})
+		draw(s, newTranscript(), newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", w, llm.Selection{})
 		cells, width, height := s.GetContents()
 		var out strings.Builder
 		for y := range height {
@@ -108,7 +108,7 @@ func TestHumanBackgroundSystemColorAndQueueRows(t *testing.T) {
 	lines := []line{{text: "user instructions", id: 1, human: true}, {text: "System prompt · inspect", id: 2, system: true}}
 	queue := []contextbuild.Input{{Text: "first queued\nsecond part"}, {Text: strings.Repeat("long queued ", 20)}}
 	view := transcriptOf(lines)
-	draw(s, view, newSidebar(), false, nil, nil, -1, newComposer("draft"), 0, queue, nil, "Working · 0s", nil, provider.Selection{})
+	draw(s, view, newSidebar(), false, nil, nil, -1, newComposer("draft"), 0, queue, nil, "Working · 0s", nil, llm.Selection{})
 	_, _, style, _ := s.GetContent(1, 0)
 	_, bg, _ := style.Decompose()
 	if bg != tcell.GetColor(render.HumanColor) {

@@ -2,10 +2,7 @@ package tool
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +15,8 @@ import (
 	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	"ttc/internal/blobcache"
-	"ttc/internal/provider"
+	"ttc/internal/binaryinput"
+	"ttc/internal/llm"
 	"ttc/internal/workspace"
 )
 
@@ -88,32 +85,24 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		if err != nil {
 			return nil, err
 		}
-		binary, ok := page.(binaryRead)
+		binary, ok := page.(*binaryinput.Result)
 		if !ok {
 			return page, nil
 		}
 		if a.Offset != nil || a.Limit != nil {
 			return nil, Fail("invalid_input", "binary reads do not support offset or limit; omit pagination arguments")
 		}
-		if err := ctx.Err(); err != nil {
+		file, err := binary.Store(ctx, path)
+		if err != nil {
 			return nil, err
 		}
-		hash := sha256.Sum256(binary.data)
-		checksum := hex.EncodeToString(hash[:])
-		cache, err := blobcache.Default()
-		if err != nil {
-			return nil, fmt.Errorf("open binary cache: %w", err)
-		}
-		if err := cache.Put(ctx, "original", checksum, binary.data); err != nil {
-			return nil, fmt.Errorf("cache binary file: %w", err)
-		}
-		metadata := map[string]any{"kind": binary.kind, "path": path, "sha256": checksum, "mime_type": binary.mime, "bytes": len(binary.data), "truncated": false}
-		if binary.kind == "image" {
-			metadata["width"], metadata["height"] = binary.width, binary.height
+		metadata := map[string]any{"kind": binary.Kind, "path": path, "sha256": file.SHA256, "mime_type": file.MIMEType, "bytes": file.Bytes, "truncated": false}
+		if binary.Kind == "image" {
+			metadata["width"], metadata["height"] = binary.Width, binary.Height
 		}
 		return Output{
 			Value: metadata,
-			Files: []provider.BinaryFile{{Path: path, SHA256: checksum, MIMEType: binary.mime, Bytes: len(binary.data)}},
+			Files: []llm.BinaryFile{file},
 		}, nil
 	})
 	Register(r, "write", prompts.ToolDescription("write"), map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
@@ -170,7 +159,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 	addSearch(r, w)
 	addPatch(r, w)
 }
-func readPage(ctx context.Context, path string, offset, limit int, types []provider.BinaryFileType) (any, error) {
+func readPage(ctx context.Context, path string, offset, limit int, types []llm.BinaryFileType) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -191,7 +180,7 @@ func readPage(ctx context.Context, path string, offset, limit int, types []provi
 }
 
 // readOpenedPage consumes the caller-owned descriptor, never reopening path.
-func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit int, types []provider.BinaryFileType) (any, error) {
+func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit int, types []llm.BinaryFileType) (any, error) {
 	st, e := f.Stat()
 	if e != nil {
 		return nil, e
@@ -231,14 +220,16 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 		return nil, Fail("unsupported_content", "not a regular file")
 	}
 	reader := bufio.NewReader(f)
-	// Sniff only the opened descriptor, not the extension or a reopened path.
-	// Peek does not consume text bytes or validate content outside its page.
-	header, err := reader.Peek(8)
-	if err != nil && err != io.EOF {
+	binary, err := binaryinput.Read(ctx, reader, path, st.Size(), types)
+	if err != nil {
+		var inputError *binaryinput.Error
+		if errors.As(err, &inputError) {
+			return nil, Fail(inputError.Code, inputError.Message)
+		}
 		return nil, err
 	}
-	if kind, mime, extension := binaryKind(path, header, types); kind != "" {
-		return readBinary(ctx, reader, st.Size(), kind, mime, extension, types)
+	if binary != nil {
+		return binary, nil
 	}
 	var content strings.Builder
 	line := 1
@@ -288,26 +279,6 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 		}
 	}
 	return map[string]any{"kind": "file", "path": path, "content": content.String(), "start_line": offset, "next_offset": next, "truncated": next != nil}, nil
-}
-
-type binaryRead struct {
-	data          []byte
-	mime          string
-	kind          string
-	width, height int
-}
-
-func imageMIME(header []byte) string {
-	switch {
-	case bytes.HasPrefix(header, []byte("\x89PNG\r\n\x1a\n")):
-		return "image/png"
-	case bytes.HasPrefix(header, []byte("\xff\xd8\xff")):
-		return "image/jpeg"
-	case bytes.HasPrefix(header, []byte("GIF87a")), bytes.HasPrefix(header, []byte("GIF89a")):
-		return "image/gif"
-	default:
-		return ""
-	}
 }
 
 const directoryEntryLimit = 10000

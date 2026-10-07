@@ -130,8 +130,8 @@ func commandCompletions(q completionQuery) completionResult {
 	return out
 }
 
-// listPaths reads one directory incrementally, bounding both matches and work.
-// It never indexes a workspace recursively or performs I/O on the UI goroutine.
+// listPaths searches relative paths below the typed directory, with bounded
+// traversal on the completion worker. Symlink directories are not traversed.
 func listPaths(ctx context.Context, q completionQuery) completionResult {
 	out := completionResult{query: q}
 	dir, prefix := filepath.Split(q.prefix)
@@ -164,37 +164,81 @@ func listPaths(ctx context.Context, q completionQuery) completionResult {
 	if prefix == "" {
 		out.items = append(out.items, completionItem{value: dir + ".", description: "Attach this directory"})
 	}
+	terms := searchTerms(prefix)
+	// Breadth-first traversal keeps at most two directory handles open.
+	// Collect the bounded scan before limiting results, so filesystem enumeration
+	// order does not decide which of the shortest matches are displayed.
+	dirs := []string{""}
 	scanned := 0
-	for scanned < 10000 && len(out.items) < 256 {
+	for next := 0; next < len(dirs) && scanned < 10000; next++ {
 		if err := ctx.Err(); err != nil {
 			out.err = err
 			return out
 		}
-		entries, err := f.ReadDir(min(128, 10000-scanned))
-		scanned += len(entries)
-		for _, entry := range entries {
-			if !strings.HasPrefix(entry.Name(), prefix) {
-				continue
+		current := f
+		if next > 0 {
+			current, err = os.OpenFile(filepath.Join(path, dirs[next]), os.O_RDONLY|unix.O_NONBLOCK, 0)
+			if err != nil {
+				// Descendants are optional search locations, unlike the requested
+				// root. A permission failure or concurrent removal must not hide
+				// valid matches elsewhere in the tree.
+				if os.IsPermission(err) || os.IsNotExist(err) {
+					out.truncated = true
+					continue
+				}
+				out.err = err
+				return out
 			}
-			item := completionItem{value: dir + entry.Name(), directory: entry.IsDir()}
-			if item.directory {
-				item.value += "/"
+		}
+		for scanned < 10000 {
+			if err := ctx.Err(); err != nil {
+				out.err = err
+				break
 			}
-			out.items = append(out.items, item)
-			if len(out.items) == 256 {
+			entries, readErr := current.ReadDir(min(128, 10000-scanned))
+			scanned += len(entries)
+			for _, entry := range entries {
+				rel := filepath.Join(dirs[next], entry.Name())
+				if entry.IsDir() {
+					dirs = append(dirs, rel)
+				}
+				if !matchesSearchTerms(strings.ToLower(rel), terms) {
+					continue
+				}
+				item := completionItem{value: dir + rel, directory: entry.IsDir()}
+				if item.directory {
+					item.value += "/"
+				}
+				out.items = append(out.items, item)
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				if next > 0 && (os.IsPermission(readErr) || os.IsNotExist(readErr)) {
+					out.truncated = true
+				} else {
+					out.err = readErr
+				}
 				break
 			}
 		}
-		if err == io.EOF {
-			break
+		if next > 0 {
+			current.Close()
 		}
-		if err != nil {
-			out.err = err
+		if out.err != nil {
 			return out
 		}
 	}
-	out.truncated = scanned >= 10000 || len(out.items) >= 256
-	sort.Slice(out.items, func(i, j int) bool { return out.items[i].value < out.items[j].value })
+	out.truncated = out.truncated || scanned >= 10000 || len(out.items) > 256
+	sort.Slice(out.items, func(i, j int) bool {
+		a, b := out.items[i].value, out.items[j].value
+		if len(a) != len(b) {
+			return len(a) < len(b)
+		}
+		return a < b
+	})
+	out.items = out.items[:min(len(out.items), 256)]
 	return out
 }
 

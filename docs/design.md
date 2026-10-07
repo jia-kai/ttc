@@ -34,29 +34,34 @@ describes setup and current behavior. Related contracts:
 
 One Go module uses direct construction and small interfaces at their consumers:
 
-| Package                    | Ownership                                           |
-| -------------------------- | --------------------------------------------------- |
-| `cmd/ttc`                  | CLI and dependency wiring                           |
-| `cmd/embed-prompts`        | Build-time prompt validation and generation         |
-| `internal/prompts`         | Immutable generated LLM text; no runtime files/YAML |
-| `internal/session`         | Main/child turns, admission, input and timers       |
-| `internal/provider`        | Models, streams, login and replay contracts         |
-| `internal/provider/openai` | Subscription transport and device-code login        |
-| `internal/tool`            | Registry, codecs, dispatch and tool implementations |
-| `internal/workspace`       | Runtime-local serialized edits and restore          |
-| `internal/history`         | SQLite branches, artifacts and exports              |
-| `internal/context`         | Request projection and budgets                      |
-| `internal/tui`             | Composer, windows, sidebar and login rendering      |
-| `internal/jobs`            | Linux process groups and managed child tasks        |
-| `internal/capture`         | Shared bounded stream rings and cursors             |
-| `internal/scratch`         | Sticky root and verified private UID directory      |
-| `internal/rail`            | Workdir-scoped Bubblewrap mounts and tmux lifecycle |
-| `internal/skills`          | Local/embedded discovery and precedence             |
-| `internal/render`          | Markdown, tool presentation and plain output        |
-| `internal/graphics`        | Kitty detection, protocol and passthrough           |
-| `internal/lsp`             | Language servers, document sync and query results   |
-| `internal/assets`          | Images, render cache and warm MathJax backend       |
-| `internal/blobcache`       | Shared disposable filesystem blob storage          |
+| Package                      | Ownership                                           |
+| ---------------------------- | --------------------------------------------------- |
+| `cmd/ttc`                    | CLI, application policy and runtime lifecycle       |
+| `cmd/embed-prompts`          | Build-time prompt validation and generation         |
+| `internal/prompts`           | Immutable generated LLM text; no runtime files/YAML |
+| `internal/session`           | Main/child turns, admission, input and timers       |
+| `internal/llm`               | Neutral LLM values and offline scripting            |
+| `internal/providers`         | Neutral modules, configuration and selection        |
+| `internal/providers/builtin` | Explicit production-module registration             |
+| `internal/providers/openai`  | OpenAI auth, protocol, codecs and module wiring     |
+| `internal/catalog`           | Neutral discovery, budgets, cache and workers       |
+| `internal/auth`              | Typed authorization presentation contract          |
+| `internal/binaryinput`       | Binary validation, filesystem resolution and cache |
+| `internal/tool`              | Registry, codecs, dispatch and tool implementations |
+| `internal/workspace`         | Runtime-local serialized edits and restore          |
+| `internal/history`           | SQLite branches, artifacts and exports              |
+| `internal/context`           | Request projection and budgets                      |
+| `internal/tui`               | Composer, windows, sidebar and login rendering      |
+| `internal/jobs`              | Linux process groups and managed child tasks        |
+| `internal/capture`           | Shared bounded stream rings and cursors             |
+| `internal/scratch`           | Sticky root and verified private UID directory      |
+| `internal/rail`              | Workdir-scoped Bubblewrap mounts and tmux lifecycle |
+| `internal/skills`            | Local/embedded discovery and precedence             |
+| `internal/render`            | Markdown, tool presentation and plain output        |
+| `internal/graphics`          | Kitty detection, protocol and passthrough           |
+| `internal/lsp`               | Language servers, document sync and query results   |
+| `internal/assets`            | Images, render cache and warm MathJax backend       |
+| `internal/blobcache`         | Shared disposable filesystem blob storage          |
 
 - The leaf `internal/prompts` package contains generated assets; authoring,
   validation and build integration belong to [prompt/README.md](../prompt/README.md).
@@ -192,30 +197,66 @@ This defines committed ordering, not repeatable worker completion order.
 
 ## Provider and model abstraction
 
-Providers own authentication, catalogs and wire formats; frontends render typed
-login steps. Providers never import widgets or print to the terminal.
+`llm` holds shared, effect-free values and deterministic offline scripting, not
+production provider registration or services. Sessions consume only
+`session.Inference`:
 
 ```go
-type Provider interface {
-    Models(ctx context.Context) ([]ModelSpec, error)
-    Login(ctx context.Context, ui LoginUI) error
-    Stream(ctx context.Context, req Request, emit func(StreamEvent) error) error
-    EstimateReplay(message Message) int
-}
-type LoginUI interface {
-    Present(ctx context.Context, step LoginStep) (LoginAnswer, error)
+type Inference interface {
+    Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
+    EstimateReplay(llm.Message) int
 }
 ```
 
-- `Stream` stops on cancellation or callback error. OpenAI uses device-code login:
+`internal/providers` defines neutral module contracts and configuration helpers.
+Concrete subpackages own each provider's implementation and wiring; shared LLM
+values remain independent of them.
+A `Module` has an `ID` and `Configure(*flag.FlagSet) (Factory, error)`;
+configuration registers module-owned flags with independent state. `Configure`
+stages all module flags and rejects invalid modules or collisions without
+partially changing the application's flag set. After parsing, `Select` returns
+the requested configured factory; empty or unknown IDs fail. Explicit flags owned
+by a nonselected module also fail, even when set to their default values.
+
+The factory receives a context and `Environment` (`DataDir`, optional HTTP
+`Client`, and `ResolveBinary`) and returns `Components`: required `Inference`,
+optional `Catalog` (`Bind` and `CachePath`), optional
+`Authorize(context.Context, auth.UI) error`, and a non-secret startup `Notice`.
+Construction starts no workers or resources requiring closure. The CLI owns
+catalog policy, deadlines, manager workers and shutdown. Normal interactive
+startup requires a catalog; fixed models can use a static `catalog.Source`.
+Login orchestration invalidates the catalog, calls authorization, then refreshes
+choices; modules do not own that lifecycle or presentation.
+
+`builtin.Modules` returns a fresh explicit production-module list. Registration
+is separate so neutral `providers` never imports its concrete subpackages. The
+first entry is the CLI's `--provider` default; currently the sole entry is OpenAI. No `init`
+registration, runtime plugins or provider JSON configuration is used: flags are
+the module configuration mechanism. `--offline-script` is separate deterministic
+test mode, not a registered production provider. It bypasses provider construction
+and rejects `--login`, explicit `--provider` and provider-specific flags rather
+than silently ignoring them.
+
+- Transports own context-bound protocol HTTP, wire/replay codecs and in-request
+  retries, not files, caches, background workers, login UI or conversation state.
+  OpenAI accepts injected credential and binary-resolution functions;
+  `openai.AccessTokens` contains only access token/account identity. ID and refresh
+  tokens stay with the auth owner, never the inference dependency.
+- `catalog.Source.Models` returns remote `ModelInfo` capacities/capabilities.
+  The provider-neutral `catalog.Manager` applies TTC `Policy` to create budgeted
+  `ModelSpec` snapshots and owns scoped cache storage and discovery lifetimes;
+  [models](models.md#catalog-and-startup) defines cold/warm startup and refresh.
+- `openai.Authenticator` owns credentials, refresh and login storage;
+  frontends render `auth.UI` steps. OpenAI uses device-code login:
   show URL/code/expiry, poll at prescribed intervals, handle slowdown/expiry and
   save credentials atomically as 0600. A cancelable file lock covers credential
   reread/refresh/save across instances, never model requests or device authorization. No server browser, callback listener or
   API-key fallback. Secrets/codes never enter history or logs. Refresh is
   serialized; exit cancels login. `--import-codex-auth` explicitly copies credentials
   without modifying their source or switching billing mode.
-- `ModelSpec` supplies stable provider/model IDs, display name, variants,
-  capabilities and catalog revision. Variants are validated reasoning/tier presets.
+- `ModelInfo` supplies remote IDs, display name, variants, capabilities, capacities
+  and catalog revision; `ModelSpec` adds application budget reserves. A `Selection`
+  freezes provider ID, model and variant. Variants are validated reasoning/tier presets.
   [Models](models.md) owns catalog/startup, selection, budget metadata and metering;
   [compaction](compaction.md) owns admission budgets, retention and failure policy.
   The frontend reloads after handoff without a popup, preserving input/interactions.
@@ -233,6 +274,32 @@ type LoginUI interface {
 - Endpoint `Usage` remains separate from input estimates. The runtime owns copied
   counters; [usage accounting](models.md#usage-accounting) defines their subsets,
   response identity, coverage and reset rules.
+
+### Adding a provider
+
+Add `internal/providers/acme` with a `Module` constructor returning a
+`providers.Module`. Keep its flag configuration, transport, credential owner
+(if needed) and catalog binding in that subpackage, with separate types/files
+for their responsibilities. Add one explicit entry in
+`internal/providers/builtin/builtin.go`; keep OpenAI first to preserve the default.
+Implement `session.Inference` and supply `catalog.Source` for
+discovery (or a static source for fixed models). Return the binding and optional
+cache path (empty disables disk caching), not a running `catalog.Manager`.
+No CLI, catalog, session or TUI changes are needed to add a provider using these
+contracts.
+For mutable authenticated identities, supply `Binding.Guard` to validate the
+captured identity and hold credential synchronization across cache commit and
+publication; scope fields alone do not prevent account-change races. See
+`internal/providers/openai/module.go`.
+For native binaries, inject `binaryinput.Resolve` or another resolver returning
+verified original `BinaryPayload` bytes; the transport codec only encodes them.
+
+Canonical `llm.Message` values intentionally remain shared with history:
+source/request identity, runtime/input provenance, authored display text and
+attachment references support admission, inspection and compaction. They are not
+wire fields; codecs project content, calls and compatible native replay state.
+Likewise, request attempt limits and typed retry/partial-error values coordinate
+transport retries with session-owned cross-request recovery, not durable workers.
 
 ### Request retries
 
@@ -444,14 +511,18 @@ The concrete boundaries above are TTC decisions, informed by:
 ### Binary, image and math assets
 
 - Providers announce binary formats and byte limits in model metadata; request
-  admission freezes them for tool execution. `read()` owns local classification,
-  bounded descriptor reads and format validation; adapters own native encoding.
-- LLM `read()` binary files are references: absolute original path and SHA-256
-  checksum, MIME type and byte size, but no payload in the database. Successful reads
-  cache the exact validated original bytes under their checksum.
-  Canonical tool messages retain references through history/load/compaction.
-  The provider adapter uploads cached bytes without reopening the source. A miss
-  verifies the source and repopulates the cache; unavailable originals become
+  admission freezes them for tool execution, and attachment selection freezes
+  them for snapshots. `binaryinput` shares classification, bounded descriptor
+  reads, format validation and original-byte caching between `read()` and
+  `@`/`/attach`. Adapters own native encoding.
+- Binary files from tools and human attachments are references: absolute original
+  path, SHA-256 checksum, MIME type and byte size, but no payload in the database.
+  Successful reads and snapshots cache the exact validated original bytes under
+  their checksum. Canonical messages retain references through history/load/compaction.
+  Inline binary payload records are rejected; data URLs exist only in provider transport.
+  The injected `binaryinput.Resolve` retrieves cached bytes without reopening the
+  source; on a miss it verifies the source and repopulates the cache, outside
+  provider code. The adapter encodes resolved originals; unavailable originals become
   explicit outgoing text notices without modifying history or tool association.
   Invalid references, cancellation and cache errors still fail requests. Native
   image tool outputs use backend-default detail, without client preprocessing;
@@ -507,10 +578,13 @@ The concrete boundaries above are TTC decisions, informed by:
   filter with deduplicated terms, longest first and early rejection. Highlight
   all occurrences in sanitized previews, merging overlaps and preserving Unicode
   positions. Enter recalls the exact prompt; Esc preserves draft.
-- Slash completion is local. One joined/debounced directory worker scans at most
-  10,000 entries/256 matches, not a recursive index. Accept only matching draft/
-  cursor/generation results; snapshot selected attachments asynchronously. Paste
-  and dialogs retain key priority.
+- Slash completion is local. One joined/debounced path worker recursively scans
+  at most 10,000 entries below the current or typed directory, without following
+  symlink directories; skip unreadable or disappeared descendants. Share Ctrl-R's
+  folded substring AND matcher; return up to 256 matches sorted by path length,
+  then alphabetically. No persistent index.
+  Accept only matching draft/cursor/generation results; snapshot selected
+  attachments asynchronously. Paste and dialogs retain key priority.
 - Ctrl-X E suspends terminal/graphics around a cancelable `$VISUAL`/`$EDITOR`
   using a 0600 scratch file. Drain runtime events while suspended. Failure preserves
   draft/cursor; valid UTF-8 edits up to 8 MiB replace without sending.

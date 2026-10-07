@@ -14,20 +14,20 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
 // cancelInputProvider gates the first response while the UI modifies pending
 // inputs and records the exact frozen request received at each admission.
 type cancelInputProvider struct {
-	provider.Script
-	requests chan provider.Request
+	llm.Script
+	requests chan llm.Request
 	release  chan struct{}
 	first    bool
 }
 
-func (p *cancelInputProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *cancelInputProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	select {
 	case p.requests <- req:
 	case <-ctx.Done():
@@ -44,20 +44,20 @@ func (p *cancelInputProvider) Stream(ctx context.Context, req provider.Request, 
 	return p.Script.Stream(ctx, req, emit)
 }
 
-func cancelTestRequest(t *testing.T, p *cancelInputProvider) provider.Request {
+func cancelTestRequest(t *testing.T, p *cancelInputProvider) llm.Request {
 	t.Helper()
 	select {
 	case req := <-p.requests:
 		return req
 	case <-time.After(3 * time.Second):
 		t.Fatal("request did not start")
-		return provider.Request{}
+		return llm.Request{}
 	}
 }
 
-func newCancelInputUI(t *testing.T, responses []provider.ScriptResponse) (*questionTestUI, *cancelInputProvider) {
+func newCancelInputUI(t *testing.T, responses []llm.ScriptResponse) (*questionTestUI, *cancelInputProvider) {
 	t.Helper()
-	p := &cancelInputProvider{Script: provider.Script{Responses: responses}, requests: make(chan provider.Request, 8), release: make(chan struct{})}
+	p := &cancelInputProvider{Script: llm.Script{Responses: responses}, requests: make(chan llm.Request, 8), release: make(chan struct{})}
 	u := newQuestionTestUIWithSetup(t, p, nil, func(r *session.Runtime) {
 		selection := r.CurrentSelection()
 		selection.Model.ID = "cancel-image-fixture"
@@ -102,7 +102,7 @@ func TestCancelPendingInputRestoresFullTextAndAttachmentSnapshots(t *testing.T) 
 			name, command, preview = "steer", "/cancel-steer", "Steer · "
 		}
 		t.Run(name, func(t *testing.T) {
-			responses := []provider.ScriptResponse{{Text: "Initial settled."}, {Text: "Older settled."}, {Text: "Restored settled."}}
+			responses := []llm.ScriptResponse{{Text: "Initial settled."}, {Text: "Older settled."}, {Text: "Restored settled."}}
 			if steer {
 				responses = responses[:2]
 				responses[1].Text = "Restored settled."
@@ -132,7 +132,7 @@ func TestCancelPendingInputRestoresFullTextAndAttachmentSnapshots(t *testing.T) 
 			}
 			var snapshots []contextbuild.Attachment
 			for _, path := range []string{textPath, dirPath, imagePath} {
-				a, err := contextbuild.Snapshot(context.Background(), path, true)
+				a, err := contextbuild.Snapshot(context.Background(), path, (llm.ModelSpec{Images: true}).BinaryFileTypes())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -171,7 +171,7 @@ func TestCancelPendingInputRestoresFullTextAndAttachmentSnapshots(t *testing.T) 
 			close(p.release)
 			u.wait(t, "Restored settled.")
 			u.wait(t, "Turn complete")
-			var req provider.Request
+			var req llm.Request
 			if !steer {
 				olderReq := cancelTestRequest(t, p)
 				if got := latestHumanInput(olderReq); got.Content != "older pending input" {
@@ -215,13 +215,13 @@ func originalInputCommitTime(t *testing.T, u *questionTestUI, content string) in
 	return committed
 }
 
-func latestHumanInput(req provider.Request) provider.Message {
+func latestHumanInput(req llm.Request) llm.Message {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" && !req.Messages[i].Runtime {
 			return req.Messages[i]
 		}
 	}
-	return provider.Message{}
+	return llm.Message{}
 }
 
 func TestCancelPendingInputLIFOLeavesNoHistoryOrCheckpoints(t *testing.T) {
@@ -231,7 +231,7 @@ func TestCancelPendingInputLIFOLeavesNoHistoryOrCheckpoints(t *testing.T) {
 			name, command, preview = "steer", "/cancel-steer", "Steer · "
 		}
 		t.Run(name, func(t *testing.T) {
-			u, p := newCancelInputUI(t, []provider.ScriptResponse{{Text: "Only initial settles."}})
+			u, p := newCancelInputUI(t, []llm.ScriptResponse{{Text: "Only initial settles."}})
 			for _, text := range []string{"oldest pending", "newest pending"} {
 				u.typeText(text)
 				submitCancelInput(u, steer)
@@ -277,7 +277,7 @@ func TestCancelPendingInputLIFOLeavesNoHistoryOrCheckpoints(t *testing.T) {
 }
 
 func TestCancelCommandsDoNotSettleDismissedQuestions(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")

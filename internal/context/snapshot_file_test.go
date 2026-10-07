@@ -16,7 +16,7 @@ func TestSnapshotRejectsFIFOWithoutWaitingForWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := Snapshot(stdcontext.Background(), path, false); done <- err }()
+	go func() { _, err := Snapshot(stdcontext.Background(), path, nil); done <- err }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "regular file or directory") {
@@ -67,7 +67,7 @@ func TestSnapshotUsesOpenedFileAfterPathReplacement(t *testing.T) {
 			if err := syscall.Mkfifo(path, 0600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := snapshotOpened(stdcontext.Background(), path, f, false)
+			got, err := snapshotOpened(stdcontext.Background(), path, f, nil)
 			want := "original"
 			if directory {
 				want = "child.txt\nnested\nnested/deep.txt"
@@ -87,7 +87,7 @@ func TestSnapshotExplicitFileSymlink(t *testing.T) {
 	if err := os.Symlink(path, path+".link"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Snapshot(stdcontext.Background(), path+".link", false)
+	got, err := Snapshot(stdcontext.Background(), path+".link", nil)
 	if err != nil || got.Text != "linked text" {
 		t.Fatal("explicit file symlink rejected", got, err)
 	}

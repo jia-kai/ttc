@@ -13,7 +13,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/tool"
 )
@@ -21,7 +21,7 @@ import (
 func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T) {
 	for _, large := range []bool{false, true} {
 		t.Run(fmt.Sprintf("paged=%v", large), func(t *testing.T) {
-			p := &provider.Script{Responses: []provider.ScriptResponse{{Text: "Ready."}, {}, {Text: "Page captured."}}}
+			p := &llm.Script{Responses: []llm.ScriptResponse{{Text: "Ready."}, {}, {Text: "Page captured."}}}
 			u := newQuestionTestUI(t, p)
 			u.typeText("Initialize capture history")
 			u.key(tcell.KeyEnter)
@@ -48,7 +48,7 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			p.Responses[1] = provider.ScriptResponse{Calls: []provider.ToolCall{{ID: "page", Name: "job_read", Arguments: args}}}
+			p.Responses[1] = llm.ScriptResponse{Calls: []llm.ToolCall{{ID: "page", Name: "job_read", Arguments: args}}}
 			u.typeText("Read the captured output")
 			u.key(tcell.KeyEnter)
 			u.wait(t, "Page captured.")
@@ -102,7 +102,7 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 }
 
 func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "stream", Name: "shell", Arguments: []byte(`{"command":"printf 'hello'"}`)}}}, {Text: "finished"}}}
+	p := &llm.Script{Responses: []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "stream", Name: "shell", Arguments: []byte(`{"command":"printf 'hello'"}`)}}}, {Text: "finished"}}}
 	u := newQuestionTestUI(t, p)
 	advance := make(chan struct{}, 2)
 	u.runtime.Tools = tool.NewRegistry()
@@ -164,7 +164,7 @@ func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
 }
 
 func TestRealShellInspectorUpdatesExpandedCaptureAndInterrupts(t *testing.T) {
-	p := &provider.Script{Responses: []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "real-stream", Name: "shell", Arguments: []byte(`{"command":"i=1; while [ $i -le 20 ]; do printf 'line-%02d\\n' \"$i\"; i=$((i+1)); done; while [ ! -f more ]; do sleep 0.01; done; cat more; sleep 30"}`)}}}}}
+	p := &llm.Script{Responses: []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "real-stream", Name: "shell", Arguments: []byte(`{"command":"i=1; while [ $i -le 20 ]; do printf 'line-%02d\\n' \"$i\"; i=$((i+1)); done; while [ ! -f more ]; do sleep 0.01; done; cat more; sleep 30"}`)}}}}}
 	u := newQuestionTestUI(t, p)
 	u.typeText("real shell")
 	u.key(tcell.KeyEnter)

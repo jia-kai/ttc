@@ -11,7 +11,7 @@ import (
 	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
 
@@ -30,7 +30,7 @@ func (r *Runtime) queueNotificationLocked(content string) error {
 		r.orderError = errors.Join(r.orderError, err)
 		return err
 	}
-	m := provider.Message{Role: "user", Runtime: true, Content: eventContent(content, id), EventSeq: id}
+	m := llm.Message{Role: "user", Runtime: true, Content: eventContent(content, id), EventSeq: id}
 	var incoming struct {
 		ID string `json:"wakeup_id"`
 	}
@@ -73,7 +73,7 @@ func (r *Runtime) committedJobs(actor string) []jobs.Snapshot {
 
 // admitMain freezes delivery and live state under the same publication gate.
 // A failed/oversized admission neither consumes notices nor advances cursors.
-func (r *Runtime) admitMain(ctx context.Context, turn string, selection provider.Selection) (admitted history.Admission, cm *provider.Message, err error) {
+func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Selection) (admitted history.Admission, cm *llm.Message, err error) {
 	err = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
@@ -186,7 +186,7 @@ func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64
 			return errors.New("event already pending delivery")
 		}
 	}
-	r.notifications = append(r.notifications, provider.Message{Role: "user", Runtime: true, Content: eventContent(content, eventID), EventSeq: eventID})
+	r.notifications = append(r.notifications, llm.Message{Role: "user", Runtime: true, Content: eventContent(content, eventID), EventSeq: eventID})
 	sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].EventSeq < r.notifications[j].EventSeq })
 	return nil
 }

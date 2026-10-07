@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestFullscreenCopiesWithoutMouseAndRestoresEveryExit(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Copy target"}, {Text: "Submitted"}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Copy target"}, {Text: "Submitted"}}})
 	u.typeText("hello")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Copy target")
@@ -71,7 +71,7 @@ func TestFullscreenConversationUsesLastColumnWithoutScrollbar(t *testing.T) {
 		view.append(line{text: strings.Repeat("x", 20), id: int64(i + 1)})
 	}
 	sidebar := newSidebar()
-	if err := draw(screen, view, sidebar, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, provider.Selection{}); err != nil {
+	if err := draw(screen, view, sidebar, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{}); err != nil {
 		t.Fatal(err)
 	}
 	for y := range 11 {
@@ -89,7 +89,7 @@ func TestFullscreenConversationUsesLastColumnWithoutScrollbar(t *testing.T) {
 }
 
 func TestFullscreenQuestionStillWorksWithKeyboard(t *testing.T) {
-	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
@@ -124,7 +124,7 @@ func TestFullscreenQuestionStillWorksWithKeyboard(t *testing.T) {
 }
 
 func TestFullscreenPausesPeriodicRedrawAndLiveReply(t *testing.T) {
-	p := &questionTestProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Reply produced while copying"}}}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Reply produced while copying"}}}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.typeText("hello")
 	u.key(tcell.KeyEnter)

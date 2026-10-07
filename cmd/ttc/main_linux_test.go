@@ -13,8 +13,8 @@ import (
 	"testing"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
-	"ttc/internal/provider/openai"
+	"ttc/internal/llm"
+	"ttc/internal/providers/openai"
 )
 
 type catalogTransport func(*http.Request) (*http.Response, error)
@@ -45,6 +45,8 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		if load := os.Getenv("TTC_TEST_MODEL_LOAD"); load != "" {
 			os.Args = append(os.Args, "--session", load, "--model", "second/fast", "--variant", "high")
 		}
+		_, cacheErr := os.Stat(filepath.Join(data, "openai-models.json"))
+		warm := cacheErr == nil
 		err := run()
 		if want := os.Getenv("TTC_TEST_MODEL_ERROR"); want != "" {
 			if err == nil || !strings.Contains(err.Error(), want) {
@@ -57,8 +59,10 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		if os.Getenv("TTC_TEST_MODEL_CATALOG_RETRY") == "1" {
 			wantCatalogs = 3
 		}
-		if catalogs != wantCatalogs {
-			t.Fatalf("catalog requests: %d", catalogs)
+		// Warm launches can exit before the refresh reaches HTTP, or cancel
+		// between retries. Cold launches must finish discovery before opening.
+		if (!warm && catalogs != wantCatalogs) || (warm && catalogs > wantCatalogs) {
+			t.Fatalf("catalog requests: %d (warm=%v, maximum=%d)", catalogs, warm, wantCatalogs)
 		}
 		return
 	}
@@ -73,13 +77,7 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := json.Marshal(openai.Credentials{AuthMode: "chatgpt", Tokens: openai.Tokens{Access: "synthetic", AccountID: "test"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(data, "openai-auth.json"), credentials, 0600); err != nil {
-		t.Fatal(err)
-	}
+	importTestCredentials(t, openai.NewAuthenticator(filepath.Join(data, "openai-auth.json")), "test")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -161,10 +159,10 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			previous := provider.Selection{Provider: "openai", Model: provider.ScriptModel(), Variant: "low"}
+			previous := llm.Selection{Provider: "openai", Model: llm.ScriptModel(), Variant: "low"}
 			previous.Model.ID = "first"
 			id := history.NewID("session")
-			turn, _, err := s.StartSession(id, work, previous, provider.Message{Role: "user", Content: "Saved research"})
+			turn, _, err := s.StartSession(id, work, previous, llm.Message{Role: "user", Content: "Saved research"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,13 +188,7 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			credentials, err := json.Marshal(openai.Credentials{AuthMode: "chatgpt", Tokens: openai.Tokens{Access: "synthetic", AccountID: "test"}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(data, "openai-auth.json"), credentials, 0600); err != nil {
-				t.Fatal(err)
-			}
+			importTestCredentials(t, openai.NewAuthenticator(filepath.Join(data, "openai-auth.json")), "test")
 			cmd := exec.Command(executable, "-test.run=^TestStartupWithoutModelAndSwitchAcrossRestarts$")
 			cmd.Env = append(os.Environ(), "TTC_TEST_MODEL_DATA="+data, "TTC_TEST_MODEL_WORK="+work, "TTC_TEST_MODEL_LOAD="+id, "TTC_TEST_MODEL_ERROR="+wantError)
 			cmd.Stdin = strings.NewReader("/quit\n")

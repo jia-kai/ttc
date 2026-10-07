@@ -8,12 +8,12 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestSessionPickerReloadPreservesEditedDraft(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	u := newQuestionTestUIWithEditor(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Original research reply"}}}, func(ctx context.Context, draft string) (string, error) {
+	u := newQuestionTestUIWithEditor(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Original research reply"}}}, func(ctx context.Context, draft string) (string, error) {
 		close(entered)
 		select {
 		case <-release:
@@ -88,7 +88,7 @@ func TestSessionMenuDateGroupingSelectionAndWrapping(t *testing.T) {
 	}
 }
 func TestSessionPickerLoadsSelectedSession(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "First session evidence"}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "First session evidence"}}})
 	first := u.runtime.Current()
 	u.typeText("hello")
 	u.key(tcell.KeyEnter)

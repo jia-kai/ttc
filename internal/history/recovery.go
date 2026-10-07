@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 // recoveryEvent is a new semantic event owned by a manual snapshot. Source
@@ -245,7 +245,7 @@ func recoveryCandidatesWith(q historyReader, entries, visible []Entry) ([]recove
 // boundary-recovery load. It never writes or acknowledges events. Returned user
 // runtime messages own fresh event IDs, including the event_seq in their bodies.
 // Ordinary sessions, read-only predecessors and fatal contexts return no notices.
-func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string) ([]provider.Message, error) {
+func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string) ([]llm.Message, error) {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -261,7 +261,7 @@ func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string
 		return nil, nil
 	}
 	seen := map[string]bool{}
-	var out []provider.Message
+	var out []llm.Message
 	for {
 		if seen[session] {
 			return nil, errors.New("cyclic compaction ancestry")
@@ -309,7 +309,7 @@ func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string
 				rows.Close()
 				return nil, err
 			}
-			out = append(out, provider.Message{Role: "user", Runtime: true, EventSeq: id, Content: string(body)})
+			out = append(out, llm.Message{Role: "user", Runtime: true, EventSeq: id, Content: string(body)})
 		}
 		if err = rows.Err(); err != nil {
 			rows.Close()

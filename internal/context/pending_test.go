@@ -4,11 +4,11 @@ import (
 	"reflect"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestAppendPendingMessageIdentityAndPurity(t *testing.T) {
-	pending := provider.Message{Role: "developer", Runtime: true, RequestID: 17, Content: "Recovery warning"}
+	pending := llm.Message{Role: "developer", Runtime: true, RequestID: 17, Content: "Recovery warning"}
 	for _, field := range []string{"same", "runtime", "role", "content", "request"} {
 		t.Run(field, func(t *testing.T) {
 			existing := pending
@@ -22,8 +22,8 @@ func TestAppendPendingMessageIdentityAndPurity(t *testing.T) {
 			case "request":
 				existing.RequestID++
 			}
-			backing := []provider.Message{existing, {Role: "assistant", Content: "do not overwrite"}}
-			original := append([]provider.Message(nil), backing...)
+			backing := []llm.Message{existing, {Role: "assistant", Content: "do not overwrite"}}
+			original := append([]llm.Message(nil), backing...)
 			result, added := AppendPendingMessage(backing[:1], &pending)
 			if added != (field != "same") || !reflect.DeepEqual(backing, original) {
 				t.Fatal("incorrect deduplication or mutated input", result, added, backing)

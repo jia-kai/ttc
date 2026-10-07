@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -30,24 +30,24 @@ func Fail(code, message string) *Error { return &Error{Code: code, Message: mess
 // Execution identifies the immutable call and its live actor/session.
 type Execution struct {
 	SessionID, CallID, Actor string
-	Update                   func(any)                 // Optional transient result update. Call serially; the runtime owns presentation and persistence.
-	BinaryFiles              []provider.BinaryFileType // Binary capabilities frozen for the producing request; callers own an immutable copy.
+	Update                   func(any)            // Optional transient result update. Call serially; the runtime owns presentation and persistence.
+	BinaryFiles              []llm.BinaryFileType // Binary capabilities frozen for the producing request; callers own an immutable copy.
 }
 
 // Output separates JSON metadata from native binary files. File references retain
 // a checksum for verified request-time loading, rather than storing original bytes.
 type Output struct {
 	Value any
-	Files []provider.BinaryFile
+	Files []llm.BinaryFile
 }
 
 // Record holds exact arguments/result/presentation; decoding it never starts work.
 type Record struct {
-	Name      string                `json:"name"`
-	Arguments json.RawMessage       `json:"arguments"`
-	Result    json.RawMessage       `json:"result"`
-	Markdown  render.Markdown       `json:"markdown"`
-	Files     []provider.BinaryFile `json:"files,omitempty"` // Native binary files, separate from textual Result.
+	Name      string           `json:"name"`
+	Arguments json.RawMessage  `json:"arguments"`
+	Result    json.RawMessage  `json:"result"`
+	Markdown  render.Markdown  `json:"markdown"`
+	Files     []llm.BinaryFile `json:"files,omitempty"` // Native binary files, separate from textual Result.
 }
 
 // Encode serializes the historical record at version one.
@@ -61,7 +61,7 @@ type Call interface {
 
 // Tool owns strict codecs and its stable definition.
 type Tool interface {
-	Definition() provider.ToolDefinition
+	Definition() llm.ToolDefinition
 	DecodeCall(int, []byte) (Call, error)
 	DecodeRecord(int, []byte) (Record, error)
 }
@@ -87,7 +87,7 @@ func Strict(data []byte, v any) error {
 }
 
 type typed[A any] struct {
-	def      provider.ToolDefinition
+	def      llm.ToolDefinition
 	validate func(A) error
 	run      func(context.Context, Execution, A) (any, error)
 }
@@ -100,7 +100,7 @@ func (c typedCall[A]) Encode() (int, []byte, error) { b, e := json.Marshal(c.arg
 func (c typedCall[A]) Run(ctx context.Context, x Execution) (any, error) {
 	return c.run(ctx, x, c.args)
 }
-func (t typed[A]) Definition() provider.ToolDefinition { return t.def }
+func (t typed[A]) Definition() llm.ToolDefinition { return t.def }
 func (t typed[A]) DecodeCall(version int, b []byte) (Call, error) {
 	if version != 1 {
 		return nil, errors.New("unsupported tool call version")
@@ -149,7 +149,7 @@ func Register[A any](r *Registry, name, description string, properties map[strin
 		required = []string{}
 	}
 	schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
-	r.tools[name] = typed[A]{provider.ToolDefinition{Name: name, Description: description, Parameters: schema}, validate, run}
+	r.tools[name] = typed[A]{llm.ToolDefinition{Name: name, Description: description, Parameters: schema}, validate, run}
 }
 
 // Property constructs a JSON Schema property, with optional enum values.
@@ -162,13 +162,13 @@ func Property(kind string, enum ...string) map[string]any {
 }
 
 // Definitions returns sorted, stable schemas for cache reuse.
-func (r *Registry) Definitions() []provider.ToolDefinition {
+func (r *Registry) Definitions() []llm.ToolDefinition {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	out := make([]provider.ToolDefinition, 0, len(names))
+	out := make([]llm.ToolDefinition, 0, len(names))
 	for _, name := range names {
 		out = append(out, r.tools[name].Definition())
 	}
@@ -208,7 +208,7 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 		}
 	}
 	var file *fileResult
-	var files []provider.BinaryFile
+	var files []llm.BinaryFile
 	if output, ok := value.(Output); ok {
 		value, files = output.Value, output.Files
 	}

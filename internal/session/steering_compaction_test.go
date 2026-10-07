@@ -12,7 +12,7 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T) {
@@ -26,11 +26,11 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	if err := os.WriteFile(path, []byte("ORIGINAL STEERING SNAPSHOT"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := contextbuild.Snapshot(context.Background(), path, false)
+	snapshot, err := contextbuild.Snapshot(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	image := contextbuild.Attachment{Path: "fixture.png", Kind: "image", Image: &provider.BinaryFile{Path: "fixture.png", DataURL: "data:image/png;base64,aW1tdXRhYmxl"}}
+	image := contextbuild.Attachment{Path: "/snapshot/fixture.png", Kind: "image", File: &llm.BinaryFile{Path: "/snapshot/fixture.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 9}}
 	inputs := []contextbuild.Input{
 		{Text: "First pending steer", Attachments: []contextbuild.Attachment{snapshot, image}},
 		{Text: "Second pending steer", Attachments: []contextbuild.Attachment{snapshot}},
@@ -51,8 +51,8 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 		}
 	}
 	summaries, coding := 0, 0
-	var committed []provider.Message
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	var committed []llm.Message
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
 			summaries++
 			if summaries != 1 {
@@ -64,13 +64,13 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			return emit(provider.StreamEvent{Kind: "text", Text: "Earlier research is archived."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Earlier research is archived."})
 		}
 		coding++
 		if r.Current() == before {
 			return fmt.Errorf("coding began before automatic handoff")
 		}
-		var found []provider.Message
+		var found []llm.Message
 		for _, message := range req.Messages {
 			if message.Role == "user" && !message.Runtime && strings.Contains(message.Content, "pending steer") {
 				found = append(found, message)
@@ -79,7 +79,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 				return fmt.Errorf("cancelled steer reached inference")
 			}
 		}
-		want := []provider.Message{inputs[0].Message(), inputs[1].Message()}
+		want := []llm.Message{inputs[0].Message(), inputs[1].Message()}
 		if len(found) != len(want) {
 			return fmt.Errorf("wrong admitted steering count: %d", len(found))
 		}
@@ -99,17 +99,17 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 			return fmt.Errorf("admitted steering provenance changed across requests")
 		}
 		if coding == 1 {
-			return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: "read-after-handoff", Name: "read", Arguments: []byte(`{"path":"steering.txt"}`)}})
+			return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "read-after-handoff", Name: "read", Arguments: []byte(`{"path":"steering.txt"}`)}})
 		}
 		if coding != 2 {
 			return fmt.Errorf("unexpected coding request %d", coding)
 		}
-		return emit(provider.StreamEvent{Kind: "text", Text: "Steering completed."})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Steering completed."})
 	}}
 	done := make(chan error, 1)
 	stopped := make(chan struct{})
 	go func() {
-		done <- r.Run(&provider.Message{Role: "user", Content: "Continue current work"})
+		done <- r.Run(&llm.Message{Role: "user", Content: "Continue current work"})
 		close(stopped)
 	}()
 	t.Cleanup(func() {
@@ -170,7 +170,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	var humans []provider.Message
+	var humans []llm.Message
 	for _, message := range messages {
 		if message.Role == "user" && !message.Runtime && (strings.Contains(message.Content, "pending steer") || strings.Contains(message.Content, "Cancel after handoff")) {
 			humans = append(humans, message)

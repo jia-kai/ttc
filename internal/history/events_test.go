@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -19,8 +19,8 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notice := provider.Message{Role: "user", Runtime: true, Content: `{"type":"job_exit","job_id":"done"}`, EventSeq: source}
-	cm := &provider.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
+	notice := llm.Message{Role: "user", Runtime: true, Content: `{"type":"job_exit","job_id":"done"}`, EventSeq: source}
+	cm := &llm.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
 	before, err := s.Session(v.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if _, err := s.DB.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []provider.Message{notice}, nil); err == nil {
+	if _, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{notice}, nil); err == nil {
 		t.Fatal("forced failure succeeded")
 	}
 	after, err := s.Session(v.ID)
@@ -49,7 +49,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if _, err := s.DB.Exec("DROP TRIGGER fail_admission"); err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []provider.Message{notice}, nil)
+	admitted, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{notice}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,15 +90,15 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 func TestRequestInputMetadataStaysBoundedForMainAndChildReplay(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	item := json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("A", 1<<20) + `"}`)
-	reply := provider.Message{Role: "assistant", State: &provider.ReplayState{Provider: v.Model.Provider, Model: v.Model.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
+	reply := llm.Message{Role: "assistant", State: &llm.ReplayState{Provider: v.Model.Provider, Model: v.Model.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
 	if _, err := s.Append(v.ID, turn, "main", "message", "assistant", true, reply); err != nil {
 		t.Fatal(err)
 	}
 	for _, actor := range []string{"main", "main/child_metadata"} {
-		var prefix []provider.Message
+		var prefix []llm.Message
 		actorTurn := turn
 		if actor != "main" {
-			prefix = []provider.Message{{Role: "user", Content: "Frozen parent context"}, reply}
+			prefix = []llm.Message{{Role: "user", Content: "Frozen parent context"}, reply}
 			var err error
 			actorTurn, err = s.BeginChildTurn(v.ID, actor, v.Model)
 			if err != nil {
@@ -183,8 +183,8 @@ func TestRejectedFutureNotificationRollsBackAndChildInputStaysIsolated(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	cm := &provider.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
-	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []provider.Message{{Role: "user", Content: "future", EventSeq: before.EntryTip + 100}}, nil)
+	cm := &llm.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
+	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Role: "user", Content: "future", EventSeq: before.EntryTip + 100}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "cutoff") {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestRejectedFutureNotificationRollsBackAndChildInputStaysIsolated(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := []provider.Message{{Role: "user", Content: "frozen child prefix"}}
+	prefix := []llm.Message{{Role: "user", Content: "frozen child prefix"}}
 	admitted, err := s.AdmitRequest(v.ID, childTurn, "main/child", v.Model, cm, nil, prefix)
 	if err != nil || len(admitted.Messages) != 2 || admitted.Messages[0].Content != "frozen child prefix" {
 		t.Fatal(admitted, err)
@@ -217,7 +217,7 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := s.CallIntent(v.ID, turn, "main", req, provider.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{}`)})
+	call, err := s.CallIntent(v.ID, turn, "main", req, llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +225,10 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 	if _, err = s.CallResult(v.ID, turn, "main", call, result, nil, map[string]string{}, render.Markdown{}, true); err != nil {
 		t.Fatal(err)
 	}
-	cm := &provider.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
+	cm := &llm.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
 	// A fast background assignment can be represented by both its immutable
 	// launch result and the queued finish; it still receives one acknowledgment.
-	first, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []provider.Message{{Role: "user", Runtime: true, Content: `{"type":"child_turn_finished"}`, EventSeq: finish}}, nil)
+	first, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Role: "user", Runtime: true, Content: `{"type":"child_turn_finished"}`, EventSeq: finish}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, calls, err := s.Assistant(source.ID, turn, "main", request, provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
+	_, calls, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,8 +272,8 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notice := provider.Message{Role: "user", Runtime: true, Content: "finished", EventSeq: finish}
-	if _, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, []provider.Message{notice}, nil); err == nil {
+	notice := llm.Message{Role: "user", Runtime: true, Content: "finished", EventSeq: finish}
+	if _, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, []llm.Message{notice}, nil); err == nil {
 		t.Fatal("loaded runtime accepted its source's live notification")
 	}
 	admitted, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, nil, nil)

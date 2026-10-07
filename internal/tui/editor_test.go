@@ -10,13 +10,13 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/sys/unix"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
 func TestHeldEditorDrainsEventsAndJoinsOnCancellation(t *testing.T) {
 	entered, exited := make(chan string, 1), make(chan struct{})
-	u := newQuestionTestUIWithEditor(t, &provider.Script{}, func(ctx context.Context, draft string) (string, error) {
+	u := newQuestionTestUIWithEditor(t, &llm.Script{}, func(ctx context.Context, draft string) (string, error) {
 		entered <- draft
 		<-ctx.Done()
 		close(exited)

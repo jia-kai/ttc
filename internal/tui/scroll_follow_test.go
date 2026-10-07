@@ -7,20 +7,20 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type scrollProvider struct {
-	provider.Script
+	llm.Script
 	release chan struct{}
 }
 
-func (p *scrollProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *scrollProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	var text strings.Builder
 	for n := range 50 {
 		fmt.Fprintf(&text, "line-%02d\n", n)
 	}
-	if err := emit(provider.StreamEvent{Kind: "text", Text: text.String()}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "text", Text: text.String()}); err != nil {
 		return err
 	}
 	select {
@@ -28,7 +28,7 @@ func (p *scrollProvider) Stream(ctx context.Context, req provider.Request, emit 
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return emit(provider.StreamEvent{Kind: "text", Text: "New streaming tail"})
+	return emit(llm.StreamEvent{Kind: "text", Text: "New streaming tail"})
 }
 
 func TestCtrlDAtBottomFollowsDuringActiveTurn(t *testing.T) {

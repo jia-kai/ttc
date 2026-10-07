@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
@@ -22,16 +22,16 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 	mainReady, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
 	var parentCalls, asideCalls atomic.Int32
-	var parent provider.Request
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	var parent llm.Request
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		cached, written, reasoning := 600, 100, 2
 		finish := func() error {
-			return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}})
+			return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}})
 		}
 		if !strings.Contains(req.ConversationID, "/btw_") {
 			if parentCalls.Add(1) == 1 {
-				call := provider.ToolCall{ID: "main-read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}
-				if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+				call := llm.ToolCall{ID: "main-read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}
+				if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 					return err
 				}
 				return finish()
@@ -43,7 +43,7 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			if err := emit(provider.StreamEvent{Kind: "text", Text: "main finished"}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "text", Text: "main finished"}); err != nil {
 				return err
 			}
 			return finish()
@@ -70,14 +70,14 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 			if req.Messages[len(parent.Messages)].Content != btwInstruction {
 				return errors.New("missing turn-local aside instruction")
 			}
-			for _, call := range []provider.ToolCall{
+			for _, call := range []llm.ToolCall{
 				{ID: "write", Name: "write", Arguments: []byte(`{"path":"forbidden.txt","content":"bad"}`)},
 				{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch forbidden-shell.txt"}`)},
 				{ID: "question", Name: "question", Arguments: []byte(`{"questions":[]}`)},
 				{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"bad","label":"bad"}`)},
 				{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)},
 			} {
-				if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+				if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 					return err
 				}
 			}
@@ -92,13 +92,13 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 		if failures != 4 {
 			return errors.New("forbidden dispatch did not return four failures")
 		}
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "## Aside answer\n\nVerified evidence."}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "## Aside answer\n\nVerified evidence."}); err != nil {
 			return err
 		}
 		return finish()
 	}}
 	done := make(chan error, 1)
-	go func() { m := provider.Message{Role: "user", Content: "Keep main working"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Role: "user", Content: "Keep main working"}; done <- r.Run(&m) }()
 	select {
 	case <-mainReady:
 	case <-time.After(3 * time.Second):
@@ -172,7 +172,7 @@ func TestBTWAdmissionAndCancellation(t *testing.T) {
 		t.Fatal("empty session persisted by aside")
 	}
 	seedRuntime(t, r, "context")
-	r.Provider = &childProvider{stream: func(ctx context.Context, _ provider.Request, _ func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, _ llm.Request, _ func(llm.StreamEvent) error) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
@@ -200,7 +200,7 @@ func TestBTWAdmissionAndCancellation(t *testing.T) {
 func TestUsageTotalsAccumulateAndSnapshotDoesNotAlias(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	cached, written, reasoning := 500, 100, 8
-	u := provider.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}
+	u := llm.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}
 	r.recordUsage(&u)
 	r.recordUsage(&u)
 	snapshot := r.UsageSnapshot()
@@ -213,7 +213,7 @@ func TestUsageTotalsAccumulateAndSnapshotDoesNotAlias(t *testing.T) {
 		t.Fatal("aliased counters")
 	}
 	r.recordUsage(nil)
-	r.recordUsage(&provider.Usage{InputTokens: 200, OutputTokens: 2})
+	r.recordUsage(&llm.Usage{InputTokens: 200, OutputTokens: 2})
 	snapshot = r.UsageSnapshot()
 	if snapshot.Totals.ReportedRequests != 3 || snapshot.Totals.Requests != 4 || snapshot.Totals.Tokens.CachedInputTokens != nil {
 		t.Fatal("missing counters presented as zero", snapshot)

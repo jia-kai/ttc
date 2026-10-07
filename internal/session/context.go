@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 	contextbuild "ttc/internal/context"
+	"ttc/internal/llm"
 	"ttc/internal/prompts"
-	"ttc/internal/provider"
 	"ttc/internal/render"
 	"unicode"
 	"unicode/utf8"
@@ -20,7 +20,7 @@ func httpClient() *http.Client { return &http.Client{Timeout: 120 * time.Second}
 
 // startNaming claims one background request at the first settled tool batch,
 // or completed response without tools. The running coding turn remains usable.
-func (r *Runtime) startNaming(turn string, selection provider.Selection, user, assistant provider.Message) {
+func (r *Runtime) startNaming(turn string, selection llm.Selection, user, assistant llm.Message) {
 	sessionID := r.Current()
 	claim, err := r.Store.DB.Exec("UPDATE sessions SET naming_claimed=1,metadata_json=json_set(metadata_json,'$.naming_turn_id',?) WHERE id=? AND naming_claimed=0 AND name_source='default'", turn, sessionID)
 	if err != nil {
@@ -53,7 +53,7 @@ func (r *Runtime) namingFailure(ctx context.Context, sessionID, turn, reason str
 	r.emit(Event{Kind: "status", Text: text, EntryID: id, SessionID: sessionID})
 }
 
-func (r *Runtime) name(ctx context.Context, sessionID string, selection provider.Selection, turn string, user, assistant provider.Message) {
+func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Selection, turn string, user, assistant llm.Message) {
 	ownerCtx := ctx
 	settings := prompts.Naming()
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutSeconds)*time.Second)
@@ -74,7 +74,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection provider
 		r.namingFailure(ownerCtx, sessionID, turn, "start request: "+e.Error())
 		return
 	}
-	var usage *provider.Usage
+	var usage *llm.Usage
 	status := "failed"
 	defer func() {
 		if ownerCtx.Err() != nil {
@@ -90,7 +90,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection provider
 		return
 	}
 	r.emit(Event{Kind: "system_prompt", Text: "System prompt · session naming", EntryID: id})
-	message := provider.Message{Role: "user", Content: text(user.Content) + "\n\n" + text(assistant.Content)}
+	message := llm.Message{Role: "user", Content: text(user.Content) + "\n\n" + text(assistant.Content)}
 	for i, call := range assistant.Calls {
 		if i == 4 {
 			break
@@ -104,7 +104,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection provider
 		return
 	}
 	var title strings.Builder
-	e = r.Provider.Stream(ctx, provider.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []provider.Message{message}, NoTools: true, OutputTokens: settings.OutputTokens, MaxAttempts: settings.MaxAttempts}, func(ev provider.StreamEvent) error {
+	e = r.Provider.Stream(ctx, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: settings.OutputTokens, MaxAttempts: settings.MaxAttempts}, func(ev llm.StreamEvent) error {
 		if ev.Kind == "completed" {
 			usage = ev.Usage
 		}
@@ -120,7 +120,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection provider
 		return nil
 	})
 	r.recordUsage(usage)
-	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "assistant", request, provider.Message{Role: "assistant", Content: title.String()}); e == nil {
+	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "assistant", request, llm.Message{Role: "assistant", Content: title.String()}); e == nil {
 		r.emit(Event{Kind: "message_placeholder", Text: "Session naming reply · inspect", EntryID: id})
 	} else {
 		r.namingFailure(ownerCtx, sessionID, turn, "save reply: "+e.Error())
@@ -162,7 +162,7 @@ func (r *Runtime) compact(focus string) (string, error) {
 // compactContext shares the manual and automatic handoff. The main loop is
 // paused, but live children/jobs can append a tail until routeMu locks commit.
 // pending is a persisted recovery warning required until coding succeeds.
-func (r *Runtime) compactContext(ctx context.Context, focus string, selection provider.Selection, pending *provider.Message) (result string, err error) {
+func (r *Runtime) compactContext(ctx context.Context, focus string, selection llm.Selection, pending *llm.Message) (result string, err error) {
 	session := r.Current()
 	defer func() { err = r.compactionFailure(session, err) }()
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
@@ -252,7 +252,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 	if e != nil {
 		return "", e
 	}
-	assembled := []provider.Message{{Role: "assistant", Content: text}}
+	assembled := []llm.Message{{Role: "assistant", Content: text}}
 	assembled = append(assembled, retainedInputs...)
 	visible = 0
 	for _, entry := range currentEntries {
@@ -284,7 +284,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		if e != nil {
 			return e
 		}
-		notices := append(append([]provider.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
+		notices := append(append([]llm.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
 		if e = compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, notices, contextMessage); e != nil {
 			return e
 		}
@@ -297,7 +297,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection pr
 		r.current = v.ID
 		r.mainContext.project = ""
 		r.mainContext.snapshot = ""
-		input := append(append([]provider.Message(nil), assembled...), notices...)
+		input := append(append([]llm.Message(nil), assembled...), notices...)
 		if contextMessage != nil {
 			input = append(input, *contextMessage)
 		}

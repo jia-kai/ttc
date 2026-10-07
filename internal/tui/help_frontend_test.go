@@ -11,7 +11,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/session"
 	"ttc/internal/skills"
@@ -22,13 +22,13 @@ import (
 // helpTestProvider records inference requests and holds the first response until
 // the test has inspected help and closed it without stopping the active turn.
 type helpTestProvider struct {
-	provider.Script
-	requests chan provider.Request
+	llm.Script
+	requests chan llm.Request
 	release  chan struct{}
 	first    bool
 }
 
-func (p *helpTestProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *helpTestProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	select {
 	case p.requests <- req:
 	case <-ctx.Done():
@@ -89,8 +89,8 @@ func waitHelpClosed(t *testing.T, u *questionTestUI, needles ...string) string {
 
 func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 	p := &helpTestProvider{
-		Script:   provider.Script{Responses: []provider.ScriptResponse{{Text: "Initial response."}, {Text: "Steer response."}, {Text: "Queue response."}}},
-		requests: make(chan provider.Request, 8), release: make(chan struct{}),
+		Script:   llm.Script{Responses: []llm.ScriptResponse{{Text: "Initial response."}, {Text: "Steer response."}, {Text: "Queue response."}}},
+		requests: make(chan llm.Request, 8), release: make(chan struct{}),
 	}
 	u := newQuestionTestUI(t, p)
 	u.typeText("initial")
@@ -148,7 +148,7 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 }
 
 func TestIdleHelpPreservesUnpersistedStatusWithoutInference(t *testing.T) {
-	p := &helpTestProvider{requests: make(chan provider.Request, 8), release: make(chan struct{})}
+	p := &helpTestProvider{requests: make(chan llm.Request, 8), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.runtime.Emit(session.Event{Kind: "status", Text: "IDLE_STATUS_BEFORE_HELP", Generation: u.runtime.Generation()})
 	u.wait(t, "IDLE_STATUS_BEFORE_HELP")
@@ -189,8 +189,8 @@ func TestPlainBusyHelpPrintsBeforeActiveResponseFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &helpTestProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Plain response."}}}, requests: make(chan provider.Request, 8), release: make(chan struct{})}
-	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	p := &helpTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Plain response."}}}, requests: make(chan llm.Request, 8), release: make(chan struct{})}
+	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 64)
 	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {

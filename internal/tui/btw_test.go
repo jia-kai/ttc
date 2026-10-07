@@ -7,18 +7,18 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 type btwUIProvider struct {
-	provider.Script
+	llm.Script
 	mainReady, asideReady, releaseAside chan struct{}
 }
 
-func (p *btwUIProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *btwUIProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	if !strings.Contains(req.ConversationID, "/btw_") {
 		close(p.mainReady)
-		if err := emit(provider.StreamEvent{Kind: "text", Text: "Main still working"}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Main still working"}); err != nil {
 			return err
 		}
 		<-ctx.Done()
@@ -30,10 +30,10 @@ func (p *btwUIProvider) Stream(ctx context.Context, req provider.Request, emit f
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if err := emit(provider.StreamEvent{Kind: "text", Text: "## Popup answer\n\nRead-only evidence."}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "text", Text: "## Popup answer\n\nRead-only evidence."}); err != nil {
 		return err
 	}
-	return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 100, OutputTokens: 10}})
+	return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 }
 
 func TestBTWPopupWaitsForFullscreenAndPreservesMain(t *testing.T) {

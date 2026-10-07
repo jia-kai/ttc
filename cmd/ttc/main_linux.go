@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -14,9 +15,13 @@ import (
 	"time"
 
 	"ttc/internal/assets"
+	"ttc/internal/auth"
+	"ttc/internal/binaryinput"
+	"ttc/internal/catalog"
 	"ttc/internal/history"
-	"ttc/internal/provider"
-	"ttc/internal/provider/openai"
+	"ttc/internal/llm"
+	"ttc/internal/providers"
+	"ttc/internal/providers/builtin"
 	"ttc/internal/rail"
 	"ttc/internal/scratch"
 	"ttc/internal/session"
@@ -29,13 +34,16 @@ import (
 
 type loginUI struct{}
 
-func (loginUI) Present(ctx context.Context, step provider.LoginStep) (provider.LoginAnswer, error) {
+func (loginUI) Present(ctx context.Context, step auth.Step) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if step.Kind == "device_code" {
 		fmt.Fprintf(os.Stdout, "Authorize from another device: %s\nCode: %s (expires in %ds)\n", step.URL, step.Code, step.ExpiresSeconds)
 	} else {
 		fmt.Fprintln(os.Stdout, step.Message)
 	}
-	return provider.LoginAnswer{}, nil
+	return nil
 }
 func main() {
 	if e := run(); e != nil {
@@ -44,6 +52,12 @@ func main() {
 	}
 }
 func run() error {
+	return runWithModules(builtin.Modules())
+}
+
+// runWithModules keeps command orchestration independent of built-in providers.
+// Modules register configuration, but the command owns catalog and UI lifetimes.
+func runWithModules(modules []providers.Module) error {
 	if rail.IsClientServer(os.Args[1:]) {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -66,16 +80,43 @@ func run() error {
 	data := flag.String("data-dir", rootDefault, "private data root")
 	cwd := flag.String("workdir", ".", "workspace directory")
 	plain := flag.Bool("plain", false, "plain terminal output")
-	importAuth := flag.String("import-codex-auth", "", "explicitly copy ChatGPT subscription credentials from a file")
 	login := flag.Bool("login", false, "run device-code login then exit")
 	installMath := flag.Bool("install-math", false, "install pinned MathJax in the user cache then exit")
-	endpoint := flag.String("openai-base-url", "", "explicit subscription endpoint override for local mock-server tests")
 	model := flag.String("model", "", "optional model ID override (otherwise use last choice)")
 	variant := flag.String("variant", "", "optional reasoning preset override")
 	script := flag.String("offline-script", "", "JSON response script for deterministic offline integration")
 	load := flag.String("session", "", "load stored session ID")
 	autoName := flag.Bool("auto-name", true, "one small naming request at the first tool boundary or completed response")
-	flag.Parse()
+	providerIDFlag := flag.String("provider", "", "compiled provider ID")
+	appFlags := make(map[string]bool)
+	flag.CommandLine.VisitAll(func(f *flag.Flag) { appFlags[f.Name] = true })
+	configured, e := providers.Configure(modules, flag.CommandLine)
+	if e != nil {
+		return e
+	}
+	*providerIDFlag = configured[0].ID
+	flag.CommandLine.Lookup("provider").DefValue = configured[0].ID
+	if e = flag.CommandLine.Parse(os.Args[1:]); e != nil {
+		if errors.Is(e, flag.ErrHelp) {
+			return nil
+		}
+		return e
+	}
+	factory, e := providers.Select(configured, *providerIDFlag)
+	if e != nil {
+		return e
+	}
+	if *script != "" {
+		var conflict string
+		flag.CommandLine.Visit(func(f *flag.Flag) {
+			if f.Name == "provider" || !appFlags[f.Name] {
+				conflict = f.Name
+			}
+		})
+		if *login || conflict != "" {
+			return errors.New("--offline-script cannot be combined with --login, --provider or provider-specific options")
+		}
+	}
 	if e = applySSHAuthSockPolicy(); e != nil {
 		return e
 	}
@@ -119,46 +160,76 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	var p provider.Provider
-	adapter := openai.New(filepath.Join(store.Root, "openai-auth.json"))
-	if *endpoint != "" {
-		adapter.BaseURL = *endpoint
-	}
-	if *importAuth != "" {
-		if e = adapter.ImportCodex(*importAuth); e != nil {
-			return e
-		}
-		fmt.Fprintln(os.Stderr, "Imported subscription credentials into private TTC storage")
-	}
-	if *login {
-		return adapter.Login(ctx, loginUI{})
-	}
+	var p session.Inference
+	var components providers.Components
+	providerID := *providerIDFlag
 	if *script != "" {
 		b, e := os.ReadFile(*script)
 		if e != nil {
 			return e
 		}
-		var responses []provider.ScriptResponse
+		var responses []llm.ScriptResponse
 		if e = json.Unmarshal(b, &responses); e != nil {
 			return e
 		}
-		p = &provider.Script{Responses: responses}
+		p = &llm.Script{Responses: responses}
 		*model = "scripted"
 		*autoName = false
-	} else {
-		p = adapter
-	}
-	modelsCtx, modelsCancel := context.WithTimeout(ctx, 30*time.Second)
-	models, e := p.Models(modelsCtx)
-	modelsCancel()
-	if e != nil {
-		return e
-	}
-	providerID := "openai"
-	if *script != "" {
 		providerID = "script"
+	} else {
+		components, e = factory(ctx, providers.Environment{DataDir: store.Root, ResolveBinary: binaryinput.Resolve})
+		if e != nil {
+			return fmt.Errorf("open provider %q: %w", providerID, e)
+		}
+		if components.Inference == nil {
+			return fmt.Errorf("provider %q has no inference component", providerID)
+		}
+		p = components.Inference
+		if components.Notice != "" {
+			fmt.Fprintln(os.Stderr, components.Notice)
+		}
+		if *login {
+			if components.Authorize == nil {
+				return fmt.Errorf("provider %q does not support authorization", providerID)
+			}
+			return components.Authorize(ctx, loginUI{})
+		}
 	}
-	var remembered *provider.Selection
+	var models []llm.ModelSpec
+	var modelUpdates <-chan catalog.Update
+	var loginCurrent func(context.Context) ([]llm.ModelSpec, error)
+	if *script != "" {
+		models = []llm.ModelSpec{llm.ScriptModel()}
+	} else {
+		if components.Catalog == nil || components.Catalog.Bind == nil {
+			return fmt.Errorf("provider %q has no model catalog", providerID)
+		}
+		manager, err := catalog.Open(ctx, catalog.Config{Bind: func(ctx context.Context) (catalog.Binding, error) {
+			binding, err := components.Catalog.Bind(ctx)
+			if err == nil && binding.Scope.Provider != providerID {
+				return catalog.Binding{}, fmt.Errorf("provider %q returned catalog scope %q", providerID, binding.Scope.Provider)
+			}
+			return binding, err
+		}, CachePath: components.Catalog.CachePath, Timeout: 30 * time.Second, Policy: catalog.DefaultPolicy()})
+		if err != nil {
+			return err
+		}
+		defer manager.Close()
+		models, modelUpdates = manager.Initial, manager.Updates
+		if manager.Notice != "" {
+			fmt.Fprintln(os.Stderr, "ttc:", manager.Notice)
+		}
+		if components.Authorize != nil {
+			loginCurrent = func(ctx context.Context) ([]llm.ModelSpec, error) {
+				manager.Invalidate()
+				if err := components.Authorize(ctx, loginUI{}); err != nil {
+					return nil, err
+				}
+				return manager.Refresh(ctx)
+			}
+		}
+	}
+	var remembered *llm.Selection
 	if *model == "" {
 		remembered, e = store.LastSelection(providerID)
 		if e != nil {
@@ -224,6 +295,6 @@ func run() error {
 		cancel()
 		runtime.Close()
 	}()
-	ui := &tui.Frontend{Runtime: runtime, Events: events, Input: os.Stdin, Output: os.Stdout, Plain: *plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginUI{}, Models: models}
+	ui := &tui.Frontend{Runtime: runtime, Events: events, Input: os.Stdin, Output: os.Stdout, Plain: *plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginCurrent, Models: models, ModelUpdates: modelUpdates}
 	return ui.Run(ctx)
 }

@@ -2,15 +2,17 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"golang.org/x/sys/unix"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestPathCompletionRejectsFIFOAndWorkerStillCloses(t *testing.T) {
@@ -91,7 +93,7 @@ func TestPathCompletionBoundAndWorkerShutdown(t *testing.T) {
 	}
 	q := completionQuery{root: root, prefix: "a", marker: '@'}
 	result := listPaths(context.Background(), q)
-	if len(result.items) != 2 || !result.items[0].directory || result.items[1].value != "alpha.txt" {
+	if len(result.items) != 3 || !result.items[0].directory || result.items[1].value != "beta.txt" || result.items[2].value != "alpha.txt" {
 		t.Fatal(result)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,7 +118,7 @@ func TestPathCompletionBoundAndWorkerShutdown(t *testing.T) {
 }
 
 func TestSlashDropdownAndAttachmentSnapshot(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Attached result"}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Attached result"}}})
 	if err := os.WriteFile(filepath.Join(u.runtime.Workspace.Root, "fixture.txt"), []byte("snapshot evidence"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +128,7 @@ func TestSlashDropdownAndAttachmentSnapshot(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "TTC help")
 	u.key(tcell.KeyEscape)
-	u.typeText("look @fix")
+	u.typeText("look @IXT")
 	u.wait(t, "fixture.txt")
 	u.key(tcell.KeyTab)
 	u.wait(t, "Attached ·")
@@ -148,6 +150,103 @@ func TestSlashDropdownAndAttachmentSnapshot(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing attachment")
+	}
+}
+
+func TestPathSearchSubstringsTermsAndRelativeOrdering(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"zz.txt", "aa.txt", "long-report.txt", "nested/Report-DRAFT.txt", "nested/other.txt"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(root, filepath.Join(root, "loop")); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		query string
+		want  []string
+	}{
+		{"TXT", []string{"aa.txt", "zz.txt", "long-report.txt", "nested/other.txt", "nested/Report-DRAFT.txt"}},
+		{"port", []string{"long-report.txt", "nested/Report-DRAFT.txt"}},
+		{"DRAFT port", []string{"nested/Report-DRAFT.txt"}},
+		{"nested/RAFT", []string{"nested/Report-DRAFT.txt"}},
+		{"other nested", []string{"nested/other.txt"}},
+		{"missing", nil},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			result := listPaths(context.Background(), completionQuery{root: root, prefix: tt.query, marker: '@'})
+			if result.err != nil || result.truncated {
+				t.Fatal(result)
+			}
+			var got []string
+			for _, item := range result.items {
+				got = append(got, item.value)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+	c := newComposer("@\"DRAFT port")
+	q, ok := completionAt(c, root, 1)
+	if !ok || q.prefix != "DRAFT port" {
+		t.Fatal(q, ok)
+	}
+	m := completionMenu{result: listPaths(context.Background(), q)}
+	if path, ok := m.accept(&c); !ok || path != "nested/Report-DRAFT.txt" || c.text != "@nested/Report-DRAFT.txt " {
+		t.Fatal(path, ok, c)
+	}
+}
+
+func TestPathSearchLimitsAfterSorting(t *testing.T) {
+	root := t.TempDir()
+	for i := range 300 {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("long-match-%03d.txt", i)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Created last, but must not be discarded by the match cap.
+	if err := os.WriteFile(filepath.Join(root, "match"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := listPaths(context.Background(), completionQuery{root: root, prefix: "match", marker: '@'})
+	if result.err != nil || !result.truncated || len(result.items) != 256 || result.items[0].value != "match" || result.items[255].value != "long-match-254.txt" {
+		t.Fatal(result)
+	}
+}
+
+func TestPathSearchSkipsUnreadableDescendants(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode-000 directories")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(locked, 0700); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "report.txt"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := listPaths(context.Background(), completionQuery{root: root, prefix: "port", marker: '@'})
+	if result.err != nil || !result.truncated || len(result.items) != 1 || result.items[0].value != "report.txt" {
+		t.Fatal(result)
+	}
+	result = listPaths(context.Background(), completionQuery{root: root, prefix: "locked/", marker: '@'})
+	if result.err == nil {
+		t.Fatal("explicit unreadable search root must fail")
 	}
 }
 

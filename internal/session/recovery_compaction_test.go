@@ -11,8 +11,8 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/llm"
 	"ttc/internal/prompts"
-	"ttc/internal/provider"
 )
 
 // A zero next-turn reserve is valid. The mandatory recovery warning must be
@@ -41,8 +41,8 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				warning := provider.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
-				messages := []provider.Message{
+				warning := llm.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
+				messages := []llm.Message{
 					{Role: "user", Content: "Continue research", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
 					{Role: "assistant", Content: strings.Repeat("Oversized partial evidence. ", 400)},
 					warning,
@@ -76,22 +76,22 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 					t.Fatal(err)
 				}
 				summary := "Partial evidence summarized; continue carefully."
-				baseline := []provider.Message{{Role: "assistant", Content: compactionLinks(summary, archive, archive+".jsonl")}}
+				baseline := []llm.Message{{Role: "assistant", Content: compactionLinks(summary, archive, archive+".jsonl")}}
 				baseline = append(baseline, retained...)
 				system := childSystemTemplate
 				if actor == "main" || aside {
 					system = systemTemplate
 				}
 				if aside {
-					baseline = append(baseline, provider.Message{Role: "developer", Runtime: true, Content: btwInstruction})
+					baseline = append(baseline, llm.Message{Role: "developer", Runtime: true, Content: btwInstruction})
 				}
 				runtime, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
 				if err != nil {
 					t.Fatal(err)
 				}
-				input := append(append([]provider.Message(nil), baseline...), *runtime)
+				input := append(append([]llm.Message(nil), baseline...), *runtime)
 				u := estimateUsage(r.selection, system, r.Tools.Definitions(), input)
-				warningTokens := contextbuild.Tokens([]provider.Message{warning})
+				warningTokens := contextbuild.Tokens([]llm.Message{warning})
 				b := &r.selection.Model.Budget
 				b.NextTurnInputReserve = 0
 				b.ContextLimit = u.Input + u.Reserved + warningTokens/2
@@ -110,14 +110,14 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 					t.Fatal("fixture does not straddle the mandatory warning budget")
 				}
 				summaries := 0
-				r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 					summaries++
 					if !req.NoTools || !strings.Contains(req.Messages[0].Content, prompts.Recovery) {
 						t.Fatal("summary must consume the original warning")
 					}
-					return emit(provider.StreamEvent{Kind: "text", Text: summary})
+					return emit(llm.StreamEvent{Kind: "text", Text: summary})
 				}}
-				var result []provider.Message
+				var result []llm.Message
 				if actor == "main" {
 					_, err = r.compactContext(context.Background(), "", r.selection, &warning)
 					if err == nil {
@@ -159,7 +159,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 					if entry.Actor != actor || entry.Kind != "message" || entry.Role != "developer" {
 						continue
 					}
-					var message provider.Message
+					var message llm.Message
 					if err := json.Unmarshal(entry.Content, &message); err != nil {
 						t.Fatal(err)
 					}
@@ -191,17 +191,17 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			warning := provider.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
+			warning := llm.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
 			if _, err := r.ensureRecovery(turn, actor, warning); err != nil {
 				t.Fatal(err)
 			}
-			messages := []provider.Message{
+			messages := []llm.Message{
 				{Role: "user", Content: "Continue isolated task", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
 				{Role: "assistant", Content: strings.Repeat("Partial isolated evidence. ", 400)},
 				warning,
 			}
 			summaries := 0
-			r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				summaries++
 				if strings.Contains(req.ConversationID, actor) {
 					// Main archives the child warning while its isolated summary
@@ -210,7 +210,7 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 						return err
 					}
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Evidence summarized; continue the task."})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Evidence summarized; continue the task."})
 			}}
 			result, _, err := r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
 			if err != nil || summaries != 2 || r.Current() == before {
@@ -246,10 +246,10 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 			}
 			coding, summaries := 0, 0
 			var failedRequest int64
-			r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.NoTools {
 					summaries++
-					return emit(provider.StreamEvent{Kind: "text", Text: "Partial evidence summarized; continue research."})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Partial evidence summarized; continue research."})
 				}
 				coding++
 				if coding == 1 {
@@ -268,11 +268,11 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 				if !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
 					t.Fatal("recovery bypassed request admission")
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Recovered after compaction"})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Recovered after compaction"})
 			}}
 			var err error
 			if actor == "main" {
-				err = r.Run(&provider.Message{Role: "user", Content: "Recover this task"})
+				err = r.Run(&llm.Message{Role: "user", Content: "Recover this task"})
 			} else {
 				seedRuntime(t, r, "Private main context")
 				turn, e := r.Store.BeginChildTurn(r.Current(), actor, r.selection)

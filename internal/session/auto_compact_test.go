@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func compactionBudget(t *testing.T, r *Runtime) {
@@ -20,7 +20,7 @@ func compactionBudget(t *testing.T, r *Runtime) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []provider.Message{*message})
+	u := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []llm.Message{*message})
 	b := &r.selection.Model.Budget
 	b.ContextLimit = u.Input + u.Reserved + 2000
 	b.RecentTokensMin = 0
@@ -34,7 +34,7 @@ func compactionBudget(t *testing.T, r *Runtime) {
 func seedCompactionHistory(t *testing.T, r *Runtime, content string) {
 	t.Helper()
 	seedRuntime(t, r, "Earlier research task")
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: content}); err != nil {
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: content}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -50,7 +50,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 	}
 	summaries, coding := 0, 0
 	var childTail int64
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
 			summaries++
 			if !strings.Contains(req.Messages[0].Content, "Previous research notes.") {
@@ -62,7 +62,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 			if err != nil {
 				return err
 			}
-			if err := emit(provider.StreamEvent{Kind: "text", Text: "Earlier research completed; continue the current task."}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed; continue the current task."}); err != nil {
 				return err
 			}
 		} else {
@@ -73,13 +73,13 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 			if !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
 				t.Fatal("oversized coding request sent")
 			}
-			if err := emit(provider.StreamEvent{Kind: "text", Text: "Continued successfully."}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "text", Text: "Continued successfully."}); err != nil {
 				return err
 			}
 		}
-		return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 100, OutputTokens: 10}})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Continue the research."}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Continue the research."}); err != nil {
 		t.Fatal(err)
 	}
 	if summaries != 1 || coding != 1 || r.Generation() != generation {
@@ -125,10 +125,10 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 	const prompt = "Edit the result and verify it."
 	before := r.Current()
 	step, summaries := 0, 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
 			summaries++
-			return emit(provider.StreamEvent{Kind: "text", Text: "The original request is ongoing; earlier file edits are recorded in the archive."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "The original request is ongoing; earlier file edits are recorded in the archive."})
 		}
 		step++
 		if step == 4 {
@@ -160,19 +160,19 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 			}
 		}
 		if step == 5 {
-			return emit(provider.StreamEvent{Kind: "text", Text: "Verified after continuation."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Verified after continuation."})
 		}
 		text := fmt.Sprintf("Model reasoning %d", step)
 		if step == 1 {
 			text += "\n" + strings.Repeat("older analysis ", 600)
 		}
-		if err := emit(provider.StreamEvent{Kind: "text", Text: text}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: text}); err != nil {
 			return err
 		}
-		calls := []provider.ToolCall{}
+		calls := []llm.ToolCall{}
 		if step == 3 {
 			for _, id := range []string{"read-a", "read-b"} {
-				calls = append(calls, provider.ToolCall{ID: id, Name: "read", Arguments: []byte(`{"path":"result.txt"}`)})
+				calls = append(calls, llm.ToolCall{ID: id, Name: "read", Arguments: []byte(`{"path":"result.txt"}`)})
 			}
 			// Switching to a tighter catalog model at this boundary exercises
 			// compaction of an active turn without first ending that turn.
@@ -190,16 +190,16 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 		} else {
 			content := fmt.Sprintf("version %d\n", step)
 			args, _ := json.Marshal(map[string]any{"path": "result.txt", "content": content})
-			calls = append(calls, provider.ToolCall{ID: fmt.Sprintf("write-%d", step), Name: "write", Arguments: args})
+			calls = append(calls, llm.ToolCall{ID: fmt.Sprintf("write-%d", step), Name: "write", Arguments: args})
 		}
 		for _, call := range calls {
-			if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 				return err
 			}
 		}
 		return nil
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: prompt}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 5 || summaries != 1 {
@@ -251,13 +251,13 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				compactionBudget(t, r)
 				seedCompactionHistory(t, r, strings.Repeat("Earlier completed research. ", 700))
 				before := r.Current()
-				newest := []provider.Message{{Role: "user", Content: "Continue with the sidebar widget."}}
+				newest := []llm.Message{{Role: "user", Content: "Continue with the sidebar widget."}}
 				for i := range cycles {
 					id := fmt.Sprintf("read-%d", i)
 					newest = append(newest,
-						provider.Message{Role: "developer", Runtime: true, Content: "Current runtime metadata"},
-						provider.Message{Role: "assistant", Calls: []provider.ToolCall{{ID: id, Name: "read", Arguments: []byte(`{"path":"fixture.go"}`)}}},
-						provider.Message{Role: "tool", CallID: id, Content: strings.Repeat("Recent tool result. ", 20)})
+						llm.Message{Role: "developer", Runtime: true, Content: "Current runtime metadata"},
+						llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: id, Name: "read", Arguments: []byte(`{"path":"fixture.go"}`)}}},
+						llm.Message{Role: "tool", CallID: id, Content: strings.Repeat("Recent tool result. ", 20)})
 				}
 				for _, message := range newest {
 					if _, err := r.Store.Append(before, "", "main", "message", message.Role, true, message); err != nil {
@@ -265,19 +265,19 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 					}
 				}
 				summaries, coding := 0, 0
-				r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 					if req.NoTools {
 						summaries++
 						if !strings.Contains(req.Messages[0].Content, "Earlier completed research.") {
 							t.Fatal("summary omitted the older prefix")
 						}
-						return emit(provider.StreamEvent{Kind: "text", Text: "Earlier research completed."})
+						return emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed."})
 					}
 					coding++
 					if r.Current() == before || !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
 						t.Fatal("coding request did not follow a fitting handoff")
 					}
-					return emit(provider.StreamEvent{Kind: "text", Text: "Continued."})
+					return emit(llm.StreamEvent{Kind: "text", Text: "Continued."})
 				}}
 				var err error
 				if automatic {
@@ -290,7 +290,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				}
 				retained := newest[:1]
 				if cycles > 0 {
-					retained = append(append([]provider.Message(nil), retained...), newest[2:]...)
+					retained = append(append([]llm.Message(nil), retained...), newest[2:]...)
 				}
 				messages, err := r.Store.Messages(r.Current())
 				if err != nil || len(messages) < len(retained)+1 {
@@ -306,7 +306,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				if start < 0 || start+len(retained) > len(messages) {
 					t.Fatal("newest input and recent cycles missing")
 				}
-				copied := append([]provider.Message(nil), messages[start:start+len(retained)]...)
+				copied := append([]llm.Message(nil), messages[start:start+len(retained)]...)
 				for i := range copied {
 					copied[i].InputSource, copied[i].InputTimeMS = "", 0
 				}
@@ -328,7 +328,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
 			before := r.Current()
 			attempts := 0
-			r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				attempts++
 				if !req.NoTools {
 					t.Fatal("coding request sent after failed compaction")
@@ -337,7 +337,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 				case "summary":
 					return errors.New("fixture summary failed")
 				case "oversized":
-					return emit(provider.StreamEvent{Kind: "text", Text: strings.Repeat("huge ", 30000)})
+					return emit(llm.StreamEvent{Kind: "text", Text: strings.Repeat("huge ", 30000)})
 				case "cancel":
 					r.Interrupt()
 					return ctx.Err()
@@ -348,15 +348,15 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 					}
 				case "tail":
 					r.routeMu.RLock()
-					_, err := r.Store.Append(before, "", "main", "message", "user", true, provider.Message{Role: "user", Content: strings.Repeat("new committed tail ", 10000)})
+					_, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Role: "user", Content: strings.Repeat("new committed tail ", 10000)})
 					r.routeMu.RUnlock()
 					if err != nil {
 						t.Fatal(err)
 					}
 				}
-				return emit(provider.StreamEvent{Kind: "text", Text: "Short valid summary."})
+				return emit(llm.StreamEvent{Kind: "text", Text: "Short valid summary."})
 			}}
-			err := r.Run(&provider.Message{Role: "user", Content: "Continue the research."})
+			err := r.Run(&llm.Message{Role: "user", Content: "Continue the research."})
 			if err == nil || attempts != 1 || r.Current() != before {
 				t.Fatal("failed compaction changed session or retried indefinitely", err, attempts)
 			}

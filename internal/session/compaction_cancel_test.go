@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
@@ -36,7 +36,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 					defer stop()
 				}
 				calls := 0
-				r.Provider = &childProvider{stream: func(got context.Context, _ provider.Request, emit func(provider.StreamEvent) error) error {
+				r.Provider = &childProvider{stream: func(got context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 					calls++
 					deadline, ok := got.Deadline()
 					if !ok {
@@ -49,7 +49,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 					} else if remaining := time.Until(deadline); remaining < 9*time.Minute || remaining > 10*time.Minute {
 						t.Fatalf("compaction deadline is not ten minutes: remaining %v", remaining)
 					}
-					if err := emit(provider.StreamEvent{Kind: "text", Text: "Earlier evidence summarized."}); err != nil {
+					if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier evidence summarized."}); err != nil {
 						return err
 					}
 					if mode == "cancel" {
@@ -57,7 +57,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 						<-got.Done()
 						return got.Err()
 					}
-					return emit(provider.StreamEvent{Kind: "completed"})
+					return emit(llm.StreamEvent{Kind: "completed"})
 				}}
 				if actor == "main" {
 					_, err = r.compactContext(ctx, "", r.CurrentSelection(), nil)
@@ -93,7 +93,7 @@ func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 	before := r.Current()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r.Provider = &childProvider{stream: func(ctx context.Context, _ provider.Request, _ func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, _ llm.Request, _ func(llm.StreamEvent) error) error {
 		cancel()
 		return ctx.Err()
 	}}
@@ -108,16 +108,16 @@ func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 		t.Fatal("load did not copy writable history")
 	}
 	summaries, coding := 0, 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
 			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) < 9*time.Minute || time.Until(deadline) > 10*time.Minute {
 				t.Fatal("manual compaction does not use ten-minute timeout")
 			}
 			summaries++
-			return emit(provider.StreamEvent{Kind: "text", Text: "Earlier evidence summarized; continue verification."})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Earlier evidence summarized; continue verification."})
 		}
 		coding++
-		return emit(provider.StreamEvent{Kind: "text", Text: "Verification continued."})
+		return emit(llm.StreamEvent{Kind: "text", Text: "Verification continued."})
 	}}
 	if _, err := r.Command("/compact"); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 	if r.Current() == loaded {
 		t.Fatal("manual compaction did not create continuation")
 	}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Continue verification."}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Continue verification."}); err != nil {
 		t.Fatal(err)
 	}
 	if summaries != 1 || coding != 1 {

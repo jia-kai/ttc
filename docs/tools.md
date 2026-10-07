@@ -117,10 +117,10 @@ it never replaces or changes model-facing results.
   Original and rendered blobs share a 4 GiB file-content cap, including recipe
   references/staging but excluding filesystem overhead, with 32 MiB per blob.
   Cache operations enforce 30-day idle retention and least-recently-used eviction;
-  no pruning daemon or active-blob pinning. Durable human image snapshots are
-  lineage assets outside this cache. History stores only absolute
-  source paths, checksums and metadata. Requests use cached originals; a miss
-  verifies the saved source and repopulates the cache. Unavailable originals
+  no pruning daemon or active-blob pinning. Human binary attachments selected
+  through `@` or `/attach` share the same validation and original-byte cache.
+  History stores only absolute source paths, checksums and metadata. Requests use
+  cached originals; a miss verifies the saved source and repopulates the cache. Unavailable originals
   become explicit outgoing text notices with path, checksum and reason, without
   changing history or tool association. Invalid references, cancellation and cache
   errors fail; changed contents are never substituted. References survive history

@@ -10,7 +10,7 @@ import (
 	"time"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/session"
 	"ttc/internal/skills"
@@ -34,10 +34,10 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 		t.Fatal(e)
 	}
 
-	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	catalog, _ := skills.Discover(context.Background(), w.Root, "")
 	events := make(chan session.Event, 64)
-	r, e := session.New(context.Background(), store, w, &provider.Script{Responses: []provider.ScriptResponse{{Text: "Done."}}}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) { events <- v })
+	r, e := session.New(context.Background(), store, w, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Done."}}}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) { events <- v })
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -107,14 +107,14 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	catalog, err := skills.Discover(context.Background(), w.Root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan session.Event, 1)
-	r, err := session.New(ctx, store, w, &provider.Script{}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) {
+	r, err := session.New(ctx, store, w, &llm.Script{}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) {
 		select {
 		case events <- v:
 		case <-ctx.Done():

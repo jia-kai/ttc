@@ -22,7 +22,8 @@ import (
 	"unicode/utf8"
 
 	"ttc/internal/filelock"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
+	"ttc/internal/privatefile"
 	"ttc/internal/render"
 
 	"golang.org/x/sys/unix"
@@ -47,7 +48,7 @@ type Session struct {
 	ID, WorkspaceID, LineageID, Name      string
 	ReadOnly                              bool
 	EntryTip, FileTip, RedoTip, UndoFloor int64
-	Model                                 provider.Selection
+	Model                                 llm.Selection
 	LastActivityMS                        int64 // Unix milliseconds; date grouping uses the frontend local timezone.
 }
 
@@ -93,7 +94,7 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = PrivateDir(root); err != nil {
+	if err = privatefile.PrivateDir(root); err != nil {
 		return nil, err
 	}
 	// SQLite's initial transition into WAL can return BUSY without invoking its
@@ -173,21 +174,6 @@ func openDatabase(root string) (*sql.DB, error) {
 	return db, nil
 }
 
-// PrivateDir creates a private directory and rejects a final symlink or unsafe mode.
-func PrivateDir(p string) error {
-	if err := os.MkdirAll(p, 0700); err != nil {
-		return err
-	}
-	st, err := os.Lstat(p)
-	if err != nil {
-		return err
-	}
-	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm() != 0700 {
-		return fmt.Errorf("unsafe private directory %s", p)
-	}
-	return nil
-}
-
 // Close closes history after the runtime workers have stopped.
 func (s *Store) Close() error { return s.DB.Close() }
 func n(v int64) any {
@@ -219,7 +205,7 @@ func (s *Store) transact(fn func(*sql.Tx) error) error {
 // StartSession atomically saves a new writable lineage, its first user turn and
 // user message. The caller owns id before saving; errors leave no partial rows.
 // It returns the turn and message entry IDs, without restoring workspace files.
-func (s *Store) StartSession(id, path string, model provider.Selection, message provider.Message) (turn string, entry int64, err error) {
+func (s *Store) StartSession(id, path string, model llm.Selection, message llm.Message) (turn string, entry int64, err error) {
 	if id == "" || !filepath.IsAbs(path) || message.Role != "user" {
 		return "", 0, errors.New("first session save requires an ID, absolute workspace path and user message")
 	}
@@ -319,14 +305,14 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 }
 
 // BeginTurn records the start checkpoint and frozen selection before model work.
-func (s *Store) BeginTurn(session, trigger string, model provider.Selection) (string, error) {
+func (s *Store) BeginTurn(session, trigger string, model llm.Selection) (string, error) {
 	id, _, err := s.AdmitTurn(session, trigger, model, nil)
 	return id, err
 }
 
 // AdmitTurn commits a main checkpoint and optional human instruction atomically.
 // Call while owning the workspace admission gate so file mutations cannot cross it.
-func (s *Store) AdmitTurn(session, trigger string, model provider.Selection, message *provider.Message) (string, int64, error) {
+func (s *Store) AdmitTurn(session, trigger string, model llm.Selection, message *llm.Message) (string, int64, error) {
 	if message != nil && trigger != "user" {
 		return "", 0, errors.New("only user turns accept a human instruction")
 	}
@@ -469,10 +455,10 @@ func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 // Messages projects only model-visible canonical messages, resolving tool references.
 // Main human inputs carry their original admission timestamp and source, including
 // across continuations; runtime notices and immutable stored entries are unchanged.
-func (s *Store) Messages(session string) ([]provider.Message, error) {
+func (s *Store) Messages(session string) ([]llm.Message, error) {
 	return messagesWith(s.DB, session)
 }
-func messagesWith(q historyReader, session string) ([]provider.Message, error) {
+func messagesWith(q historyReader, session string) ([]llm.Message, error) {
 	entries, e := branchWith(q, session, 0)
 	if e != nil {
 		return nil, e
@@ -481,15 +467,15 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 	if e != nil {
 		return nil, e
 	}
-	out := make([]provider.Message, 0, len(entries))
+	out := make([]llm.Message, 0, len(entries))
 	for _, v := range entries {
 		if !v.Visible {
 			continue
 		}
 		if v.Kind == "tool_result" {
 			var ref struct {
-				CallID string                `json:"call_id"`
-				Files  []provider.BinaryFile `json:"files,omitempty"`
+				CallID string           `json:"call_id"`
+				Files  []llm.BinaryFile `json:"files,omitempty"`
 			}
 			if e = json.Unmarshal(v.Content, &ref); e != nil {
 				return nil, e
@@ -498,9 +484,9 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 			if e = q.QueryRow("SELECT result_json,provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&result, &pcid); e != nil {
 				return nil, e
 			}
-			out = append(out, provider.Message{Role: "tool", CallID: pcid, Content: result, Files: ref.Files})
+			out = append(out, llm.Message{Role: "tool", CallID: pcid, Content: result, Files: ref.Files})
 		} else {
-			var m provider.Message
+			var m llm.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
 				return nil, e
 			}
@@ -516,7 +502,7 @@ func messagesWith(q historyReader, session string) ([]provider.Message, error) {
 
 // orderedToolResults keeps canonical call order while entry rows retain actual
 // completion chronology. Missing results stay missing until callers settle them.
-func orderedToolResults(messages []provider.Message) []provider.Message {
+func orderedToolResults(messages []llm.Message) []llm.Message {
 	for i, m := range messages {
 		if m.Role != "assistant" || len(m.Calls) < 2 {
 			continue
@@ -528,7 +514,7 @@ func orderedToolResults(messages []provider.Message) []provider.Message {
 		if end-i-1 < 2 {
 			continue
 		}
-		results := map[string]provider.Message{}
+		results := map[string]llm.Message{}
 		for _, r := range messages[i+1 : end] {
 			results[r.CallID] = r
 		}
@@ -544,7 +530,7 @@ func orderedToolResults(messages []provider.Message) []provider.Message {
 }
 
 // StartRequest persists uncertain request state before network I/O.
-func (s *Store) StartRequest(session, turn, actor, purpose string, model provider.Selection) (id int64, err error) {
+func (s *Store) StartRequest(session, turn, actor, purpose string, model llm.Selection) (id int64, err error) {
 	m, err := json.Marshal(model)
 	if err != nil {
 		return 0, err
@@ -596,7 +582,7 @@ func (s *Store) FinishRequest(id int64, status string, attempts any) error {
 }
 
 // CallIntent commits validated or invalid input before execution begins.
-func (s *Store) CallIntent(session, turn, actor string, request int64, c provider.ToolCall) (string, error) {
+func (s *Store) CallIntent(session, turn, actor string, request int64, c llm.ToolCall) (string, error) {
 	id := NewID("call")
 	if !json.Valid(c.Arguments) {
 		return "", errors.New("tool arguments are not JSON")
@@ -615,7 +601,7 @@ func (s *Store) CallIntent(session, turn, actor string, request int64, c provide
 
 // CallResult commits immutable JSON metadata, native binary references and portable
 // presentation. Original bytes remain in a disposable cache, not in history.
-func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, files []provider.BinaryFile, record any, md render.Markdown, visible bool) (int64, error) {
+func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, files []llm.BinaryFile, record any, md render.Markdown, visible bool) (int64, error) {
 	b, e := json.Marshal(record)
 	if e != nil {
 		return 0, e
@@ -631,8 +617,8 @@ func (s *Store) CallResult(session, turn, actor, call string, result json.RawMes
 			return e
 		}
 		ref, err := json.Marshal(struct {
-			CallID string                `json:"call_id"`
-			Files  []provider.BinaryFile `json:"files,omitempty"`
+			CallID string           `json:"call_id"`
+			Files  []llm.BinaryFile `json:"files,omitempty"`
 		}{call, files})
 		if err != nil {
 			return err
@@ -658,7 +644,7 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 		return "", errors.New("invalid artifact category")
 	}
 	dir := filepath.Join(s.Root, "lineages", v.LineageID, category)
-	if e = PrivateDir(dir); e != nil {
+	if e = privatefile.PrivateDir(dir); e != nil {
 		return "", e
 	}
 	h := sha256.Sum256(data)
@@ -671,47 +657,10 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 	} else if !os.IsNotExist(e) {
 		return "", fmt.Errorf("read saved artifact: %w", e)
 	}
-	if e = AtomicFile(p, data, 0600); e != nil {
+	if e = privatefile.AtomicFile(p, data, 0600); e != nil {
 		return "", e
 	}
 	return p, nil
-}
-
-// AtomicFile writes/fyncs bytes then atomically renames within the same directory.
-func AtomicFile(path string, data []byte, mode os.FileMode) error {
-	f, e := os.CreateTemp(filepath.Dir(path), ".ttc-*")
-	if e != nil {
-		return e
-	}
-	temp := f.Name()
-	defer os.Remove(temp)
-	if e = f.Chmod(mode); e == nil {
-		_, e = f.Write(data)
-	}
-	if e == nil {
-		e = f.Sync()
-	}
-	ce := f.Close()
-	if e == nil {
-		e = ce
-	}
-	if e != nil {
-		return e
-	}
-	if e = os.Rename(temp, path); e != nil {
-		return e
-	}
-	return SyncDir(filepath.Dir(path))
-}
-
-// SyncDir ensures directory entry updates reach durable storage.
-func SyncDir(path string) error {
-	f, e := os.Open(path)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	return f.Sync()
 }
 
 // Ping validates storage availability with cancellation.
@@ -791,7 +740,7 @@ func (s *Store) Inspect(entry Entry) (string, error) {
 		}
 		var internal struct {
 			Type, Purpose string
-			Message       provider.Message
+			Message       llm.Message
 		}
 		if json.Unmarshal(entry.Content, &internal) == nil && internal.Type == "request_message" {
 			if internal.Purpose == "compaction" && internal.Message.Role == "assistant" {
@@ -810,7 +759,7 @@ func (s *Store) Inspect(entry Entry) (string, error) {
 			return string(b), e
 		}
 	}
-	var m provider.Message
+	var m llm.Message
 	if entry.Visible {
 		if e := json.Unmarshal(entry.Content, &m); e != nil {
 			return "", e
@@ -832,7 +781,7 @@ func (s *Store) Inspect(entry Entry) (string, error) {
 
 // Assistant commits a response and all call intents in the same transaction.
 // A crash can never leave emitted assistant calls without recoverable intent rows.
-func (s *Store) Assistant(session, turn, actor string, request int64, message provider.Message) (int64, []string, error) {
+func (s *Store) Assistant(session, turn, actor string, request int64, message llm.Message) (int64, []string, error) {
 	message.RequestID = request
 	data, e := json.Marshal(message)
 	if e != nil {

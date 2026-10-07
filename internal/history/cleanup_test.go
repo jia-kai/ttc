@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
+	"ttc/internal/privatefile"
 	"ttc/internal/render"
 )
 
@@ -40,8 +41,8 @@ func retainedContinuation(t *testing.T, s *Store, v Session) Session {
 
 func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	s, v, turn, req := historyFixture(t)
-	call := provider.ToolCall{ID: "write", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"result"}`)}
-	_, calls, err := s.Assistant(v.ID, turn, "main", req, provider.Message{Role: "assistant", Calls: []provider.ToolCall{call}})
+	call := llm.ToolCall{ID: "write", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"result"}`)}
+	_, calls, err := s.Assistant(v.ID, turn, "main", req, llm.Message{Role: "assistant", Calls: []llm.ToolCall{call}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if _, err := s.RecordSystemPrompt(v.ID, turn, "main", req, "Exact instructions."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RequestMessage(v.ID, turn, "main/child", "assistant", req, provider.Message{Role: "assistant", Content: "Child output"}); err != nil {
+	if _, err := s.RequestMessage(v.ID, turn, "main/child", "assistant", req, llm.Message{Role: "assistant", Content: "Child output"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, category := range []string{"snapshots", "images", "attachments", "details"} {
@@ -191,12 +192,12 @@ func TestCleanupNeverFollowsManagedSymlinks(t *testing.T) {
 			}
 			link := filepath.Join(s.Root, location)
 			if location == "lineage" || location == "nested" {
-				if err := PrivateDir(filepath.Join(s.Root, "lineages")); err != nil {
+				if err := privatefile.PrivateDir(filepath.Join(s.Root, "lineages")); err != nil {
 					t.Fatal(err)
 				}
 				link = filepath.Join(s.Root, "lineages", v.LineageID)
 				if location == "nested" {
-					if err := PrivateDir(link); err != nil {
+					if err := privatefile.PrivateDir(link); err != nil {
 						t.Fatal(err)
 					}
 					link = filepath.Join(link, "snapshot-link")

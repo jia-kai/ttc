@@ -5,21 +5,21 @@ import (
 	"strings"
 	"testing"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
 func TestHistoryTreeShowsSiblingBranchesAndBoundedLabels(t *testing.T) {
 	s, saved, turn, _ := historyFixture(t)
 	baseline := saved.EntryTip
-	a, err := s.Append(saved.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "Old branch evidence"})
+	a, err := s.Append(saved.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "Old branch evidence"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = s.CommitRestore(saved.ID, RestoreTarget{EntryTip: baseline}); err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.Append(saved.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: "\x1b[31mNew branch\n" + strings.Repeat("x", 1<<20)})
+	b, err := s.Append(saved.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "\x1b[31mNew branch\n" + strings.Repeat("x", 1<<20)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestHistoryTreeShowsSiblingBranchesAndBoundedLabels(t *testing.T) {
 
 func TestBranchSelectionRequiresCompleteMainToolBatch(t *testing.T) {
 	s, saved, turn, request := historyFixture(t)
-	assistant, calls, err := s.Assistant(saved.ID, turn, "main", request, provider.Message{Role: "assistant", Calls: []provider.ToolCall{
+	assistant, calls, err := s.Assistant(saved.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{
 		{ID: "first", Name: "read", Arguments: []byte(`{"path":"one"}`)},
 		{ID: "second", Name: "read", Arguments: []byte(`{"path":"two"}`)},
 	}})
@@ -135,11 +135,11 @@ func TestBranchSelectionHonorsFloorAncestryAndReadOnly(t *testing.T) {
 
 func TestHistoryTreeIdentifiesHumanInputsAndAuthoredLabels(t *testing.T) {
 	s, saved, turn, _ := historyFixture(t)
-	runtimeID, err := s.Append(saved.ID, turn, "main", "message", "user", true, provider.Message{Role: "user", Content: "Job finished", Runtime: true})
+	runtimeID, err := s.Append(saved.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: "Job finished", Runtime: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	childID, err := s.Append(saved.ID, turn, "child", "message", "user", false, provider.Message{Role: "user", Content: "Child question"})
+	childID, err := s.Append(saved.ID, turn, "child", "message", "user", false, llm.Message{Role: "user", Content: "Child question"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestHistoryTreeIdentifiesHumanInputsAndAuthoredLabels(t *testing.T) {
 	if err := s.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	_, inputID, err := s.AdmitTurn(saved.ID, "user", saved.Model, &provider.Message{Role: "user", Content: authored + "\nATTACHMENT CONTENT", UserText: &authored})
+	_, inputID, err := s.AdmitTurn(saved.ID, "user", saved.Model, &llm.Message{Role: "user", Content: authored + "\nATTACHMENT CONTENT", UserText: &authored})
 	if err != nil {
 		t.Fatal(err)
 	}

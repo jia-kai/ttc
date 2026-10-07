@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestCommandMenuNarrowRevealAndCancel(t *testing.T) {
@@ -26,7 +26,7 @@ func TestCommandMenuNarrowRevealAndCancel(t *testing.T) {
 }
 
 func TestCommandPalettePreservesDraftUntilSelection(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{})
+	u := newQuestionTestUI(t, &llm.Script{})
 	u.typeText("Retained input")
 	u.key(tcell.KeyCtrlP)
 	u.wait(t, "Enter fills input")
@@ -52,7 +52,7 @@ func TestCommandPalettePreservesDraftUntilSelection(t *testing.T) {
 }
 
 func TestLeaderLiveInspectorsDuringActiveTurn(t *testing.T) {
-	p := &questionTestProvider{Script: provider.Script{Responses: []provider.ScriptResponse{{Text: "Settled"}}}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Settled"}}}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.typeText("Start")
 	u.key(tcell.KeyEnter)
@@ -77,7 +77,7 @@ func TestLeaderLiveInspectorsDuringActiveTurn(t *testing.T) {
 }
 
 func TestLeaderNewQuestionAndExit(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	oldID := u.runtime.Current()
 	u.typeText("Retained draft")
 	u.key(tcell.KeyCtrlX)
@@ -113,7 +113,7 @@ func TestLeaderNewQuestionAndExit(t *testing.T) {
 }
 
 func TestEditorCommandUsesTerminalEditor(t *testing.T) {
-	u := newQuestionTestUIWithEditor(t, &provider.Script{}, func(ctx context.Context, text string) (string, error) {
+	u := newQuestionTestUIWithEditor(t, &llm.Script{}, func(ctx context.Context, text string) (string, error) {
 		return "Edited through command", nil
 	})
 	u.typeText("/editor")

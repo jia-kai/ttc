@@ -12,7 +12,7 @@ import (
 	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/tool"
 )
@@ -21,9 +21,9 @@ import (
 // only its running worker owns messages/cursor until publishing an idle state.
 type codingChild struct {
 	id, label, state, turn, job string
-	selection                   provider.Selection
+	selection                   llm.Selection
 	tools                       *tool.Registry
-	messages                    []provider.Message
+	messages                    []llm.Message
 	cursor                      contextCursor
 	closing                     bool
 }
@@ -201,7 +201,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	return nil
 }
 
-func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []provider.Message, cursor contextCursor) (admitted history.Admission, next contextCursor, err error) {
+func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor) (admitted history.Admission, next contextCursor, err error) {
 	next = cursor
 	err = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()

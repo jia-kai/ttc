@@ -3,7 +3,7 @@ package session
 import (
 	"errors"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"unicode/utf8"
 )
 
@@ -31,10 +31,10 @@ func (r *Runtime) Steer(input contextbuild.Input) error {
 
 func validateSteeringInput(input contextbuild.Input) error {
 	if !utf8.ValidString(input.Text) || input.Text == "" && len(input.Attachments) == 0 {
-		return errors.New("steering requires a human UTF-8 user instruction or image")
+		return errors.New("steering requires a human UTF-8 user instruction or attachment")
 	}
 	for _, attachment := range input.Attachments {
-		if !utf8.ValidString(attachment.Path) || attachment.Image == nil && (!utf8.ValidString(attachment.Kind) || !utf8.ValidString(attachment.Text)) {
+		if !utf8.ValidString(attachment.Path) || attachment.File == nil && (!utf8.ValidString(attachment.Kind) || !utf8.ValidString(attachment.Text)) {
 			return errors.New("steering attachment must contain valid UTF-8")
 		}
 	}
@@ -69,8 +69,8 @@ func (r *Runtime) SteeringPreview(limit int) (int, []string) {
 	return len(r.steers), texts
 }
 
-func (r *Runtime) steeringMessagesLocked() []provider.Message {
-	messages := make([]provider.Message, len(r.steers))
+func (r *Runtime) steeringMessagesLocked() []llm.Message {
+	messages := make([]llm.Message, len(r.steers))
 	for i, input := range r.steers {
 		messages[i] = input.Message()
 	}

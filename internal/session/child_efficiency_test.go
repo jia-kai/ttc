@@ -10,19 +10,19 @@ import (
 
 	"ttc/internal/history"
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T) {
 	answer := "Final answer:\n" + strings.Repeat("界", history.MaxChildAnswerBytes/3+100)
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"answer with evidence","label":"audit","persistent":false}`)}}},
-		{Text: "Intermediate commentary must not become the answer.", Calls: []provider.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}}},
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"answer with evidence","label":"audit","persistent":false}`)}}},
+		{Text: "Intermediate commentary must not become the answer.", Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}}},
 		{Text: answer},
 		{Text: "Parent used the delivered answer."},
 	})
 	r.Emit = nil
-	m := provider.Message{Role: "user", Content: "Run a disposable audit"}
+	m := llm.Message{Role: "user", Content: "Run a disposable audit"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	var original provider.Message
+	var original llm.Message
 	if err := json.Unmarshal(entry.Content, &original); err != nil || original.Content != answer {
 		t.Fatal("full immutable answer lost", err)
 	}
@@ -84,7 +84,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	const answer = "The audit found one actionable issue."
 	mainCalls, delivered := 0, 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		text := "Parent is waiting for the child."
 		if req.NoTools {
 			text = "A disposable audit is running; consume its completion answer."
@@ -99,8 +99,8 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 		} else {
 			mainCalls++
 			if mainCalls == 1 {
-				call := provider.ToolCall{ID: "background", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false,"background":true}`)}
-				if err := emit(provider.StreamEvent{Kind: "call", Call: &call}); err != nil {
+				call := llm.ToolCall{ID: "background", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false,"background":true}`)}
+				if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
 					return err
 				}
 				text = ""
@@ -120,13 +120,13 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 			}
 		}
 		if text != "" {
-			if err := emit(provider.StreamEvent{Kind: "text", Text: text}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "text", Text: text}); err != nil {
 				return err
 			}
 		}
-		return emit(provider.StreamEvent{Kind: "completed", Usage: &provider.Usage{InputTokens: 100, OutputTokens: 10}})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 	}}
-	m := provider.Message{Role: "user", Content: "Launch an audit"}
+	m := llm.Message{Role: "user", Content: "Launch an audit"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -178,9 +178,9 @@ func TestChildResultUsesCommittedCompletionBeforeJobSnapshot(t *testing.T) {
 }
 
 func TestChildCommitFailureStopsPersistentOwnedJobs(t *testing.T) {
-	r, _ := runtimeFixture(t, []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":true}`)}}},
-		{Calls: []provider.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}}},
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":true}`)}}},
+		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}}},
 		{Text: "Final audit answer"},
 	})
 	r.Emit = nil
@@ -189,7 +189,7 @@ WHEN json_extract(NEW.content_json,'$.type')='child_turn_finished'
 BEGIN SELECT RAISE(ABORT,'injected child commit failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	m := provider.Message{Role: "user", Content: "Audit"}
+	m := llm.Message{Role: "user", Content: "Audit"}
 	err := r.Run(&m)
 	if err == nil || !strings.Contains(err.Error(), "injected child commit failure") {
 		t.Fatal("commit failure was not reported", err)

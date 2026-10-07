@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/workspace"
 )
@@ -30,9 +30,9 @@ func toolFixture(t *testing.T) (*Registry, *workspace.Manager, Execution, int64)
 	if e != nil {
 		t.Fatal(e)
 	}
-	selection := provider.Selection{Model: provider.ScriptModel()}
+	selection := llm.Selection{Model: llm.ScriptModel()}
 	id := history.NewID("session")
-	turn, _, e := s.StartSession(id, w.Root, selection, provider.Message{Role: "user", Content: "Exercise file tools"})
+	turn, _, e := s.StartSession(id, w.Root, selection, llm.Message{Role: "user", Content: "Exercise file tools"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -50,7 +50,7 @@ func invoke(t *testing.T, r *Registry, w *workspace.Manager, x Execution, req in
 	if e := w.Store.DB.QueryRow("SELECT coalesce(turn_id,'') FROM model_requests WHERE id=?", req).Scan(&turn); e != nil {
 		t.Fatal(e)
 	}
-	id, e := w.Store.CallIntent(x.SessionID, turn, x.Actor, req, provider.ToolCall{ID: history.NewID("p"), Name: name, Arguments: []byte(args)})
+	id, e := w.Store.CallIntent(x.SessionID, turn, x.Actor, req, llm.ToolCall{ID: history.NewID("p"), Name: name, Arguments: []byte(args)})
 	if e != nil {
 		t.Fatal(e)
 	}

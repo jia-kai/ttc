@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestEnterSteersAndAltEnterQueues(t *testing.T) {
@@ -20,7 +20,7 @@ func TestEnterSteersAndAltEnterQueues(t *testing.T) {
 		{"legacy_lf", tcell.KeyRune, 'j', tcell.ModAlt | tcell.ModCtrl},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &questionTestProvider{Script: provider.Script{Responses: []provider.ScriptResponse{
+			p := &questionTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{
 				{Prefix: "user: start", Text: "First boundary settles"},
 				{Prefix: "user: change direction", Text: "Steering accepted"},
 				{Prefix: "user: next turn", Text: "Queued turn accepted"},
@@ -58,7 +58,7 @@ func TestEnterSteersAndAltEnterQueues(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var humans []provider.Message
+			var humans []llm.Message
 			for _, m := range messages {
 				if m.Role == "user" && !m.Runtime {
 					humans = append(humans, m)

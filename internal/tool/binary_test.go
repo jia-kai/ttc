@@ -8,8 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,11 +17,12 @@ import (
 	"testing"
 
 	"ttc/internal/assets"
+	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
-func documentCapability(extension string) provider.BinaryFileType {
+func documentCapability(extension string) llm.BinaryFileType {
 	mime := map[string]string{
 		".pdf": "application/pdf", ".doc": "application/msword",
 		".dot":  "application/msword",
@@ -35,7 +34,7 @@ func documentCapability(extension string) provider.BinaryFileType {
 		".rtf": "application/rtf", ".odt": "application/vnd.oasis.opendocument.text",
 		".pages": "application/vnd.apple.pages", ".key": "application/vnd.apple.keynote",
 	}[extension]
-	return provider.BinaryFileType{MIMEType: mime, Extensions: []string{extension}, Kind: "document", MaxBytes: assets.MaxBytes}
+	return llm.BinaryFileType{MIMEType: mime, Extensions: []string{extension}, Kind: "document", MaxBytes: assets.MaxBytes}
 }
 
 func zipFixture(t *testing.T, entries map[string]string) []byte {
@@ -68,7 +67,7 @@ func documentFixture(t *testing.T, extension string) []byte {
 		return []byte("{\\rtf1\\ansi synthetic marker}\n")
 	case ".doc", ".dot", ".ppt", ".pot", ".ppa", ".pps", ".pwz", ".wiz", ".xls", ".xla", ".xlb", ".xlc", ".xlm", ".xlt", ".xlw":
 		data := make([]byte, 1024)
-		copy(data, oleMagic)
+		copy(data, []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1})
 		binary.LittleEndian.PutUint16(data[26:28], 3)
 		binary.LittleEndian.PutUint16(data[28:30], 0xfffe)
 		binary.LittleEndian.PutUint16(data[30:32], 9)
@@ -93,7 +92,7 @@ func TestReadDocumentsPreserveOriginalBytesAndReferences(t *testing.T) {
 	for _, extension := range []string{".pdf", ".doc", ".dot", ".docx", ".ppt", ".pot", ".ppa", ".pps", ".pwz", ".wiz", ".pptx", ".xls", ".xla", ".xlb", ".xlc", ".xlm", ".xlt", ".xlw", ".xlsx", ".rtf", ".odt", ".pages", ".key"} {
 		t.Run(extension, func(t *testing.T) {
 			r, w, x, req := toolFixture(t)
-			x.BinaryFiles = []provider.BinaryFileType{documentCapability(extension)}
+			x.BinaryFiles = []llm.BinaryFileType{documentCapability(extension)}
 			data := documentFixture(t, extension)
 			name := "source" + strings.ToUpper(extension)
 			path := filepath.Join(w.Root, name)
@@ -105,8 +104,8 @@ func TestReadDocumentsPreserveOriginalBytesAndReferences(t *testing.T) {
 			ok(t, record)
 			hash := sha256.Sum256(data)
 			checksum := hex.EncodeToString(hash[:])
-			want := provider.BinaryFile{Path: path, SHA256: checksum, MIMEType: x.BinaryFiles[0].MIMEType, Bytes: len(data)}
-			if !reflect.DeepEqual(record.Files, []provider.BinaryFile{want}) {
+			want := llm.BinaryFile{Path: path, SHA256: checksum, MIMEType: x.BinaryFiles[0].MIMEType, Bytes: len(data)}
+			if !reflect.DeepEqual(record.Files, []llm.BinaryFile{want}) {
 				t.Fatalf("wrong binary references: %+v", record.Files)
 			}
 			var metadata map[string]any
@@ -154,14 +153,14 @@ func TestReadDocumentsCapabilitiesPaginationAndText(t *testing.T) {
 	}
 	for _, name := range []string{"source.pdf", "no-extension"} {
 		args, _ := json.Marshal(map[string]string{"path": name})
-		for _, types := range [][]provider.BinaryFileType{nil, (provider.ModelSpec{Images: true}).BinaryFileTypes(), {documentCapability(".docx")}} {
+		for _, types := range [][]llm.BinaryFileType{nil, (llm.ModelSpec{Images: true}).BinaryFileTypes(), {documentCapability(".docx")}} {
 			x.BinaryFiles = types
 			record := invoke(t, r, w, x, req, "read", string(args))
 			if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"unsupported_binary_input"`) || !strings.Contains(string(record.Result), "select a model") {
 				t.Fatalf("ASCII PDF incorrectly read as text or without capability: %s", record.Result)
 			}
 		}
-		x.BinaryFiles = []provider.BinaryFileType{documentCapability(".pdf")}
+		x.BinaryFiles = []llm.BinaryFileType{documentCapability(".pdf")}
 		ok(t, invoke(t, r, w, x, req, "read", string(args)))
 		for _, pagination := range []string{"offset", "limit"} {
 			args, _ := json.Marshal(map[string]any{"path": name, pagination: 1})
@@ -176,7 +175,7 @@ func TestReadDocumentsCapabilitiesPaginationAndText(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(w.Root, name), []byte("first\nsecond\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		x.BinaryFiles = []provider.BinaryFileType{{Kind: "document", MIMEType: mime, Extensions: []string{extension}, MaxBytes: assets.MaxBytes}}
+		x.BinaryFiles = []llm.BinaryFileType{{Kind: "document", MIMEType: mime, Extensions: []string{extension}, MaxBytes: assets.MaxBytes}}
 		args, _ := json.Marshal(map[string]any{"path": name, "limit": 1})
 		record := invoke(t, r, w, x, req, "read", string(args))
 		ok(t, record)
@@ -189,7 +188,7 @@ func TestReadDocumentsCapabilitiesPaginationAndText(t *testing.T) {
 func TestReadDocumentsRejectInvalidContainers(t *testing.T) {
 	r, w, x, req := toolFixture(t)
 	for _, extension := range []string{".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".odt", ".pages", ".key"} {
-		x.BinaryFiles = []provider.BinaryFileType{documentCapability(extension)}
+		x.BinaryFiles = []llm.BinaryFileType{documentCapability(extension)}
 		name := "mislabeled" + extension
 		if err := os.WriteFile(filepath.Join(w.Root, name), []byte("ordinary text\n"), 0600); err != nil {
 			t.Fatal(err)
@@ -208,7 +207,7 @@ func TestReadDocumentsRejectInvalidContainers(t *testing.T) {
 		"bomb.odt":         zipFixture(t, map[string]string{"content.xml": "x", "META-INF/manifest.xml": "x", "mimetype": strings.Repeat("x", 1<<20)}),
 		"truncated.docx":   documentFixture(t, ".docx")[:20],
 	} {
-		x.BinaryFiles = []provider.BinaryFileType{documentCapability(filepath.Ext(name))}
+		x.BinaryFiles = []llm.BinaryFileType{documentCapability(filepath.Ext(name))}
 		if err := os.WriteFile(filepath.Join(w.Root, name), data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +222,7 @@ func TestReadDocumentsRejectInvalidContainers(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(w.Root, name), data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		x.BinaryFiles = []provider.BinaryFileType{documentCapability(".docx"), documentCapability(".doc")}
+		x.BinaryFiles = []llm.BinaryFileType{documentCapability(".docx"), documentCapability(".doc")}
 		args, _ := json.Marshal(map[string]string{"path": name})
 		record := invoke(t, r, w, x, req, "read", string(args))
 		if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"unsupported_binary_input"`) {
@@ -235,8 +234,8 @@ func TestReadDocumentsRejectInvalidContainers(t *testing.T) {
 func TestReadUsesAnnouncedCatalogForNewFormatsAndMIMEValidation(t *testing.T) {
 	r, w, x, req := toolFixture(t)
 	data := []byte("FOOBIN\x00\xfforiginal opaque payload")
-	capability := provider.BinaryFileType{Kind: "document", MIMEType: "application/vnd.example.foo", Extensions: []string{"FOO"}, MaxBytes: 1024}
-	x.BinaryFiles = []provider.BinaryFileType{capability}
+	capability := llm.BinaryFileType{Kind: "document", MIMEType: "application/vnd.example.foo", Extensions: []string{"FOO"}, MaxBytes: 1024}
+	x.BinaryFiles = []llm.BinaryFileType{capability}
 	path := filepath.Join(w.Root, "source.FoO")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
@@ -245,8 +244,8 @@ func TestReadUsesAnnouncedCatalogForNewFormatsAndMIMEValidation(t *testing.T) {
 	ok(t, record)
 	hash := sha256.Sum256(data)
 	checksum := hex.EncodeToString(hash[:])
-	want := provider.BinaryFile{Path: path, SHA256: checksum, MIMEType: capability.MIMEType, Bytes: len(data)}
-	if !reflect.DeepEqual(record.Files, []provider.BinaryFile{want}) || !strings.Contains(string(record.Result), `"kind":"document"`) {
+	want := llm.BinaryFile{Path: path, SHA256: checksum, MIMEType: capability.MIMEType, Bytes: len(data)}
+	if !reflect.DeepEqual(record.Files, []llm.BinaryFile{want}) || !strings.Contains(string(record.Result), `"kind":"document"`) {
 		t.Fatalf("new provider-announced format did not flow through: %s, %+v", record.Result, record.Files)
 	}
 	cache, err := blobcache.Default()
@@ -271,7 +270,7 @@ func TestReadUsesAnnouncedCatalogForNewFormatsAndMIMEValidation(t *testing.T) {
 		// A new extension for a known MIME family must still get that family's
 		// validation, rather than either hardcoded extension validation or none.
 		capability.Extensions = []string{".foo"}
-		x.BinaryFiles = []provider.BinaryFileType{capability}
+		x.BinaryFiles = []llm.BinaryFileType{capability}
 		if err := os.WriteFile(path, documentFixture(t, test.actual), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +289,7 @@ func TestRTFTextMIMEUsesNativeBinaryRead(t *testing.T) {
 	r, w, x, req := toolFixture(t)
 	capability := documentCapability(".rtf")
 	capability.MIMEType = "text/rtf"
-	x.BinaryFiles = []provider.BinaryFileType{capability}
+	x.BinaryFiles = []llm.BinaryFileType{capability}
 	for _, name := range []string{"source.rtf", "extensionless"} {
 		if err := os.WriteFile(filepath.Join(w.Root, name), documentFixture(t, ".rtf"), 0600); err != nil {
 			t.Fatal(err)
@@ -306,7 +305,7 @@ func TestRTFTextMIMEUsesNativeBinaryRead(t *testing.T) {
 		if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"unsupported_binary_input"`) {
 			t.Fatalf("unannounced ASCII RTF fell through to text: %s", record.Result)
 		}
-		x.BinaryFiles = []provider.BinaryFileType{capability}
+		x.BinaryFiles = []llm.BinaryFileType{capability}
 	}
 }
 
@@ -319,17 +318,13 @@ func TestReadDocumentBoundsCancellationCacheAndDescriptor(t *testing.T) {
 	}
 	capability := documentCapability(".pdf")
 	capability.MaxBytes = len(data) - 1
-	x.BinaryFiles = []provider.BinaryFileType{capability}
+	x.BinaryFiles = []llm.BinaryFileType{capability}
 	record := invoke(t, r, w, x, req, "read", `{"path":"source.pdf"}`)
 	if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"binary_too_large"`) {
 		t.Fatalf("declared lower bound ignored: %s", record.Result)
 	}
-	// Simulate a descriptor that grew after Stat by supplying its earlier size.
-	if _, err := readBinary(context.Background(), bytes.NewReader(data), 0, "document", "", ".pdf", x.BinaryFiles); err == nil || !strings.Contains(err.Error(), "binary_too_large") {
-		t.Fatalf("actual byte bound ignored: %v", err)
-	}
 	capability.MaxBytes = assets.MaxBytes * 2
-	x.BinaryFiles = []provider.BinaryFileType{capability}
+	x.BinaryFiles = []llm.BinaryFileType{capability}
 	if err := os.Truncate(path, assets.MaxBytes+1); err != nil {
 		t.Fatal(err)
 	}
@@ -361,8 +356,8 @@ func TestReadDocumentBoundsCancellationCacheAndDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binary, ok := value.(binaryRead)
-	if !ok || !bytes.Equal(binary.data, data) {
+	binary, ok := value.(*binaryinput.Result)
+	if !ok || !bytes.Equal(binary.Data, data) {
 		t.Fatal("document read reopened replacement instead of descriptor")
 	}
 	blocked := filepath.Join(t.TempDir(), "file")
@@ -374,51 +369,5 @@ func TestReadDocumentBoundsCancellationCacheAndDescriptor(t *testing.T) {
 	record = invoke(t, r, w, x, req, "read", `{"path":"source.pdf.old"}`)
 	if len(record.Files) != 0 || !strings.Contains(string(record.Result), "open binary cache") {
 		t.Fatalf("cache failure carried an attachment: %s", record.Result)
-	}
-}
-
-func TestDocumentZIPMetadataIsBounded(t *testing.T) {
-	entries := make(map[string]string, 4097)
-	for i := 0; i < 4097; i++ {
-		entries[fmt.Sprintf("entry-%d", i)] = "x"
-	}
-	if _, err := boundedDocumentZIP(zipFixture(t, entries)); err == nil || !strings.Contains(err.Error(), "4096") {
-		t.Fatalf("unbounded ZIP directory accepted: %v", err)
-	}
-	data := documentFixture(t, ".docx")
-	for name, modify := range map[string]func([]byte){
-		"forged-count": func(data []byte) {
-			end := data[len(data)-22:]
-			binary.LittleEndian.PutUint16(end[8:10], 1)
-			binary.LittleEndian.PutUint16(end[10:12], 1)
-		},
-		"zip64": func(data []byte) {
-			binary.LittleEndian.PutUint16(data[len(data)-22+10:], 0xffff)
-		},
-		"central-bound": func(data []byte) {
-			binary.LittleEndian.PutUint32(data[len(data)-22+12:], 2<<20+1)
-		},
-	} {
-		bad := bytes.Clone(data)
-		modify(bad)
-		if _, err := boundedDocumentZIP(bad); err == nil {
-			t.Fatalf("invalid %s ZIP accepted", name)
-		}
-	}
-	for length := 0; length < len(data); length++ {
-		if _, err := boundedDocumentZIP(data[:length]); err == nil {
-			t.Fatalf("truncated ZIP prefix of %d bytes accepted", length)
-		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := validateReadDocument(ctx, data, documentCapability(".docx").MIMEType); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled container validation returned %v", err)
-	}
-	for extension, index := range map[string]string{".pages": "index.xml", ".key": "index.apxl.gz"} {
-		data := zipFixture(t, map[string]string{index: "original bytes"})
-		if err := validateReadDocument(context.Background(), data, documentCapability(extension).MIMEType); err != nil {
-			t.Fatalf("legacy iWork ZIP index rejected: %v", err)
-		}
 	}
 }

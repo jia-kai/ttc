@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"ttc/internal/jobs"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -44,11 +44,11 @@ func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r.Provider = &provider.Script{Responses: []provider.ScriptResponse{
-				{Calls: []provider.ToolCall{{ID: "read-page", Name: "job_read", Arguments: encoded}}},
+			r.Provider = &llm.Script{Responses: []llm.ScriptResponse{
+				{Calls: []llm.ToolCall{{ID: "read-page", Name: "job_read", Arguments: encoded}}},
 				{Text: "Page read."},
 			}}
-			if err := r.Run(&provider.Message{Role: "user", Content: "Inspect a captured page"}); err != nil {
+			if err := r.Run(&llm.Message{Role: "user", Content: "Inspect a captured page"}); err != nil {
 				t.Fatal(err)
 			}
 			var entryID int64

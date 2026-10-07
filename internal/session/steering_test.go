@@ -9,13 +9,13 @@ import (
 	"testing"
 
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	requests := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests++
 		if requests == 1 {
 			if err := r.Steer(contextbuild.Input{Text: "Steer: revise after first write"}); err != nil {
@@ -38,16 +38,16 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 			}
 		}
 		if requests == 3 {
-			return emit(provider.StreamEvent{Kind: "text", Text: "Done"})
+			return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 		}
 		content := "first\n"
 		if requests == 2 {
 			content = "revised\n"
 		}
 		arguments, _ := json.Marshal(map[string]string{"path": "result.txt", "content": content})
-		return emit(provider.StreamEvent{Kind: "call", Call: &provider.ToolCall{ID: content, Name: "write", Arguments: arguments}})
+		return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: content, Name: "write", Arguments: arguments}})
 	}}
-	if err := r.Run(&provider.Message{Role: "user", Content: "Write the result"}); err != nil {
+	if err := r.Run(&llm.Message{Role: "user", Content: "Write the result"}); err != nil {
 		t.Fatal(err)
 	}
 	if count, _ := r.SteeringPreview(0); requests != 3 || count != 0 {

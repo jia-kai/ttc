@@ -7,14 +7,14 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
 func TestInspectionPagesBoundLargeToolAndMessageBodies(t *testing.T) {
 	s, v, turn, req := historyFixture(t)
-	call := provider.ToolCall{ID: "large", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.txt"}`)}
-	_, calls, err := s.Assistant(v.ID, turn, "main", req, provider.Message{Role: "assistant", Calls: []provider.ToolCall{call}})
+	call := llm.ToolCall{ID: "large", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.txt"}`)}
+	_, calls, err := s.Assistant(v.ID, turn, "main", req, llm.Message{Role: "assistant", Calls: []llm.ToolCall{call}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestInspectionPagesBoundLargeToolAndMessageBodies(t *testing.T) {
 	if err != nil || !strings.HasSuffix(tail.Text, "Last line") || len(tail.Text) > 64<<10 {
 		t.Fatal("incorrect last page", err)
 	}
-	messageID, err := s.Append(v.ID, turn, "main", "message", "assistant", true, provider.Message{Role: "assistant", Content: strings.Repeat("x", 1<<20)})
+	messageID, err := s.Append(v.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: strings.Repeat("x", 1<<20)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,21 +69,21 @@ func TestInstructionInspectionPagesAndValidation(t *testing.T) {
 	}
 }
 
-func TestInspectionTinyMessageOmitsLargeImageAndReplayEnvelopes(t *testing.T) {
+func TestInspectionTinyMessageOmitsBinaryReferencesAndLargeReplayEnvelopes(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
-	for _, message := range []provider.Message{
-		{Role: "user", Files: []provider.BinaryFile{{Path: "fixture.png", DataURL: "data:image/png;base64," + strings.Repeat("A", 8<<20)}}},
-		{Role: "assistant", Content: "Done.", State: &provider.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"opaque":"` + strings.Repeat("x", 8<<20) + `"}`)}}},
+	for _, message := range []llm.Message{
+		{Role: "user", Files: []llm.BinaryFile{{Path: "/snapshot/fixture.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8 << 20}}},
+		{Role: "assistant", Content: "Done.", State: &llm.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"opaque":"` + strings.Repeat("x", 8<<20) + `"}`)}}},
 	} {
 		id, err := s.Append(v.ID, turn, "main", "message", message.Role, true, message)
 		if err != nil {
 			t.Fatal(err)
 		}
 		page, err := s.InspectPage(context.Background(), id, 0, InspectionPageChars)
-		if err != nil || !page.Supported || !page.LargeEnvelope || len(page.Text) > 100 || page.Total > page.Limit {
-			t.Fatal("short message loaded large canonical data", page, err)
+		if err != nil || !page.Supported || page.LargeEnvelope != (message.Role == "assistant") || len(page.Text) > 100 || page.Total > page.Limit {
+			t.Fatal("inspection lost bounded text or native envelope size", page, err)
 		}
-		if message.Role == "user" && !strings.Contains(page.Text, "Binary snapshot: fixture.png") {
+		if message.Role == "user" && !strings.Contains(page.Text, "Binary snapshot: /snapshot/fixture.png") {
 			t.Fatal("image-only inspection lost snapshot metadata", page.Text)
 		}
 	}

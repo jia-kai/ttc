@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -16,7 +16,7 @@ func TestQuestionMouseWheelPreservesManualScroll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "long", Name: "question", Arguments: arguments}}}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "long", Name: "question", Arguments: arguments}}}}})
 	u.typeText("ask long question")
 	u.key(tcell.KeyEnter)
 	frame := u.wait(t, "LAST_OPTION")

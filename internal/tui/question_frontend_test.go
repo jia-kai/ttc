@@ -14,7 +14,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"ttc/internal/graphics"
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/session"
 	"ttc/internal/skills"
@@ -22,12 +22,12 @@ import (
 )
 
 type questionTestProvider struct {
-	provider.Script
+	llm.Script
 	ready, release chan struct{}
 	first          bool
 }
 
-func (p *questionTestProvider) Stream(ctx context.Context, req provider.Request, emit func(provider.StreamEvent) error) error {
+func (p *questionTestProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	if !p.first {
 		p.first = true
 		close(p.ready)
@@ -48,16 +48,16 @@ type questionTestUI struct {
 	cancel         context.CancelFunc
 }
 
-func newQuestionTestUI(t *testing.T, p provider.Provider, sinks ...*graphics.Kitty) *questionTestUI {
+func newQuestionTestUI(t *testing.T, p session.Inference, sinks ...*graphics.Kitty) *questionTestUI {
 	t.Helper()
 	return newQuestionTestUIWithEditor(t, p, nil, sinks...)
 }
 
-func newQuestionTestUIWithEditor(t *testing.T, p provider.Provider, editor func(context.Context, string) (string, error), sinks ...*graphics.Kitty) *questionTestUI {
+func newQuestionTestUIWithEditor(t *testing.T, p session.Inference, editor func(context.Context, string) (string, error), sinks ...*graphics.Kitty) *questionTestUI {
 	return newQuestionTestUIWithSetup(t, p, editor, nil, sinks...)
 }
 
-func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(context.Context, string) (string, error), setup func(*session.Runtime), sinks ...*graphics.Kitty) *questionTestUI {
+func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(context.Context, string) (string, error), setup func(*session.Runtime), sinks ...*graphics.Kitty) *questionTestUI {
 	t.Helper()
 	if _, err := scratch.Verify(); err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(c
 	if err != nil {
 		t.Fatal(err)
 	}
-	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	catalog, err := skills.Discover(context.Background(), w.Root, "")
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func newQuestionTestUIWithSetup(t *testing.T, p provider.Provider, editor func(c
 	}
 	s := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 128)}
 	ui := &questionTestUI{screen: s, runtime: r, done: make(chan error, 1), questionEvents: questionEvents, cancel: cancel}
-	f := Frontend{Runtime: r, Events: events, Screen: s, Output: io.Discard, Models: []provider.ModelSpec{selection.Model}, EditInput: editor}
+	f := Frontend{Runtime: r, Events: events, Screen: s, Output: io.Discard, Models: []llm.ModelSpec{selection.Model}, EditInput: editor}
 	if len(sinks) > 0 {
 		f.Graphics = sinks[0]
 	}
@@ -141,12 +141,12 @@ func (u *questionTestUI) typeText(text string) {
 }
 func (u *questionTestUI) key(k tcell.Key) { u.screen.PostEventWait(tcell.NewEventKey(k, 0, 0)) }
 
-func questionScript() []provider.ScriptResponse {
-	return []provider.ScriptResponse{{Calls: []provider.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"choice","prompt":"Choose a method?","recommended_option_id":"b","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]},{"id":"notes","prompt":"Add notes?"}]}`)}}}, {Text: "Done answering."}}
+func questionScript() []llm.ScriptResponse {
+	return []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"choice","prompt":"Choose a method?","recommended_option_id":"b","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]},{"id":"notes","prompt":"Add notes?"}]}`)}}}, {Text: "Done answering."}}
 }
 
 func TestQuestionFreeTextEnterAdvancesInFrontend(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")
@@ -172,8 +172,8 @@ func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
 	for _, modifier := range []tcell.ModMask{0, tcell.ModAlt} {
 		t.Run(fmt.Sprint(modifier), func(t *testing.T) {
 			responses := questionScript()
-			responses[1] = provider.ScriptResponse{Prefix: "user: Do something else", Text: "Redirect received."}
-			u := newQuestionTestUI(t, &provider.Script{Responses: responses})
+			responses[1] = llm.ScriptResponse{Prefix: "user: Do something else", Text: "Redirect received."}
+			u := newQuestionTestUI(t, &llm.Script{Responses: responses})
 			u.typeText("ask")
 			u.key(tcell.KeyEnter)
 			u.wait(t, "Choose a method?")
@@ -227,7 +227,7 @@ func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
 }
 
 func TestDismissedQuestionReopensWithDraftAndCanStillBeAnswered(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")
@@ -254,7 +254,7 @@ func TestDismissedQuestionReopensWithDraftAndCanStillBeAnswered(t *testing.T) {
 }
 
 func TestQuestionArrivingDuringModelPickerOpensAfterPickerCloses(t *testing.T) {
-	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
@@ -284,7 +284,7 @@ func TestQuestionArrivingDuringModelPickerOpensAfterPickerCloses(t *testing.T) {
 }
 
 func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) {
-	p := &questionTestProvider{Script: provider.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
+	p := &questionTestProvider{Script: llm.Script{Responses: questionScript()}, ready: make(chan struct{}), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
 	u.key(tcell.KeyCtrlD) // Empty composer must remain open.
 	u.typeText("ask")
@@ -331,8 +331,8 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 }
 
 func TestQuestionFrontendSequentialRoundsPreserveNextDraft(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{
-		{Calls: []provider.ToolCall{
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{
 			{ID: "qa", Name: "question", Arguments: []byte(`{"questions":[{"id":"answer","prompt":"Alpha?"}]}`)},
 			{ID: "qb", Name: "question", Arguments: []byte(`{"questions":[{"id":"answer","prompt":"Beta?"}]}`)},
 		}},
@@ -388,7 +388,7 @@ func TestComposerCtrlDScrollsDownWithoutExiting(t *testing.T) {
 	for i := range 80 {
 		rows = append(rows, fmt.Sprintf("ROW_%03d", i))
 	}
-	u := newQuestionTestUI(t, &provider.Script{Responses: []provider.ScriptResponse{{Text: "```\n" + strings.Join(rows, "\n") + "\n```"}}})
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "```\n" + strings.Join(rows, "\n") + "\n```"}}})
 	u.typeText("show rows")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
@@ -409,7 +409,7 @@ func TestComposerCtrlDScrollsDownWithoutExiting(t *testing.T) {
 }
 
 func TestQuestionFrontendDismissReopenAndCtrlCExitsForm(t *testing.T) {
-	u := newQuestionTestUI(t, &provider.Script{Responses: questionScript()})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Second (Recommended)")

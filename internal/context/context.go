@@ -2,8 +2,8 @@
 package context
 
 import (
+	"bufio"
 	stdcontext "context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +12,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"ttc/internal/provider"
+	"ttc/internal/binaryinput"
+	"ttc/internal/llm"
 	"unicode/utf8"
 )
 
@@ -22,11 +23,11 @@ func Estimate(text string) int { return (len(text) + 2) / 3 }
 // Tokens includes messages, calls and adapter-estimated native replay occupancy.
 // Unannotated replay uses a conservative transport estimate; binary files use
 // format-dependent reserves, not their base64 transport size.
-func Tokens(messages []provider.Message) int {
+func Tokens(messages []llm.Message) int {
 	n := 0
 	for _, m := range messages {
 		if m.State != nil {
-			n += provider.ReplayTokens(m.State)
+			n += llm.ReplayTokens(m.State)
 			continue
 		}
 		n += 16 + Estimate(m.Content)
@@ -41,7 +42,7 @@ func Tokens(messages []provider.Message) int {
 }
 
 // Fits reserves next-turn headroom when requested.
-func Fits(selection provider.Selection, system string, tools []provider.ToolDefinition, messages []provider.Message, headroom bool) bool {
+func Fits(selection llm.Selection, system string, tools []llm.ToolDefinition, messages []llm.Message, headroom bool) bool {
 	n := Estimate(system) + Tokens(messages)
 	for _, t := range tools {
 		n += Estimate(t.Description) + Estimate(string(t.Parameters)) + 16
@@ -72,7 +73,7 @@ type Retention struct {
 // outside the tail budget; task/btw inputs count with normal/queued inputs.
 // Runtime notices are not human inputs. Unresolved calls fail, and callers check
 // capacity/headroom for the complete replacement input.
-func Retain(messages []provider.Message, minTokens, maxTokens int) (Retention, error) {
+func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error) {
 	fail := func(reason string) (Retention, error) { return Retention{}, errors.New(reason) }
 	if minTokens < 0 || maxTokens <= 0 || minTokens > maxTokens {
 		return fail("invalid recent-cycle token bounds")
@@ -191,7 +192,7 @@ func Retain(messages []provider.Message, minTokens, maxTokens int) (Retention, e
 	return fail("no unretained human input or completed older model cycle can be compacted")
 }
 
-func inputSource(message provider.Message) (string, error) {
+func inputSource(message llm.Message) (string, error) {
 	switch message.InputSource {
 	case "":
 		return "normal", nil
@@ -204,15 +205,17 @@ func inputSource(message provider.Message) (string, error) {
 
 // Attachment is a snapshot made before queuing user input; bytes do not change on disk edits.
 type Attachment struct {
-	Path      string               `json:"path"`
-	Kind      string               `json:"kind"`
-	Text      string               `json:"text,omitempty"`
-	Image     *provider.BinaryFile `json:"image,omitempty"`
-	Truncated bool                 `json:"truncated"`
+	Path      string          `json:"path"`
+	Kind      string          `json:"kind"`
+	Text      string          `json:"text,omitempty"`
+	File      *llm.BinaryFile `json:"file,omitempty"` // Checksum-backed native image or document; original bytes live in the shared blob cache.
+	Truncated bool            `json:"truncated"`
 }
 
-// Snapshot rejects unsupported content and never follows directory symlinks.
-func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, error) {
+// Snapshot freezes text, a directory listing, or a native binary reference.
+// Binary classification, validation and limits use the selected model's formats,
+// shared with read(). Recursive directory listings never follow symlinks.
+func Snapshot(ctx stdcontext.Context, path string, types []llm.BinaryFileType) (Attachment, error) {
 	if err := ctx.Err(); err != nil {
 		return Attachment{}, err
 	}
@@ -227,11 +230,11 @@ func Snapshot(ctx stdcontext.Context, path string, images bool) (Attachment, err
 		return Attachment{}, e
 	}
 	defer f.Close()
-	return snapshotOpened(ctx, path, f, images)
+	return snapshotOpened(ctx, path, f, types)
 }
 
 // snapshotOpened reads only the caller-owned descriptor, never reopening path.
-func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, images bool) (Attachment, error) {
+func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, types []llm.BinaryFileType) (Attachment, error) {
 	stop := stdcontext.AfterFunc(ctx, func() { _ = f.Close() })
 	defer stop()
 	st, e := f.Stat()
@@ -307,10 +310,23 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, images bool
 	if !st.Mode().IsRegular() {
 		return a, errors.New("attachment must be a regular file or directory")
 	}
+	reader := bufio.NewReader(f)
+	binary, err := binaryinput.Read(ctx, reader, path, st.Size(), types)
+	if err != nil {
+		return Attachment{}, err
+	}
+	if binary != nil {
+		file, err := binary.Store(ctx, path)
+		if err != nil {
+			return Attachment{}, err
+		}
+		a.Kind, a.File = binary.Kind, &file
+		return a, nil
+	}
 	if st.Size() > 8<<20 {
 		return a, errors.New("attachment exceeds 8 MiB")
 	}
-	b, e := io.ReadAll(io.LimitReader(f, 8<<20+1))
+	b, e := io.ReadAll(io.LimitReader(reader, 8<<20+1))
 	if err := ctx.Err(); err != nil {
 		return a, err
 	}
@@ -319,23 +335,6 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, images bool
 	}
 	if e != nil {
 		return a, e
-	}
-	mime := ""
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png":
-		mime = "image/png"
-	case ".jpg", ".jpeg":
-		mime = "image/jpeg"
-	case ".gif":
-		mime = "image/gif"
-	}
-	if mime != "" {
-		if !images {
-			return a, errors.New("selected model does not support image attachments")
-		}
-		a.Kind = "image"
-		a.Image = &provider.BinaryFile{Path: path, DataURL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(b), MIMEType: mime, Bytes: len(b)}
-		return a, nil
 	}
 	if !utf8.Valid(b) || strings.ContainsRune(string(b), 0) {
 		return a, errors.New("unsupported attachment content")
@@ -361,18 +360,22 @@ type Input struct {
 }
 
 // Message constructs the model-facing message without rereading attachment paths.
-func (i Input) Message() provider.Message {
+func (i Input) Message() llm.Message {
 	if len(i.Attachments) == 0 {
-		return provider.Message{Role: "user", Content: i.Text, InputSource: i.Source}
+		return llm.Message{Role: "user", Content: i.Text, InputSource: i.Source}
 	}
 	text := i.Text
-	m := provider.Message{Role: "user", UserText: &text, InputSource: i.Source}
+	m := llm.Message{Role: "user", UserText: &text, InputSource: i.Source}
 	var content strings.Builder
 	content.WriteString(text)
 	for _, a := range i.Attachments {
-		if a.Image != nil {
-			m.Files = append(m.Files, *a.Image)
-			content.WriteString("\nImage attachment: ")
+		if a.File != nil {
+			m.Files = append(m.Files, *a.File)
+			if a.Kind == "image" {
+				content.WriteString("\nImage attachment: ")
+			} else {
+				content.WriteString("\nDocument attachment: ")
+			}
 			content.WriteString(a.Path)
 			continue
 		}

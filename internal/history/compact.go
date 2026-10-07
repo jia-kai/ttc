@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 	ctxmgr "ttc/internal/context"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 // Continue atomically freezes a predecessor and copies a retained visible suffix.
@@ -24,7 +24,7 @@ import (
 // identify an active-branch entry, or the final entry ID plus one for an empty suffix.
 // pending preserves an already-persisted runtime recovery warning, with its
 // original request/source identity, if it is not in the copied visible suffix.
-func (s *Store) Continue(session, summary, archive string, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *provider.Message) (Session, error) {
+func (s *Store) Continue(session, summary, archive string, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
 	archiveHash, e := filepathHash(archive)
 	if e != nil {
 		return Session{}, fmt.Errorf("validate Markdown compaction archive: %w", e)
@@ -57,11 +57,11 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != pending.Role {
 				continue
 			}
-			var message provider.Message
+			var message llm.Message
 			if e := json.Unmarshal(entry.Content, &message); e != nil {
 				return Session{}, e
 			}
-			if _, added := ctxmgr.AppendPendingMessage([]provider.Message{message}, pending); !added {
+			if _, added := ctxmgr.AppendPendingMessage([]llm.Message{message}, pending); !added {
 				pendingEntry = entry
 				break
 			}
@@ -83,8 +83,8 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 		if e != nil {
 			return e
 		}
-		inputs := make(map[int64]provider.Message, len(inputIDs))
-		markers := make(map[int64]provider.Message, len(inputIDs))
+		inputs := make(map[int64]llm.Message, len(inputIDs))
+		markers := make(map[int64]llm.Message, len(inputIDs))
 		boundaryFound := retainFrom == entries[len(entries)-1].ID+1
 		normal, steers := 0, 0
 		for _, entry := range entries {
@@ -92,7 +92,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			if !selected[entry.ID] {
 				continue
 			}
-			var message provider.Message
+			var message llm.Message
 			if e := json.Unmarshal(entry.Content, &message); e != nil {
 				return e
 			}
@@ -143,7 +143,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 		if _, e = tx.Exec("UPDATE sessions SET file_tip_id=? WHERE id=?", n(baseline), id); e != nil {
 			return e
 		}
-		data, _ := json.Marshal(provider.Message{Role: "assistant", Content: summary})
+		data, _ := json.Marshal(llm.Message{Role: "assistant", Content: summary})
 		summaryID, e := appendTx(tx, id, "", "main", "summary", "assistant", true, data, 0)
 		if e != nil {
 			return e
@@ -176,7 +176,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 				}
 			}
 			if entry.Visible && (entry.Kind == "message" || entry.Kind == "summary") {
-				var m provider.Message
+				var m llm.Message
 				if input, ok := inputs[entry.ID]; ok {
 					m = input
 				} else {
@@ -190,7 +190,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 				}
 				m.State = nil
 				if pending != nil && entry.Actor == "main" && entry.Role == pending.Role {
-					_, added := ctxmgr.AppendPendingMessage([]provider.Message{m}, pending)
+					_, added := ctxmgr.AppendPendingMessage([]llm.Message{m}, pending)
 					pendingCopied = pendingCopied || !added
 				}
 				content, e = json.Marshal(m)

@@ -17,10 +17,11 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/provider"
-	"ttc/internal/provider/openai"
+	"ttc/internal/llm"
+	"ttc/internal/providers/openai"
 )
 
 func readImageFixture(t *testing.T, r *Runtime) (string, string) {
@@ -52,7 +53,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.selection.Model.Images = true
 	path, checksum := readImageFixture(t, r)
-	calls := []provider.ToolCall{{ID: "image-call", Name: "read", Arguments: json.RawMessage(`{"path":"source.png"}`)}}
+	calls := []llm.ToolCall{{ID: "image-call", Name: "read", Arguments: json.RawMessage(`{"path":"source.png"}`)}}
 	turn, ids := batchIntents(t, r, "main", calls)
 	records, err := r.runToolBatch(context.Background(), turn, "main", r.Tools, calls, ids, nil)
 	if err != nil || len(records) != 1 || len(records[0].Files) != 1 {
@@ -62,7 +63,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := provider.BinaryFile{Path: path, SHA256: checksum, MIMEType: "image/png", Bytes: int(info.Size())}
+	want := llm.BinaryFile{Path: path, SHA256: checksum, MIMEType: "image/png", Bytes: int(info.Size())}
 	check := func(session string) {
 		t.Helper()
 		messages, err := r.Store.Messages(session)
@@ -73,7 +74,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		for _, message := range messages {
 			if message.Role == "tool" && message.CallID == "image-call" {
 				found = true
-				if !reflect.DeepEqual(message.Files, []provider.BinaryFile{want}) || strings.Contains(message.Content, "data_url") {
+				if !reflect.DeepEqual(message.Files, []llm.BinaryFile{want}) || strings.Contains(message.Content, "data_url") {
 					t.Fatalf("history lost the image reference: %+v", message)
 				}
 			}
@@ -81,7 +82,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		if !found {
 			t.Fatal("history lost image tool result")
 		}
-		withoutImages := append([]provider.Message(nil), messages...)
+		withoutImages := append([]llm.Message(nil), messages...)
 		for i := range withoutImages {
 			withoutImages[i].Files = nil
 		}
@@ -137,7 +138,7 @@ func TestImageReadUsesProducingRequestVisionCapability(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			r.selection.Model.Images = vision
 			readImageFixture(t, r)
-			calls := []provider.ToolCall{{ID: "read", Name: "read", Arguments: json.RawMessage(`{"path":"source.png"}`)}}
+			calls := []llm.ToolCall{{ID: "read", Name: "read", Arguments: json.RawMessage(`{"path":"source.png"}`)}}
 			turn, ids := batchIntents(t, r, "main", calls)
 			// Picker changes cannot change the capability of an admitted call.
 			r.selection.Model.Images = !vision
@@ -161,18 +162,13 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 		t.Run(map[bool]string{false: "changed", true: "missing"}[missing], func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			path, checksum := readImageFixture(t, r)
-			auth := filepath.Join(t.TempDir(), "auth.json")
-			credentials, err := json.Marshal(openai.Credentials{AuthMode: "chatgpt", Tokens: openai.Tokens{Access: "mock-token", AccountID: "mock-account"}, LastRefresh: time.Now()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(auth, credentials, 0600); err != nil {
-				t.Fatal(err)
-			}
 			requests := 0
 			unavailable := false
-			adapter := openai.New(auth)
-			adapter.BaseURL = "http://mock.invalid"
+			adapter := openai.NewAdapter(openai.Config{BaseURL: "http://mock.invalid", ResolveBinary: binaryinput.Resolve,
+				TokenSource: func(context.Context) (openai.AccessTokens, error) {
+					return openai.AccessTokens{Access: "mock-token", AccountID: "mock-account"}, nil
+				},
+			})
 			adapter.Client = mockHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				step := requests
 				requests++
@@ -196,9 +192,10 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			r.Provider = adapter
 			r.selection.Provider = "openai"
 			r.selection.Model.Images = true
-			if err := r.Run(&provider.Message{Role: "user", Content: "Read the image."}); err != nil || requests != 2 {
+			if err := r.Run(&llm.Message{Role: "user", Content: "Read the image."}); err != nil || requests != 2 {
 				t.Fatal("initial image exchange failed", err, requests)
 			}
+			var err error
 			if missing {
 				err = os.Remove(path)
 			} else {
@@ -212,7 +209,7 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			if _, err := r.Command("/load " + r.Current()); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.Run(&provider.Message{Role: "user", Content: "Continue using the image."}); err != nil || requests != 3 {
+			if err := r.Run(&llm.Message{Role: "user", Content: "Continue using the image."}); err != nil || requests != 3 {
 				t.Fatal("missing/changed source blocked cached continuation", err, requests)
 			}
 			cache, err := blobcache.Default()
@@ -224,7 +221,7 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 				t.Fatal(err)
 			}
 			unavailable = true
-			if err := r.Run(&provider.Message{Role: "user", Content: "Continue after eviction."}); err != nil || requests != 4 {
+			if err := r.Run(&llm.Message{Role: "user", Content: "Continue after eviction."}); err != nil || requests != 4 {
 				t.Fatal("unavailable image blocked continuation", err, requests)
 			}
 			messages, err := r.Store.Messages(r.Current())
@@ -234,7 +231,7 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			found := false
 			for _, message := range messages {
 				for _, im := range message.Files {
-					if im.Path == path && im.SHA256 == checksum && im.DataURL == "" {
+					if im.Path == path && im.SHA256 == checksum {
 						found = true
 					}
 				}
@@ -244,6 +241,10 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			}
 			if !found {
 				t.Fatal("eviction lost persisted image reference")
+			}
+			encoded, err := json.Marshal(messages)
+			if err != nil || bytes.Contains(encoded, []byte("data_url")) || bytes.Contains(encoded, []byte("base64")) {
+				t.Fatal("eviction persisted transport binary payload", err)
 			}
 		})
 	}

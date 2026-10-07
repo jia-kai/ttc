@@ -10,10 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"ttc/internal/filelock"
-	"ttc/internal/provider"
-	"unicode"
+	"ttc/internal/llm"
+	"ttc/internal/privatefile"
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
@@ -33,7 +32,7 @@ type modelChoices struct {
 
 // SwitchModel atomically records an applied selection and updates session metadata.
 // It rejects a read-only session; callers must retain their old selection on error.
-func (s *Store) SwitchModel(session, turn string, previous, next provider.Selection, text string) (int64, error) {
+func (s *Store) SwitchModel(session, turn string, previous, next llm.Selection, text string) (int64, error) {
 	model, err := json.Marshal(next)
 	if err != nil {
 		return 0, err
@@ -67,8 +66,8 @@ func (s *Store) SwitchModel(session, turn string, previous, next provider.Select
 // LastSelection reads the explicit choice saved for a provider, across workspaces.
 // Nil means no saved choice. Only Provider, Model.ID and Variant are populated;
 // callers must resolve current catalog metadata before using the selection.
-func (s *Store) LastSelection(providerID string) (*provider.Selection, error) {
-	if err := choiceText("provider", providerID, 128); err != nil {
+func (s *Store) LastSelection(providerID string) (*llm.Selection, error) {
+	if err := llm.ValidateChoiceText("provider", providerID, llm.MaxProviderIDBytes); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -81,14 +80,14 @@ func (s *Store) LastSelection(providerID string) (*provider.Selection, error) {
 	if !found {
 		return nil, nil
 	}
-	return &provider.Selection{Provider: providerID, Model: provider.ModelSpec{ID: choice.ID}, Variant: choice.Variant}, nil
+	return &llm.Selection{Provider: providerID, Model: llm.ModelSpec{ID: choice.ID}, Variant: choice.Variant}, nil
 }
 
 // SaveSelection atomically saves an explicit model ID and variant in a private,
 // versioned preference file, independently of session creation or model switches.
 // Call before accepting a queued choice. Catalog metadata is never persisted.
 // Invalid existing files fail rather than falling back to session history.
-func (s *Store) SaveSelection(selection provider.Selection) error {
+func (s *Store) SaveSelection(selection llm.Selection) error {
 	if err := validateModelChoice(selection.Provider, modelChoice{selection.Model.ID, selection.Variant}); err != nil {
 		return err
 	}
@@ -111,7 +110,7 @@ func (s *Store) SaveSelection(selection provider.Selection) error {
 	if len(data) > modelChoicesBytes {
 		return errors.New("model preferences exceed 64 KiB")
 	}
-	if err := AtomicFile(filepath.Join(s.Root, "model-choices.json"), data, 0600); err != nil {
+	if err := privatefile.AtomicFile(filepath.Join(s.Root, "model-choices.json"), data, 0600); err != nil {
 		return fmt.Errorf("save model preferences: %w", err)
 	}
 	return nil
@@ -172,17 +171,10 @@ func validateModelChoice(providerID string, choice modelChoice) error {
 	for _, field := range []struct {
 		name, value string
 		limit       int
-	}{{"provider", providerID, 128}, {"model ID", choice.ID, 512}, {"variant", choice.Variant, 128}} {
-		if err := choiceText(field.name, field.value, field.limit); err != nil {
+	}{{"provider", providerID, llm.MaxProviderIDBytes}, {"model ID", choice.ID, llm.MaxModelIDBytes}, {"variant", choice.Variant, llm.MaxVariantBytes}} {
+		if err := llm.ValidateChoiceText(field.name, field.value, field.limit); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func choiceText(name, value string, limit int) error {
-	if value == "" || len(value) > limit || !utf8.ValidString(value) || strings.TrimSpace(value) != value || strings.IndexFunc(value, unicode.IsControl) >= 0 {
-		return fmt.Errorf("invalid model preference %s (require 1–%d UTF-8 bytes without controls or surrounding whitespace)", name, limit)
 	}
 	return nil
 }

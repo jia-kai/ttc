@@ -9,19 +9,20 @@ import (
 	"os"
 	"path/filepath"
 
-	"ttc/internal/provider"
+	"ttc/internal/llm"
+	"ttc/internal/privatefile"
 )
 
 // ArchiveMessages freezes an isolated actor's model input as Markdown and exact
 // JSONL envelopes, including replay state and attachment bytes. The caller owns
 // the supplied Markdown projection; managed files are immutable and private.
-func (s *Store) ArchiveMessages(session, actor, markdown string, messages []provider.Message) (string, error) {
+func (s *Store) ArchiveMessages(session, actor, markdown string, messages []llm.Message) (string, error) {
 	var exact bytes.Buffer
 	encoder := json.NewEncoder(&exact)
 	for _, message := range messages {
 		if err := encoder.Encode(struct {
-			Actor   string           `json:"actor"`
-			Message provider.Message `json:"message"`
+			Actor   string      `json:"actor"`
+			Message llm.Message `json:"message"`
 		}{actor, message}); err != nil {
 			return "", err
 		}
@@ -38,7 +39,7 @@ func (s *Store) writeArchive(session string, text, exact []byte) (string, error)
 	hash.Write(text)
 	hash.Write(exact)
 	dir := filepath.Join(s.Root, "lineages", v.LineageID, "compactions")
-	if err := PrivateDir(dir); err != nil {
+	if err := privatefile.PrivateDir(dir); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, fmt.Sprintf("%x.md", hash.Sum(nil)))
@@ -55,7 +56,7 @@ func (s *Store) writeArchive(session string, text, exact []byte) (string, error)
 		} else if !os.IsNotExist(err) {
 			return "", err
 		}
-		if err := AtomicFile(file.path, file.data, 0600); err != nil {
+		if err := privatefile.AtomicFile(file.path, file.data, 0600); err != nil {
 			return "", err
 		}
 	}

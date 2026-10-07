@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"ttc/internal/history"
-	"ttc/internal/provider"
+	"ttc/internal/llm"
 )
 
 func retentionFixture(t *testing.T) (*Runtime, chan Event, string) {
@@ -21,9 +21,9 @@ func retentionFixture(t *testing.T) (*Runtime, chan Event, string) {
 	t.Cleanup(func() { store.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	selection := provider.Selection{Provider: "script", Model: provider.ScriptModel(), Variant: "none"}
+	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	path, id := t.TempDir(), history.NewID("session")
-	turn, _, err := store.StartSession(id, path, selection, provider.Message{Role: "user", Content: "Loaded conversation"})
+	turn, _, err := store.StartSession(id, path, selection, llm.Message{Role: "user", Content: "Loaded conversation"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func retentionFixture(t *testing.T) (*Runtime, chan Event, string) {
 func TestRetentionStartupProtectsLoadedLineageAndStops(t *testing.T) {
 	r, _, path := retentionFixture(t)
 	other := history.NewID("session")
-	turn, _, err := r.Store.StartSession(other, path, r.CurrentSelection(), provider.Message{Role: "user", Content: "Expired conversation"})
+	turn, _, err := r.Store.StartSession(other, path, r.CurrentSelection(), llm.Message{Role: "user", Content: "Expired conversation"})
 	if err != nil {
 		t.Fatal(err)
 	}
