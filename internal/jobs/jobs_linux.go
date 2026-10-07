@@ -23,7 +23,7 @@ import (
 
 // ErrNotFound identifies a stale or inaccessible job handle without exposing
 // another actor's jobs. Callers can map it to their own error protocol.
-var ErrNotFound = errors.New("unknown or inaccessible job_id; use job_list(state=all) to choose an accessible job")
+var ErrNotFound = errors.New(prompts.JobNotFound)
 
 // ForegroundTimeout is the default deadline for foreground shells, in duration units.
 // Foreground commands cannot run without a deadline; background shells default to none.
@@ -95,7 +95,7 @@ func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration
 
 func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool) (string, error) {
 	if timeout < 0 {
-		return "", errors.New("shell timeout must be nonnegative")
+		return "", errors.New(prompts.JobTimeoutNonnegative)
 	}
 	if !background && timeout == 0 {
 		timeout = ForegroundTimeout
@@ -103,7 +103,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return "", errors.New("runtime ended")
+		return "", errors.New(prompts.RuntimeEnded)
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	if timeout > 0 {
@@ -146,7 +146,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 			}
 			cancel()
 			m.mu.Unlock()
-			return "", fmt.Errorf("create LSP pipes: %w", err)
+			return "", fmt.Errorf(prompts.JobLSPPipeFailure, err)
 		}
 		cmd.Stdout = writer
 		j.view.Kind = "lsp"
@@ -187,7 +187,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 			var exit *exec.ExitError
 			if !errors.As(e, &exit) {
 				j.view.Status = "failed"
-				fmt.Fprintf(j.stderr, "Shell supervision failed: %v\n", e)
+				fmt.Fprintf(j.stderr, prompts.JobSupervisionFailure, e)
 				if errors.Is(e, exec.ErrWaitDelay) {
 					io.WriteString(j.stderr, prompts.ToolNote("shell", "descendant_pipes"))
 				}
@@ -225,15 +225,15 @@ func (m *Manager) QueryLSP(ctx context.Context, owner, id string, query lsp.Quer
 	j, ok := m.jobs[id]
 	if !ok || !allowed(owner, j.view.Owner) {
 		m.mu.Unlock()
-		return nil, &lsp.Error{Code: "not_found", Message: "unknown or inaccessible live LSP job; use job_list or start shell(protocol=lsp, background=true)"}
+		return nil, &lsp.Error{Code: "not_found", Message: prompts.JobLSPNotFound}
 	}
 	if j.client == nil {
 		m.mu.Unlock()
-		return nil, &lsp.Error{Code: "invalid_input", Message: "job is not an LSP server; start shell(protocol=lsp, background=true)"}
+		return nil, &lsp.Error{Code: "invalid_input", Message: prompts.JobNotLSPServer}
 	}
 	if j.view.Status != "running" {
 		m.mu.Unlock()
-		return nil, &lsp.Error{Code: "job_not_running", Message: "language server exited; inspect job_read(stream=stderr) and start a new server"}
+		return nil, &lsp.Error{Code: "job_not_running", Message: prompts.JobLSPExited}
 	}
 	client := j.client
 	m.mu.Unlock()
@@ -338,7 +338,7 @@ func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 	}
 	if j.view.Kind == "subagent" && j.view.Owner == owner {
 		m.mu.Unlock()
-		return Snapshot{}, errors.New("a child cannot stop its own task")
+		return Snapshot{}, errors.New(prompts.JobCannotStopOwnTask)
 	}
 	j.cancel()
 	done := j.done
@@ -375,13 +375,13 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 		}
 	}
 	if j.client != nil && stream != "stderr" {
-		return nil, &lsp.Error{Code: "invalid_input", Message: "LSP stdout belongs to the protocol client; set stream=stderr for server diagnostics"}
+		return nil, &lsp.Error{Code: "invalid_input", Message: prompts.JobLSPProtocolStdout}
 	}
 	buffer := j.stdout
 	if stream == "stderr" {
 		buffer = j.stderr
 	} else if stream != "stdout" {
-		return nil, errors.New("stream must be stdout or stderr")
+		return nil, errors.New(prompts.JobInvalidStream)
 	}
 	page, err := buffer.Read(options.Cursor, options.Limit)
 	if err != nil {
@@ -403,7 +403,7 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 		}
 		expression, err := regexp.Compile(pattern)
 		if err != nil {
-			return nil, fmt.Errorf("invalid output grep: %w", err)
+			return nil, fmt.Errorf(prompts.JobOutputGrepFailure, err)
 		}
 		var kept strings.Builder
 		line, offset := page.Line, page.Start
@@ -450,7 +450,7 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return "", errors.New("runtime ended")
+		return "", errors.New(prompts.RuntimeEnded)
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()

@@ -162,7 +162,7 @@ func TestChildResultUsesCommittedCompletionBeforeJobSnapshot(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	child := &codingChild{id: "main/child"}
 	for _, answer := range []string{"Final answer", ""} {
-		assignment := &childAssignment{turn: "ct", finish: 1, result: 2, status: "completed", answer: answer}
+		assignment := &childAssignment{turn: "ct", finish: 1, completion: history.ChildFinish{Status: "completed", ResultEntry: 2, Answer: answer}}
 		result := r.childResult(child, assignment, jobs.Snapshot{Status: "running", Stdout: "Intermediate commentary"})
 		if result["status"] != "completed" || result["answer"] != answer || result["stdout"] != nil {
 			t.Fatal("fast completion lost its answer or exposed commentary", result)

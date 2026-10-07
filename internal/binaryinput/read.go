@@ -17,6 +17,7 @@ import (
 
 	"ttc/internal/blobcache"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 // Error describes a binary input failure independently of a tool envelope.
@@ -48,10 +49,10 @@ func (r *Result) Store(ctx context.Context, path string) (llm.BinaryFile, error)
 	checksum := hex.EncodeToString(hash[:])
 	cache, err := blobcache.Default()
 	if err != nil {
-		return llm.BinaryFile{}, fmt.Errorf("open binary cache: %w", err)
+		return llm.BinaryFile{}, fmt.Errorf(prompts.BinaryOpenCache, err)
 	}
 	if err := cache.Put(ctx, "original", checksum, r.Data); err != nil {
-		return llm.BinaryFile{}, fmt.Errorf("cache binary file: %w", err)
+		return llm.BinaryFile{}, fmt.Errorf(prompts.BinaryCacheFile, err)
 	}
 	return llm.BinaryFile{Path: path, SHA256: checksum, MIMEType: r.MIMEType, Bytes: len(r.Data)}, nil
 }
@@ -178,10 +179,10 @@ func readBinary(ctx context.Context, reader io.Reader, size int64, kind, mime, e
 		if format == "" {
 			format = extension
 		}
-		return nil, &Error{Code: "unsupported_binary_input", Message: fmt.Sprintf("selected model does not announce %s input; select a model supporting this format, or use shell for explicit inspection/conversion", format)}
+		return nil, &Error{Code: "unsupported_binary_input", Message: fmt.Sprintf(prompts.BinaryUnsupportedInput, format)}
 	}
 	if capability.MaxBytes <= 0 || !llm.ValidBinaryMIME(capability.MIMEType) {
-		return nil, &Error{Code: "invalid_binary_capability", Message: "provider binary capability must declare a canonical MIME type without parameters and positive MaxBytes; fix the provider's model metadata"}
+		return nil, &Error{Code: "invalid_binary_capability", Message: prompts.BinaryInvalidCapability}
 	}
 	maxBytes := min(blobcache.MaxBytes, capability.MaxBytes)
 	tooLarge := func() error {
@@ -189,7 +190,7 @@ func readBinary(ctx context.Context, reader io.Reader, size int64, kind, mime, e
 		if maxBytes == blobcache.MaxBytes {
 			bound = "32 MiB"
 		}
-		return &Error{Code: "binary_too_large", Message: "binary file exceeds " + bound + "; provide a smaller file"}
+		return &Error{Code: "binary_too_large", Message: fmt.Sprintf(prompts.BinaryTooLarge, bound)}
 	}
 	if size > int64(maxBytes) {
 		return nil, tooLarge()
@@ -203,7 +204,7 @@ func readBinary(ctx context.Context, reader io.Reader, size int64, kind, mime, e
 		return nil, tooLarge()
 	}
 	if len(data) == 0 {
-		return nil, &Error{Code: "unsupported_content", Message: "binary file is empty; provide a nonempty original file"}
+		return nil, &Error{Code: "unsupported_content", Message: prompts.BinaryEmpty}
 	}
 	result := &Result{Data: data, MIMEType: capability.MIMEType, Kind: kind}
 	if kind == "image" {
@@ -219,7 +220,7 @@ func readBinary(ctx context.Context, reader io.Reader, size int64, kind, mime, e
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &Error{Code: "unsupported_content", Message: fmt.Sprintf("invalid %s document: %v; provide an original file matching its extension and announced MIME type", capability.MIMEType, err)}
+		return nil, &Error{Code: "unsupported_content", Message: fmt.Sprintf(prompts.BinaryInvalidDocument, capability.MIMEType, err)}
 	}
 	return result, ctx.Err()
 }
@@ -288,27 +289,27 @@ func validateReadDocument(ctx context.Context, data []byte, mime string) error {
 	switch mime {
 	case "application/pdf":
 		if len(data) < 8 || !bytes.HasPrefix(data, []byte("%PDF-")) || (data[5] != '1' && data[5] != '2') || data[6] != '.' || data[7] < '0' || data[7] > '9' {
-			return fmt.Errorf("missing PDF version header")
+			return fmt.Errorf(prompts.BinaryPDFVersionHeader)
 		}
 		if !bytes.Contains(data[max(0, len(data)-1024):], []byte("%%EOF")) {
-			return fmt.Errorf("missing PDF end marker")
+			return fmt.Errorf(prompts.BinaryPDFEndMarker)
 		}
 		return nil
 	case "application/rtf":
 		if !bytes.HasPrefix(data, []byte("{\\rtf")) || len(data) < 7 || data[5] < '0' || data[5] > '9' || !bytes.HasSuffix(bytes.TrimSpace(data), []byte("}")) {
-			return fmt.Errorf("missing RTF header or closing brace")
+			return fmt.Errorf(prompts.BinaryRTFHeader)
 		}
 		return nil
 	case "application/msword", "application/vnd.ms-powerpoint", "application/vnd.ms-excel":
 		if len(data) < 512 || !bytes.HasPrefix(data, oleMagic) || data[28] != 0xfe || data[29] != 0xff {
-			return fmt.Errorf("missing OLE compound-file header")
+			return fmt.Errorf(prompts.BinaryOLEHeader)
 		}
 		version, shift := binary.LittleEndian.Uint16(data[26:28]), binary.LittleEndian.Uint16(data[30:32])
 		if (version != 3 || shift != 9) && (version != 4 || shift != 12) {
-			return fmt.Errorf("invalid OLE version/sector size")
+			return fmt.Errorf(prompts.BinaryOLEVersion)
 		}
 		if len(data) < 1<<shift || len(data)%(1<<shift) != 0 {
-			return fmt.Errorf("incomplete OLE sector")
+			return fmt.Errorf(prompts.BinaryOLESector)
 		}
 		return nil
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.oasis.opendocument.text", "application/vnd.apple.pages", "application/vnd.apple.keynote", "application/vnd.apple.iwork":
@@ -322,7 +323,7 @@ func validateReadDocument(ctx context.Context, data []byte, mime string) error {
 				return err
 			}
 			if _, exists := entries[file.Name]; exists {
-				return fmt.Errorf("duplicate ZIP entry %q", file.Name)
+				return fmt.Errorf(prompts.BinaryZIPDuplicateEntry, file.Name)
 			}
 			entries[file.Name] = file
 		}
@@ -353,18 +354,18 @@ func validateReadDocument(ctx context.Context, data []byte, mime string) error {
 				}
 			}
 			if !found {
-				return fmt.Errorf("missing iWork document index")
+				return fmt.Errorf(prompts.BinaryIWorkIndex)
 			}
 		}
 		for _, name := range required {
 			if entries[name] == nil || entries[name].FileInfo().IsDir() {
-				return fmt.Errorf("missing ZIP entry %q", name)
+				return fmt.Errorf(prompts.BinaryZIPMissingEntry, name)
 			}
 		}
 		if mime == "application/vnd.oasis.opendocument.text" {
 			file := entries["mimetype"]
 			if file.UncompressedSize64 > 128 {
-				return fmt.Errorf("oversized ODT MIME identifier")
+				return fmt.Errorf(prompts.BinaryODTMIMETooLarge)
 			}
 			r, err := file.Open()
 			if err != nil {
@@ -379,7 +380,7 @@ func validateReadDocument(ctx context.Context, data []byte, mime string) error {
 				return closeErr
 			}
 			if string(mime) != "application/vnd.oasis.opendocument.text" {
-				return fmt.Errorf("incorrect ODT MIME identifier")
+				return fmt.Errorf(prompts.BinaryODTMIMEIncorrect)
 			}
 		}
 		return ctx.Err()
@@ -390,7 +391,7 @@ func validateReadDocument(ctx context.Context, data []byte, mime string) error {
 
 func boundedDocumentZIP(data []byte) (*zip.Reader, error) {
 	if !bytes.HasPrefix(data, []byte("PK\x03\x04")) {
-		return nil, fmt.Errorf("missing ZIP local-file header")
+		return nil, fmt.Errorf(prompts.BinaryZIPLocalHeader)
 	}
 	// Find the real EOCD by its exact comment length, rather than trusting a
 	// signature embedded in the archive comment. ZIP64 and multi-disk archives
@@ -404,7 +405,7 @@ func boundedDocumentZIP(data []byte) (*zip.Reader, error) {
 		centralBytes := binary.LittleEndian.Uint32(end[12:16])
 		centralOffset := binary.LittleEndian.Uint32(end[16:20])
 		if binary.LittleEndian.Uint16(end[4:6]) != 0 || binary.LittleEndian.Uint16(end[6:8]) != 0 || binary.LittleEndian.Uint16(end[8:10]) != count || count > 4096 || centralBytes > 2<<20 || uint64(centralOffset)+uint64(centralBytes) != uint64(offset) {
-			return nil, fmt.Errorf("ZIP directory exceeds 4096 entries/2 MiB, uses ZIP64, or is invalid")
+			return nil, fmt.Errorf(prompts.BinaryZIPDirectoryBounds)
 		}
 		// Count real directory records before allocation: a forged EOCD count
 		// must not let archive/zip allocate more than our declared entry cap.
@@ -412,26 +413,26 @@ func boundedDocumentZIP(data []byte) (*zip.Reader, error) {
 		actual := 0
 		for len(directory) > 0 {
 			if len(directory) < 46 || !bytes.HasPrefix(directory, []byte("PK\x01\x02")) {
-				return nil, fmt.Errorf("invalid ZIP directory record")
+				return nil, fmt.Errorf(prompts.BinaryZIPDirectoryRecord)
 			}
 			length := 46 + int(binary.LittleEndian.Uint16(directory[28:30])) + int(binary.LittleEndian.Uint16(directory[30:32])) + int(binary.LittleEndian.Uint16(directory[32:34]))
 			actual++
 			if length > len(directory) || actual > int(count) {
-				return nil, fmt.Errorf("ZIP directory entry count or size mismatch")
+				return nil, fmt.Errorf(prompts.BinaryZIPEntrySizeMismatch)
 			}
 			directory = directory[length:]
 		}
 		if actual != int(count) {
-			return nil, fmt.Errorf("ZIP directory entry count mismatch")
+			return nil, fmt.Errorf(prompts.BinaryZIPEntryCountMismatch)
 		}
 		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 		if err != nil {
 			return nil, err
 		}
 		if len(archive.File) != int(count) {
-			return nil, fmt.Errorf("ZIP directory entry count mismatch")
+			return nil, fmt.Errorf(prompts.BinaryZIPEntryCountMismatch)
 		}
 		return archive, nil
 	}
-	return nil, fmt.Errorf("missing ZIP end-of-directory record")
+	return nil, fmt.Errorf(prompts.BinaryZIPEndRecord)
 }

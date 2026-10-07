@@ -111,7 +111,10 @@ subagent:
     background=true returns a job_id immediately and delivers the answer on
     completion. variant selects a supported reasoning variant; omit it to
     inherit the parent setting at creation or retain the child's setting.
-    Use job_read if the returned answer is truncated and job_stop to close a child.
+    Failures return the last assistant text with a partial-work/side-effect
+    warning and durable full-transcript paths, or an explicit export error.
+    Inspect the transcript before continuing failed work or for a full failed
+    answer. Use job_read for bounded raw output and job_stop to close an idle child.
 wakeup_cancel:
   description: >-
     Cancel a scheduled reminder by exactly one of wakeup_id or name.

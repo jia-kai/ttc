@@ -1,0 +1,6 @@
+# Provider-neutral stream errors delivered through failed-child handoffs.
+LLMInvalidReplayState: invalid provider replay state
+LLMMixedReplayState: mixed provider replay state
+LLMScriptExhausted: offline script exhausted
+LLMScriptPrefixMismatch: "offline script prefix mismatch: expected "
+LLMScriptNoTools: script returned tools to a no-tools request

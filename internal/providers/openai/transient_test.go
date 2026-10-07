@@ -13,24 +13,24 @@ import (
 
 func TestTerminalStreamFailuresCarryRecoverability(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		status    int
-		body      string
-		transient bool
+		name   string
+		status int
+		body   string
 	}{
-		{"rate limit", 429, "", true}, {"server failure", 503, "", true},
-		{"invalid input", 400, "", false},
-		{"lost after output", 200, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n", true},
-		{"malformed JSON", 200, "data: invalid\n\n", false},
-		{"server event", 200, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\"}}}\n\n", true},
-		{"context event", 200, "data: {\"type\":\"error\",\"code\":\"context_length_exceeded\"}\n\n", false},
+		{"rate limit", 429, ""}, {"server failure", 503, ""},
+		{"invalid input", 400, ""},
+		{"lost after output", 200, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"},
+		{"malformed JSON", 200, "data: invalid\n\n"},
+		{"server event", 200, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\"}}}\n\n"},
+		{"context event", 200, "data: {\"type\":\"error\",\"code\":\"context_length_exceeded\"}\n\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); io.WriteString(w, test.body) })
 			req := llm.Request{ConversationID: "test-conversation", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}, MaxAttempts: 1}
 			err := a.Stream(context.Background(), req, func(llm.StreamEvent) error { return nil })
 			var transient *llm.TransientError
-			if err == nil || errors.As(err, &transient) != test.transient {
+			var partial *llm.PartialError
+			if !errors.As(err, &transient) || errors.As(err, &partial) || !strings.HasPrefix(err.Error(), "upstream attempt 1/1 failed: ") {
 				t.Fatal("wrong terminal classification", err)
 			}
 		})
@@ -47,13 +47,14 @@ func TestTerminalTransportErrorDoesNotExposePrivateDetails(t *testing.T) {
 	}
 }
 
-func TestUncommittedTransientSSEFailuresRetry(t *testing.T) {
-	for _, code := range []string{"server_error", "rate_limit_exceeded", "temporarily_unavailable"} {
+func TestUncommittedSSEFailuresRetryRegardlessOfCode(t *testing.T) {
+	for _, code := range []string{"server_error", "rate_limit_exceeded", "temporarily_unavailable", "context_length_exceeded", "invalid_request_error", "unknown_failure"} {
 		for _, kind := range []string{"response.failed", "error"} {
 			t.Run(kind+"/"+code, func(t *testing.T) {
 				requests, retries := 0, 0
 				a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
 					requests++
+					w.Header().Set("Retry-After", "0")
 					if requests == 1 {
 						event := map[string]any{"type": kind, "code": code, "message": "Temporary fixture failure"}
 						if kind == "response.failed" {
@@ -67,7 +68,7 @@ func TestUncommittedTransientSSEFailuresRetry(t *testing.T) {
 				err := a.Stream(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}, MaxAttempts: 2}, func(ev llm.StreamEvent) error {
 					if ev.Kind == "retry" {
 						retries++
-						if ev.Retry.Attempt != 2 || ev.Retry.MaxAttempts != 2 {
+						if ev.Retry.Attempt != 2 || ev.Retry.MaxAttempts != 2 || ev.Retry.DelayMilliseconds != 0 || !strings.Contains(ev.Retry.Reason, "upstream attempt 1/2 failed: ") || !strings.Contains(ev.Retry.Reason, code) || !strings.Contains(ev.Retry.Reason, "Temporary fixture failure") {
 							t.Error("incorrect retry notice", ev.Retry)
 						}
 					}
@@ -116,6 +117,7 @@ func TestBufferedReasoningTransientFailuresRetryWithoutLeakingState(t *testing.T
 			requests, retries, states, completions := 0, 0, 0, 0
 			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				requests++
+				w.Header().Set("Retry-After", "0")
 				if requests > 1 {
 					io.WriteString(w, sseFrames(map[string]any{
 						"type": "response.output_item.done", "output_index": 0,

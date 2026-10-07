@@ -20,7 +20,7 @@ func (r *Runtime) recoverPartial(ctx context.Context, turn, actor string, reques
 		return llm.Message{}, err
 	}
 	if failure == nil || failure.Err == nil || failure.Retry.Attempt-1 <= priorAttempts {
-		return llm.Message{}, errors.New("provider emitted invalid partial recovery")
+		return llm.Message{}, errors.New(prompts.SessionInvalidPartialRecovery)
 	}
 	if err := validateRetry(&failure.Retry); err != nil {
 		return llm.Message{}, err
@@ -52,7 +52,7 @@ func (r *Runtime) ensureRecovery(turn, actor string, message llm.Message) (bool,
 	entries, err := r.Store.Branch(session, 0)
 	if err != nil {
 		r.routeMu.RUnlock()
-		return false, fmt.Errorf("read recovery instructions: %w", err)
+		return false, fmt.Errorf(prompts.SessionReadRecoveryInstructions, err)
 	}
 	for _, entry := range entries {
 		if entry.Actor != actor || entry.Kind != "message" || entry.Role != message.Role {
@@ -61,7 +61,7 @@ func (r *Runtime) ensureRecovery(turn, actor string, message llm.Message) (bool,
 		var existing llm.Message
 		if err := json.Unmarshal(entry.Content, &existing); err != nil {
 			r.routeMu.RUnlock()
-			return false, fmt.Errorf("read recovery instructions: %w", err)
+			return false, fmt.Errorf(prompts.SessionReadRecoveryInstructions, err)
 		}
 		if _, added := contextbuild.AppendPendingMessage([]llm.Message{existing}, &message); !added {
 			r.routeMu.RUnlock()
@@ -71,7 +71,7 @@ func (r *Runtime) ensureRecovery(turn, actor string, message llm.Message) (bool,
 	id, err := r.Store.Append(session, turn, actor, "message", message.Role, actor == "main", message)
 	r.routeMu.RUnlock()
 	if err != nil {
-		return false, fmt.Errorf("record recovery instructions: %w", err)
+		return false, fmt.Errorf(prompts.SessionRecordRecoveryInstructions, err)
 	}
 	r.emit(Event{Kind: "message_placeholder", Actor: actor, SessionID: session, EntryID: id, Text: "Recovery instructions · inspect"})
 	return true, nil
@@ -84,10 +84,7 @@ func (r *Runtime) retryNotice(turn, actor string, request int64, purpose string,
 	if err := validateRetry(retry); err != nil {
 		return err
 	}
-	attempt := fmt.Sprint(retry.Attempt)
-	if retry.MaxAttempts > 0 {
-		attempt += fmt.Sprintf("/%d", retry.MaxAttempts)
-	}
+	attempt := fmt.Sprintf("%d/%d", retry.Attempt, retry.MaxAttempts)
 	text := fmt.Sprintf("Retrying · attempt %s in %.3gs · %s", attempt, float64(retry.DelayMilliseconds)/1000, retry.Reason)
 	r.routeMu.RLock()
 	session := r.Current()
@@ -99,7 +96,7 @@ func (r *Runtime) retryNotice(turn, actor string, request int64, purpose string,
 	}{"model_retry", request, retry, text})
 	r.routeMu.RUnlock()
 	if err != nil {
-		return fmt.Errorf("record model retry: %w", err)
+		return fmt.Errorf(prompts.SessionRecordModelRetry, err)
 	}
 	event := Event{Kind: "status", Actor: actor, SessionID: session, EntryID: id, RequestID: request, Text: text}
 	if purpose != "naming" {
@@ -111,8 +108,8 @@ func (r *Runtime) retryNotice(turn, actor string, request int64, purpose string,
 }
 
 func validateRetry(retry *llm.Retry) error {
-	if retry == nil || retry.Attempt < 2 || retry.MaxAttempts < 0 || retry.MaxAttempts > 0 && retry.Attempt > retry.MaxAttempts || retry.DelayMilliseconds < 0 || retry.DelayMilliseconds > int64((1<<63-1)/time.Millisecond) || retry.Reason == "" {
-		return errors.New("provider emitted invalid retry notice")
+	if retry == nil || retry.Attempt < 2 || retry.MaxAttempts < 1 || retry.Attempt > retry.MaxAttempts || retry.DelayMilliseconds < 0 || retry.DelayMilliseconds > int64((1<<63-1)/time.Millisecond) || retry.Reason == "" {
+		return errors.New(prompts.SessionInvalidRetryNotice)
 	}
 	return nil
 }

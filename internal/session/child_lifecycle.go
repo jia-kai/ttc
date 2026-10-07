@@ -13,6 +13,7 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 	"ttc/internal/tool"
 )
@@ -26,20 +27,25 @@ type codingChild struct {
 	messages                    []llm.Message
 	cursor                      contextCursor
 	closing                     bool
+	lastAnswer                  string // Last nonempty assistant text across persistent assignments, bounded like parent delivery.
+	lastResult                  int64
+	lastTruncated               bool
 }
 
 type childAssignment struct {
-	turn, job      string
-	finish, result int64 // childStartMu guards updates; each assignment retains distinct output refs.
-	answer         string
-	status         string // Terminal assignment status may precede the job supervisor's final snapshot.
-	truncated      bool
-	persistent     bool // Retain context after this assignment, independent of foreground/background execution.
-	background     bool // Deliver the answer only through its completion notification.
+	turn, job       string
+	finish, result  int64 // childStartMu guards updates; each assignment retains distinct output refs.
+	answer          string
+	truncated       bool
+	persistent      bool                // Retain context after this assignment, independent of foreground/background execution.
+	background      bool                // Deliver the answer only through its completion notification.
+	completion      history.ChildFinish // Terminal handoff metadata, including a local completion-publication failure.
+	pending         *llm.Message        // Full emitted output until its assistant entry commits; export on local storage failure.
+	inheritedAnswer bool                // No newer assistant text has replaced the previous assignment's last reply.
 }
 
 // childAnswer returns a bounded final-answer prefix without retaining the backing
-// storage of a large response. Full text stays in the immutable assistant entry.
+// storage of a large response. Full text stays in its committed entry or failure transcript.
 func childAnswer(text string) (string, bool) {
 	n := min(len(text), history.MaxChildAnswerBytes)
 	if n < len(text) {
@@ -75,17 +81,17 @@ func (r *Runtime) ChildViews(actor string) []tool.ChildView {
 // Main-only ownership avoids child self-join and cross-actor cancellation.
 func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) {
 	if actor != "main" {
-		return nil, tool.Fail("ownership", "only the main agent can close coding children")
+		return nil, tool.Fail("ownership", prompts.ChildStopOwnership)
 	}
 	r.childStartMu.Lock()
 	child := r.children[id]
 	if child == nil {
 		r.childStartMu.Unlock()
-		return nil, tool.Fail("not_found", "unknown or closed child_id; use job_list or create a new child")
+		return nil, tool.Fail("not_found", prompts.ChildStopUnknown)
 	}
 	if child.closing {
 		r.childStartMu.Unlock()
-		return nil, tool.Fail("child_busy", "child is already closing; wait for its terminal event")
+		return nil, tool.Fail("child_busy", prompts.ChildAlreadyClosing)
 	}
 	job := child.job
 	if child.state == "idle" {
@@ -103,7 +109,7 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 	}
 	if job == "" {
 		r.childStartMu.Unlock()
-		return nil, tool.Fail("child_busy", "child launch is still being admitted; retry job_stop after its job_id is visible")
+		return nil, tool.Fail("child_busy", prompts.ChildLaunchPending)
 	}
 	child.closing = true
 	r.childStartMu.Unlock()
@@ -128,16 +134,28 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 		delete(result, "stdout") // Completion notification owns the answer, even for a fast launch.
 		return result
 	}
-	if assignment.finish != 0 {
-		result["finish_event_seq"], result["result_entry_id"] = assignment.finish, assignment.result
-		result["status"] = assignment.status
-		if assignment.status == "completed" {
-			result["answer"] = assignment.answer
-			if assignment.truncated {
-				result["answer_truncated"] = true
-			}
-			delete(result, "stdout") // Final answer replaces commentary and duplicate output previews.
+	if finish := assignment.completion; finish.Status != "" {
+		if assignment.finish != 0 {
+			result["finish_event_seq"] = assignment.finish
 		}
+		result["result_entry_id"] = finish.ResultEntry
+		result["status"] = finish.Status
+		result["answer"] = finish.Answer
+		if finish.Truncated {
+			result["answer_truncated"] = true
+		}
+		for key, value := range map[string]string{
+			"warning":                 assignment.completion.Warning,
+			"transcript_path":         assignment.completion.TranscriptPath,
+			"transcript_jsonl_path":   assignment.completion.TranscriptJSONLPath,
+			"transcript_export_error": assignment.completion.TranscriptExportError,
+			"error":                   assignment.completion.Error,
+		} {
+			if value != "" {
+				result[key] = value
+			}
+		}
+		delete(result, "stdout") // Return one assistant message, never concatenated commentary.
 	}
 	return result
 }
@@ -156,12 +174,20 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	if status != "completed" || closing || !task.assignment.persistent {
 		r.Jobs.StopOwned(child.id, task.assignment.job)
 	}
+	var transcript string
+	var exportErr error
+	if status != "completed" {
+		r.routeMu.RLock()
+		transcript, exportErr = r.Store.ArchiveActorTranscript(r.Current(), child.id, task.assignment.pending)
+		r.routeMu.RUnlock()
+	}
 	r.childStartMu.Lock()
 	r.routeMu.RLock()
 	r.orderMu.Lock()
 	finish := history.ChildFinish{Type: "child_turn_finished", ChildID: child.id, TurnID: task.assignment.turn, JobID: task.assignment.job, Status: status, Persistent: task.assignment.persistent, ResultEntry: task.assignment.result}
-	if status == "completed" {
-		finish.Answer, finish.Truncated = task.assignment.answer, task.assignment.truncated
+	finish.Answer, finish.Truncated = task.assignment.answer, task.assignment.truncated
+	if status != "completed" {
+		childFailureMetadata(&finish, task.assignment.inheritedAnswer, transcript, exportErr)
 	}
 	if err != nil {
 		finish.Error = err.Error()
@@ -169,9 +195,11 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	id, commitErr := r.Store.FinishChildTurn(r.Current(), finish)
 	if commitErr == nil {
 		task.assignment.finish = id
-		task.assignment.status = status
+		task.assignment.completion = finish
+		task.assignment.pending = nil
 		if status == "completed" && !child.closing && task.assignment.persistent {
 			child.state = "idle"
+			child.lastAnswer, child.lastTruncated, child.lastResult = finish.Answer, finish.Truncated, finish.ResultEntry
 		} else {
 			child.state = "closed"
 			delete(r.children, child.id)
@@ -192,13 +220,51 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	r.childStartMu.Unlock()
 	if commitErr != nil {
 		r.Jobs.StopOwned(child.id, task.assignment.job)
-		return fmt.Errorf("commit child completion: %w", commitErr)
+		completionErr := fmt.Errorf(prompts.ChildCompletionCommitFailure, commitErr)
+		finish.Error = errors.Join(err, completionErr).Error()
+		if finish.Status == "completed" {
+			finish.Status = "failed"
+			r.routeMu.RLock()
+			transcript, exportErr = r.Store.ArchiveActorTranscript(r.Current(), child.id, task.assignment.pending)
+			r.routeMu.RUnlock()
+			childFailureMetadata(&finish, task.assignment.inheritedAnswer, transcript, exportErr)
+		}
+		finish.Warning += prompts.ChildCompletionPublicationFailure
+		handoffErr := fmt.Errorf("%w; %s", completionErr, finish.Warning)
+		// Storage failures still abort the runtime, but the foreground caller
+		// must not receive concatenated stdout or lose its investigation paths.
+		r.childStartMu.Lock()
+		task.assignment.completion = finish
+		task.assignment.pending = nil
+		r.childStartMu.Unlock()
+		r.orderMu.Lock()
+		r.orderError = errors.Join(r.orderError, handoffErr)
+		r.orderMu.Unlock()
+		return handoffErr
 	}
 	r.emit(Event{Kind: "status", Actor: child.id, EntryID: id, Text: "Assignment · " + render.Status(status)})
 	if task.assignment.background {
 		r.emit(Event{Kind: "wake", Actor: child.id, Text: "Child turn finished"})
 	}
 	return nil
+}
+
+func childFailureMetadata(finish *history.ChildFinish, inherited bool, transcript string, exportErr error) {
+	if finish.Answer == "" {
+		finish.Answer = prompts.ChildNoAssistantText
+	}
+	finish.Warning = fmt.Sprintf(prompts.ChildFailureWarning, finish.Status)
+	if inherited {
+		finish.Warning += prompts.ChildInheritedAnswerWarning
+	}
+	if exportErr != nil {
+		finish.TranscriptExportError = exportErr.Error()
+		finish.Warning += fmt.Sprintf(prompts.ChildTranscriptExportFailure, exportErr)
+	} else {
+		finish.TranscriptPath = transcript
+		finish.TranscriptJSONLPath = transcript + ".jsonl"
+		finish.Warning += fmt.Sprintf(prompts.ChildTranscriptReferences, transcript, finish.TranscriptJSONLPath)
+	}
 }
 
 func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor) (admitted history.Admission, next contextCursor, err error) {

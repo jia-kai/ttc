@@ -14,10 +14,11 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
+
+	"golang.org/x/net/http/httpguts"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 func headers(req *http.Request, t AccessTokens) {
@@ -32,7 +33,7 @@ func headers(req *http.Request, t AccessTokens) {
 // cancellation or cache failures. Canonical messages remain unchanged.
 func binaryPart(ctx context.Context, file llm.BinaryFile, model llm.ModelSpec, textKind string, resolve func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)) (map[string]any, error) {
 	if resolve == nil {
-		return nil, errors.New("OpenAI binary input requires a configured resolver")
+		return nil, errors.New(prompts.OpenAIRequiresBinaryResolver)
 	}
 	payload, err := resolve(ctx, file)
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -46,7 +47,7 @@ func binaryPart(ctx context.Context, file llm.BinaryFile, model llm.ModelSpec, t
 					return nil, err
 				}
 			} else if !model.Images {
-				return nil, errors.New("model does not support images")
+				return nil, errors.New(prompts.OpenAIImagesUnsupported)
 			}
 			return map[string]any{"type": textKind, "text": unavailable.Error()}, nil
 		}
@@ -62,7 +63,7 @@ func binaryPart(ctx context.Context, file llm.BinaryFile, model llm.ModelSpec, t
 	}
 	name := filepath.Base(file.Path)
 	if file.Path == "" || name == "." || name == string(filepath.Separator) {
-		return nil, errors.New("document attachment requires a filename")
+		return nil, errors.New(prompts.OpenAIDocumentFilenameRequired)
 	}
 	// Content-detected documents may be extensionless or have a misleading
 	// suffix. Supply a parser-consistent transport filename without changing
@@ -87,17 +88,17 @@ func supportedBinaryType(model llm.ModelSpec, mt string, size int) (llm.BinaryFi
 			continue
 		}
 		if format.Kind != "image" && format.Kind != "document" || format.MaxBytes <= 0 {
-			return llm.BinaryFileType{}, errors.New("invalid model binary format metadata")
+			return llm.BinaryFileType{}, errors.New(prompts.OpenAIInvalidBinaryMetadata)
 		}
 		if size > format.MaxBytes {
-			return llm.BinaryFileType{}, fmt.Errorf("binary file %s exceeds model limit of %d bytes", mt, format.MaxBytes)
+			return llm.BinaryFileType{}, fmt.Errorf(prompts.OpenAIBinaryLimit, mt, format.MaxBytes)
 		}
 		return format, nil
 	}
 	if strings.HasPrefix(mt, "image/") {
-		return llm.BinaryFileType{}, errors.New("model does not support images in this format")
+		return llm.BinaryFileType{}, errors.New(prompts.OpenAIImageFormatUnsupported)
 	}
-	return llm.BinaryFileType{}, fmt.Errorf("model does not support binary file MIME type %q", mt)
+	return llm.BinaryFileType{}, fmt.Errorf(prompts.OpenAIBinaryMIMEUnsupported, mt)
 }
 
 func wire(ctx context.Context, req llm.Request, resolve func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)) ([]byte, error) {
@@ -105,10 +106,10 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 		return nil, err
 	}
 	if req.Selection.Provider != "openai" || req.Selection.Model.RequestID() == "" {
-		return nil, errors.New("OpenAI adapter requires an OpenAI model selection")
+		return nil, errors.New(prompts.OpenAISelectionRequired)
 	}
 	if req.ConversationID == "" || strings.IndexFunc(req.ConversationID, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
-		return nil, errors.New("OpenAI adapter requires a nonempty printable ASCII conversation identity without whitespace")
+		return nil, errors.New(prompts.OpenAIConversationIdentityRequired)
 	}
 	input := []any{}
 	for _, m := range llm.ContextFor(req.Selection, req.Messages) {
@@ -119,12 +120,12 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 					return nil, err
 				}
 			} else if !req.Selection.Model.Images {
-				return nil, errors.New("model does not support images")
+				return nil, errors.New(prompts.OpenAIImagesUnsupported)
 			}
 		}
 		if m.State != nil {
 			if len(m.Files) > 0 {
-				return nil, errors.New("OpenAI replay state does not support canonical binary files")
+				return nil, errors.New(prompts.OpenAIReplayBinaryUnsupported)
 			}
 			items, err := replayItems(m)
 			if err != nil {
@@ -140,7 +141,7 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 				for _, im := range m.Files {
 					part, err := binaryPart(ctx, im, req.Selection.Model, "input_text", resolve)
 					if err != nil {
-						return nil, fmt.Errorf("tool output %q binary file: %w", m.CallID, err)
+						return nil, fmt.Errorf(prompts.OpenAIToolBinaryFile, m.CallID, err)
 					}
 					parts = append(parts, part)
 				}
@@ -161,7 +162,7 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 			for _, im := range m.Files {
 				part, err := binaryPart(ctx, im, req.Selection.Model, kind, resolve)
 				if err != nil {
-					return nil, fmt.Errorf("%s message binary file: %w", m.Role, err)
+					return nil, fmt.Errorf(prompts.OpenAIMessageBinaryFile, m.Role, err)
 				}
 				content = append(content, part)
 			}
@@ -173,7 +174,7 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 		}
 		for _, c := range m.Calls {
 			if !json.Valid(c.Arguments) {
-				return nil, errors.New("invalid call JSON in history")
+				return nil, errors.New(prompts.OpenAIInvalidHistoryCallJSON)
 			}
 			input = append(input, map[string]any{"type": "function_call", "call_id": c.ID, "name": c.Name, "arguments": string(c.Arguments)})
 		}
@@ -204,47 +205,50 @@ type wireEvent struct {
 	ItemID      string          `json:"item_id"`
 	OutputIndex *int            `json:"output_index"`
 	Arguments   string          `json:"arguments"`
-	Code        string          `json:"code"` // Error events use top-level fields.
-	Message     string          `json:"message"`
-	Param       string          `json:"param"`
 	Response    struct {
 		ID          string     `json:"id"`
 		ServiceTier string     `json:"service_tier"`
 		Usage       *wireUsage `json:"usage"`
-		Error       *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-		Incomplete *struct {
-			Reason string `json:"reason"`
-		} `json:"incomplete_details"`
 	} `json:"response"`
 }
 
-// Stream retries uncommitted transient failures until cancellation or MaxAttempts.
-// Committed transient failures return PartialError when another attempt is allowed;
+// Stream retries upstream failures within one bounded attempt budget.
+// Committed failures return PartialError when another attempt is allowed;
 // only the runtime may continue them, with a new request and retained partial history.
+// Local validation, callback failures and cancellation never authorize retries.
+// NoTools replies are buffered until completion, so their failed partial text is
+// discarded and retried within the same budget without a runtime continuation.
 // The subscription endpoint has no verified output cap; OutputTokens reserves context only.
 func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	maxAttempts := req.MaxAttempts
 	if maxAttempts < 0 {
-		return errors.New("max attempts must be nonnegative")
+		return errors.New(prompts.OpenAIMaxAttemptsNonnegative)
 	}
-	if req.PriorAttempts < 0 || maxAttempts > 0 && req.PriorAttempts >= maxAttempts {
-		return errors.New("prior attempts must be nonnegative and below max attempts")
+	if maxAttempts == 0 {
+		maxAttempts = llm.DefaultMaxAttempts
+	}
+	if req.PriorAttempts < 0 || req.PriorAttempts >= maxAttempts {
+		return errors.New(prompts.OpenAIPriorAttemptsRange)
 	}
 	body, e := wire(ctx, req, a.resolveBinary)
 	if e != nil {
 		return e
 	}
-	for attempt := req.PriorAttempts; maxAttempts == 0 || attempt < maxAttempts; attempt++ {
+	for attempt := req.PriorAttempts; attempt < maxAttempts; attempt++ {
 		tokens, e := a.credentials(ctx)
 		if e != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			var transient *llm.TransientError
-			if !errors.As(e, &transient) || maxAttempts > 0 && attempt == maxAttempts-1 {
+			if !errors.As(e, &transient) {
 				return e
 			}
-			if e = retryWait(ctx, emit, attempt, maxAttempts, transient.Error(), ""); e != nil {
+			err := &llm.TransientError{Err: fmt.Errorf(prompts.OpenAIUpstreamAttemptFailed, attempt+1, maxAttempts, e)}
+			if attempt == maxAttempts-1 {
+				return err
+			}
+			if e = retryWait(ctx, emit, attempt, maxAttempts, err.Error(), credentialRetryAfter(e)); e != nil {
 				return e
 			}
 			continue
@@ -254,7 +258,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			return e
 		}
 		if (h.URL.Scheme != "http" && h.URL.Scheme != "https") || h.URL.Host == "" {
-			return errors.New("subscription endpoint requires an HTTP(S) URL with a host")
+			return errors.New(prompts.OpenAIEndpointHTTPHostRequired)
 		}
 		headers(h, tokens)
 		// ChatGPT uses session-id for cache affinity; keep it aligned with the body key.
@@ -266,89 +270,122 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 		h.Header.Set("x-codex-routing-hint", "model="+req.Selection.Model.RequestID()+";tier="+tier)
 		h.Header.Set("Content-Type", "application/json")
 		h.Header.Set("Accept", "text/event-stream")
-		resp, e := a.Client.Do(h)
-		if e != nil {
+		for name, values := range h.Header {
+			for _, value := range values {
+				if !httpguts.ValidHeaderFieldValue(value) {
+					return fmt.Errorf(prompts.OpenAIInvalidLocalHeader, name)
+				}
+			}
+		}
+		resp, upstreamErr := a.Client.Do(h)
+		committed, callbackFailed := false, false
+		retryAfter := ""
+		if upstreamErr != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if invalidCertificate(e) {
-				return errors.New("subscription TLS certificate verification failed")
+			if final := finalSubscriptionFailure(upstreamErr); final != nil {
+				return final
 			}
-			if maxAttempts > 0 && attempt == maxAttempts-1 {
-				return &llm.TransientError{Err: errors.New("subscription transport failed before response")}
+			// A response alongside an error means Client.Do rejected a redirect
+			// through local policy; retrying that policy cannot recover.
+			if resp != nil {
+				return errors.New(prompts.OpenAIRedirectPolicyFailed)
 			}
-			if e = retryWait(ctx, emit, attempt, maxAttempts, "transport failed before response", ""); e != nil {
-				return e
-			}
-			continue
-		}
-		if resp.StatusCode != 200 {
-			status := resp.StatusCode
+			upstreamErr = transportFailure(upstreamErr)
+		} else if resp.StatusCode != http.StatusOK {
+			retryAfter = resp.Header.Get("Retry-After")
+			upstreamErr = httpFailure(tokens.Access, resp)
 			resp.Body.Close()
-			if (status == 429 || status >= 500 && status <= 599) && (maxAttempts == 0 || attempt < maxAttempts-1) {
-				if e = retryWait(ctx, emit, attempt, maxAttempts, fmt.Sprintf("HTTP %d", status), resp.Header.Get("Retry-After")); e != nil {
-					return e
+		} else {
+			retryAfter = resp.Header.Get("Retry-After")
+			// Naming and compaction publish only complete no-tools replies.
+			// Buffer their text so a failed generation can be retried atomically,
+			// rather than requiring a coding continuation or mixing two replies.
+			var privateText strings.Builder
+			var privateEvents []llm.StreamEvent
+			committed, upstreamErr = parseStream(tokens.Access, resp.Body, func(event llm.StreamEvent) error {
+				if req.NoTools && (event.Kind == "call" || event.Kind == "call_start") {
+					return errors.New(prompts.OpenAINoToolsReturnedTool)
 				}
-				continue
+				if req.NoTools {
+					if event.Kind == "text" {
+						privateText.WriteString(event.Text)
+					} else {
+						privateEvents = append(privateEvents, event)
+					}
+					return nil
+				}
+				err := emit(event)
+				callbackFailed = callbackFailed || err != nil
+				return finalCallbackError(err)
+			})
+			resp.Body.Close()
+			if upstreamErr == nil {
+				if req.NoTools {
+					if privateText.Len() != 0 {
+						if err := emit(llm.StreamEvent{Kind: "text", Text: privateText.String()}); err != nil {
+							return finalCallbackError(err)
+						}
+					}
+					for _, event := range privateEvents {
+						if err := emit(event); err != nil {
+							return finalCallbackError(err)
+						}
+					}
+				}
+				return nil
 			}
-			err := fmt.Errorf("subscription response HTTP %d", status)
-			if status == 429 || status >= 500 && status <= 599 {
-				return &llm.TransientError{Err: err}
+			if req.NoTools {
+				committed = false // Buffered output has not reached a consumer.
 			}
-			return err
-		}
-		callbackFailed := false
-		committed, err := parseStream(resp.Body, func(event llm.StreamEvent) error {
-			if req.NoTools && (event.Kind == "call" || event.Kind == "call_start") {
-				return errors.New("OpenAI returned a tool to a no-tools request")
+			if !callbackFailed {
+				upstreamErr = failureWithRequestID(upstreamErr, redactAccessToken(resp.Header.Get("x-request-id"), tokens.Access))
 			}
-			err := emit(event)
-			callbackFailed = callbackFailed || err != nil
-			return finalCallbackError(err)
-		})
-		resp.Body.Close()
-		if err == nil {
-			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		reason := "temporary stream failure before output"
-		if retryableToolArguments(err) && !callbackFailed {
-			reason = err.Error()
-			err = &llm.TransientError{Err: err}
+		if callbackFailed {
+			return upstreamErr
 		}
-		if errors.Is(err, errStreamLost) && !callbackFailed {
-			err = &llm.TransientError{Err: err}
-			reason = "stream interrupted before output"
+		if final := finalSubscriptionFailure(upstreamErr); final != nil {
+			return final
 		}
-		var transient *llm.TransientError
-		if callbackFailed || maxAttempts > 0 && attempt == maxAttempts-1 || !errors.As(err, &transient) {
+		// Every upstream failure shares this budget, regardless of its code or
+		// whether it came from HTTP, SSE, transport or response validation.
+		err := &llm.TransientError{Err: fmt.Errorf(prompts.OpenAIUpstreamAttemptFailed, attempt+1, maxAttempts, upstreamErr)}
+		if attempt == maxAttempts-1 {
 			return err
 		}
 		if committed {
-			partialReason := "stream interrupted after partial output"
-			if retryableToolArguments(err) {
-				partialReason = reason
-			}
-			return &llm.PartialError{Err: err, Retry: retryMetadata(attempt, maxAttempts, partialReason, retryDelay(attempt, "", time.Now()))}
+			return &llm.PartialError{Err: err, Retry: retryMetadata(attempt, maxAttempts, err.Error(), retryDelay(attempt, retryAfter, time.Now()))}
 		}
-		if e = retryWait(ctx, emit, attempt, maxAttempts, reason, ""); e != nil {
+		if e = retryWait(ctx, emit, attempt, maxAttempts, err.Error(), retryAfter); e != nil {
 			return e
 		}
 	}
-	return errors.New("request attempts exhausted")
+	return errors.New(prompts.OpenAIAttemptsExhausted)
 }
 
-var errStreamLost = errors.New("Responses stream interrupted before completion")
-var errInvalidToolArguments = errors.New("completed tool arguments are not a JSON object")
-var errConflictingToolArguments = errors.New("completed tool disagrees with finalized arguments")
+var errStreamLost = errors.New(prompts.OpenAIStreamInterrupted)
+var errSubscriptionCertificate = errors.New(prompts.OpenAISubscriptionCertificateFailed)
+var errInvalidToolArguments = errors.New(prompts.OpenAICompletedArgumentsNotObject)
+var errConflictingToolArguments = errors.New(prompts.OpenAICompletedArgumentsConflict)
 
-func retryableToolArguments(err error) bool {
-	return errors.Is(err, errInvalidToolArguments) || errors.Is(err, errConflictingToolArguments)
+// finalSubscriptionFailure preserves final categories without exposing arbitrary
+// transport or reader error values. The outer request context may still be live.
+func finalSubscriptionFailure(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, errSubscriptionCertificate) || invalidCertificate(err) {
+		return errSubscriptionCertificate
+	}
+	return nil
 }
 
-func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, error) {
+func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent) error) (bool, error) {
 	scan := bufio.NewScanner(reader)
 	scan.Buffer(make([]byte, 4096), 8<<20)
 	data := []string{}
@@ -372,7 +409,15 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 		}
 		var event wireEvent
 		if e := json.Unmarshal([]byte(b), &event); e != nil {
-			return errors.New("invalid Responses stream JSON")
+			// Preserve terminal diagnostics even if other response fields have
+			// unexpected types; the failure decoder does not consume output.
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal([]byte(b), &envelope) == nil && (envelope.Type == "error" || envelope.Type == "response.failed" || envelope.Type == "response.incomplete") {
+				return streamFailure(accessToken, []byte(b), envelope.Type)
+			}
+			return errors.New(prompts.OpenAIInvalidStreamJSON)
 		}
 		var out *llm.StreamEvent
 		switch event.Type {
@@ -383,11 +428,11 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 		case "response.output_item.added":
 			var item functionItem
 			if err := json.Unmarshal(event.Item, &item); err != nil {
-				return errors.New("invalid added Responses item")
+				return errors.New(prompts.OpenAIInvalidAddedItem)
 			}
 			if item.Type == "function_call" {
 				if event.OutputIndex == nil || *event.OutputIndex < 0 || item.ID == "" || item.CallID == "" || item.Name == "" || calls[*event.OutputIndex] != nil || nativeItems[*event.OutputIndex] != nil || callIDs[item.CallID] || itemIDs[item.ID] {
-					return errors.New("invalid or duplicate streamed tool announcement")
+					return errors.New(prompts.OpenAIInvalidToolAnnouncement)
 				}
 				c := &streamedCall{item: item}
 				c.arguments.WriteString(item.Arguments)
@@ -399,15 +444,15 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 			}
 		case "response.function_call_arguments.delta", "response.function_call_arguments.done":
 			if event.OutputIndex == nil {
-				return errors.New("tool arguments missing output index")
+				return errors.New(prompts.OpenAIToolArgumentsMissingIndex)
 			}
 			c := calls[*event.OutputIndex]
 			if c == nil || c.item.ID != event.ItemID || c.finished || c.argumentsDone {
-				return errors.New("tool arguments have unknown identity or invalid lifecycle")
+				return errors.New(prompts.OpenAIToolArgumentsInvalidLifecycle)
 			}
 			if event.Type == "response.function_call_arguments.delta" {
 				if c.arguments.Len()+len(event.Delta) > 8<<20 {
-					return errors.New("streamed tool arguments exceed 8 MiB")
+					return errors.New(prompts.OpenAIToolArgumentsLimit)
 				}
 				c.arguments.WriteString(event.Delta)
 				c.segments++
@@ -435,25 +480,25 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 		case "response.output_item.done":
 			var item functionItem
 			if e := json.Unmarshal(event.Item, &item); e != nil {
-				return e
+				return errors.New(prompts.OpenAIInvalidCompletedItem)
 			}
 			if item.Type == "function_call" {
 				if event.OutputIndex == nil {
-					return errors.New("completed tool missing output index")
+					return errors.New(prompts.OpenAICompletedToolMissingIndex)
 				}
 				c := calls[*event.OutputIndex]
 				if c == nil || c.finished || !c.argumentsDone || c.item.ID != item.ID || c.item.CallID != item.CallID || c.item.Name != item.Name {
-					return errors.New("completed tool disagrees with streamed call")
+					return errors.New(prompts.OpenAICompletedToolConflict)
 				}
 				if c.arguments.String() != item.Arguments {
 					return errConflictingToolArguments
 				}
 				c.finished = true
 			} else if item.Type != "reasoning" && item.Type != "message" {
-				return errors.New("unsupported Responses output item")
+				return errors.New(prompts.OpenAIUnsupportedOutputItem)
 			}
 			if event.OutputIndex == nil || *event.OutputIndex < 0 || nativeItems[*event.OutputIndex] != nil || item.Type != "function_call" && calls[*event.OutputIndex] != nil {
-				return errors.New("invalid or duplicate completed Responses output index")
+				return errors.New(prompts.OpenAIInvalidCompletedOutputIndex)
 			}
 			nativeItems[*event.OutputIndex] = append(json.RawMessage(nil), event.Item...)
 			retainedBytes += len(event.Item)
@@ -463,7 +508,7 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 			indices := make([]int, 0, len(calls))
 			for _, c := range calls {
 				if !c.finished {
-					return errors.New("response completed with unfinished tool arguments")
+					return errors.New(prompts.OpenAIUnfinishedToolArguments)
 				}
 			}
 			for index := range nativeItems {
@@ -488,7 +533,7 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 					Phase string
 				}
 				if err := json.Unmarshal(nativeItems[index], &native); err != nil {
-					return err
+					return errors.New(prompts.OpenAIInvalidCompletedItemMetadata)
 				}
 				if native.Type == "message" && native.Phase != "" {
 					if err := emit(llm.StreamEvent{Kind: "phase", Phase: native.Phase}); err != nil {
@@ -513,10 +558,10 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 			complete = true
 			out = &llm.StreamEvent{Kind: "completed", Usage: event.Response.Usage.normalized(), ResponseID: event.Response.ID, ServiceTier: event.Response.ServiceTier}
 		case "response.failed", "response.incomplete", "error":
-			return streamFailure(event)
+			return streamFailure(accessToken, []byte(b), event.Type)
 		}
 		if retainedBytes > 32<<20 {
-			return errors.New("Responses output exceeds 32 MiB")
+			return errors.New(prompts.OpenAIOutputLimit)
 		}
 		if out != nil {
 			committed = true
@@ -540,14 +585,17 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 		if strings.HasPrefix(line, "data:") {
 			eventBytes += len(line)
 			if eventBytes > 8<<20 {
-				return committed, errors.New("Responses stream event exceeds 8 MiB")
+				return committed, errors.New(prompts.OpenAIStreamEventLimit)
 			}
 			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
 	}
 	if e := scan.Err(); e != nil {
+		if final := finalSubscriptionFailure(e); final != nil {
+			return committed, final
+		}
 		if errors.Is(e, bufio.ErrTooLong) {
-			return committed, errors.New("Responses stream line exceeds 8 MiB")
+			return committed, errors.New(prompts.OpenAIStreamLineLimit)
 		}
 		return committed, errStreamLost
 	}
@@ -558,52 +606,6 @@ func parseStream(reader io.Reader, emit func(llm.StreamEvent) error) (bool, erro
 		return committed, errStreamLost
 	}
 	return committed, nil
-}
-
-// streamFailure reports the documented terminal event fields. Keep backend
-// recovery guidance readable, control-safe and bounded to 4096 UTF-8 bytes.
-func streamFailure(event wireEvent) error {
-	parts := []string{event.Type}
-	if event.Type == "error" {
-		parts = append(parts, event.Code, event.Message)
-		if event.Param != "" {
-			parts = append(parts, "parameter="+event.Param)
-		}
-	} else {
-		if event.Response.Error != nil {
-			parts = append(parts, event.Response.Error.Code, event.Response.Error.Message)
-		}
-		if event.Response.Incomplete != nil {
-			parts = append(parts, "reason="+event.Response.Incomplete.Reason)
-		}
-	}
-	text := strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' {
-			return r
-		}
-		if unicode.IsControl(r) || r == 0x202e || r == 0x202d || r == 0x202a || r == 0x202b || r == 0x202c || r == 0x2066 || r == 0x2067 || r == 0x2068 || r == 0x2069 {
-			return -1
-		}
-		return r
-	}, strings.ToValidUTF8(strings.Join(parts, " "), "�"))
-	text = strings.Join(strings.Fields(text), " ")
-	if len(text) > 4096 {
-		text = text[:4093]
-		for !utf8.ValidString(text) {
-			text = text[:len(text)-1]
-		}
-		text += "…"
-	}
-	err := fmt.Errorf("subscription stream terminated: %s", text)
-	code := event.Code
-	if event.Response.Error != nil {
-		code = event.Response.Error.Code
-	}
-	switch code {
-	case "server_error", "rate_limit_exceeded", "temporarily_unavailable":
-		return &llm.TransientError{Err: err}
-	}
-	return err
 }
 
 type functionItem struct {

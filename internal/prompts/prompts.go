@@ -8,7 +8,6 @@ import "sort"
 type NamingSettings struct {
 	Text           string // Instructions sent to the naming model.
 	OutputTokens   int    // Maximum generated tokens, including reasoning.
-	MaxAttempts    int    // Total provider attempts, including the initial request.
 	TimeoutSeconds int    // Deadline for the complete naming request, in seconds.
 }
 

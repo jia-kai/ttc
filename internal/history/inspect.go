@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -66,7 +67,7 @@ func (s *Store) Label(v Entry) string {
 		var x struct{ Type, Text, Label, Purpose, Role string }
 		if json.Unmarshal(v.Content, &x) == nil {
 			if x.Type == "request_message" {
-				return x.Purpose + " " + x.Role + " · inspect"
+				return fmt.Sprintf(prompts.HistoryRequestMessageLabel, x.Purpose, x.Role)
 			}
 			if x.Type == "system_prompt" {
 				return "System prompt · inspect"

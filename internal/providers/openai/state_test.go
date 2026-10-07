@@ -40,7 +40,7 @@ func TestNativePhaseStateUsageAndStatelessWire(t *testing.T) {
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 	reply := llm.Message{Role: "assistant"}
 	var usage *llm.Usage
-	_, err := parseStream(strings.NewReader(sseFrames(events...)), func(e llm.StreamEvent) error {
+	_, err := parseStream("", strings.NewReader(sseFrames(events...)), func(e llm.StreamEvent) error {
 		switch e.Kind {
 		case "text":
 			reply.Content += e.Text
@@ -137,7 +137,7 @@ func TestRefusalAndContradictoryNativeMessage(t *testing.T) {
 		m := llm.Message{Role: "assistant"}
 		selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 		completed := false
-		_, err := parseStream(strings.NewReader(sseFrames(map[string]any{"type": "response.refusal.delta", "delta": delta}, message, map[string]any{"type": "response.completed"})), func(e llm.StreamEvent) error {
+		_, err := parseStream("", strings.NewReader(sseFrames(map[string]any{"type": "response.refusal.delta", "delta": delta}, message, map[string]any{"type": "response.completed"})), func(e llm.StreamEvent) error {
 			switch e.Kind {
 			case "text":
 				m.Content += e.Text

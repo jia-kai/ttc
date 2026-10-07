@@ -1,0 +1,6 @@
+# Tool-facing skill lookup and instruction-source failures.
+SkillNotFound: skill %q not found
+SkillInspectFailure: 'inspect instruction %s: %w'
+SkillRegularFileRequired: instruction %s must be a regular file
+SkillInstructionTooLarge: instruction %s exceeds the 1 MiB limit; shorten the document
+SkillReadFailure: 'read instruction %s: %w'

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 const replayVersion = 1
@@ -14,7 +15,7 @@ const replayVersion = 1
 // replaying it. Assistant phases, reasoning and original item IDs stay intact.
 func replayItems(m llm.Message) ([]any, error) {
 	if m.State.Version != replayVersion || m.Role != "assistant" || len(m.State.Items) == 0 {
-		return nil, errors.New("unsupported OpenAI replay state")
+		return nil, errors.New(prompts.OpenAIUnsupportedReplayState)
 	}
 	var content strings.Builder
 	var calls []llm.ToolCall
@@ -33,13 +34,13 @@ func replayItems(m llm.Message) ([]any, error) {
 			} `json:"content"`
 		}
 		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, err
+			return nil, errors.New(prompts.OpenAIInvalidReplayItemFields)
 		}
 		switch item.Type {
 		case "reasoning":
 		case "message":
 			if item.Role != "assistant" {
-				return nil, errors.New("non-assistant OpenAI replay message")
+				return nil, errors.New(prompts.OpenAINonAssistantReplayMessage)
 			}
 			for _, part := range item.Content {
 				switch part.Type {
@@ -48,22 +49,23 @@ func replayItems(m llm.Message) ([]any, error) {
 				case "refusal":
 					content.WriteString(part.Refusal)
 				default:
-					return nil, errors.New("unsupported OpenAI replay content")
+					return nil, errors.New(prompts.OpenAIUnsupportedReplayContent)
 				}
 			}
 		case "function_call":
 			calls = append(calls, llm.ToolCall{ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments)})
 		default:
-			return nil, errors.New("unsupported OpenAI replay item")
+			return nil, errors.New(prompts.OpenAIUnsupportedReplayItem)
 		}
 		var v map[string]any
 		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, err
+			// JSON type errors can contain a complete private scalar value.
+			return nil, errors.New(prompts.OpenAIInvalidReplayItemJSON)
 		}
 		out = append(out, v)
 	}
 	if content.String() != m.Content || len(calls) != len(m.Calls) {
-		return nil, errors.New("OpenAI replay state disagrees with canonical response")
+		return nil, errors.New(prompts.OpenAIReplayResponseConflict)
 	}
 	for i, call := range calls {
 		original := m.Calls[i]
@@ -72,14 +74,14 @@ func replayItems(m llm.Message) ([]any, error) {
 		// formatting. Normalize both with the same marshaler, preserving numbers.
 		args, err := json.Marshal(call.Arguments)
 		if err != nil {
-			return nil, err
+			return nil, errors.New(prompts.OpenAIInvalidReplayToolArguments)
 		}
 		canonical, err := json.Marshal(original.Arguments)
 		if err != nil {
-			return nil, err
+			return nil, errors.New(prompts.OpenAIInvalidCanonicalToolArguments)
 		}
 		if call.ID != original.ID || call.Name != original.Name || string(args) != string(canonical) {
-			return nil, errors.New("OpenAI replay tool disagrees with canonical call")
+			return nil, errors.New(prompts.OpenAIReplayToolConflict)
 		}
 	}
 	return out, nil

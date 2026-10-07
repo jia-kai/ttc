@@ -39,7 +39,7 @@ func addSearch(r *Registry, w *workspace.Manager) {
 		paths, size := []string{}, 0
 		truncated, err := runSearch(ctx, root, args, splitNull, func(token []byte) (bool, error) {
 			if !utf8.Valid(token) {
-				return false, Fail("unsupported_content", "file path is not UTF-8")
+				return false, Fail("unsupported_content", prompts.ToolPathNotUTF8)
 			}
 			if len(paths) >= intDefault(a.Limit, 100) || size+len(token) > searchTextLimit {
 				return true, nil
@@ -56,7 +56,7 @@ func addSearch(r *Registry, w *workspace.Manager) {
 	})
 	Register(r, "grep", prompts.ToolDescription("grep"), map[string]any{"pattern": Property("string"), "path": Property("string"), "include": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a grepArgs) error {
 		if a.Pattern == "" {
-			return errors.New("pattern required")
+			return errors.New(prompts.ToolPatternRequired)
 		}
 		return rangeInt("limit", a.Limit, 1, 500)
 	}, func(ctx context.Context, x Execution, a grepArgs) (any, error) {
@@ -71,7 +71,7 @@ func addSearch(r *Registry, w *workspace.Manager) {
 		target := "."
 		if !st.IsDir() {
 			if !st.Mode().IsRegular() {
-				return nil, Fail("unsupported_content", "search path is not a regular file or directory")
+				return nil, Fail("unsupported_content", prompts.ToolSearchPathKind)
 			}
 			target, root = "./"+filepath.Base(root), filepath.Dir(root)
 		}
@@ -99,7 +99,7 @@ func addSearch(r *Registry, w *workspace.Manager) {
 				} `json:"data"`
 			}
 			if err := json.Unmarshal(token, &event); err != nil {
-				return false, fmt.Errorf("decode rg output: %w", err)
+				return false, fmt.Errorf(prompts.ToolDecodeRGOutput, err)
 			}
 			if event.Type != "match" {
 				return false, nil
@@ -113,7 +113,7 @@ func addSearch(r *Registry, w *workspace.Manager) {
 				return false, err
 			}
 			if !utf8.ValidString(path) {
-				return false, Fail("unsupported_content", "file path is not UTF-8")
+				return false, Fail("unsupported_content", prompts.ToolPathNotUTF8)
 			}
 			if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
 				return false, nil // Keep the text tool's UTF-8 contract for non-text matches.
@@ -178,7 +178,7 @@ func runSearch(ctx context.Context, dir string, args []string, split bufio.Split
 	}
 	if err := cmd.Start(); err != nil {
 		stdout.Close()
-		return false, fmt.Errorf("start rg: %w", err)
+		return false, fmt.Errorf(prompts.ToolStartRG, err)
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
@@ -208,7 +208,7 @@ func runSearch(ctx context.Context, dir string, args []string, split bufio.Split
 	if waitErr != nil {
 		var exit *exec.ExitError
 		if !errors.As(waitErr, &exit) || exit.ExitCode() != 1 {
-			return false, fmt.Errorf("rg search failed: %w: %s", waitErr, strings.TrimSpace(string(stderr.data)))
+			return false, fmt.Errorf(prompts.ToolRGFailed, waitErr, strings.TrimSpace(string(stderr.data)))
 		}
 	}
 	return false, nil

@@ -4,7 +4,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ttc/internal/prompts"
 )
+
+func TestUnsafeDirectoryDiagnosticExact(t *testing.T) {
+	if got, want := prompts.PrivateFileUnsafeDirectory, "unsafe private directory %s"; got != want {
+		t.Fatalf("diagnostic changed: %q, want %q", got, want)
+	}
+	path := t.TempDir()
+	if err := os.Chmod(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrivateDir(path); err == nil || err.Error() != "unsafe private directory "+path {
+		t.Fatalf("unsafe directory: %v", err)
+	}
+}
 
 func TestPrivateDir(t *testing.T) {
 	t.Run("create and reuse", func(t *testing.T) {

@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 const maxRetryDelay = 30 * time.Second
@@ -32,6 +36,24 @@ func invalidCertificate(err error) bool {
 	var hostname x509.HostnameError
 	var certificate x509.CertificateInvalidError
 	return errors.As(err, &authority) || errors.As(err, &hostname) || errors.As(err, &certificate)
+}
+
+// transportFailure retains safe error categories, not raw errors that can embed
+// request URLs, credentials or private proxy details.
+func transportFailure(err error) error {
+	detail := fmt.Sprintf(prompts.OpenAITransportErrorType, err)
+	var dns *net.DNSError
+	var network net.Error
+	var errno syscall.Errno
+	switch {
+	case errors.As(err, &dns):
+		detail += prompts.OpenAIDNSResolutionFailed
+	case errors.As(err, &errno):
+		detail += " " + errno.Error()
+	case errors.As(err, &network) && network.Timeout():
+		detail += prompts.OpenAITransportTimeout
+	}
+	return fmt.Errorf(prompts.OpenAITransportFailed, detail)
 }
 
 // retryDelay uses server delays exactly, capped at 30 seconds. Ordinary backoff

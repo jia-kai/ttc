@@ -16,10 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/http/httpguts"
+
 	"ttc/internal/auth"
 	"ttc/internal/filelock"
 	"ttc/internal/llm"
 	"ttc/internal/privatefile"
+	"ttc/internal/prompts"
 )
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -39,20 +42,20 @@ func readCredentials(path string, private bool) ([]byte, error) {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, errors.New("credential file must be a regular file")
+		return nil, errors.New(prompts.OpenAICredentialRegularFileRequired)
 	}
 	if private && info.Mode().Perm() != 0600 {
-		return nil, errors.New("credentials must be a private 0600 regular file")
+		return nil, errors.New(prompts.OpenAICredentialPrivateFileRequired)
 	}
 	if info.Size() > maxCredentialBytes {
-		return nil, errors.New("credential file exceeds 1 MiB; select the subscription auth JSON file")
+		return nil, errors.New(prompts.OpenAICredentialFileLimitGuidance)
 	}
 	b, err := io.ReadAll(io.LimitReader(f, maxCredentialBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(b) > maxCredentialBytes {
-		return nil, errors.New("credential file exceeds 1 MiB; select the subscription auth JSON file")
+		return nil, errors.New(prompts.OpenAICredentialFileLimitGuidance)
 	}
 	return b, nil
 }
@@ -92,7 +95,7 @@ func NewAuthenticator(path string) *Authenticator {
 // refreshing credentials or waiting for device authorization.
 func (a *Authenticator) lockAuth(ctx context.Context) error {
 	if a.authGate == nil {
-		return errors.New("OpenAI authenticator must be constructed with NewAuthenticator")
+		return errors.New(prompts.OpenAIAuthenticatorConstructorRequired)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -114,13 +117,13 @@ func (a *Authenticator) load() error {
 	b, e := readCredentials(a.CredentialPath, true)
 	if e != nil {
 		if errors.Is(e, os.ErrNotExist) {
-			return errors.New("subscription login required: run ttc --login or ttc --import-codex-auth \"$HOME/.codex/auth.json\"")
+			return errors.New(prompts.OpenAISubscriptionLoginRequired)
 		}
-		return fmt.Errorf("read subscription credentials: %w", e)
+		return fmt.Errorf(prompts.OpenAIReadCredentials, e)
 	}
 	var c Credentials
 	if e = json.Unmarshal(b, &c); e != nil {
-		return errors.New("invalid subscription credential file")
+		return errors.New(prompts.OpenAIInvalidCredentialFile)
 	}
 	if e = validateCredentials(c); e != nil {
 		return e
@@ -130,7 +133,7 @@ func (a *Authenticator) load() error {
 }
 func validateCredentials(c Credentials) error {
 	if c.AuthMode != "chatgpt" || c.Tokens.Access == "" || c.Tokens.AccountID == "" {
-		return errors.New("require ChatGPT subscription credentials; API-key billing is unsupported")
+		return errors.New(prompts.OpenAISubscriptionCredentialsRequired)
 	}
 	return nil
 }
@@ -146,7 +149,7 @@ func (a *Authenticator) save(c Credentials) error {
 		return e
 	}
 	if len(b) > maxCredentialBytes {
-		return errors.New("credential file exceeds 1 MiB")
+		return errors.New(prompts.OpenAICredentialFileLimit)
 	}
 	if e = privatefile.AtomicFile(a.CredentialPath, b, 0600); e != nil {
 		return e
@@ -220,6 +223,8 @@ func expiry(token string) time.Time {
 
 // AccessTokens reloads local credentials and refreshes expired tokens under a shared file lock.
 // It returns only the access token and account ID required by the transport.
+// Remote refresh failures are transient; local storage/configuration failures,
+// TLS certificate verification and cancellation remain final.
 func (a *Authenticator) AccessTokens(ctx context.Context) (AccessTokens, error) {
 	if err := a.lockAuth(ctx); err != nil {
 		return AccessTokens{}, err
@@ -254,19 +259,23 @@ func (a *Authenticator) AccessTokens(ctx context.Context) (AccessTokens, error) 
 		return AccessTokens{Access: c.Tokens.Access, AccountID: c.Tokens.AccountID}, nil
 	}
 	if c.Tokens.Refresh == "" {
-		return AccessTokens{}, errors.New("subscription token expired; login required")
+		return AccessTokens{}, errors.New(prompts.OpenAITokenExpired)
 	}
 	var response struct {
 		Access  string `json:"access_token"`
 		Refresh string `json:"refresh_token"`
 		ID      string `json:"id_token"`
 	}
-	_, e := a.json(ctx, a.AuthURL+"/oauth/token", map[string]string{"grant_type": "refresh_token", "client_id": clientID, "refresh_token": c.Tokens.Refresh}, &response)
+	result, e := a.json(ctx, a.AuthURL+"/oauth/token", map[string]string{"grant_type": "refresh_token", "client_id": clientID, "refresh_token": c.Tokens.Refresh}, &response)
 	if e != nil {
+		var upstream *authUpstreamFailure
+		if errors.As(e, &upstream) {
+			e = &llm.TransientError{Err: e}
+		}
 		return AccessTokens{}, e
 	}
 	if response.Access == "" {
-		return AccessTokens{}, errors.New("refresh returned no access token")
+		return AccessTokens{}, &llm.TransientError{Err: result.failure(fmt.Errorf(prompts.OpenAIRefreshMissingAccessToken, result.status))}
 	}
 	c.Tokens.Access = response.Access
 	if response.Refresh != "" {
@@ -276,46 +285,170 @@ func (a *Authenticator) AccessTokens(ctx context.Context) (AccessTokens, error) 
 		c.Tokens.ID = response.ID
 	}
 	c.LastRefresh = time.Now().UTC()
+	if err := ctx.Err(); err != nil {
+		return AccessTokens{}, err
+	}
 	if e = a.save(c); e != nil {
 		return AccessTokens{}, e
 	}
 	return AccessTokens{Access: c.Tokens.Access, AccountID: c.Tokens.AccountID}, nil
 }
-func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out any) (int, error) {
+
+// authUpstreamFailure records remote origin without granting Login retry policy.
+// err contains only bounded, safe diagnostics, never raw response or transport errors.
+type authUpstreamFailure struct {
+	err        error
+	retryAfter string
+}
+
+func (e *authUpstreamFailure) Error() string { return e.err.Error() }
+func (e *authUpstreamFailure) Unwrap() error { return e.err }
+
+// credentialRetryAfter finds refresh response hints through Stream's wrappers.
+func credentialRetryAfter(err error) string {
+	var upstream *authUpstreamFailure
+	if errors.As(err, &upstream) {
+		return upstream.retryAfter
+	}
+	return ""
+}
+
+type authJSONResult struct {
+	status     int
+	requestID  string
+	retryAfter string
+}
+
+func (r authJSONResult) failure(err error) *authUpstreamFailure {
+	diagnostic := errors.New(safeFailureText(err.Error(), failureDetailsLimit))
+	return &authUpstreamFailure{err: failureWithRequestID(diagnostic, r.requestID), retryAfter: r.retryAfter}
+}
+
+// authHTTPFailure exposes only OAuth/JSON error fields, not token fields or
+// arbitrary bodies. The caller bounds raw before invoking this helper.
+func authHTTPFailure(status int, raw []byte, readErr error, redact func(string) string) error {
+	detail := prompts.OpenAIErrorDetailsMissing
+	if len(raw) > failureBodyLimit {
+		detail += prompts.OpenAIBodyTruncatedSuffix
+	} else if root := failureObject(raw); root != nil {
+		var parts []string
+		if code := failureString(root["error"]); code != "" {
+			parts = append(parts, "code="+safeFailureText(redact(code), 256))
+		}
+		if message := failureString(root["error_description"]); message != "" {
+			parts = append(parts, "message="+safeFailureText(redact(message), 2048))
+		}
+		for _, object := range []map[string]json.RawMessage{failureObject(root["error"]), root} {
+			for _, field := range []string{"type", "code", "message", "param"} {
+				if value := failureString(object[field]); value != "" {
+					limit := 256
+					if field == "message" {
+						limit = 2048
+					}
+					parts = append(parts, field+"="+safeFailureText(redact(value), limit))
+				}
+			}
+		}
+		if len(parts) > 0 {
+			detail = strings.Join(parts, "; ")
+		}
+	} else if len(raw) == 0 {
+		detail += prompts.OpenAIBodyAbsentSuffix
+	} else {
+		detail += prompts.OpenAIBodyInvalidJSONSuffix
+	}
+	if readErr != nil {
+		detail += prompts.OpenAIBodyReadFailedSuffix
+	}
+	return fmt.Errorf(prompts.OpenAIAuthResponseHTTP, status, safeFailureText(detail, failureDetailsLimit))
+}
+
+// redactAuthTokens protects known token values even when an upstream places them
+// in an otherwise allowed error field or request-ID header.
+func (a *Authenticator) redactAuthTokens(text string, payloads ...[]byte) string {
+	var tokens []string
+	if a.credentials != nil {
+		tokens = append(tokens, a.credentials.Tokens.Access, a.credentials.Tokens.Refresh, a.credentials.Tokens.ID)
+	}
+	for _, raw := range payloads {
+		root := failureObject(raw)
+		for _, field := range []string{"access_token", "refresh_token", "id_token"} {
+			tokens = append(tokens, failureString(root[field]))
+		}
+	}
+	for _, token := range tokens {
+		if token != "" {
+			text = strings.ReplaceAll(text, token, prompts.OpenAIDiagnosticRedacted)
+		}
+	}
+	return text
+}
+
+func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out any) (authJSONResult, error) {
+	var result authJSONResult
 	b, e := json.Marshal(body)
 	if e != nil {
-		return 0, e
+		return result, e
 	}
 	req, e := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(string(b)))
 	if e != nil {
-		return 0, e
+		return result, errors.New(prompts.OpenAIInvalidAuthEndpoint)
+	}
+	if a.Client == nil || req.URL.Host == "" || !httpguts.ValidHostHeader(req.URL.Host) || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+		return result, errors.New(prompts.OpenAIInvalidAuthHTTPConfiguration)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, e := a.Client.Do(req)
 	if e != nil {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return result, err
+		}
+		if errors.Is(e, context.Canceled) {
+			return result, context.Canceled
 		}
 		if invalidCertificate(e) {
-			return 0, errors.New("authentication TLS certificate verification failed")
+			return result, errors.New(prompts.OpenAIAuthCertificateFailed)
 		}
-		return 0, &llm.TransientError{Err: errors.New("authentication transport failed")}
+		// Client.Do returns a response with an error only when redirect policy
+		// rejects the request. Repeating that local policy cannot recover.
+		if resp != nil {
+			return result, errors.New(prompts.OpenAIAuthRedirectPolicyFailed)
+		}
+		return result, result.failure(errors.New(prompts.OpenAIAuthTransportFailed))
 	}
 	defer resp.Body.Close()
+	result = authJSONResult{status: resp.StatusCode, requestID: resp.Header.Get("x-request-id"), retryAfter: resp.Header.Get("Retry-After")}
+	result.requestID = a.redactAuthTokens(result.requestID, b)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := fmt.Errorf("authentication HTTP %d", resp.StatusCode)
-		if resp.StatusCode == 429 || resp.StatusCode >= 500 && resp.StatusCode <= 599 {
-			return resp.StatusCode, &llm.TransientError{Err: err}
-		}
-		return resp.StatusCode, err
-	}
-	if e = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); e != nil {
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, failureBodyLimit+1))
 		if err := ctx.Err(); err != nil {
-			return resp.StatusCode, err
+			return result, err
 		}
-		return resp.StatusCode, errors.New("invalid authentication response")
+		if errors.Is(readErr, context.Canceled) {
+			return result, context.Canceled
+		}
+		if invalidCertificate(readErr) {
+			return result, errors.New(prompts.OpenAIAuthCertificateFailed)
+		}
+		diagnostic := authHTTPFailure(resp.StatusCode, raw, readErr, func(text string) string { return a.redactAuthTokens(text, b, raw) })
+		result.requestID = a.redactAuthTokens(result.requestID, raw)
+		return result, result.failure(diagnostic)
 	}
-	return resp.StatusCode, nil
+	raw, e := io.ReadAll(io.LimitReader(resp.Body, maxCredentialBytes+1))
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if errors.Is(e, context.Canceled) {
+		return result, context.Canceled
+	}
+	if invalidCertificate(e) {
+		return result, errors.New(prompts.OpenAIAuthCertificateFailed)
+	}
+	result.requestID = a.redactAuthTokens(result.requestID, raw)
+	if e != nil || len(raw) > maxCredentialBytes || json.Unmarshal(raw, out) != nil {
+		return result, result.failure(fmt.Errorf(prompts.OpenAIInvalidAuthResponse, resp.StatusCode))
+	}
+	return result, nil
 }
 
 // Login emits a typed code step, polls at the prescribed interval, and privately saves tokens.
@@ -364,7 +497,8 @@ func (a *Authenticator) Login(ctx context.Context, ui auth.UI) error {
 			Code     string `json:"authorization_code"`
 			Verifier string `json:"code_verifier"`
 		}
-		status, e := a.json(ctx, a.AuthURL+"/api/accounts/deviceauth/token", map[string]string{"device_auth_id": code.DeviceID, "user_code": code.UserCode}, &poll)
+		result, e := a.json(ctx, a.AuthURL+"/api/accounts/deviceauth/token", map[string]string{"device_auth_id": code.DeviceID, "user_code": code.UserCode}, &poll)
+		status := result.status
 		if status == 403 || status == 404 {
 			continue
 		}

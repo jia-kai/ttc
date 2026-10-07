@@ -24,6 +24,7 @@ integration: build
 	python3 tests/pty_partial_retry.py
 	python3 tests/pty_subagent.py --offline
 	python3 tests/pty_subagent.py
+	python3 tests/pty_subagent.py --failure
 	python3 tests/demo.py
 	python3 tests/demo.py --tui
 

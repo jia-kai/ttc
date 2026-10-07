@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"ttc/internal/prompts"
 )
 
 // ScriptResponse is a deterministic offline response used for local integration runs.
@@ -34,7 +35,7 @@ func (s *Script) Stream(ctx context.Context, req Request, emit func(StreamEvent)
 	s.mu.Lock()
 	if s.next >= len(s.Responses) {
 		s.mu.Unlock()
-		return errors.New("offline script exhausted")
+		return errors.New(prompts.LLMScriptExhausted)
 	}
 	v := s.Responses[s.next]
 	s.next++
@@ -45,14 +46,14 @@ func (s *Script) Stream(ctx context.Context, req Request, emit func(StreamEvent)
 			last--
 		}
 		if last < 0 || !strings.HasPrefix(req.Messages[last].Role+": "+req.Messages[last].Content, v.Prefix) {
-			return errors.New("offline script prefix mismatch: expected " + v.Prefix)
+			return errors.New(prompts.LLMScriptPrefixMismatch + v.Prefix)
 		}
 	}
 	if e := ctx.Err(); e != nil {
 		return e
 	}
 	if req.NoTools && len(v.Calls) > 0 {
-		return errors.New("script returned tools to a no-tools request")
+		return errors.New(prompts.LLMScriptNoTools)
 	}
 	if v.Text != "" {
 		if e := emit(StreamEvent{Kind: "text", Text: v.Text}); e != nil {

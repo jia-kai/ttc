@@ -23,7 +23,7 @@ func parsePatch(text string) ([]patchSection, error) {
 	}
 	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	if len(lines) < 3 || lines[0] != "*** Begin Patch" || lines[len(lines)-1] != "*** End Patch" {
-		return nil, errors.New("patch_text must start with *** Begin Patch and end with *** End Patch on separate lines")
+		return nil, errors.New(prompts.ToolPatchMarkers)
 	}
 	var sections []patchSection
 	var cur *patchSection
@@ -38,7 +38,7 @@ func parsePatch(text string) ([]patchSection, error) {
 		}
 		if action != "" {
 			if path == "" || seen[path] {
-				return nil, errors.New("empty or duplicate patch target")
+				return nil, errors.New(prompts.ToolPatchDuplicateTarget)
 			}
 			seen[path] = true
 			sections = append(sections, patchSection{path: path, action: action})
@@ -46,15 +46,15 @@ func parsePatch(text string) ([]patchSection, error) {
 			continue
 		}
 		if cur == nil {
-			return nil, errors.New("patch content before file header")
+			return nil, errors.New(prompts.ToolPatchHeaderRequired)
 		}
 		if strings.HasPrefix(line, "*** Move to: ") {
 			if cur.action != "update" || cur.move != "" || len(cur.lines) > 0 {
-				return nil, errors.New("invalid move header")
+				return nil, errors.New(prompts.ToolPatchMoveHeader)
 			}
 			cur.move = strings.TrimPrefix(line, "*** Move to: ")
 			if cur.move == "" || seen[cur.move] {
-				return nil, errors.New("conflicting move target")
+				return nil, errors.New(prompts.ToolPatchMoveTarget)
 			}
 			seen[cur.move] = true
 			continue
@@ -62,7 +62,7 @@ func parsePatch(text string) ([]patchSection, error) {
 		cur.lines = append(cur.lines, line)
 	}
 	if len(sections) == 0 {
-		return nil, errors.New("empty patch")
+		return nil, errors.New(prompts.ToolPatchEmpty)
 	}
 	return sections, nil
 }
@@ -77,14 +77,14 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 	cursor := 0
 	for i := 0; i < len(lines); {
 		if !strings.HasPrefix(lines[i], "@@") {
-			return nil, errors.New("update requires @@ hunk")
+			return nil, errors.New(prompts.ToolPatchHunkRequired)
 		}
 		anchor := strings.TrimSpace(strings.TrimPrefix(lines[i], "@@"))
 		i++
 		if anchor != "" {
 			pos := strings.Index(text[cursor:], anchor)
 			if pos < 0 {
-				return nil, errors.New("hunk anchor not found; read current contents and correct or omit the text after @@")
+				return nil, errors.New(prompts.ToolPatchAnchorMissing)
 			}
 			cursor += pos + len(anchor)
 			if cursor < len(text) && text[cursor] == '\n' {
@@ -101,7 +101,7 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 				continue
 			}
 			if len(line) == 0 {
-				return nil, errors.New("empty hunk line requires a space, + or - prefix")
+				return nil, errors.New(prompts.ToolPatchEmptyHunkLine)
 			}
 			switch line[0] {
 			case ' ':
@@ -112,12 +112,12 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 			case '+':
 				new.WriteString(line[1:] + "\n")
 			default:
-				return nil, errors.New("prefix each hunk line with a space for context, - for deletion or + for addition")
+				return nil, errors.New(prompts.ToolPatchHunkPrefix)
 			}
 		}
 		before, after := old.String(), new.String()
 		if before == "" {
-			return nil, errors.New("update hunk must include context")
+			return nil, errors.New(prompts.ToolPatchContextRequired)
 		}
 		pos := patchLineMatch(text, before, cursor, endFile)
 		if pos < 0 && strings.HasSuffix(before, "\n") {
@@ -126,7 +126,7 @@ func updatePatch(data []byte, lines []string) ([]byte, error) {
 			pos = patchLineMatch(text, before, cursor, true)
 		}
 		if pos < 0 {
-			return nil, errors.New("patch context does not match complete lines; read current contents and update the hunk context")
+			return nil, errors.New(prompts.ToolPatchContextMismatch)
 		}
 		text = text[:pos] + after + text[pos+len(before):]
 		cursor = pos + len(after)
@@ -171,14 +171,14 @@ func addPatch(r *Registry, w *workspace.Manager) {
 				var b strings.Builder
 				for _, line := range s.lines {
 					if !strings.HasPrefix(line, "+") {
-						return nil, errors.New("add file line requires +")
+						return nil, errors.New(prompts.ToolPatchAddPrefix)
 					}
 					b.WriteString(line[1:] + "\n")
 				}
 				ops = append(ops, workspace.Mutation{Path: s.path, Data: []byte(b.String()), MustAbsent: true})
 			case "delete":
 				if len(s.lines) != 0 {
-					return nil, errors.New("delete file has unexpected content")
+					return nil, errors.New(prompts.ToolPatchDeleteContent)
 				}
 				ops = append(ops, workspace.Mutation{Path: s.path, Delete: true, MustExist: true})
 			case "update":
@@ -200,7 +200,7 @@ func addPatch(r *Registry, w *workspace.Manager) {
 					applied = append(applied, p.Path)
 				}
 			}
-			return presentFiles(ctx, nil, res.Changes), &Error{Code: "partial_patch", Message: fmt.Sprint(e) + "; some changes were applied: read the applied paths before retrying only the remaining changes", Details: map[string]any{"applied": applied}}
+			return presentFiles(ctx, nil, res.Changes), &Error{Code: "partial_patch", Message: fmt.Sprintf(prompts.ToolPartialPatch, e), Details: map[string]any{"applied": applied}}
 		}
 		return presentFiles(ctx, map[string]any{"files": files}, res.Changes), e
 	})

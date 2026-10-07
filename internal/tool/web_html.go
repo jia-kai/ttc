@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"golang.org/x/net/html"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -30,7 +31,7 @@ func htmlMarkdown(ctx context.Context, source string, base *url.URL) (string, er
 			}
 		}
 		if count > 200000 || depth > 128 {
-			return fmt.Errorf("HTML structure exceeds conversion limit")
+			return fmt.Errorf(prompts.ToolHTMLStructureLimit)
 		}
 		if n.Type == html.ElementNode {
 			if n.Data == "main" && main == nil {
@@ -136,7 +137,7 @@ func htmlMarkdown(ctx context.Context, source string, base *url.URL) (string, er
 							value := strings.ReplaceAll(strings.Join(strings.Fields(convert(c, false, depth+1)), " "), "|", "\\|")
 							tableBytes += int64(len(value)) + 6
 							if tableBytes > webDownloadBytes {
-								conversionErr = Fail("response_too_large", "converted table exceeds 4 MiB; retry with format=text or a narrower URL")
+								conversionErr = Fail("response_too_large", prompts.ToolHTMLTableLimit)
 								return
 							}
 							cells = append(cells, value)
@@ -165,7 +166,7 @@ func htmlMarkdown(ctx context.Context, source string, base *url.URL) (string, er
 			// Empty cells still cost output bytes. Bound rectangular padding
 			// before allocating it, including the Markdown separator row.
 			if tableBytes+int64(columns)*int64(len(rows))*3+int64(columns)*6+4 > webDownloadBytes {
-				conversionErr = Fail("response_too_large", "converted table exceeds 4 MiB; retry with format=text or a narrower URL")
+				conversionErr = Fail("response_too_large", prompts.ToolHTMLTableLimit)
 				return ""
 			}
 			var out strings.Builder
@@ -190,7 +191,7 @@ func htmlMarkdown(ctx context.Context, source string, base *url.URL) (string, er
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			part := convert(c, pre, depth+1)
 			if out.Len()+len(part) > webDownloadBytes {
-				conversionErr = Fail("response_too_large", "converted page exceeds 4 MiB; retry with format=text or a narrower URL")
+				conversionErr = Fail("response_too_large", prompts.ToolHTMLPageLimit)
 				return ""
 			}
 			out.WriteString(part)

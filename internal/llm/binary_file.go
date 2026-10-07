@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"mime"
 	"strings"
+
+	"ttc/internal/prompts"
 )
 
 // UnmarshalJSON rejects obsolete inline binary inputs instead of silently
@@ -16,7 +18,7 @@ func (f *BinaryFile) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if _, inline := fields["data_url"]; inline {
-		return errors.New("inline binary data_url is unsupported; provide an original path and SHA-256 reference")
+		return errors.New(prompts.BinaryInlineUnsupported)
 	}
 	type reference BinaryFile
 	var decoded reference
@@ -37,7 +39,7 @@ type UnavailableBinaryFileError struct {
 
 // Error describes the omitted original and failed source verification.
 func (e *UnavailableBinaryFileError) Error() string {
-	return fmt.Sprintf("binary file unavailable: original bytes omitted for %q (expected SHA-256 %s); cache miss and source could not be verified: %v", e.File.Path, e.File.SHA256, e.Err)
+	return fmt.Sprintf(prompts.BinaryUnavailable, e.File.Path, e.File.SHA256, e.Err)
 }
 
 // Unwrap returns the source reconstruction error.

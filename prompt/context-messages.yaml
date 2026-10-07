@@ -1,0 +1,18 @@
+# Authored retention validation delivered through failed-child diagnostics.
+ContextTokenBounds: invalid recent-cycle token bounds
+ContextNothingToCompact: nothing to compact
+ContextInvalidCallSequence: invalid tool call sequence prevents compaction
+ContextUnpairedResult: unpaired tool result prevents compaction
+ContextUnresolvedCalls: unresolved tool calls prevent compaction
+ContextHumanInputFailure: 'human input %d: %w'
+ContextNoHumanInput: no human input to retain
+ContextUnreadBinaryCycle: unread binary result has no complete assistant cycle to retain
+ContextNoCompactableCycle: no unretained human input or completed older model cycle can be compacted
+ContextInvalidInputSource: invalid human input source %q
+ContextRetainedInputRole: retained input must be a non-runtime user message
+ContextRetainedInputTimestamps: retained input requires positive commit and compaction timestamps
+ContextRetainedInputFuture: retained input commit timestamp %d is after compaction timestamp %d
+ContextEncodeRetainedInput: 'encode retained input metadata: %w'
+ContextRetainedInputLimit: retained input selection exceeds four messages
+ContextRetainedInputIndex: 'invalid retained input index %d: indices must be ordered and in bounds'
+ContextRetainedInputFailure: 'retained input %d: %w'

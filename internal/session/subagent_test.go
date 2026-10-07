@@ -121,7 +121,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 				case <-ctx.Done():
 					return ctx.Err()
 				}
-				if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}}); err != nil {
+				if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, DelayMilliseconds: 1000, Reason: "HTTP 503"}}); err != nil {
 					return err
 				}
 				call := llm.ToolCall{ID: "write", Name: "write", Arguments: []byte(`{"path":"child-after-compact.txt","content":"safe\n"}`)}
@@ -130,7 +130,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 			return emit(llm.StreamEvent{Kind: "text", Text: "Done after compaction."})
 		}
 		if req.NoTools {
-			if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, Reason: "HTTP 429"}}); err != nil {
+			if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, Reason: "HTTP 429"}}); err != nil {
 				return err
 			}
 			return emit(llm.StreamEvent{Kind: "text", Text: "Keep the child task and research state."})

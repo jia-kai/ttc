@@ -101,7 +101,7 @@ install -m 600 /dev/null "${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json"
 Edit that file to contain `{"api_key":"YOUR_EXA_KEY"}`. Optional `endpoint`
 selects an HTTP(S) backend URL. `--web-search-config PATH` selects another file;
 restart TTC after changes. Inside rail, also recreate it if the host replaced an
-imported config file; see [restart rules](default-skills/ttc-config/SKILL.md#restart-rules).
+imported config file; see [restart rules](prompt/skills/ttc-config/SKILL.md#restart-rules).
 Keep credential files private (mode 0600). No key is supplied through tool arguments.
 
 Use Kitty as the terminal client for TTC's graphics features. When
@@ -240,11 +240,10 @@ preserves them; switching sessions or exiting cancels them. Use tmux for work
 that needs to outlive TTC.
 
 Main, child and aside compaction have a **10-minute timeout** and remain
-cancelable. Transient model-stream failures retry automatically before output is
-delivered. A failed or interrupted turn pauses automatic notification turns;
-pending messages stay queued. Send a prompt, successfully `/compact` or `/load`,
-or change session/model to resume. `/compact [focus]` while idle uses the same
-handoff as automatic compaction.
+cancelable. A failed or interrupted main turn pauses automatic notification
+turns; pending messages stay queued. Send a prompt, successfully `/compact` or
+`/load`, or change session/model to resume. `/compact [focus]` while idle uses the
+same handoff as automatic compaction.
 
 Original `read()` image bytes and rendered thumbnails/formulas share a
 disposable filesystem cache at `${XDG_CACHE_HOME:-~/.cache}/ttc/assets`: **4 GiB

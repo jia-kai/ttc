@@ -1,0 +1,71 @@
+# Authored session tool guidance, model-input scaffolds and diagnostics delivered
+# through tool results or child handoffs. Preserve printf slots and whitespace.
+ChildExplicitPersistence: persistent must be explicitly true or false on every assignment; use false for a disposable child
+ChildNonemptyVariant: variant must be nonempty; omit it to inherit the current reasoning selection
+ChildFollowupLabel: omit label for a follow-up; the existing child retains its title
+ChildValidLabel: choose a label of 1–4 words and at most 64 characters, on one line without controls; shorten the name and retry
+ChildCannotAssign: children cannot spawn children or assign follow-ups
+ChildUnknownFollowup: unknown or closed child_id; create a fresh child
+ChildFollowupBusy: child is still running; wait for child_turn_finished before assigning a follow-up
+ChildUnsupportedVariant: 'unsupported variant %q for %s; supported variants: %s; choose one or omit variant to retain the current selection'
+ChildCapacity: four child contexts/tasks are retained; close an idle child with job_stop(child_id=...) or wait for an aside
+ChildResponseTooLarge: child response exceeds %d bytes
+ChildCompletedWithoutText: child completed without assistant text
+ImageClicksUnsupported: image clicks require the Kitty graphics/mouse TUI; omit request_click to display without requesting a point
+ImageSelectionPending: an image selection is pending or its reply is unconsumed; wait for and process that reply before requesting another click
+QuestionCount: require 1–3 questions
+QuestionIdentityAndPrompt: question IDs must be unique and prompts nonempty
+QuestionChoiceCount: require 2–5 choices
+QuestionOptionIdentityAndLabel: option IDs must be nonempty and unique within each question; labels must be nonempty
+QuestionRecommendation: recommended_option_id must identify an existing option
+QuestionMainOnly: question is available only to the main agent
+QuestionIntent: 'question intent: %w'
+QuestionAlreadyPending: a main question is already pending
+WakeupEncodeStartup: 'encode wakeup startup parameters: %w'
+WakeupNameActive: wakeup name already active; choose another name or cancel the existing reminder with wakeup_cancel first
+WakeupTimeRequired: exactly one of at or delay_seconds required
+WakeupDelayRange: delay_seconds must be 0–31536000
+WakeupRepeatRange: repeat_seconds must be 1–31536000 (omit for a one-shot timer)
+WakeupInvalidTimestamp: 'at must be RFC3339 with a timezone, such as 2026-10-02T15:04:05Z; use delay_seconds instead for a relative time: %w'
+WakeupCancelIdentity: exactly one of wakeup_id or name required
+WakeupCancelNotFound: no scheduled reminder matches; use wakeup_list and choose an active wakeup_id or name
+SessionToolInterrupted: stream did not complete; tool was not executed
+SessionToolIntentMismatch: tool call/intent count mismatch
+SessionUnusableAfterCompaction: 'session unusable after compaction: %s; inspect/export history or start/load another session'
+SessionPersistUnusableContext: 'persist unusable context: %w'
+SessionContextUnusableAfterCompaction: 'context unusable after compaction: %w; inspect/export history or start/load another session'
+SessionNamingTruncated: "\n[truncated]"
+SessionNamingTool: "\nTool: "
+SessionSummaryMessageHeader: "\n### %s"
+SessionSummaryCallID: ' · %s'
+SessionSummaryToolCall: "Tool call %s · %s\n%s\n"
+SessionSummaryBinaryAttachment: "Binary attachment (%s): %s\n"
+SessionCompactionHeadroom: compaction summary, retained history (including unread binary results) and pending input/events exceed context headroom; use smaller files or narrower input
+SessionCompactionInputTooLarge: compaction input exceeds model context (estimated input %d + output/margin reserve %d, limit %d tokens); no summary was requested
+SessionRecordCompactionResult: 'record compaction result: %w'
+SessionCompactionNoTools: compaction response must not call tools
+SessionCompactionSummaryTooLarge: compaction summary exceeds 1 MiB
+SessionCompactionEmptySummary: empty compaction summary
+ChildCompactionIdentity: child compaction requires actor identity and tool registry
+ChildArchiveHeader: "# Child context · %s\n\n"
+ChildArchiveTool: "### Tool · %s\n\n%s\n\n"
+ChildArchiveStream: "#### %s\n\n%s\n"
+ChildArchiveMessage: "### %s\n\n%s\n\n"
+ChildArchiveBinaryFile: "Binary file: %s\n\n"
+SessionProviderNilCall: provider emitted nil call
+SessionInvalidPartialRecovery: provider emitted invalid partial recovery
+SessionReadRecoveryInstructions: 'read recovery instructions: %w'
+SessionRecordRecoveryInstructions: 'record recovery instructions: %w'
+SessionRecordModelRetry: 'record model retry: %w'
+SessionInvalidRetryNotice: provider emitted invalid retry notice
+SessionInvalidToolAnnouncement: provider emitted invalid tool announcement
+SessionRecordToolAnnouncement: 'record tool announcement: %w'
+SessionInvalidToolProgress: provider emitted invalid tool progress
+SessionReadProjectInstructions: 'read project instructions %s: %w'
+SessionRuntimeEventPersistence: 'runtime event persistence failed: %w'
+SessionNotificationSource: notification source must be an original committed event
+SessionNotificationJSON: notification must contain valid JSON
+SessionEventAlreadyPending: event already pending delivery
+SessionJobOutputUnavailable: "\nOutput unavailable: "
+SessionJobStreamUnavailable: "\n%s unavailable: %s"
+SessionJobTail: "\n**%s · showing tail, up to 8 KiB**\n\n"

@@ -7,18 +7,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"ttc/internal/prompts"
 	"unicode"
 )
 
 // toolDetail formats supplied parameters and results without exposing JSON
 // serialization syntax as the primary presentation. Exact JSON lives in records.
 func toolDetail(name string, args, result json.RawMessage) string {
-	return "Parameters:\n\n" + toolValues(args, name) + "\nResult:\n\n" + toolValues(result, "")
+	return fmt.Sprintf(prompts.ToolDetailSections, toolValues(args, name), toolValues(result, ""))
 }
 
 func toolValues(raw json.RawMessage, name string) string {
 	if len(raw) == 0 {
-		return "Pending.\n"
+		return prompts.ToolDetailPending
 	}
 	var value any
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -44,7 +45,7 @@ func toolValues(raw json.RawMessage, name string) string {
 	}
 	writeToolValue(&out, "", value, "", path)
 	if out.Len() == 0 {
-		return "None.\n"
+		return prompts.ToolDetailNone
 	}
 	return out.String()
 }
@@ -64,7 +65,7 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 			indent += "  "
 		}
 		if len(value) == 0 && key != "" {
-			out.WriteString(indent + "Empty.\n")
+			out.WriteString(indent + prompts.ToolDetailEmpty)
 		}
 		keys := make([]string, 0, len(value))
 		for k := range value {
@@ -77,7 +78,7 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 	case []any:
 		out.WriteString("\n")
 		if len(value) == 0 {
-			out.WriteString(indent + "  None.\n")
+			out.WriteString(indent + prompts.ToolDetailEmptyList)
 		}
 		for i, item := range value {
 			writeToolValue(out, fmt.Sprint(i+1), item, indent+"  ", path)

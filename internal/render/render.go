@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"ttc/internal/prompts"
 	"unicode"
 	"unicode/utf8"
 )
@@ -75,7 +76,8 @@ func inlineCode(s string) string {
 }
 
 // Markdown is a durable presentation record, distinct from the model result.
-// Summary is bounded portable Markdown for a card; Detail is the expanded inspector.
+// Summary is bounded portable Markdown for a card and child diagnostic stream;
+// Detail is the expanded inspector.
 type Markdown struct {
 	Revision int     `json:"revision"`
 	Summary  string  `json:"summary"`
@@ -115,11 +117,11 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 			summary += " · " + Inline(Status(status))
 		}
 		if code, ok := v["exit_code"].(float64); ok {
-			summary += fmt.Sprintf(" · exit %d", int(code))
+			summary += fmt.Sprintf(prompts.ToolSummaryExit, int(code))
 		}
 	}
 	if failure, ok := v["error"].(map[string]any); ok {
-		summary += " · error"
+		summary += prompts.ToolSummaryError
 		if message, ok := failure["message"].(string); ok {
 			summary += ": " + Inline(message)
 		}
@@ -153,7 +155,7 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 			}
 		}
 		if v["truncated"] == true {
-			summary += " · tail truncated"
+			summary += prompts.ToolSummaryTailTruncated
 		}
 		if id, ok := v["job_id"].(string); ok {
 			summary += " · " + inlineCode(id)

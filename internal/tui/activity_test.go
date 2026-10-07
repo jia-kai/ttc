@@ -23,7 +23,7 @@ func TestTurnActivityUsesPhaseDurationsAndIgnoresChildren(t *testing.T) {
 	}
 	check(now, "Working · 30s")
 	activity.observe(session.Event{Actor: "main/child", Kind: "assistant"}, now)
-	activity.observe(session.Event{Actor: "main/child", Retry: &llm.Retry{DelayMilliseconds: 10000}}, now)
+	activity.observe(session.Event{Actor: "main/child", Retry: &llm.Retry{Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, DelayMilliseconds: 10000, Reason: "HTTP 503"}}, now)
 	check(now, "Working · 30s")
 	activity.syncQuestion(&session.QuestionForm{ID: "first"}, now)
 	check(now.Add(time.Second), "Waiting for answer · 1s")
@@ -35,7 +35,7 @@ func TestTurnActivityUsesPhaseDurationsAndIgnoresChildren(t *testing.T) {
 	check(now.Add(3*time.Second), "Waiting for answer · 2s")
 	activity.syncQuestion(nil, now.Add(3*time.Second))
 	check(now.Add(3*time.Second), "Working · 33s")
-	activity.observe(session.Event{Actor: "main", Retry: &llm.Retry{DelayMilliseconds: 10000}}, now.Add(3*time.Second))
+	activity.observe(session.Event{Actor: "main", Retry: &llm.Retry{Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, DelayMilliseconds: 10000, Reason: "HTTP 503"}}, now.Add(3*time.Second))
 	check(now.Add(5*time.Second), "Retrying · 2s")
 	check(now.Add(13*time.Second), "Working · 43s")
 	activity.observe(session.Event{Actor: "main", Kind: "delta"}, now.Add(6*time.Second))
@@ -71,7 +71,7 @@ type activityRetryProvider struct {
 }
 
 func (p *activityRetryProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-	if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, DelayMilliseconds: 10000, Reason: "HTTP 503"}}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, DelayMilliseconds: 10000, Reason: "HTTP 503"}}); err != nil {
 		return err
 	}
 	select {

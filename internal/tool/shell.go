@@ -43,16 +43,16 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 			return e
 		}
 		if a.Timeout != nil && (*a.Timeout < 0 || *a.Timeout > 86400000) {
-			return errors.New("timeout_ms must be 0–86400000")
+			return errors.New(prompts.ToolShellTimeoutRange)
 		}
 		if !a.Background && a.Timeout != nil && *a.Timeout == 0 {
-			return errors.New("foreground timeout_ms must be 1–86400000; use background=true for commands without a timeout")
+			return errors.New(prompts.ToolShellForegroundTimeout)
 		}
 		if a.Protocol != "" && a.Protocol != "lsp" {
-			return errors.New("protocol must be lsp for a language server; omit it for an ordinary command")
+			return errors.New(prompts.ToolShellProtocol)
 		}
 		if a.Protocol == "lsp" && !a.Background {
-			return errors.New("protocol=lsp requires background=true")
+			return errors.New(prompts.ToolLSPBackgroundRequired)
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a shellArgs) (any, error) {
@@ -95,7 +95,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 	}
 	Register(r, "job_list", prompts.ToolDescription("job_list"), map[string]any{"state": Property("string", "running", "all")}, nil, func(a list) error {
 		if a.State != "" && a.State != "running" && a.State != "all" {
-			return errors.New("state must be running or all; omit it to list running jobs")
+			return errors.New(prompts.ToolJobListState)
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a list) (any, error) {
@@ -138,13 +138,13 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 	}
 	Register(r, "job_stop", prompts.ToolDescription("job_stop"), map[string]any{"job_id": Property("string"), "child_id": Property("string")}, nil, func(a stop) error {
 		if (a.ID == "") == (a.Child == "") {
-			return Fail("invalid_arguments", "supply exactly one of job_id or child_id")
+			return Fail("invalid_arguments", prompts.ToolJobStopIdentifier)
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a stop) (any, error) {
 		if a.Child != "" {
 			if children == nil {
-				return nil, Fail("not_found", "no coding children in this runtime")
+				return nil, Fail("not_found", prompts.ToolNoCodingChildren)
 			}
 			return children.StopChild(ctx, x.Actor, a.Child)
 		}

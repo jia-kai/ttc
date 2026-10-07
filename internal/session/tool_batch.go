@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 	"ttc/internal/tool"
 )
@@ -35,7 +36,7 @@ func failedTool(call llm.ToolCall, code, message string) tool.Record {
 // child file mutations/commits so compaction can advance their continuation.
 func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry *tool.Registry, calls []llm.ToolCall, ids []string, streamErr error) ([]tool.Record, error) {
 	if len(calls) != len(ids) {
-		return nil, errors.New("tool call/intent count mismatch")
+		return nil, errors.New(prompts.SessionToolIntentMismatch)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -65,7 +66,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 		call := calls[i]
 		var record tool.Record
 		if streamErr != nil {
-			record = failedTool(call, "interrupted", "stream did not complete; tool was not executed")
+			record = failedTool(call, "interrupted", prompts.SessionToolInterrupted)
 		} else if err := ctx.Err(); err != nil {
 			record = failedTool(call, "cancelled", err.Error())
 		} else {

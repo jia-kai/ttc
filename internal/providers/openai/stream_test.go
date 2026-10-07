@@ -23,7 +23,7 @@ func TestStreamFailuresPreserveOfficialErrorFields(t *testing.T) {
 			// An announced call must remain unexecuted after a terminal failure.
 			announcement := callEvents(0, "fc_pending", "pending", "read", `{}`)[0]
 			calls := 0
-			committed, err := parseStream(strings.NewReader(sseFrames(announcement, test.event)), func(event llm.StreamEvent) error {
+			committed, err := parseStream("", strings.NewReader(sseFrames(announcement, test.event)), func(event llm.StreamEvent) error {
 				if event.Kind == "call" {
 					calls++
 				}
@@ -43,7 +43,7 @@ func TestStreamFailuresPreserveOfficialErrorFields(t *testing.T) {
 
 func TestStreamFailureDiagnosticsAreBoundedAndControlSafe(t *testing.T) {
 	event := map[string]any{"type": "error", "code": "invalid_request_error", "message": "Adjust the request.\n\t\x1b\u202e" + strings.Repeat("研究", 3000)}
-	_, err := parseStream(strings.NewReader(sseFrames(event)), func(llm.StreamEvent) error { return nil })
+	_, err := parseStream("", strings.NewReader(sseFrames(event)), func(llm.StreamEvent) error { return nil })
 	if err == nil {
 		t.Fatal("error event accepted")
 	}
@@ -71,7 +71,7 @@ func TestRejectsDuplicateItemIDsAcrossOutputIndices(t *testing.T) {
 	a, b := callEvents(1, "same", "call_a", "read", `{}`), callEvents(2, "same", "call_b", "read", `{}`)
 	stream := sseFrames(a[0], b[0], map[string]any{"type": "response.completed"})
 	calls := 0
-	_, err := parseStream(strings.NewReader(stream), func(ev llm.StreamEvent) error {
+	_, err := parseStream("", strings.NewReader(stream), func(ev llm.StreamEvent) error {
 		if ev.Kind == "call" {
 			calls++
 		}
@@ -94,7 +94,7 @@ func TestToolCallsPreserveOutputOrderWithReverseCompletion(t *testing.T) {
 	}
 	stream.WriteString(sseFrames(map[string]any{"type": "response.completed"}))
 	var calls []llm.ToolCall
-	_, err := parseStream(strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
+	_, err := parseStream("", strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
 		if ev.Kind == "call" {
 			calls = append(calls, *ev.Call)
 		}
@@ -135,7 +135,7 @@ func TestInterleavedToolArgumentAssembly(t *testing.T) {
 	var calls []llm.ToolCall
 	progress := map[string]llm.ToolProgress{}
 	starts := 0
-	committed, err := parseStream(strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
+	committed, err := parseStream("", strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
 		if ev.Kind == "call_start" {
 			starts++
 			if ev.Call != nil || ev.CallStart.Name == "" {
@@ -193,7 +193,7 @@ func TestMalformedToolStreamNeverEmitsExecutableCall(t *testing.T) {
 			}
 			stream.WriteString(sseFrames(map[string]any{"type": "response.completed"}))
 			starts, calls := 0, 0
-			_, err := parseStream(strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
+			_, err := parseStream("", strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
 				if ev.Kind == "call_start" {
 					starts++
 				}
@@ -214,7 +214,7 @@ func TestFinalizedToolArgumentsOverrideDeltas(t *testing.T) {
 	events[3]["arguments"] = `{"path":"final"}`
 	events[4]["item"].(map[string]any)["arguments"] = `{"path":"final"}`
 	var calls []llm.ToolCall
-	_, err := parseStream(strings.NewReader(sseFrames(events[0], events[1], events[2], events[3], events[4], map[string]any{"type": "response.completed"})), func(ev llm.StreamEvent) error {
+	_, err := parseStream("", strings.NewReader(sseFrames(events[0], events[1], events[2], events[3], events[4], map[string]any{"type": "response.completed"})), func(ev llm.StreamEvent) error {
 		if ev.Kind == "call" {
 			calls = append(calls, *ev.Call)
 		}
@@ -233,7 +233,7 @@ func TestArgumentsAccumulateBeforeExecutionAndTruncation(t *testing.T) {
 		stream.WriteString(sseFrames(event))
 	}
 	starts, calls := 0, 0
-	committed, err := parseStream(strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
+	committed, err := parseStream("", strings.NewReader(stream.String()), func(ev llm.StreamEvent) error {
 		if ev.Kind == "call_start" {
 			starts++
 		}

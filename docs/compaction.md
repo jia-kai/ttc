@@ -22,7 +22,8 @@ explicit session changes/exit cancel them.
   estimate instructions, tools, attachments, history and output allowance against
   capacity; compact before overflow. Native replay estimates model-visible
   occupancy, not encrypted transport JSON; reported usage is separate. Provider
-  context-length rejection fails directly, without compaction/retry.
+  context-length rejection uses the bounded upstream retry budget; it does not
+  trigger automatic compaction.
 - Preserve up to two latest admitted normal/queued prompts combined and up to two
   committed steers independently, chronologically, with exact text/attachments.
   Child tasks/asides count as normal/queued prompts. Unadmitted input stays live.

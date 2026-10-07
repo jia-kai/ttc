@@ -1,0 +1,38 @@
+# Authored binary-input diagnostics. Decoder, archive and OS error payloads remain data.
+BinaryOpenCache: 'open binary cache: %w'
+BinaryCacheFile: 'cache binary file: %w'
+BinaryPDFVersionHeader: missing PDF version header
+BinaryPDFEndMarker: missing PDF end marker
+BinaryRTFHeader: missing RTF header or closing brace
+BinaryOLEHeader: missing OLE compound-file header
+BinaryOLEVersion: invalid OLE version/sector size
+BinaryOLESector: incomplete OLE sector
+BinaryZIPDuplicateEntry: duplicate ZIP entry %q
+BinaryIWorkIndex: missing iWork document index
+BinaryZIPMissingEntry: missing ZIP entry %q
+BinaryODTMIMETooLarge: oversized ODT MIME identifier
+BinaryODTMIMEIncorrect: incorrect ODT MIME identifier
+BinaryZIPLocalHeader: missing ZIP local-file header
+BinaryZIPDirectoryBounds: ZIP directory exceeds 4096 entries/2 MiB, uses ZIP64, or is invalid
+BinaryZIPDirectoryRecord: invalid ZIP directory record
+BinaryZIPEntrySizeMismatch: ZIP directory entry count or size mismatch
+BinaryZIPEntryCountMismatch: ZIP directory entry count mismatch
+BinaryZIPEndRecord: missing ZIP end-of-directory record
+BinaryInvalidImage: 'invalid image: %w'
+BinaryGIFBlockMarker: invalid GIF block marker %#x
+BinaryReferenceSize: binary file size must be between 0 and %d bytes
+BinaryReferenceMIME: binary file requires a canonical MIME type without parameters
+BinaryReferenceRequired: file-backed binary requires an absolute path and SHA-256 checksum
+BinaryReferencePath: 'binary file path must be absolute: %q'
+BinaryReferenceChecksum: binary file %q requires a lowercase hex SHA-256 checksum
+BinaryDocumentSizeRequired: file-backed document requires original byte size
+BinaryReferenceFailure: 'binary file %q: %w'
+BinaryOpenFileCache: 'open binary file cache: %w'
+BinaryReadCachedFile: 'read cached binary file: %w'
+BinaryReferenceSizeMismatch: binary file byte size differs from original
+BinaryReferenceImageType: unsupported image type %q; document references require MIME type
+BinaryReferenceMIMEMismatch: binary file MIME type differs from original image
+BinaryCacheReconstructedFile: 'cache reconstructed binary file: %w'
+BinarySourceRegularFile: source is not a regular file
+BinarySourceTooLarge: source exceeds %d bytes
+BinarySourceChecksumMismatch: source SHA-256 checksum mismatch; original binary file has changed

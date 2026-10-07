@@ -11,6 +11,7 @@ import (
 	"io"
 
 	"ttc/internal/blobcache"
+	"ttc/internal/prompts"
 )
 
 // MaxImagePixels bounds the canvas pixel count before decoded image allocation.
@@ -21,14 +22,14 @@ const MaxImagePixels = 16 << 20
 // metadata; complete image/container validation requires decoding separately.
 func ImageConfig(data []byte) (image.Config, string, error) {
 	if len(data) > blobcache.MaxBytes {
-		return image.Config{}, "", fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", blobcache.MaxBytes)
+		return image.Config{}, "", fmt.Errorf(prompts.ImageTooLarge, blobcache.MaxBytes)
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return image.Config{}, "", fmt.Errorf("cannot decode image header; provide a valid PNG, JPEG or GIF: %w", err)
+		return image.Config{}, "", fmt.Errorf(prompts.ImageHeaderDecode, err)
 	}
 	if config.Width <= 0 || config.Height <= 0 || config.Width > MaxImagePixels/config.Height {
-		return image.Config{}, "", fmt.Errorf("image dimensions are invalid or exceed %d pixels; provide a valid image with fewer pixels", MaxImagePixels)
+		return image.Config{}, "", fmt.Errorf(prompts.ImageInvalidDimensions, MaxImagePixels)
 	}
 	return config, format, nil
 }
@@ -57,7 +58,7 @@ func validateReadImage(ctx context.Context, data []byte) (image.Config, error) {
 		return image.Config{}, ctx.Err()
 	}
 	if err != nil {
-		return image.Config{}, fmt.Errorf("invalid image: %w", err)
+		return image.Config{}, fmt.Errorf(prompts.BinaryInvalidImage, err)
 	}
 	return config, nil
 }
@@ -112,7 +113,7 @@ func singleFrameGIF(ctx context.Context, data []byte) error {
 		switch marker {
 		case 0x3b: // Trailer.
 			if frames != 1 {
-				return fmt.Errorf("GIF must contain exactly one image frame")
+				return fmt.Errorf(prompts.ImageGIFSingleFrame)
 			}
 			return nil
 		case 0x21: // Extension label, followed by data subblocks.
@@ -125,7 +126,7 @@ func singleFrameGIF(ctx context.Context, data []byte) error {
 		case 0x2c: // Image descriptor, optional color table, then LZW data.
 			frames++
 			if frames > 1 {
-				return fmt.Errorf("animated GIF input is unsupported; provide a non-animated GIF, PNG or JPEG")
+				return fmt.Errorf(prompts.ImageGIFAnimated)
 			}
 			if len(data)-offset < 9 {
 				return io.ErrUnexpectedEOF
@@ -144,7 +145,7 @@ func singleFrameGIF(ctx context.Context, data []byte) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("invalid GIF block marker %#x", marker)
+			return fmt.Errorf(prompts.BinaryGIFBlockMarker, marker)
 		}
 	}
 	return io.ErrUnexpectedEOF

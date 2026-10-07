@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"ttc/internal/binaryinput"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"unicode/utf8"
 )
 
@@ -76,10 +77,10 @@ type Retention struct {
 func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error) {
 	fail := func(reason string) (Retention, error) { return Retention{}, errors.New(reason) }
 	if minTokens < 0 || maxTokens <= 0 || minTokens > maxTokens {
-		return fail("invalid recent-cycle token bounds")
+		return fail(prompts.ContextTokenBounds)
 	}
 	if len(messages) == 0 {
-		return fail("nothing to compact")
+		return fail(prompts.ContextNothingToCompact)
 	}
 	suffix := make([]int, len(messages)+1)
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -91,20 +92,20 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	for i, message := range messages {
 		for _, call := range message.Calls {
 			if call.ID == "" || pending[call.ID] {
-				return fail("invalid tool call sequence prevents compaction")
+				return fail(prompts.ContextInvalidCallSequence)
 			}
 			pending[call.ID] = true
 		}
 		if message.Role == "tool" {
 			if !pending[message.CallID] {
-				return fail("unpaired tool result prevents compaction")
+				return fail(prompts.ContextUnpairedResult)
 			}
 			delete(pending, message.CallID)
 		}
 		safe[i+1] = len(pending) == 0
 	}
 	if len(pending) != 0 {
-		return fail("unresolved tool calls prevent compaction")
+		return fail(prompts.ContextUnresolvedCalls)
 	}
 	latestUser := -1
 	inputs := make([]int, 0, 4)
@@ -116,7 +117,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 			}
 			source, err := inputSource(messages[i])
 			if err != nil {
-				return Retention{}, fmt.Errorf("human input %d: %w", i, err)
+				return Retention{}, fmt.Errorf(prompts.ContextHumanInputFailure, i, err)
 			}
 			if source == "steer" {
 				if steers < 2 {
@@ -130,7 +131,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 		}
 	}
 	if latestUser < 0 {
-		return fail("no human input to retain")
+		return fail(prompts.ContextNoHumanInput)
 	}
 	sort.Ints(inputs)
 	threshold, cycles := len(messages), 0
@@ -171,7 +172,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 					start--
 				}
 				if start < 0 {
-					return fail("unread binary result has no complete assistant cycle to retain")
+					return fail(prompts.ContextUnreadBinaryCycle)
 				}
 				cut = min(cut, start)
 				break
@@ -189,7 +190,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 			return Retention{Start: cut, Inputs: inputs}, nil
 		}
 	}
-	return fail("no unretained human input or completed older model cycle can be compacted")
+	return fail(prompts.ContextNoCompactableCycle)
 }
 
 func inputSource(message llm.Message) (string, error) {
@@ -199,7 +200,7 @@ func inputSource(message llm.Message) (string, error) {
 	case "normal", "queue", "steer", "task", "btw":
 		return message.InputSource, nil
 	default:
-		return "", fmt.Errorf("invalid human input source %q", message.InputSource)
+		return "", fmt.Errorf(prompts.ContextInvalidInputSource, message.InputSource)
 	}
 }
 
@@ -308,7 +309,7 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, types []llm
 		return a, nil
 	}
 	if !st.Mode().IsRegular() {
-		return a, errors.New("attachment must be a regular file or directory")
+		return a, errors.New(prompts.AttachmentRegularFileOrDirectory)
 	}
 	reader := bufio.NewReader(f)
 	binary, err := binaryinput.Read(ctx, reader, path, st.Size(), types)
@@ -324,20 +325,20 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, types []llm
 		return a, nil
 	}
 	if st.Size() > 8<<20 {
-		return a, errors.New("attachment exceeds 8 MiB")
+		return a, errors.New(prompts.AttachmentTooLarge)
 	}
 	b, e := io.ReadAll(io.LimitReader(reader, 8<<20+1))
 	if err := ctx.Err(); err != nil {
 		return a, err
 	}
 	if len(b) > 8<<20 {
-		return a, errors.New("attachment exceeds 8 MiB")
+		return a, errors.New(prompts.AttachmentTooLarge)
 	}
 	if e != nil {
 		return a, e
 	}
 	if !utf8.Valid(b) || strings.ContainsRune(string(b), 0) {
-		return a, errors.New("unsupported attachment content")
+		return a, errors.New(prompts.AttachmentUnsupportedContent)
 	}
 	a.Kind = "text"
 	if len(b) > 32768 {
@@ -372,21 +373,15 @@ func (i Input) Message() llm.Message {
 		if a.File != nil {
 			m.Files = append(m.Files, *a.File)
 			if a.Kind == "image" {
-				content.WriteString("\nImage attachment: ")
+				fmt.Fprintf(&content, prompts.AttachmentImage, a.Path)
 			} else {
-				content.WriteString("\nDocument attachment: ")
+				fmt.Fprintf(&content, prompts.AttachmentDocument, a.Path)
 			}
-			content.WriteString(a.Path)
 			continue
 		}
-		content.WriteString("\n\nAttachment (")
-		content.WriteString(a.Kind)
-		content.WriteString("): ")
-		content.WriteString(a.Path)
-		content.WriteString("\n")
-		content.WriteString(a.Text)
+		fmt.Fprintf(&content, prompts.AttachmentText, a.Kind, a.Path, a.Text)
 		if a.Truncated {
-			content.WriteString("\n[attachment truncated]")
+			content.WriteString(prompts.AttachmentTruncated)
 		}
 	}
 	m.Content = content.String()

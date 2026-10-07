@@ -14,7 +14,7 @@ func TestEmbeddedAndPrecedence(t *testing.T) {
 		t.Fatal(e)
 	}
 	s, e := c.Load(context.Background(), "tmux")
-	if e != nil || s.Source != "bundled" || s.Content == "" {
+	if e != nil || s.Source != "bundled" || s.Content == "" || s.Path != "prompt/skills/tmux/SKILL.md" {
 		t.Fatalf("%+v %v", s, e)
 	}
 	for _, root := range []string{user, filepath.Join(project, ".agents/skills")} {

@@ -59,11 +59,11 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebS
 	key := config.APIKey
 	searchClient := *client
 	searchClient.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return errors.New("search endpoint redirects are unsupported")
+		return errors.New(prompts.ToolSearchRedirectUnsupported)
 	}
 	Register(r, "web_search", prompts.ToolDescription("web_search"), map[string]any{"query": Property("string"), "num_results": Property("integer"), "max_chars": Property("integer")}, []string{"query"}, func(a webSearchArgs) error {
 		if strings.TrimSpace(a.Query) == "" || len(a.Query) > 4096 {
-			return errors.New("query must contain 1–4096 bytes")
+			return errors.New(prompts.ToolSearchQueryRange)
 		}
 		if err := rangeInt("num_results", a.NumResults, 1, 10); err != nil {
 			return err
@@ -95,7 +95,7 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebS
 		}()
 
 		if _, err := webURL(endpoint); err != nil {
-			return nil, fmt.Errorf("search endpoint: %w", err)
+			return nil, fmt.Errorf(prompts.ToolSearchEndpoint, err)
 		}
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -120,14 +120,14 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebS
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == 429 {
-			return nil, Fail("rate_limited", "Exa search rate limit reached; retry later or reduce search frequency")
+			return nil, Fail("rate_limited", prompts.ToolSearchRateLimited)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			hint := "ask the user to check TTC web-search configuration"
+			hint := prompts.ToolSearchHTTPConfigHint
 			if resp.StatusCode >= 500 {
-				hint = "retry later or use web_fetch with a known source URL"
+				hint = prompts.ToolSearchHTTPSourceHint
 			}
-			return nil, fmt.Errorf("search HTTP %d; %s", resp.StatusCode, hint)
+			return nil, fmt.Errorf(prompts.ToolSearchHTTPFailed, resp.StatusCode, hint)
 		}
 		result, err := searchResult(resp.Body, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"), key)
 		if err != nil {
@@ -168,23 +168,23 @@ func searchResult(reader io.Reader, sse bool, key string) (string, error) {
 	decode := func(raw []byte) (string, bool, error) {
 		var e envelope
 		if err := json.Unmarshal(raw, &e); err != nil {
-			return "", false, fmt.Errorf("decode search response: %w", err)
+			return "", false, fmt.Errorf(prompts.ToolSearchDecodeResponse, err)
 		}
 		if e.ID != 1 {
 			return "", false, nil
 		}
 		if e.Version != "2.0" {
-			return "", false, errors.New("invalid search JSON-RPC version")
+			return "", false, errors.New(prompts.ToolSearchRPCVersion)
 		}
 		if e.Error != nil {
 			detail := searchDiagnostic(redact(e.Error.Message))
 			if detail == "" {
-				return "", false, fmt.Errorf("search RPC error %d", e.Error.Code)
+				return "", false, fmt.Errorf(prompts.ToolSearchRPCError, e.Error.Code)
 			}
-			return "", false, fmt.Errorf("search RPC error %d: %s", e.Error.Code, detail)
+			return "", false, fmt.Errorf(prompts.ToolSearchRPCErrorDetail, e.Error.Code, detail)
 		}
 		if e.Result == nil {
-			return "", false, errors.New("missing search tool result")
+			return "", false, errors.New(prompts.ToolSearchMissingResult)
 		}
 		var text []string
 		for _, c := range e.Result.Content {
@@ -195,12 +195,12 @@ func searchResult(reader io.Reader, sse bool, key string) (string, error) {
 		if e.Result.IsError {
 			detail := searchDiagnostic(strings.Join(text, "\n\n"))
 			if detail == "" {
-				return "", false, errors.New("Exa search tool failed")
+				return "", false, errors.New(prompts.ToolSearchFailed)
 			}
-			return "", false, fmt.Errorf("Exa search tool failed: %s", detail)
+			return "", false, fmt.Errorf(prompts.ToolSearchFailedDetail, detail)
 		}
 		if len(text) == 0 {
-			return "", false, errors.New("search result contains no text")
+			return "", false, errors.New(prompts.ToolSearchNoText)
 		}
 		return strings.Join(text, "\n\n"), true, nil
 	}
@@ -210,14 +210,14 @@ func searchResult(reader io.Reader, sse bool, key string) (string, error) {
 			return "", err
 		}
 		if len(raw) > 2<<20 {
-			return "", Fail("response_too_large", "search response exceeds 2 MiB; retry with fewer num_results or a more specific query")
+			return "", Fail("response_too_large", prompts.ToolSearchResponseTooLarge)
 		}
 		text, ok, err := decode(raw)
 		if err != nil {
 			return "", err
 		}
 		if !ok {
-			return "", errors.New("search response ID mismatch")
+			return "", errors.New(prompts.ToolSearchResponseID)
 		}
 		return text, nil
 	}
@@ -237,7 +237,7 @@ func searchResult(reader io.Reader, sse bool, key string) (string, error) {
 		line := scanner.Text()
 		consumed += len(line) + 1
 		if consumed > 2<<20 {
-			return "", Fail("response_too_large", "search response exceeds 2 MiB; retry with fewer num_results or a more specific query")
+			return "", Fail("response_too_large", prompts.ToolSearchResponseTooLarge)
 		}
 		if line == "" {
 			text, ok, err := dispatch()
@@ -256,7 +256,7 @@ func searchResult(reader io.Reader, sse bool, key string) (string, error) {
 		return "", err
 	}
 	if !ok {
-		return "", errors.New("search stream contains no matching result")
+		return "", errors.New(prompts.ToolSearchStreamNoResult)
 	}
 	return text, nil
 }

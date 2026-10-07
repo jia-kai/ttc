@@ -1,0 +1,55 @@
+# Authored helper guidance and attachment scaffolds delivered to models.
+# Protocol keys, source data and external diagnostic payloads remain in Go.
+AttachmentImage: "\nImage attachment: %s"
+AttachmentDocument: "\nDocument attachment: %s"
+AttachmentText: "\n\nAttachment (%s): %s\n%s"
+AttachmentTruncated: "\n[attachment truncated]"
+AttachmentRegularFileOrDirectory: attachment must be a regular file or directory
+AttachmentTooLarge: attachment exceeds 8 MiB
+AttachmentUnsupportedContent: unsupported attachment content
+BinaryInlineUnsupported: inline binary data_url is unsupported; provide an original path and SHA-256 reference
+BinaryUnavailable: 'binary file unavailable: original bytes omitted for %q (expected SHA-256 %s); cache miss and source could not be verified: %v'
+BinaryUnsupportedInput: selected model does not announce %s input; select a model supporting this format, or use shell for explicit inspection/conversion
+BinaryInvalidCapability: provider binary capability must declare a canonical MIME type without parameters and positive MaxBytes; fix the provider's model metadata
+BinaryTooLarge: binary file exceeds %s; provide a smaller file
+BinaryEmpty: binary file is empty; provide a nonempty original file
+BinaryInvalidDocument: 'invalid %s document: %v; provide an original file matching its extension and announced MIME type'
+JobNotFound: unknown or inaccessible job_id; use job_list(state=all) to choose an accessible job
+JobTimeoutNonnegative: shell timeout must be nonnegative
+JobLSPNotFound: unknown or inaccessible live LSP job; use job_list or start shell(protocol=lsp, background=true)
+JobNotLSPServer: job is not an LSP server; start shell(protocol=lsp, background=true)
+JobLSPExited: language server exited; inspect job_read(stream=stderr) and start a new server
+JobCannotStopOwnTask: a child cannot stop its own task
+JobLSPProtocolStdout: LSP stdout belongs to the protocol client; set stream=stderr for server diagnostics
+JobInvalidStream: stream must be stdout or stderr
+RuntimeEnded: runtime ended
+JobLSPPipeFailure: 'create LSP pipes: %w'
+JobSupervisionFailure: "Shell supervision failed: %v\n"
+JobOutputGrepFailure: 'invalid output grep: %w'
+CapturePositiveReadLimit: read limit must be positive
+CaptureEOFCursorFormat: expected eof:-N:bytes or eof:-N:lines
+CaptureEOFOffset: EOF offset must be nonpositive and representable
+CaptureEOFUnit: EOF cursor unit must be bytes or lines
+CaptureAbsoluteCursor: invalid absolute byte cursor
+CaptureCursorBeyondOutput: cursor beyond output; use the returned next_cursor or eof:0:bytes for the current end
+CaptureUTF8ReadLimit: read limit is too small for the next UTF-8 character; increase limit_bytes to at least 4
+WorkspaceSymlinkMutation: 'symlink mutation path: %s; resolve the real target and retry with its path'
+WorkspaceNotRegularFile: 'not a regular file: %s'
+WorkspaceMultiplyLinkedFile: 'multiply linked file: %s'
+WorkspaceParentNotDirectory: 'parent is not a directory: %s'
+WorkspaceMutationTooLarge: file exceeds 8 MiB mutation limit
+WorkspaceEmptyMutation: empty mutation
+WorkspaceDuplicateTarget: duplicate mutation target %s
+WorkspaceSourceNotFound: 'source not found: %s'
+WorkspaceTargetExists: 'target exists: %s; read it and use an update for intended changes, or choose a different add/move destination'
+WorkspaceConflict: 'workspace conflict: %s'
+WorkspaceCorruptSnapshot: corrupt snapshot blob
+WorkspaceUnusableSession: 'session unusable after compaction: %s'
+WorkspaceRecordMutationFailure: 'record file mutation: %w'
+WorkspacePartialMutation: 'partial mutation: %w'
+ImageNotRegularFile: image is not a regular file; provide a regular PNG, JPEG or GIF
+ImageTooLarge: image exceeds %d bytes; resize or compress it before retrying
+ImageHeaderDecode: 'cannot decode image header; provide a valid PNG, JPEG or GIF: %w'
+ImageInvalidDimensions: image dimensions are invalid or exceed %d pixels; provide a valid image with fewer pixels
+ImageGIFSingleFrame: GIF must contain exactly one image frame
+ImageGIFAnimated: animated GIF input is unsupported; provide a non-animated GIF, PNG or JPEG

@@ -11,6 +11,7 @@ import (
 
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/scratch"
 	"ttc/internal/skills"
 	"ttc/internal/tool"
@@ -89,7 +90,7 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 		if err == nil {
 			project.Instructions = append(project.Instructions, projectInstruction{Path: p, Content: string(b)})
 		} else if !os.IsNotExist(err) {
-			return nil, previous, fmt.Errorf("read project instructions %s: %w", p, err)
+			return nil, previous, fmt.Errorf(prompts.SessionReadProjectInstructions, p, err)
 		}
 	}
 	projectJSON, err := json.Marshal(project)

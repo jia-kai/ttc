@@ -214,7 +214,9 @@ def main():
         session = db.execute('SELECT id FROM sessions WHERE read_only=0').fetchone()[0]
         retry_id, retry_json, visible = db.execute("SELECT id,content_json,model_visible FROM entries WHERE json_extract(content_json,'$.type')='model_retry'").fetchone()
         retry = json.loads(retry_json)
-        assert not visible and retry['retry'] == {'attempt': 2, 'max_attempts': 0, 'delay_ms': 0, 'reason': 'HTTP 503'}
+        assert not visible
+        assert retry['retry']['attempt'] == 2 and retry['retry']['max_attempts'] == 3
+        assert retry['retry']['delay_ms'] == 0 and 'HTTP 503' in retry['retry']['reason']
         assert db.execute('SELECT purpose FROM model_requests WHERE id=?', (retry['request_id'],)).fetchone()[0] == 'coding'
         assert failed_request == requests[0], 'retry changed the request'
         send(f'/inspect {retry_id}')

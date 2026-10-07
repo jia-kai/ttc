@@ -15,7 +15,7 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 	r, events := runtimeFixture(t, nil)
 	p := &childProvider{}
 	p.stream = func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 4, DelayMilliseconds: 1250, Reason: "HTTP 503"}}); err != nil {
+		if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 4, MaxAttempts: 4, DelayMilliseconds: 1250, Reason: "HTTP 503"}}); err != nil {
 			return err
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Finished"})
@@ -86,7 +86,7 @@ func TestRetryActivityExcludesBackgroundNaming(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		retry := llm.Retry{Attempt: 2, DelayMilliseconds: 1000, Reason: "HTTP 503"}
+		retry := llm.Retry{Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, DelayMilliseconds: 1000, Reason: "HTTP 503"}
 		if err := r.retryNotice("", "main", request, purpose, &retry); err != nil {
 			t.Fatal(err)
 		}

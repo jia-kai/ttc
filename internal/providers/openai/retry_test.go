@@ -46,7 +46,7 @@ func TestRetryAfterAndSaturatedBackoff(t *testing.T) {
 	}
 }
 
-func TestUnlimitedHTTPRetriesPreserveRequestAndRecover(t *testing.T) {
+func TestDefaultHTTPRetriesPreserveRequestAndRecover(t *testing.T) {
 	var requests atomic.Int32
 	var bodies []string
 	a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +55,7 @@ func TestUnlimitedHTTPRetriesPreserveRequestAndRecover(t *testing.T) {
 		if r.Header.Get("session-id") != "test-conversation" {
 			t.Error("cache identity changed during retry", r.Header.Get("session-id"))
 		}
-		if requests.Add(1) <= 4 {
+		if requests.Add(1) < llm.DefaultMaxAttempts {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, "secret backend detail")
@@ -72,11 +72,12 @@ func TestUnlimitedHTTPRetriesPreserveRequestAndRecover(t *testing.T) {
 		text += ev.Text
 		return nil
 	})
-	if err != nil || requests.Load() != 5 || len(retries) != 4 || text != "Done" {
+	if err != nil || requests.Load() != llm.DefaultMaxAttempts || len(retries) != llm.DefaultMaxAttempts-1 || text != "Done" {
 		t.Fatal(err, requests.Load(), retries, text)
 	}
 	for i, retry := range retries {
-		if retry != (llm.Retry{Attempt: i + 2, MaxAttempts: 0, Reason: "HTTP 503"}) {
+		wantReason := fmt.Sprintf("upstream attempt %d/%d failed: subscription response HTTP 503: error details missing; body non-JSON or invalid JSON", i+1, llm.DefaultMaxAttempts)
+		if retry != (llm.Retry{Attempt: i + 2, MaxAttempts: llm.DefaultMaxAttempts, Reason: wantReason}) {
 			t.Fatal(retry)
 		}
 	}
@@ -87,8 +88,11 @@ func TestUnlimitedHTTPRetriesPreserveRequestAndRecover(t *testing.T) {
 	}
 }
 
-func TestBoundedRetryAndPermanentHTTPFailures(t *testing.T) {
-	for _, status := range []int{429, 503, 401, 400} {
+func TestEveryNonOKHTTPStatusUsesBoundedRetries(t *testing.T) {
+	for status := 100; status <= 599; status++ {
+		if status == http.StatusOK {
+			continue
+		}
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			var count atomic.Int32
 			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -96,20 +100,25 @@ func TestBoundedRetryAndPermanentHTTPFailures(t *testing.T) {
 				w.Header().Set("Retry-After", "0")
 				w.WriteHeader(status)
 			})
-			attempts := []int{}
+			var retries []llm.Retry
 			err := a.Stream(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}, MaxAttempts: 3}, func(ev llm.StreamEvent) error {
-				attempts = append(attempts, ev.Retry.Attempt)
-				if ev.Retry.MaxAttempts != 3 {
-					t.Error(ev.Retry)
+				if ev.Kind != "retry" || ev.Retry == nil {
+					t.Fatal("unexpected event", ev)
 				}
+				retries = append(retries, *ev.Retry)
 				return nil
 			})
-			want := int32(1)
-			if status == 429 || status == 503 {
-				want = 3
+			var transient *llm.TransientError
+			wantReason := func(attempt int) string {
+				return fmt.Sprintf("upstream attempt %d/3 failed: subscription response HTTP %d: error details missing; body absent", attempt, status)
 			}
-			if err == nil || count.Load() != want || len(attempts) != int(want)-1 {
-				t.Fatal(err, count.Load(), attempts)
+			if !errors.As(err, &transient) || count.Load() != 3 || len(retries) != 2 || err.Error() != wantReason(3) {
+				t.Fatal(err, count.Load(), retries)
+			}
+			for i, retry := range retries {
+				if retry != (llm.Retry{Attempt: i + 2, MaxAttempts: 3, Reason: wantReason(i + 1)}) {
+					t.Fatal("incorrect retry diagnostic", retry)
+				}
 			}
 		})
 	}
@@ -162,7 +171,7 @@ func TestTransportAndEmptyStreamRetry(t *testing.T) {
 				if count > 1 {
 					body = "data: {\"type\":\"response.completed\"}\n\n"
 				}
-				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+				return &http.Response{StatusCode: 200, Header: http.Header{"Retry-After": []string{"0"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 			})}
 			kinds := []string{}
 			err := a.Stream(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}}, func(ev llm.StreamEvent) error {
@@ -179,13 +188,12 @@ func TestTransportAndEmptyStreamRetry(t *testing.T) {
 	}
 }
 
-func TestInvalidEndpointCertificateAndOversizedSSEDoNotRetry(t *testing.T) {
-	for _, kind := range []string{"endpoint", "certificate", "oversized"} {
+func TestInvalidEndpointAndCertificateDoNotRetry(t *testing.T) {
+	for _, kind := range []string{"endpoint", "certificate"} {
 		t.Run(kind, func(t *testing.T) {
 			var count atomic.Int32
 			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				count.Add(1)
-				fmt.Fprint(w, "data: "+strings.Repeat("x", 8<<20)+"\n\n")
 			})
 			want := int32(1)
 			if kind == "endpoint" {

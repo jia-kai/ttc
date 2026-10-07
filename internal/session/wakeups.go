@@ -54,7 +54,7 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 	// decoded call's optional-argument pointers and later inspection refreshes.
 	startup, err := json.Marshal(a)
 	if err != nil {
-		return wakeup{}, fmt.Errorf("encode wakeup startup parameters: %w", err)
+		return wakeup{}, fmt.Errorf(prompts.WakeupEncodeStartup, err)
 	}
 	startupText := "### Original startup parameters\n\n" + render.Fence(string(startup), "json")
 	repeat := 0
@@ -64,12 +64,12 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
-		return wakeup{}, errors.New("runtime ended")
+		return wakeup{}, errors.New(prompts.RuntimeEnded)
 	}
 	for _, v := range w.items {
 		if v.Name == a.Name && v.Status == "scheduled" {
 			w.mu.Unlock()
-			return wakeup{}, errors.New("wakeup name already active; choose another name or cancel the existing reminder with wakeup_cancel first")
+			return wakeup{}, errors.New(prompts.WakeupNameActive)
 		}
 	}
 	ctx, cancel := context.WithCancel(w.ctx)
@@ -178,17 +178,17 @@ func (r *Runtime) addWakeupTools() {
 			return e
 		}
 		if (a.At == nil) == (a.Delay == nil) {
-			return errors.New("exactly one of at or delay_seconds required")
+			return errors.New(prompts.WakeupTimeRequired)
 		}
 		if a.Delay != nil && (*a.Delay < 0 || *a.Delay > 31536000) {
-			return errors.New("delay_seconds must be 0–31536000")
+			return errors.New(prompts.WakeupDelayRange)
 		}
 		if a.Repeat != nil && (*a.Repeat < 1 || *a.Repeat > 31536000) {
-			return errors.New("repeat_seconds must be 1–31536000 (omit for a one-shot timer)")
+			return errors.New(prompts.WakeupRepeatRange)
 		}
 		if a.At != nil {
 			if _, e := time.Parse(time.RFC3339, *a.At); e != nil {
-				return fmt.Errorf("at must be RFC3339 with a timezone, such as 2026-10-02T15:04:05Z; use delay_seconds instead for a relative time: %w", e)
+				return fmt.Errorf(prompts.WakeupInvalidTimestamp, e)
 			}
 		}
 		return nil
@@ -215,7 +215,7 @@ func (r *Runtime) addWakeupTools() {
 	}
 	tool.Register(r.Tools, "wakeup_cancel", prompts.ToolDescription("wakeup_cancel"), map[string]any{"wakeup_id": tool.Property("string"), "name": tool.Property("string")}, nil, func(a stop) error {
 		if (a.ID == nil) == (a.Name == nil) {
-			return errors.New("exactly one of wakeup_id or name required")
+			return errors.New(prompts.WakeupCancelIdentity)
 		}
 		return nil
 	}, func(ctx context.Context, x tool.Execution, a stop) (any, error) {
@@ -228,7 +228,7 @@ func (r *Runtime) addWakeupTools() {
 		}
 		v, e := r.timers.stop(id, name)
 		if e != nil {
-			return nil, tool.Fail("not_found", "no scheduled reminder matches; use wakeup_list and choose an active wakeup_id or name")
+			return nil, tool.Fail("not_found", prompts.WakeupCancelNotFound)
 		}
 		return map[string]any{"wakeup_id": v.ID, "status": v.Status}, nil
 	})

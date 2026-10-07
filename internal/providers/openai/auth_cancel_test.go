@@ -104,12 +104,12 @@ func (canceledAuthBody) Close() error { return nil }
 
 func TestRefreshFailuresPreserveRecoverability(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		status    int
-		transient bool
+		name   string
+		status int
 	}{
-		{"transport", 0, true}, {"rate limit", 429, true},
-		{"unavailable", 503, true}, {"expired refresh", 401, false},
+		{"transport", 0}, {"rate limit", 429},
+		{"unavailable", 503}, {"expired refresh", 401},
+		{"invalid request", 400}, {"invalid response", 200},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			a := authenticatorFixture(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(test.status) })
@@ -125,7 +125,7 @@ func TestRefreshFailuresPreserveRecoverability(t *testing.T) {
 			}
 			err := transportAdapter(a).Stream(context.Background(), llm.Request{ConversationID: "test", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}, MaxAttempts: 1}, func(llm.StreamEvent) error { return nil })
 			var transient *llm.TransientError
-			if err == nil || errors.As(err, &transient) != test.transient || strings.Contains(err.Error(), "private") {
+			if !errors.As(err, &transient) || strings.Contains(err.Error(), "private") {
 				t.Fatal("unsafe or unclassified refresh failure", err)
 			}
 		})

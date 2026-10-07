@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,9 +30,9 @@ func partialOutput(kind string) map[string]any {
 	return map[string]any{"type": "response.output_text.delta", "delta": "partial"}
 }
 
-func TestCommittedTransientFailuresHandOffWithoutReplay(t *testing.T) {
+func TestCommittedUpstreamFailuresHandOffWithoutReplay(t *testing.T) {
 	for _, output := range []string{"text", "call_start", "finished_call"} {
-		for _, terminal := range []string{"disconnect", "error", "response.failed"} {
+		for _, terminal := range []string{"disconnect", "error", "response.failed", "bare error", "unknown nested", "context length", "malformed JSON", "duplicate output"} {
 			t.Run(output+"/"+terminal, func(t *testing.T) {
 				var requests atomic.Int32
 				a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +49,17 @@ func TestCommittedTransientFailuresHandOffWithoutReplay(t *testing.T) {
 						io.WriteString(w, sseFrames(map[string]any{"type": "error", "code": "server_error", "message": "private backend detail"}))
 					case "response.failed":
 						io.WriteString(w, sseFrames(map[string]any{"type": "response.failed", "response": map[string]any{"error": map[string]string{"code": "temporarily_unavailable", "message": "private backend detail"}}}))
+					case "bare error":
+						io.WriteString(w, sseFrames(map[string]any{"type": "error"}))
+					case "unknown nested":
+						io.WriteString(w, sseFrames(map[string]any{"type": "error", "error": map[string]string{"code": "unknown_failure", "message": "Reduce tool count"}}))
+					case "context length":
+						io.WriteString(w, sseFrames(map[string]any{"type": "error", "code": "context_length_exceeded"}))
+					case "malformed JSON":
+						io.WriteString(w, "data: invalid JSON\n\n")
+					case "duplicate output":
+						done := messageDone(9, "partial")
+						io.WriteString(w, sseFrames(done, done))
 					}
 				})
 				// A provider-owned wait would exhaust this deadline instead of handing off.
@@ -69,7 +81,7 @@ func TestCommittedTransientFailuresHandOffWithoutReplay(t *testing.T) {
 					t.Fatal("missing handoff, replay, wait or leaked executable output", err, requests.Load(), kinds)
 				}
 				retry := partial.Retry
-				if retry.Attempt != 2 || retry.MaxAttempts != 2 || retry.DelayMilliseconds < 750 || retry.DelayMilliseconds > 1250 || retry.Reason != "stream interrupted after partial output" {
+				if retry.Attempt != 2 || retry.MaxAttempts != 2 || retry.DelayMilliseconds < 750 || retry.DelayMilliseconds > 1250 || retry.Reason != transient.Error() || !strings.HasPrefix(retry.Reason, "upstream attempt 1/2 failed: ") {
 					t.Fatal("invalid or unsafe continuation metadata", retry)
 				}
 			})
@@ -94,7 +106,7 @@ func TestInvalidFinalToolArgumentsUsePartialRecovery(t *testing.T) {
 			for _, tc := range []struct {
 				prior, limit int
 				handoff      bool
-			}{{0, 2, true}, {1, 2, false}, {2, 0, true}} {
+			}{{0, 2, true}, {1, 2, false}, {2, 0, false}} {
 				var starts, calls int
 				err := a.Stream(context.Background(), partialRequest(tc.prior, tc.limit), func(ev llm.StreamEvent) error {
 					if ev.Kind == "call_start" {
@@ -132,7 +144,9 @@ func TestPartialHandoffRespectsPriorAttemptsAndLimits(t *testing.T) {
 		{1, 2, false, 0, 0},
 		{1, 3, true, 1500, 2500},
 		{3, 5, true, 6000, 10000},
-		{100000, 0, true, 22500, 30000},
+		{1, 0, true, 1500, 2500},
+		{2, 0, false, 0, 0},
+		{100000, 100002, true, 22500, 30000},
 	} {
 		t.Run(fmt.Sprintf("%d/%d", tc.prior, tc.limit), func(t *testing.T) {
 			var requests atomic.Int32
@@ -153,7 +167,11 @@ func TestPartialHandoffRespectsPriorAttemptsAndLimits(t *testing.T) {
 			}
 			if tc.handoff {
 				retry := partial.Retry
-				if partial.Err != transient || retry.Attempt != tc.prior+2 || retry.MaxAttempts != tc.limit || retry.DelayMilliseconds < tc.minMS || retry.DelayMilliseconds > tc.maxMS {
+				limit := tc.limit
+				if limit == 0 {
+					limit = llm.DefaultMaxAttempts
+				}
+				if partial.Err != transient || retry.Attempt != tc.prior+2 || retry.MaxAttempts != limit || retry.Reason != transient.Error() || retry.DelayMilliseconds < tc.minMS || retry.DelayMilliseconds > tc.maxMS {
 					t.Fatal("attempts or backoff restarted", partial, retry)
 				}
 			} else if err != transient {
@@ -164,7 +182,7 @@ func TestPartialHandoffRespectsPriorAttemptsAndLimits(t *testing.T) {
 }
 
 func TestPriorAttemptsValidationMakesNoRequests(t *testing.T) {
-	for _, bounds := range [][2]int{{-1, 0}, {0, -1}, {2, 2}, {3, 2}} {
+	for _, bounds := range [][2]int{{-1, 0}, {0, -1}, {2, 2}, {3, 2}, {3, 0}, {100000, 0}} {
 		var requests atomic.Int32
 		a := adapterFixture(t, func(http.ResponseWriter, *http.Request) { requests.Add(1) })
 		err := a.Stream(context.Background(), partialRequest(bounds[0], bounds[1]), func(ev llm.StreamEvent) error {
@@ -203,7 +221,8 @@ func TestPreOutputRetriesContinueAttemptNumberingIntoPartialHandoff(t *testing.T
 				t.Fatal("lost continuous attempt budget", err, requests.Load(), retries)
 			}
 			for i, retry := range retries {
-				if retry != (llm.Retry{Attempt: i + 5, MaxAttempts: limit, Reason: "HTTP 503"}) {
+				reason := fmt.Sprintf("upstream attempt %d/%d failed: subscription response HTTP 503: error details missing; body absent", i+4, limit)
+				if retry != (llm.Retry{Attempt: i + 5, MaxAttempts: limit, Reason: reason}) {
 					t.Fatal("pre-output numbering restarted", retry)
 				}
 			}
@@ -214,8 +233,71 @@ func TestPreOutputRetriesContinueAttemptNumberingIntoPartialHandoff(t *testing.T
 	}
 }
 
+func TestMixedPreOutputAndPartialFailuresShareContinuationBudget(t *testing.T) {
+	for _, recover := range []bool{false, true} {
+		t.Run(fmt.Sprint(recover), func(t *testing.T) {
+			requests := 0
+			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Retry-After", "0")
+				switch requests {
+				case 1:
+					w.WriteHeader(http.StatusBadRequest)
+					io.WriteString(w, `{"error":{"code":"invalid_request_error","message":"Adjust tools"}}`)
+				case 2:
+					io.WriteString(w, sseFrames(map[string]any{"type": "error", "error": map[string]string{"code": "unknown_backend_failure"}}))
+				case 3:
+					io.WriteString(w, sseFrames(partialOutput("text"), map[string]any{"type": "error", "code": "context_length_exceeded"}))
+				case 4:
+					if recover {
+						io.WriteString(w, sseFrames(map[string]any{"type": "response.completed"}))
+					} else {
+						io.WriteString(w, sseFrames(partialOutput("text"), map[string]any{"type": "error"}))
+					}
+				default:
+					t.Error("continued after exhausting shared budget", requests)
+				}
+			})
+			var retries []llm.Retry
+			emit := func(ev llm.StreamEvent) error {
+				if ev.Kind == "retry" {
+					retries = append(retries, *ev.Retry)
+				}
+				return nil
+			}
+			err := a.Stream(context.Background(), partialRequest(0, 4), emit)
+			var partial *llm.PartialError
+			if !errors.As(err, &partial) || requests != 3 || len(retries) != 2 {
+				t.Fatal("pre-output attempts were lost or committed output replayed", err, requests, retries)
+			}
+			if partial.Retry.Attempt != 4 || partial.Retry.MaxAttempts != 4 || partial.Retry.DelayMilliseconds != 0 || partial.Retry.Reason != err.Error() || !strings.Contains(err.Error(), "upstream attempt 3/4 failed:") || !strings.Contains(err.Error(), "context_length_exceeded") {
+				t.Fatal("incorrect continuation metadata", partial.Retry, err)
+			}
+			for i, retry := range retries {
+				if retry.Attempt != i+2 || retry.MaxAttempts != 4 || !strings.HasPrefix(retry.Reason, fmt.Sprintf("upstream attempt %d/4 failed: ", i+1)) {
+					t.Fatal("pre-output attempt numbering restarted", retry)
+				}
+			}
+			err = a.Stream(context.Background(), partialRequest(partial.Retry.Attempt-1, partial.Retry.MaxAttempts), emit)
+			if requests != 4 || len(retries) != 2 {
+				t.Fatal("continuation reset shared budget", err, requests, retries)
+			}
+			if recover {
+				if err != nil {
+					t.Fatal("last allowed attempt failed to recover", err)
+				}
+			} else {
+				var transient *llm.TransientError
+				if !errors.As(err, &transient) || errors.As(err, &partial) || !strings.HasPrefix(err.Error(), "upstream attempt 4/4 failed: ") {
+					t.Fatal("exhaustion granted another continuation", err)
+				}
+			}
+		})
+	}
+}
+
 func TestCallbackPartialErrorsNeverAuthorizeHandoff(t *testing.T) {
-	for _, kind := range []string{"text", "call_start", "retry", "state", "completed"} {
+	for _, kind := range []string{"text", "call_start", "call", "retry", "state", "completed"} {
 		for _, wrapped := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/wrapped=%t", kind, wrapped), func(t *testing.T) {
 				var requests atomic.Int32
@@ -228,6 +310,11 @@ func TestCallbackPartialErrorsNeverAuthorizeHandoff(t *testing.T) {
 					}
 					if kind == "text" || kind == "call_start" {
 						io.WriteString(w, sseFrames(partialOutput(kind)))
+						return
+					}
+					if kind == "call" {
+						io.WriteString(w, functionFrames(0, "item", "call", "read", `{}`))
+						io.WriteString(w, sseFrames(map[string]any{"type": "response.completed"}))
 						return
 					}
 					io.WriteString(w, sseFrames(map[string]any{
@@ -257,43 +344,24 @@ func TestCallbackPartialErrorsNeverAuthorizeHandoff(t *testing.T) {
 	}
 }
 
-func TestCommittedNonTransientFailuresNeverHandOff(t *testing.T) {
-	for _, terminal := range []string{"protocol", "permanent", "no-tools", "cancel"} {
-		t.Run(terminal, func(t *testing.T) {
-			var requests atomic.Int32
-			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
-				requests.Add(1)
-				io.WriteString(w, sseFrames(partialOutput("text")))
-				switch terminal {
-				case "protocol":
-					io.WriteString(w, "data: invalid JSON\n\n")
-				case "permanent":
-					io.WriteString(w, sseFrames(map[string]any{"type": "error", "code": "invalid_request_error"}))
-				case "no-tools":
-					io.WriteString(w, sseFrames(partialOutput("call_start")))
-				}
-			})
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			req := partialRequest(0, 2)
-			req.NoTools = terminal == "no-tools"
-			err := a.Stream(ctx, req, func(ev llm.StreamEvent) error {
-				if ev.Kind != "text" {
-					t.Error("unexpected event", ev.Kind)
-				}
-				if terminal == "cancel" {
-					cancel()
-				}
-				return nil
-			})
-			var partial *llm.PartialError
-			var transient *llm.TransientError
-			if err == nil || errors.As(err, &partial) || errors.As(err, &transient) || requests.Load() != 1 {
-				t.Fatal("local/permanent failure authorized recovery", err, requests.Load())
-			}
-			if terminal == "cancel" && !errors.Is(err, context.Canceled) {
-				t.Fatal("lost cancellation", err)
-			}
-		})
+func TestCommittedCancellationNeverHandsOff(t *testing.T) {
+	var requests atomic.Int32
+	a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		io.WriteString(w, sseFrames(partialOutput("text")))
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := a.Stream(ctx, partialRequest(0, 2), func(ev llm.StreamEvent) error {
+		if ev.Kind != "text" {
+			t.Error("unexpected event", ev.Kind)
+		}
+		cancel()
+		return nil
+	})
+	var partial *llm.PartialError
+	var transient *llm.TransientError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &partial) || errors.As(err, &transient) || requests.Load() != 1 {
+		t.Fatal("cancellation lost or authorized recovery", err, requests.Load())
 	}
 }

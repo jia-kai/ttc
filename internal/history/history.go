@@ -24,6 +24,7 @@ import (
 	"ttc/internal/filelock"
 	"ttc/internal/llm"
 	"ttc/internal/privatefile"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 
 	"golang.org/x/sys/unix"
@@ -325,7 +326,7 @@ func (s *Store) AdmitTurn(session, trigger string, model llm.Selection, message 
 			return e
 		}
 		if ro {
-			return errors.New("session is read-only")
+			return errors.New(prompts.HistorySessionReadOnly)
 		}
 		_, e := tx.Exec(`INSERT INTO turns(id,session_id,trigger,start_entry_id,start_file_tip_id,status,model_json,started_ms) SELECT ?,id,?,active_entry_id,file_tip_id,'running',?,? FROM sessions WHERE id=?`, id, trigger, string(m), time.Now().UnixMilli(), session)
 		if e != nil {
@@ -378,7 +379,7 @@ func (s *Store) FinishTurn(id, status string) error {
 }
 func appendTx(tx *sql.Tx, session, turn, actor, kind, role string, visible bool, data json.RawMessage, source int64) (int64, error) {
 	if !json.Valid(data) {
-		return 0, errors.New("invalid history JSON")
+		return 0, errors.New(prompts.HistoryInvalidJSON)
 	}
 	var parent, tip sql.NullInt64
 	var ro bool
@@ -386,7 +387,7 @@ func appendTx(tx *sql.Tx, session, turn, actor, kind, role string, visible bool,
 		return 0, e
 	}
 	if ro {
-		return 0, errors.New("session is read-only")
+		return 0, errors.New(prompts.HistorySessionReadOnly)
 	}
 	var mainTurn, undoOwner sql.NullString
 	if e := tx.QueryRow("SELECT json_extract(metadata_json,'$.main_turn_id'),json_extract(metadata_json,'$.undo_owner_turn_id') FROM sessions WHERE id=?", session).Scan(&mainTurn, &undoOwner); e != nil {
@@ -556,6 +557,8 @@ func (s *Store) StartRequest(session, turn, actor, purpose string, model llm.Sel
 }
 
 // FinishRequest commits terminal request metadata and its chronological event.
+// Attempt diagnostics are also embedded in the event so exact transcript exports
+// preserve failures without needing the live model_requests table.
 func (s *Store) FinishRequest(id int64, status string, attempts any) error {
 	b, err := json.Marshal(attempts)
 	if err != nil {
@@ -575,7 +578,7 @@ func (s *Store) FinishRequest(id int64, status string, attempts any) error {
 		if _, err := tx.Exec("UPDATE model_requests SET status=?,attempts_json=? WHERE id=?", status, string(b), id); err != nil {
 			return err
 		}
-		event, _ := json.Marshal(map[string]any{"type": "request_finished", "request_id": id, "status": status})
+		event, _ := json.Marshal(map[string]any{"type": "request_finished", "request_id": id, "status": status, "attempts": json.RawMessage(b)})
 		_, err := appendTx(tx, session, turn, actor, "status", "", false, event, 0)
 		return err
 	})
@@ -585,7 +588,7 @@ func (s *Store) FinishRequest(id int64, status string, attempts any) error {
 func (s *Store) CallIntent(session, turn, actor string, request int64, c llm.ToolCall) (string, error) {
 	id := NewID("call")
 	if !json.Valid(c.Arguments) {
-		return "", errors.New("tool arguments are not JSON")
+		return "", errors.New(prompts.HistoryToolArguments)
 	}
 	e := s.transact(func(tx *sql.Tx) error {
 		_, e := tx.Exec(`INSERT INTO tool_calls(id,session_id,request_id,provider_call_id,actor_id,name,call_version,call_json) VALUES(?,?,?,?,?,?,1,?)`, id, session, request, c.ID, actor, c.Name, string(c.Arguments))
@@ -641,7 +644,7 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 		return "", e
 	}
 	if strings.ContainsAny(category, "/\\.") {
-		return "", errors.New("invalid artifact category")
+		return "", errors.New(prompts.HistoryArtifactCategory)
 	}
 	dir := filepath.Join(s.Root, "lineages", v.LineageID, category)
 	if e = privatefile.PrivateDir(dir); e != nil {
@@ -651,11 +654,11 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 	p := filepath.Join(dir, hex.EncodeToString(h[:]))
 	if old, e := readArtifact(p, int64(len(data))); e == nil {
 		if sha256.Sum256(old) != h {
-			return "", errors.New("artifact hash conflict")
+			return "", errors.New(prompts.HistoryArtifactConflict)
 		}
 		return p, nil
 	} else if !os.IsNotExist(e) {
-		return "", fmt.Errorf("read saved artifact: %w", e)
+		return "", fmt.Errorf(prompts.HistoryArtifactRead, e)
 	}
 	if e = privatefile.AtomicFile(p, data, 0600); e != nil {
 		return "", e
@@ -671,7 +674,7 @@ func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
 // Authentication never belongs in this prompt or its artifact.
 func (s *Store) RecordSystemPrompt(session, turn, actor string, request int64, prompt string) (int64, error) {
 	if len(prompt) > instructionSnapshotBytes {
-		return 0, errors.New("instruction snapshot exceeds 1 MiB")
+		return 0, errors.New(prompts.HistorySystemPromptTooLarge)
 	}
 	path, e := s.Artifact(session, "prompts", []byte(prompt))
 	if e != nil {
@@ -734,7 +737,7 @@ func (s *Store) Inspect(entry Entry) (string, error) {
 		}
 		if json.Unmarshal(entry.Content, &job) == nil && job.Type == "job_completion" {
 			if job.Markdown.Revision != 1 || job.Markdown.Summary == "" {
-				return "", errors.New("invalid job completion presentation")
+				return "", errors.New(prompts.HistoryJobCompletionPresentation)
 			}
 			return job.Markdown.Detail, nil
 		}
@@ -797,7 +800,7 @@ func (s *Store) Assistant(session, turn, actor string, request int64, message ll
 		}
 		for _, c := range message.Calls {
 			if !json.Valid(c.Arguments) {
-				return errors.New("invalid provider call arguments")
+				return errors.New(prompts.HistoryAssistantArguments)
 			}
 			id := NewID("call")
 			if _, e = tx.Exec(`INSERT INTO tool_calls(id,session_id,request_id,provider_call_id,actor_id,name,call_version,call_json) VALUES(?,?,?,?,?,?,1,?)`, id, session, request, c.ID, actor, c.Name, string(c.Arguments)); e != nil {

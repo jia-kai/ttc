@@ -12,6 +12,7 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/tool"
 )
 
@@ -78,7 +79,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
 		if r.orderError != nil {
-			return fmt.Errorf("runtime event persistence failed: %w", r.orderError)
+			return fmt.Errorf(prompts.SessionRuntimeEventPersistence, r.orderError)
 		}
 		var next contextCursor
 		var e error
@@ -124,14 +125,14 @@ func (r *Runtime) checkContext() error {
 	fatal := r.fatalCompaction
 	r.mu.Unlock()
 	if fatal != "" {
-		return fmt.Errorf("session unusable after compaction: %s; inspect/export history or start/load another session", fatal)
+		return fmt.Errorf(prompts.SessionUnusableAfterCompaction, fatal)
 	}
 	v, err := r.CurrentSession()
 	if err != nil {
 		return err
 	}
 	if v.CompactionError != "" {
-		return fmt.Errorf("session unusable after compaction: %s; inspect/export history or start/load another session", v.CompactionError)
+		return fmt.Errorf(prompts.SessionUnusableAfterCompaction, v.CompactionError)
 	}
 	return nil
 }
@@ -176,14 +177,14 @@ func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64
 		return err
 	}
 	if entry.EventSeq() != eventID {
-		return errors.New("notification source must be an original committed event")
+		return errors.New(prompts.SessionNotificationSource)
 	}
 	if !json.Valid([]byte(content)) {
-		return errors.New("notification must contain valid JSON")
+		return errors.New(prompts.SessionNotificationJSON)
 	}
 	for _, m := range r.notifications {
 		if m.EventSeq == eventID {
-			return errors.New("event already pending delivery")
+			return errors.New(prompts.SessionEventAlreadyPending)
 		}
 	}
 	r.notifications = append(r.notifications, llm.Message{Role: "user", Runtime: true, Content: eventContent(content, eventID), EventSeq: eventID})

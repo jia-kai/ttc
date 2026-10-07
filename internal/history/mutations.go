@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"ttc/internal/prompts"
 )
 
 // CommitChange records an applied subset and advances its session file tip atomically.
@@ -21,7 +23,7 @@ func (s *Store) CommitChange(session, call string, paths any, reversible bool) (
 			return e
 		}
 		if ro {
-			return errors.New("session is read-only")
+			return errors.New(prompts.HistorySessionReadOnly)
 		}
 		r, e := tx.Exec(`INSERT INTO file_changes(session_id,previous_id,call_id,paths_json,reversible,created_ms) SELECT id,file_tip_id,?,?,?,? FROM sessions WHERE id=?`, call, string(b), reversible, time.Now().UnixMilli(), session)
 		if e != nil {

@@ -1,5 +1,5 @@
-// Package defaultskills embeds the default tool-use recipes in the binary.
-package defaultskills
+// Package bundledskills embeds the bundled tool-use recipes in the binary.
+package bundledskills
 
 import "embed"
 

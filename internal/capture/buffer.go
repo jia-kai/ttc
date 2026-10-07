@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"ttc/internal/prompts"
 )
 
 // CallLimit and SharedLimit are the default retained payload limits, in bytes.
@@ -227,7 +229,7 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if limit < 1 {
-		return Page{}, errors.New("read limit must be positive")
+		return Page{}, errors.New(prompts.CapturePositiveReadLimit)
 	}
 	if cursor == "eof:0:bytes" || cursor == "eof:0:lines" {
 		return Page{NextCursor: fmt.Sprint(b.total), Start: b.total, End: b.total, Line: b.totalLines + 1, Truncated: b.truncated}, nil
@@ -238,11 +240,11 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 	if strings.HasPrefix(cursor, "eof:") {
 		parts := strings.Split(cursor, ":")
 		if len(parts) != 3 {
-			return Page{}, errors.New("expected eof:-N:bytes or eof:-N:lines")
+			return Page{}, errors.New(prompts.CaptureEOFCursorFormat)
 		}
 		n, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil || n > 0 || n == (-1<<63) {
-			return Page{}, errors.New("EOF offset must be nonpositive and representable")
+			return Page{}, errors.New(prompts.CaptureEOFOffset)
 		}
 		switch parts[2] {
 		case "bytes":
@@ -268,12 +270,12 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 				pos = base + int64(start)
 			}
 		default:
-			return Page{}, errors.New("EOF cursor unit must be bytes or lines")
+			return Page{}, errors.New(prompts.CaptureEOFUnit)
 		}
 	} else if cursor != "" {
 		n, err := strconv.ParseInt(cursor, 10, 64)
 		if err != nil || n < 0 {
-			return Page{}, errors.New("invalid absolute byte cursor")
+			return Page{}, errors.New(prompts.CaptureAbsoluteCursor)
 		}
 		pos = n
 	}
@@ -282,13 +284,13 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 		lost = true
 	}
 	if pos > b.total {
-		return Page{}, errors.New("cursor beyond output; use the returned next_cursor or eof:0:bytes for the current end")
+		return Page{}, errors.New(prompts.CaptureCursorBeyondOutput)
 	}
 	start := int(pos - base)
 	start = b.boundary(start, true)
 	end := b.boundary(min(b.size, start+limit), false)
 	if start < b.size && end == start {
-		return Page{}, errors.New("read limit is too small for the next UTF-8 character; increase limit_bytes to at least 4")
+		return Page{}, errors.New(prompts.CaptureUTF8ReadLimit)
 	}
 	data := make([]byte, end-start)
 	for i := range data {

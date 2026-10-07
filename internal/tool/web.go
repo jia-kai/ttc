@@ -51,7 +51,7 @@ func (c *webCache) add(doc webDocument) (webDocument, error) {
 	doc.id, doc.expires = history.NewID("web"), time.Now().Add(webCacheTTL)
 	size := len(doc.text)
 	if size > webCacheBytes {
-		return doc, errors.New("converted document exceeds retained-page limit")
+		return doc, errors.New(prompts.ToolWebRetainedLimit)
 	}
 	c.prune()
 	for len(c.docs) > 0 && (c.bytes+size > webCacheBytes || len(c.docs) >= 8) {
@@ -79,16 +79,16 @@ func (c *webCache) get(id string) (webDocument, error) {
 			return doc, nil
 		}
 	}
-	return webDocument{}, Fail("document_unavailable", "retained document expired, was evicted, or belongs to another runtime; fetch the URL again")
+	return webDocument{}, Fail("document_unavailable", prompts.ToolWebDocumentUnavailable)
 }
 
 func webURL(raw string) (*url.URL, error) {
 	if len(raw) > 4096 {
-		return nil, errors.New("URL exceeds 4096 bytes")
+		return nil, errors.New(prompts.ToolURLTooLarge)
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-		return nil, errors.New("require HTTP(S) URL without credentials")
+		return nil, errors.New(prompts.ToolURLRequired)
 	}
 	return u, nil
 }
@@ -100,7 +100,7 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 	fetchClient := *client
 	fetchClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
-			return errors.New("too many redirects")
+			return errors.New(prompts.ToolWebRedirectLimit)
 		}
 		if _, err := webURL(req.URL.String()); err != nil {
 			return err
@@ -112,7 +112,7 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 	}
 	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": Property("integer"), "max_chars": Property("integer"), "pattern": Property("string"), "context_lines": Property("integer"), "timeout_ms": Property("integer")}, nil, func(a webArgs) error {
 		if (a.URL == "") == (a.DocumentID == "") {
-			return errors.New("provide exactly one of url or document_id")
+			return errors.New(prompts.ToolWebSourceIdentifier)
 		}
 		if a.URL != "" {
 			if _, err := webURL(a.URL); err != nil {
@@ -120,13 +120,13 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 			}
 		}
 		if a.DocumentID != "" && a.Format != "" {
-			return errors.New("retained document format cannot change; omit format with document_id, or fetch url again with the desired format")
+			return errors.New(prompts.ToolWebRetainedFormat)
 		}
 		if a.Format != "" && a.Format != "markdown" && a.Format != "text" && a.Format != "html" {
-			return errors.New("format must be markdown, text or html; omit it for markdown")
+			return errors.New(prompts.ToolWebFormat)
 		}
 		if a.Offset != nil && *a.Offset < 0 {
-			return errors.New("offset must be nonnegative; start at 0 or use the returned next_offset")
+			return errors.New(prompts.ToolWebOffset)
 		}
 		if err := rangeInt("max_chars", a.Max, 1, 64000); err != nil {
 			return err
@@ -138,14 +138,14 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 			return err
 		}
 		if a.Context != nil && a.Pattern == "" {
-			return errors.New("context_lines requires pattern")
+			return errors.New(prompts.ToolWebContextPattern)
 		}
 		if len(a.Pattern) > 1024 {
-			return errors.New("pattern exceeds 1024 bytes")
+			return errors.New(prompts.ToolWebPatternTooLarge)
 		}
 		if a.Pattern != "" {
 			if _, err := regexp.Compile(a.Pattern); err != nil {
-				return fmt.Errorf("invalid pattern; use a valid RE2 expression (no lookaround or backreferences): %w", err)
+				return fmt.Errorf(prompts.ToolWebInvalidPattern, err)
 			}
 		}
 		return nil
@@ -162,7 +162,7 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 		}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				return nil, Fail("timeout", "page fetch timed out; increase timeout_ms (max 120000) or use a smaller page URL")
+				return nil, Fail("timeout", prompts.ToolWebTimeout)
 			}
 			return nil, err
 		}
@@ -185,31 +185,31 @@ func fetchWeb(ctx context.Context, client *http.Client, a webArgs) (webDocument,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		hint := "check the URL or use another source"
+		hint := prompts.ToolWebHTTPSourceHint
 		switch {
 		case resp.StatusCode == 401 || resp.StatusCode == 403:
-			hint = "access denied; use a publicly accessible URL or another source"
+			hint = prompts.ToolWebHTTPAccessHint
 		case resp.StatusCode == 429 || resp.StatusCode >= 500:
-			hint = "retry later or use another source"
+			hint = prompts.ToolWebHTTPRetryHint
 		}
-		return webDocument{}, fmt.Errorf("HTTP %d fetching page; %s", resp.StatusCode, hint)
+		return webDocument{}, fmt.Errorf(prompts.ToolWebHTTPFailed, resp.StatusCode, hint)
 	}
 	ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil {
-		return webDocument{}, Fail("unsupported_content", "missing or invalid content type")
+		return webDocument{}, Fail("unsupported_content", prompts.ToolWebContentType)
 	}
 	if !strings.HasPrefix(ct, "text/") && ct != "application/json" && ct != "application/xml" && ct != "application/xhtml+xml" {
-		return webDocument{}, Fail("unsupported_content", "not a text response; use an HTML or text version of the source")
+		return webDocument{}, Fail("unsupported_content", prompts.ToolWebTextResponse)
 	}
 	if resp.ContentLength > webDownloadBytes {
-		return webDocument{}, Fail("response_too_large", "page exceeds 4 MiB; narrow URL")
+		return webDocument{}, Fail("response_too_large", prompts.ToolWebPageTooLarge)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, webDownloadBytes+1))
 	if err != nil {
 		return webDocument{}, err
 	}
 	if len(raw) > webDownloadBytes {
-		return webDocument{}, Fail("response_too_large", "page exceeds 4 MiB; narrow URL")
+		return webDocument{}, Fail("response_too_large", prompts.ToolWebPageTooLarge)
 	}
 	text := string(raw)
 	if ct == "text/html" || ct == "application/xhtml+xml" {
@@ -222,12 +222,12 @@ func fetchWeb(ctx context.Context, client *http.Client, a webArgs) (webDocument,
 			return webDocument{}, err
 		}
 		if len(decoded) > webDownloadBytes {
-			return webDocument{}, Fail("response_too_large", "decoded page exceeds 4 MiB")
+			return webDocument{}, Fail("response_too_large", prompts.ToolWebDecodedTooLarge)
 		}
 		text = string(decoded)
 	}
 	if !utf8.ValidString(text) {
-		return webDocument{}, Fail("unsupported_content", "page is not UTF-8")
+		return webDocument{}, Fail("unsupported_content", prompts.ToolWebNotUTF8)
 	}
 	format := a.Format
 	if format == "" {

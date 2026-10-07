@@ -3,7 +3,9 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"ttc/internal/jobs"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -31,7 +33,7 @@ func (r *Runtime) JobDetail(id, detail string) string {
 	}
 	job, err := r.Jobs.View("main", id)
 	if err != nil {
-		return detail + "\nOutput unavailable: " + render.Inline(err.Error())
+		return detail + prompts.SessionJobOutputUnavailable + render.Inline(err.Error())
 	}
 	if detail == "" {
 		key := "label"
@@ -51,12 +53,12 @@ func (r *Runtime) JobDetail(id, detail string) string {
 	for _, stream := range streams {
 		page, err := r.Jobs.Read(context.Background(), "main", id, jobs.ReadOptions{Stream: stream, Cursor: "eof:-8192:bytes", Limit: inspectionTailBytes})
 		if err != nil {
-			detail += "\n" + stream + " unavailable: " + render.Inline(err.Error())
+			detail += fmt.Sprintf(prompts.SessionJobStreamUnavailable, stream, render.Inline(err.Error()))
 			continue
 		}
 		text, _ := page["output"].(string)
 		if text != "" {
-			detail += "\n**" + stream + " · showing tail, up to 8 KiB**\n\n" + render.Fence(text, "text")
+			detail += fmt.Sprintf(prompts.SessionJobTail, stream) + render.Fence(text, "text")
 		}
 	}
 	return detail

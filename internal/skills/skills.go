@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	defaultskills "ttc/default-skills"
+	"ttc/internal/prompts"
+	bundledskills "ttc/prompt/skills"
 )
 
 // Skill identifies a discovered document; Content is loaded only on request.
@@ -33,17 +34,17 @@ func Discover(ctx context.Context, project, user string) (*Catalog, error) {
 		return nil, err
 	}
 	c := &Catalog{items: map[string]Skill{}}
-	entries, e := fs.Glob(defaultskills.Files, "*/SKILL.md")
+	entries, e := fs.Glob(bundledskills.Files, "*/SKILL.md")
 	if e != nil {
 		return nil, e
 	}
 	for _, p := range entries {
-		b, e := defaultskills.Files.ReadFile(p)
+		b, e := bundledskills.Files.ReadFile(p)
 		if e != nil {
 			return nil, e
 		}
 		name := strings.Split(p, "/")[0]
-		c.items[name] = Skill{Name: name, Path: "default-skills/" + p, Source: "bundled", Description: description(string(b))}
+		c.items[name] = Skill{Name: name, Path: "prompt/skills/" + p, Source: "bundled", Description: description(string(b))}
 	}
 	type layer struct{ root, source string }
 	var layers []layer
@@ -118,12 +119,12 @@ func (c *Catalog) Load(ctx context.Context, name string) (Skill, error) {
 	}
 	s, ok := c.items[name]
 	if !ok {
-		return s, fmt.Errorf("skill %q not found", name)
+		return s, fmt.Errorf(prompts.SkillNotFound, name)
 	}
 	var b []byte
 	var e error
 	if s.Source == "bundled" {
-		b, e = defaultskills.Files.ReadFile(strings.TrimPrefix(s.Path, "default-skills/"))
+		b, e = bundledskills.Files.ReadFile(strings.TrimPrefix(s.Path, "prompt/skills/"))
 	} else {
 		b, e = ReadInstruction(ctx, s.Path)
 	}

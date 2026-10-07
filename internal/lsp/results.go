@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -55,7 +56,7 @@ func (c *Client) location(ctx context.Context, uri string, span sourceRange, sou
 	}
 	if _, exists := sources.texts[path]; !exists {
 		if sources.bytes+len(text) > 16<<20 {
-			return Location{}, fail("result_too_large", "LSP result source files exceed 16 MiB; reduce limit and page with offset")
+			return Location{}, fail("result_too_large", prompts.LSPResultSourcesTooLarge)
 		}
 		sources.texts[path] = text
 		sources.bytes += len(text)
@@ -69,7 +70,7 @@ func (c *Client) location(ctx context.Context, uri string, span sourceRange, sou
 		return Location{}, err
 	}
 	if endLine < line || endLine == line && endColumn < column {
-		return Location{}, fail("invalid_server_result", "LSP returned a reversed source range")
+		return Location{}, fail("invalid_server_result", prompts.LSPReversedSourceRange)
 	}
 	return Location{path, line, column, endLine, endColumn}, nil
 }
@@ -83,7 +84,7 @@ func resultArray(raw json.RawMessage, single bool) ([]json.RawMessage, error) {
 	}
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fail("invalid_server_result", "LSP result must be a list of source locations/symbols")
+		return nil, fail("invalid_server_result", prompts.LSPResultListRequired)
 	}
 	return items, nil
 }
@@ -118,7 +119,7 @@ func (c *Client) locations(ctx context.Context, raw json.RawMessage, offset, lim
 			Selection   *sourceRange `json:"targetSelectionRange"`
 		}
 		if err := json.Unmarshal(item, &value); err != nil {
-			return nil, fail("invalid_server_result", "invalid LSP location")
+			return nil, fail("invalid_server_result", prompts.LSPInvalidLocation)
 		}
 		uri, span := value.URI, value.Range
 		if value.TargetURI != "" {
@@ -128,7 +129,7 @@ func (c *Client) locations(ctx context.Context, raw json.RawMessage, offset, lim
 			}
 		}
 		if span == nil {
-			return nil, fail("invalid_server_result", "LSP location has no source range")
+			return nil, fail("invalid_server_result", prompts.LSPLocationMissingRange)
 		}
 		location, err := c.location(ctx, uri, *span, &sources)
 		if err != nil {
@@ -145,7 +146,7 @@ func hover(raw json.RawMessage) (map[string]any, error) {
 	}
 	if string(raw) != "null" {
 		if err := json.Unmarshal(raw, &result); err != nil {
-			return nil, fail("invalid_server_result", "invalid LSP hover result")
+			return nil, fail("invalid_server_result", prompts.LSPInvalidHoverResult)
 		}
 	}
 	if len(result.Contents) == 0 || string(result.Contents) == "null" {
@@ -168,7 +169,7 @@ func hover(raw json.RawMessage) (map[string]any, error) {
 		}
 		var value struct{ Kind, Language, Value string }
 		if err := json.Unmarshal(part, &value); err != nil {
-			return nil, fail("invalid_server_result", "invalid LSP hover contents")
+			return nil, fail("invalid_server_result", prompts.LSPInvalidHoverContents)
 		}
 		if value.Language != "" {
 			text = render.Fence(value.Value, value.Language)
@@ -227,11 +228,11 @@ func (c *Client) symbols(ctx context.Context, raw json.RawMessage, path string, 
 		item := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if item.depth > 64 {
-			return nil, fail("result_too_large", "LSP symbol hierarchy exceeds 64 levels; narrow the workspace query or use another server")
+			return nil, fail("result_too_large", prompts.LSPSymbolHierarchyTooDeep)
 		}
 		var value wireSymbol
 		if err := json.Unmarshal(item.raw, &value); err != nil {
-			return nil, fail("invalid_server_result", "invalid LSP symbol")
+			return nil, fail("invalid_server_result", prompts.LSPInvalidSymbol)
 		}
 		container := value.Container
 		if container == "" {
@@ -263,14 +264,14 @@ func (c *Client) symbols(ctx context.Context, raw json.RawMessage, path string, 
 				return nil, err
 			}
 			if err = json.Unmarshal(resolved, &value); err != nil {
-				return nil, fail("invalid_server_result", "invalid resolved workspace symbol")
+				return nil, fail("invalid_server_result", prompts.LSPInvalidResolvedSymbol)
 			}
 			if value.Location != nil {
 				uri, span = value.Location.URI, value.Location.Range
 			}
 		}
 		if span == nil {
-			return nil, fail("invalid_server_result", "LSP symbol has no source location; use a server supporting source ranges")
+			return nil, fail("invalid_server_result", prompts.LSPSymbolMissingLocation)
 		}
 		location, err := c.location(ctx, uri, *span, &sources)
 		if err != nil {

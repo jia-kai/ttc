@@ -16,8 +16,10 @@ func fixture(t *testing.T) string {
 		"prompt/child.md":              "\nChild instructions.\n",
 		"prompt/btw.md":                "Read-only answer.",
 		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nlinks: '%s Archives: %s %s'\n",
-		"prompt/naming.yaml":           "text: Name it.\noutput_tokens: 32\nmax_attempts: 1\ntimeout_seconds: 15\n",
+		"prompt/naming.yaml":           "text: Name it.\noutput_tokens: 32\ntimeout_seconds: 15\n",
 		"prompt/tools.yaml":            "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
+		"prompt/runtime.yaml":          "RuntimeWarning: 'Synthetic warning: %s'\n",
+		"prompt/tool-messages.yaml":    "ToolMissing: Synthetic missing input.\n",
 		"internal/tool/register.go":    "package tool\nfunc setup() { Register(r, \"read\", description, properties) }\n",
 		"internal/session/register.go": "package session\n",
 	} {
@@ -52,7 +54,7 @@ func TestGenerationPreservesTextAndIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(first, []byte(`"Stable instructions.\r\n\n"`)) || !bytes.Contains(first, []byte(`"Try another path."`)) {
+	if !bytes.Contains(first, []byte(`"Stable instructions.\r\n\n"`)) || !bytes.Contains(first, []byte(`"Try another path."`)) || !bytes.Contains(first, []byte(`const RuntimeWarning = "Synthetic warning: %s"`)) {
 		t.Fatal("lost original text", string(first))
 	}
 	if err = generate(root, target); err != nil {
@@ -93,11 +95,26 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"duplicate", "prompt/tools.yaml", "read:\n  description: Read.\nread:\n  description: Other.\n", "already defined"},
 		{"multiple documents", "prompt/tools.yaml", "read:\n  description: Read.\n---\n{}\n", "exactly one"},
 		{"empty yaml", "prompt/naming.yaml", "", "EOF"},
-		{"unknown config", "prompt/naming.yaml", "text: Name.\noutput_tokens: 32\nmax_attempts: 1\ntimeout_seconds: 15\ntypo: 1", "field typo"},
-		{"invalid bounds", "prompt/naming.yaml", "text: Name.\noutput_tokens: 0\nmax_attempts: 1\ntimeout_seconds: 15", "output_tokens"},
+		{"unknown config", "prompt/naming.yaml", "text: Name.\noutput_tokens: 32\ntimeout_seconds: 15\ntypo: 1", "field typo"},
+		{"obsolete attempt limit", "prompt/naming.yaml", "text: Name.\noutput_tokens: 32\ntimeout_seconds: 15\nmax_attempts: 1", "field max_attempts"},
+		{"invalid bounds", "prompt/naming.yaml", "text: Name.\noutput_tokens: 0\ntimeout_seconds: 15", "output_tokens"},
 		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\ninput: '%s %s'\nlinks: '%s %s %s'", "nonempty"},
 		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\ninput: '%s %s'\nlinks: '%s %s %s'\ntypo: bad", "field typo"},
 		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\ninput: Focus %s\nlinks: '%s %s %s'", "format"},
+		{"empty messages", "prompt/runtime.yaml", "{}", "model-facing messages"},
+		{"empty message", "prompt/runtime.yaml", "RuntimeWarning: ''", "nonempty"},
+		{"message nul", "prompt/runtime.yaml", "RuntimeWarning: \"bad\\0text\"", "NUL"},
+		{"message number", "prompt/runtime.yaml", "RuntimeWarning: 42", "nonempty UTF-8"},
+		{"message object", "prompt/runtime.yaml", "RuntimeWarning: {text: warning}", "nonempty UTF-8"},
+		{"invalid message name", "prompt/runtime.yaml", "runtime_warning: warning", "invalid or reserved"},
+		{"reserved message name", "prompt/runtime.yaml", "Naming: warning", "invalid or reserved"},
+		{"markdown collision", "prompt/runtime.yaml", "Child: warning", "duplicate prompt"},
+		{"message collision", "prompt/tool-messages.yaml", "RuntimeWarning: warning", "duplicate prompt"},
+		{"duplicate message", "prompt/runtime.yaml", "RuntimeWarning: warning\nRuntimeWarning: other", "already defined"},
+		{"invalid extra message", "prompt/helper-messages.yaml", "ExtraMessage: false", "nonempty UTF-8"},
+		{"extra message collision", "prompt/helper-messages.yaml", "ToolMissing: duplicate", "duplicate prompt"},
+		{"message documents", "prompt/runtime.yaml", "RuntimeWarning: warning\n---\nOther: other", "exactly one"},
+		{"message encoding", "prompt/runtime.yaml", "RuntimeWarning: \xff", "UTF-8"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := fixture(t)
@@ -126,5 +143,30 @@ func TestMissingRequiredPrompt(t *testing.T) {
 	}
 	if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing Markdown") {
 		t.Fatal(err)
+	}
+}
+
+func TestAdditionalMessageAssetsAndSkillsSubtree(t *testing.T) {
+	root := fixture(t)
+	put(t, root, "prompt/helper-messages.yaml", "HelperWarning: 'first\\nsecond %q'\n")
+	put(t, root, "prompt/skills/example/SKILL.md", "External skill embedding source.\n")
+	if err := generate(root, "generated.go"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "generated.go"))
+	if err != nil || !bytes.Contains(data, []byte(`const HelperWarning = "first\\nsecond %q"`)) {
+		t.Fatal("additional message asset was not preserved", string(data), err)
+	}
+}
+
+func TestMissingRequiredMessageAsset(t *testing.T) {
+	for _, name := range []string{"runtime.yaml", "tool-messages.yaml"} {
+		root := fixture(t)
+		if err := os.Remove(filepath.Join(root, "prompt", name)); err != nil {
+			t.Fatal(err)
+		}
+		if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatal("missing required message source was not rejected", name, err)
+		}
 	}
 }

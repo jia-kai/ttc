@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ttc/internal/prompts"
 )
 
 // Query selects one read-only operation. Paths are absolute or relative to the
@@ -22,7 +24,7 @@ func (c *Client) initialize(ctx context.Context) error {
 		return nil
 	}
 	if c.attempted {
-		return fail("initialization_failed", "language server initialization failed or was interrupted; stop and restart this job")
+		return fail("initialization_failed", prompts.LSPInitializationFailed)
 	}
 	c.attempted = true
 	kinds := make([]int, 26)
@@ -43,16 +45,16 @@ func (c *Client) initialize(ctx context.Context) error {
 		Capabilities map[string]json.RawMessage `json:"capabilities"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil || result.Capabilities == nil {
-		return fail("protocol_error", "LSP initialize returned no capabilities; restart a correctly configured language server")
+		return fail("protocol_error", prompts.LSPInitializeCapabilitiesMissing)
 	}
 	c.capabilities = result.Capabilities
 	if value := result.Capabilities["positionEncoding"]; len(value) > 0 {
 		if err := json.Unmarshal(value, &c.encoding); err != nil {
-			return fail("protocol_error", "invalid LSP positionEncoding")
+			return fail("protocol_error", prompts.LSPInvalidPositionEncoding)
 		}
 	}
 	if c.encoding != "utf-8" && c.encoding != "utf-16" && c.encoding != "utf-32" {
-		return fail("unsupported_encoding", "language server chose unsupported positionEncoding; use UTF-8, UTF-16 or UTF-32")
+		return fail("unsupported_encoding", prompts.LSPUnsupportedPositionEncoding)
 	}
 	if value := result.Capabilities["textDocumentSync"]; len(value) > 0 && string(value) != "null" {
 		if err := json.Unmarshal(value, &c.change); err == nil {
@@ -63,12 +65,12 @@ func (c *Client) initialize(ctx context.Context) error {
 				Change    int  `json:"change"`
 			}
 			if err := json.Unmarshal(value, &sync); err != nil {
-				return fail("protocol_error", "invalid LSP textDocumentSync")
+				return fail("protocol_error", prompts.LSPInvalidTextDocumentSync)
 			}
 			c.openClose, c.change = sync.OpenClose, sync.Change
 		}
 		if c.change < 0 || c.change > 2 {
-			return fail("protocol_error", "invalid LSP textDocumentSync change kind")
+			return fail("protocol_error", prompts.LSPInvalidTextDocumentSyncChangeKind)
 		}
 	}
 	if err := c.notify(ctx, "initialized", map[string]any{}); err != nil {
@@ -87,12 +89,12 @@ func (c *Client) supports(name string) bool {
 // returns portable results. The caller's context bounds queueing and all RPCs.
 func (c *Client) Query(ctx context.Context, q Query) (map[string]any, error) {
 	if q.Offset < 0 || q.Limit < 1 || q.Limit > 500 {
-		return nil, fail("invalid_input", "offset must be nonnegative and limit must be 1–500")
+		return nil, fail("invalid_input", prompts.LSPInvalidPagination)
 	}
 	methods := map[string][2]string{"definition": {"textDocument/definition", "definitionProvider"}, "references": {"textDocument/references", "referencesProvider"}, "hover": {"textDocument/hover", "hoverProvider"}, "document_symbols": {"textDocument/documentSymbol", "documentSymbolProvider"}, "workspace_symbols": {"workspace/symbol", "workspaceSymbolProvider"}}
 	method, ok := methods[q.Operation]
 	if !ok {
-		return nil, fail("invalid_input", "operation must be definition, references, hover, document_symbols or workspace_symbols")
+		return nil, fail("invalid_input", prompts.LSPInvalidOperation)
 	}
 	select {
 	case c.query <- struct{}{}:
@@ -109,7 +111,7 @@ func (c *Client) Query(ctx context.Context, q Query) (map[string]any, error) {
 		return nil, err
 	}
 	if !c.supports(method[1]) {
-		return nil, fail("unsupported_operation", fmt.Sprintf("language server does not advertise %s; choose another operation or server", q.Operation))
+		return nil, fail("unsupported_operation", fmt.Sprintf(prompts.LSPUnsupportedOperation, q.Operation))
 	}
 	params := map[string]any{}
 	path := ""
@@ -117,7 +119,7 @@ func (c *Client) Query(ctx context.Context, q Query) (map[string]any, error) {
 		params["query"] = q.Text
 	} else {
 		if q.Path == "" {
-			return nil, fail("invalid_input", "path is required for this operation")
+			return nil, fail("invalid_input", prompts.LSPPathRequired)
 		}
 		path = q.Path
 		if !filepath.IsAbs(path) {

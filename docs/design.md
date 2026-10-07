@@ -65,7 +65,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 
 - The leaf `internal/prompts` package contains generated assets; authoring,
   validation and build integration belong to [prompt/README.md](../prompt/README.md).
-  Embed `default-skills` through its Go package; no plugin framework, service
+  Embed bundled skills through `prompt/skills`; no plugin framework, service
   locator or reflection persistence.
 - Read root-to-cwd AGENTS.md at request boundaries and supply changes; deeper
   instructions apply before scoped edits. Discover `*/SKILL.md` in user/ancestor
@@ -129,7 +129,7 @@ targets, relevant metadata and bounded SSH directory listings, not recursive
 directory contents. Ordinary host binds can still change after validation;
 selected snapshot bytes stay fixed, but directory membership and ancestor
 replacement remain live. Configuration
-and user-visible security limits remain in the [rail reference](../default-skills/ttc-config/SKILL.md#rail-configuration-reference).
+and user-visible security limits remain in the [rail reference](../prompt/skills/ttc-config/SKILL.md#rail-configuration-reference).
 
 ## Event ordering and main timeline
 
@@ -305,13 +305,13 @@ transport retries with session-owned cross-request recovery, not durable workers
 
 - Main steering waits for a model boundary; children accept idle follow-ups only.
   Native steering and resuming the same partial stream are outside v1. Providers
-  retry transient transport/rate-limit/server failures before output is delivered.
+  retry upstream HTTP, transport, stream and protocol failures regardless of code.
   Parser-private native items, including reasoning, do not block retry and are
-  discarded on failure. Zero `MaxAttempts` retries until cancellation; positive
+  discarded on failure. Zero `MaxAttempts` selects three total attempts; positive
   values bound the whole retry/recovery
   chain; `PriorAttempts` carries failed attempts across continuation requests and
-  resets after a successful response. Naming limits come from
-  [prompt/naming.yaml](../prompt/naming.yaml).
+  resets after a successful response. Naming and compaction use the same default;
+  no-tools replies are buffered until completion and retried atomically.
 - After partial output, only a provider-issued `PartialError` authorizes a new
   main/child/aside coding request. Persist canonical partial output without native
   replay state and settle emitted calls as not executed. Retain earlier tool
@@ -319,8 +319,7 @@ transport retries with session-owned cross-request recovery, not durable workers
   [prompt/recovery.md](../prompt/recovery.md), then continue through normal admission.
   Keep the exact warning pending across compaction. Do not replay the failed
   request or automatically repeat side effects. Callback and persistence
-  failures, other protocol errors, cancellation and permanent failures stop;
-  naming/compaction partials stay final.
+  failures, local validation, TLS certificate verification and cancellation stop.
   Finalized tool arguments, rather than streamed fragments, determine executable
   calls. An invalid finalized argument object or disagreement with the completed
   output item uses this recovery path under the request's retry policy; unfinished
@@ -332,7 +331,9 @@ transport retries with session-owned cross-request recovery, not durable workers
   retry. Keep constant-size retry bookkeeping; history retains partial output and
   recovery instructions. Restart never retries unfinished requests. Persist final
   aggregate metadata and separate notices, not a durable retry queue. Coding request metadata and
-  hidden turn-end records include failure text for inspection.
+  hidden turn-end records include failure text for inspection. Each upstream
+  failure retains bounded, control-safe allowed error fields and request IDs;
+  unknown shapes expose field names/types, not arbitrary scalar values or bodies.
 
 ## Inspectable request messages
 

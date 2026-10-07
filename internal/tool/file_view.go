@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 	"ttc/internal/workspace"
 )
@@ -55,7 +56,7 @@ func presentFiles(ctx context.Context, value any, changes []workspace.PathChange
 		diff := ""
 		note := ""
 		if remaining == 0 || ctx.Err() != nil {
-			note = "Diff omitted: tool-call presentation budget exhausted."
+			note = prompts.ToolDiffBudgetExhausted
 		} else {
 			capture := &diffCapture{remaining: &remaining}
 			cmd := exec.CommandContext(ctx, "diff", "-u", "--label", path, "--label", path, "--", before, after)
@@ -64,20 +65,20 @@ func presentFiles(ctx context.Context, value any, changes []workspace.PathChange
 			err := cmd.Run()
 			var exit *exec.ExitError
 			if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
-				note = "Diff unavailable: " + err.Error()
+				note = prompts.ToolDiffUnavailable + err.Error()
 			} else {
 				diff = render.Clean(capture.buffer.String())
 				if capture.truncated {
-					note = "Diff truncated: the 256 KiB tool-call capture budget was reached."
+					note = prompts.ToolDiffTruncated
 				}
 			}
 		}
 		if diff == "" && note == "" {
-			note = "No content changes."
+			note = prompts.ToolDiffNoChanges
 			if !change.Before.Exists && change.After.Exists {
-				note = "Created empty file."
+				note = prompts.ToolDiffCreatedEmpty
 			} else if change.Before.Exists && !change.After.Exists {
-				note = "Deleted empty file."
+				note = prompts.ToolDiffDeletedEmpty
 			}
 		}
 		if diff != "" {

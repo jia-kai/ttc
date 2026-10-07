@@ -1,7 +1,9 @@
 package history
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -11,10 +13,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"ttc/internal/llm"
 	"ttc/internal/privatefile"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -30,6 +34,10 @@ func (s *Store) Transcript(session string, tip int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.transcriptEntries(v.Name, entries)
+}
+
+func (s *Store) transcriptEntries(name string, entries []Entry) ([]byte, error) {
 	completed := map[string]bool{}
 	for _, entry := range entries {
 		if entry.Kind == "tool_result" {
@@ -43,7 +51,7 @@ func (s *Store) Transcript(session string, tip int64) ([]byte, error) {
 		}
 	}
 	var out strings.Builder
-	out.WriteString("# " + render.Inline(v.Name) + "\n\n")
+	fmt.Fprintf(&out, prompts.HistoryTranscriptHeader, render.Inline(name))
 	for _, entry := range entries {
 		if entry.Kind == "tool_call" {
 			var ref struct {
@@ -67,7 +75,7 @@ func (s *Store) Transcript(session string, tip int64) ([]byte, error) {
 		if kind == "" {
 			kind = entry.Kind
 		}
-		fmt.Fprintf(&out, "### %s · %s · #%d\n\n%s\n\n", render.Inline(entry.Actor), render.Inline(kind), entry.ID, text)
+		fmt.Fprintf(&out, prompts.HistoryTranscriptEntry, render.Inline(entry.Actor), render.Inline(kind), entry.ID, text)
 	}
 	return []byte(out.String()), nil
 }
@@ -105,13 +113,13 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 		text := render.Clean(message.Content)
 		for _, snapshot := range message.Files {
 			path := strings.ReplaceAll(render.Clean(snapshot.Path), ">", "\\>")
-			link := "Binary file: [snapshot](<" + path + ">)"
+			link := fmt.Sprintf(prompts.HistoryBinarySnapshot, path)
 			// Dimensions are optional presentation metadata; the durable path and
 			// exact reference remain available even if image decoding is unavailable.
 			if f, err := os.OpenFile(snapshot.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
 				if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
 					if config, _, err := image.DecodeConfig(io.LimitReader(f, 1<<20)); err == nil {
-						link += fmt.Sprintf(" · %d×%d", config.Width, config.Height)
+						link += fmt.Sprintf(prompts.HistoryBinaryDimensions, config.Width, config.Height)
 					}
 				}
 				f.Close()
@@ -134,7 +142,7 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 		if err := s.DB.QueryRow("SELECT name,call_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &call); err != nil {
 			return "", err
 		}
-		return "Pending call:\n\n" + render.Tool(name, json.RawMessage(call), nil).Detail, nil
+		return prompts.HistoryPendingCall + render.Tool(name, json.RawMessage(call), nil).Detail, nil
 	}
 	if entry.Kind == "tool_result" {
 		var raw string
@@ -158,6 +166,10 @@ func (s *Store) TranscriptJSONL(session string, tip int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.transcriptJSONLEntries(entries)
+}
+
+func (s *Store) transcriptJSONLEntries(entries []Entry) ([]byte, error) {
 	var out strings.Builder
 	enc := json.NewEncoder(&out)
 	enc.SetEscapeHTML(false)
@@ -202,6 +214,126 @@ func (s *Store) TranscriptJSONL(session string, tip int64) ([]byte, error) {
 		}
 	}
 	return []byte(out.String()), nil
+}
+
+// ArchiveActorTranscript freezes an actor's complete selected conversation in a
+// private, immutable Markdown/JSONL pair under the session lineage. It includes
+// original pre-compaction entries and previous assignments, not just summaries
+// or the current model input. Copies are deduplicated by source event identity;
+// sibling branches and unrelated actors are excluded. The returned path names
+// Markdown; its exact JSONL companion is path + ".jsonl". A nonnil pending
+// assistant message captures output that could not be committed to SQLite. It
+// is appended as an explicitly uncommitted actor/message record, without a
+// fabricated history entry ID or completion.
+func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Message) (string, error) {
+	if strings.TrimSpace(actor) == "" {
+		return "", fmt.Errorf(prompts.HistoryTranscriptActor)
+	}
+	if pending != nil && pending.Role != "assistant" {
+		return "", fmt.Errorf(prompts.HistoryTranscriptPendingRole)
+	}
+	entries, err := actorTranscriptEntriesWith(s.DB, session, actor)
+	if err != nil {
+		return "", err
+	}
+	unique := map[int64]Entry{}
+	for _, entry := range entries {
+		seq := entry.EventSeq()
+		if previous, ok := unique[seq]; !ok || entry.ID < previous.ID {
+			unique[seq] = entry // Prefer the original, with unmodified provider state.
+		}
+	}
+	entries = make([]Entry, 0, len(unique))
+	for _, entry := range unique {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].EventSeq() < entries[j].EventSeq() })
+	text, err := s.transcriptEntries(fmt.Sprintf(prompts.HistoryTranscriptChildTitle, actor), entries)
+	if err != nil {
+		return "", err
+	}
+	exact, err := s.transcriptJSONLEntries(entries)
+	if err != nil {
+		return "", err
+	}
+	if pending != nil {
+		captured, err := archiveMessageJSONL(actor, []llm.Message{*pending}, true)
+		if err != nil {
+			return "", err
+		}
+		exact = append(exact, captured...)
+		body, err := json.Marshal(pending)
+		if err != nil {
+			return "", err
+		}
+		presentation, err := s.ExportText(Entry{Kind: "message", Content: body})
+		if err != nil {
+			return "", err
+		}
+		text = append(text, []byte(fmt.Sprintf(prompts.HistoryTranscriptUncommitted, presentation))...)
+	}
+	return s.writeArchive(session, text, exact)
+}
+
+// actorTranscriptEntriesWith follows the same frozen compaction cuts as recovery
+// ancestry, but loads payloads only for the exported actor. Manual snapshot
+// sources and unselected sibling branches are not compaction predecessors.
+func actorTranscriptEntriesWith(q historyReader, session, actor string) ([]Entry, error) {
+	var out []Entry
+	var tip int64
+	seen := map[string]bool{session: true}
+	for {
+		branch, err := actorBranchWith(q, session, tip, actor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, branch...)
+		var predecessor string
+		err = q.QueryRow("SELECT predecessor_id,source_tip_id FROM compactions WHERE continuation_id=?", session).Scan(&predecessor, &tip)
+		if errors.Is(err, sql.ErrNoRows) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if seen[predecessor] {
+			return nil, errors.New(prompts.HistoryCompactionAncestry)
+		}
+		seen[predecessor] = true
+		session = predecessor
+	}
+}
+
+func actorBranchWith(q historyReader, session string, tip int64, actor string) ([]Entry, error) {
+	if tip == 0 {
+		if err := q.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); err != nil {
+			return nil, err
+		}
+	}
+	// Actor filtering must follow, not constrain, recursion: another actor's row
+	// can connect two selected actor entries. Keep payloads out of the recursive
+	// work table so unrelated messages and opaque state are never materialized.
+	rows, err := q.Query(`WITH RECURSIVE ancestry(id,parent_id) AS (
+		SELECT id,parent_id FROM entries WHERE id=? AND session_id=?
+		UNION ALL
+		SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id
+	) SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),coalesce(e.file_tip_id,0),e.session_id,coalesce(e.turn_id,''),e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,e.content_json,e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
+	FROM ancestry a JOIN entries e ON e.id=a.id WHERE e.actor_id=?`, tip, session, actor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Entry
+	for rows.Next() {
+		var entry Entry
+		var content string
+		if err := rows.Scan(&entry.ID, &entry.Parent, &entry.Source, &entry.FileTip, &entry.SessionID, &entry.TurnID, &entry.Actor, &entry.Kind, &entry.Role, &entry.Visible, &content, &entry.CreatedMS, &entry.MainTurnID, &entry.UndoOwnerTurnID); err != nil {
+			return nil, err
+		}
+		entry.Content = json.RawMessage(content)
+		out = append(out, entry)
+	}
+	return out, rows.Err()
 }
 
 // ArchiveTranscript writes the same Markdown/JSONL pair used by /export under

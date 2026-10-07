@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"ttc/internal/prompts"
 	"unicode"
 	"unicode/utf8"
 )
@@ -216,13 +217,13 @@ func (m Message) DisplayText() string {
 // per response. State items are never executable tool calls on their own.
 func (m *Message) AppendState(selection Selection, version int, item json.RawMessage) error {
 	if selection.Provider == "" || selection.Model.RequestID() == "" || version < 1 || !json.Valid(item) {
-		return fmt.Errorf("invalid provider replay state")
+		return fmt.Errorf(prompts.LLMInvalidReplayState)
 	}
 	if m.State == nil {
 		m.State = &ReplayState{Provider: selection.Provider, Model: selection.Model.RequestID(), Version: version}
 	}
 	if m.State.Provider != selection.Provider || m.State.Model != selection.Model.RequestID() || m.State.Version != version {
-		return fmt.Errorf("mixed provider replay state")
+		return fmt.Errorf(prompts.LLMMixedReplayState)
 	}
 	m.State.Items = append(m.State.Items, append(json.RawMessage(nil), item...))
 	return nil
@@ -240,6 +241,10 @@ func ContextFor(selection Selection, messages []Message) []Message {
 	return out
 }
 
+// DefaultMaxAttempts bounds a response/recovery sequence to three total upstream
+// attempts, including the initial request and any partial-output continuations.
+const DefaultMaxAttempts = 3
+
 // Request contains immutable instructions, selection and canonical context,
 // including developer messages. Providers own transport/state codecs and map
 // roles to their API. NoTools prohibits executable calls, regardless of schemas.
@@ -251,8 +256,8 @@ type Request struct {
 	Tools          []ToolDefinition
 	NoTools        bool
 	OutputTokens   int
-	MaxAttempts    int // Zero means unlimited attempts until cancellation; positive values bound the entire recovery sequence.
-	PriorAttempts  int // Failed attempts already used in that sequence; nonnegative and less than a positive MaxAttempts.
+	MaxAttempts    int // Zero selects DefaultMaxAttempts; positive values bound the entire response/recovery sequence.
+	PriorAttempts  int // Failed attempts already used in that sequence; nonnegative and less than the resolved MaxAttempts.
 }
 
 // Usage reports endpoint input/output tokens; output includes reasoning when reported.
@@ -269,7 +274,7 @@ type Usage struct {
 // Reason is a safe explanation without credentials or raw transport errors.
 type Retry struct {
 	Attempt           int    `json:"attempt"`      // Next attempt, numbered from one.
-	MaxAttempts       int    `json:"max_attempts"` // Zero means unlimited.
+	MaxAttempts       int    `json:"max_attempts"` // Positive resolved limit for the entire response/recovery sequence.
 	DelayMilliseconds int64  `json:"delay_ms"`
 	Reason            string `json:"reason"`
 }

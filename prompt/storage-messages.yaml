@@ -1,0 +1,30 @@
+# Authored storage diagnostics, including errors wrapped into tool and child failures.
+# OS/library error payloads, paths, cache keys and namespace labels remain dynamic.
+BlobCacheMiss: blob cache miss
+BlobCacheRootAbsolute: blob cache root must be absolute
+BlobCacheRootDirectory: blob cache root is not a directory
+BlobCacheInvalidLock: 'invalid cache lock: %w'
+BlobCacheInvalidKind: invalid blob kind %q
+BlobCacheInvalidKey: invalid blob key
+BlobCacheEntryRegular: blob cache entry is not a regular file
+BlobCacheEntryHardLinks: blob cache entry has multiple hard links
+BlobCacheInvalidConfiguration: invalid blob cache configuration
+BlobCacheEntryTooLarge: '%s exceeds %d bytes'
+BlobCacheCorruptReference: corrupt cache reference %s
+BlobCacheChecksumMismatch: 'cache content checksum mismatch: %s'
+BlobCacheExpiredMiss: '%w: expired %s'
+BlobCacheBlobTooLarge: blob exceeds %d bytes
+BlobCacheOriginalChecksum: original key does not match content SHA256
+BlobCacheLockEmpty: cache lock must be empty
+BlobCachePruneBlobTooLarge: '%s: blob exceeds %d bytes'
+BlobCacheReserveSpace: cache cannot reserve space within total limit
+FileLockOpen: 'open lock: %w'
+FileLockPrivateRegular: lock must be a private 0600 regular file
+FileLockAcquire: 'acquire lock: %w'
+PrivateFileUnsafeDirectory: unsafe private directory %s
+ScratchOwnedRequirement: owned 0700 directory
+ScratchSharedRequirement: shared sticky 1777 directory
+ScratchSetPermissions: 'set scratch permissions %s: %w'
+ScratchCreate: 'create scratch %s: %w'
+ScratchInspect: 'inspect scratch %s: %w'
+ScratchUnsafeDirectory: 'unsafe scratch directory %s: require %s'

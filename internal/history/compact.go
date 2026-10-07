@@ -13,6 +13,7 @@ import (
 	"time"
 	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 // Continue atomically freezes a predecessor and copies a retained visible suffix.
@@ -27,11 +28,11 @@ import (
 func (s *Store) Continue(session, summary, archive string, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
 	archiveHash, e := filepathHash(archive)
 	if e != nil {
-		return Session{}, fmt.Errorf("validate Markdown compaction archive: %w", e)
+		return Session{}, fmt.Errorf(prompts.HistoryCompactionValidateMarkdown, e)
 	}
 	exactHash, e := filepathHash(archive + ".jsonl")
 	if e != nil {
-		return Session{}, fmt.Errorf("validate exact compaction archive: %w", e)
+		return Session{}, fmt.Errorf(prompts.HistoryCompactionValidateExact, e)
 	}
 	old, e := s.Session(session)
 	if e != nil {
@@ -42,15 +43,15 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 		return Session{}, e
 	}
 	if old.ReadOnly || summary == "" || len(entries) == 0 {
-		return Session{}, errors.New("invalid continuation")
+		return Session{}, errors.New(prompts.HistoryContinuation)
 	}
 	if retainFrom <= 0 || compactedAt.IsZero() || len(inputIDs) > 4 {
-		return Session{}, errors.New("invalid continuation retention boundary")
+		return Session{}, errors.New(prompts.HistoryContinuationBoundary)
 	}
 	var pendingEntry *Entry
 	if pending != nil {
 		if !pending.Runtime || pending.Role != "developer" || pending.RequestID <= 0 {
-			return Session{}, errors.New("invalid continuation recovery warning")
+			return Session{}, errors.New(prompts.HistoryContinuationWarning)
 		}
 		for i := range entries {
 			entry := &entries[i]
@@ -67,13 +68,13 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			}
 		}
 		if pendingEntry == nil {
-			return Session{}, errors.New("continuation recovery warning is not persisted")
+			return Session{}, errors.New(prompts.HistoryContinuationWarningMissing)
 		}
 	}
 	selected := make(map[int64]bool, len(inputIDs))
 	for i, input := range inputIDs {
 		if input <= 0 || input >= retainFrom || (i > 0 && input <= inputIDs[i-1]) {
-			return Session{}, errors.New("continuation inputs must be sorted unique IDs before the suffix")
+			return Session{}, errors.New(prompts.HistoryContinuationInputIDs)
 		}
 		selected[input] = true
 	}
@@ -97,7 +98,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 				return e
 			}
 			if !entry.Visible || entry.Kind != "message" || entry.Role != "user" || entry.Actor != "main" || message.Role != "user" || message.Runtime {
-				return errors.New("continuation input must identify a visible main human message")
+				return errors.New(prompts.HistoryContinuationInput)
 			}
 			message, e = enrichInput(metadata, entry, message)
 			if e != nil {
@@ -115,7 +116,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			inputs[entry.ID], markers[entry.ID] = message, marker
 		}
 		if !boundaryFound || len(inputs) != len(inputIDs) || normal > 2 || steers > 2 {
-			return errors.New("invalid continuation input selection or suffix boundary")
+			return errors.New(prompts.HistoryContinuationSelection)
 		}
 		var ordinal int
 		if e := tx.QueryRow("SELECT count(*) FROM compactions c JOIN sessions s ON s.id=c.continuation_id WHERE s.lineage_id=?", old.LineageID).Scan(&ordinal); e != nil {
@@ -284,7 +285,7 @@ func filepathHash(path string) (string, error) {
 		return "", e
 	}
 	if !info.Mode().IsRegular() {
-		return "", errors.New("compaction archive must be a regular file")
+		return "", errors.New(prompts.HistoryCompactionArchiveRegularFile)
 	}
 	h := sha256.New()
 	if _, e = io.Copy(h, f); e != nil {

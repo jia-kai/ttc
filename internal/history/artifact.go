@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"syscall"
+
+	"ttc/internal/prompts"
 )
 
 const instructionSnapshotBytes = 1 << 20
@@ -25,7 +27,7 @@ func readArtifact(path string, maxBytes int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("saved artifact exceeds %d-byte limit", maxBytes)
+		return nil, fmt.Errorf(prompts.HistoryArtifactTooLarge, maxBytes)
 	}
 	return data, nil
 }
@@ -35,7 +37,7 @@ func readArtifact(path string, maxBytes int64) ([]byte, error) {
 // the complete snapshot.
 func openArtifact(path string, maxBytes int64) (*os.File, error) {
 	if maxBytes < 0 || maxBytes == math.MaxInt64 {
-		return nil, errors.New("invalid saved artifact byte limit")
+		return nil, errors.New(prompts.HistoryArtifactLimit)
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -48,11 +50,11 @@ func openArtifact(path string, maxBytes int64) (*os.File, error) {
 	}
 	if !info.Mode().IsRegular() {
 		f.Close()
-		return nil, errors.New("saved artifact must be a regular file")
+		return nil, errors.New(prompts.HistoryArtifactRegularFile)
 	}
 	if info.Size() > maxBytes {
 		f.Close()
-		return nil, fmt.Errorf("saved artifact exceeds %d-byte limit", maxBytes)
+		return nil, fmt.Errorf(prompts.HistoryArtifactTooLarge, maxBytes)
 	}
 	return f, nil
 }

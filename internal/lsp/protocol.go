@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -76,7 +77,7 @@ func New(ctx context.Context, root string, input io.WriteCloser, output io.ReadC
 
 // Close interrupts protocol I/O and joins the reader; repeated calls are safe.
 func (c *Client) Close() {
-	c.stop(fail("job_not_running", "language server stopped; start a new protocol=lsp job"))
+	c.stop(fail("job_not_running", prompts.LSPServerStopped))
 	c.wg.Wait()
 }
 
@@ -100,7 +101,7 @@ func (c *Client) failure() error {
 	if c.err != nil {
 		return c.err
 	}
-	return fail("job_not_running", "language server stopped; inspect job_read(stream=stderr) and start a new protocol=lsp job")
+	return fail("job_not_running", prompts.LSPServerStoppedInspect)
 }
 
 func readFrame(reader *bufio.Reader) ([]byte, error) {
@@ -112,28 +113,28 @@ func readFrame(reader *bufio.Reader) ([]byte, error) {
 		}
 		size += len(line)
 		if size > 8192 || !strings.HasSuffix(string(line), "\r\n") {
-			return nil, errors.New("invalid or oversized LSP header")
+			return nil, errors.New(prompts.LSPInvalidHeader)
 		}
 		if string(line) == "\r\n" {
 			break
 		}
 		name, value, ok := strings.Cut(strings.TrimSuffix(string(line), "\r\n"), ":")
 		if !ok {
-			return nil, errors.New("expected Content-Length framing")
+			return nil, errors.New(prompts.LSPExpectedContentLength)
 		}
 		if strings.EqualFold(name, "Content-Length") {
 			if length >= 0 {
-				return nil, errors.New("duplicate Content-Length")
+				return nil, errors.New(prompts.LSPDuplicateContentLength)
 			}
 			n, err := strconv.Atoi(strings.TrimSpace(value))
 			if err != nil || n < 1 || n > maxMessageBytes {
-				return nil, errors.New("Content-Length must be 1–8388608 bytes")
+				return nil, errors.New(prompts.LSPInvalidContentLength)
 			}
 			length = n
 		}
 	}
 	if length < 0 {
-		return nil, errors.New("missing Content-Length")
+		return nil, errors.New(prompts.LSPMissingContentLength)
 	}
 	data := make([]byte, length)
 	_, err := io.ReadFull(reader, data)
@@ -149,16 +150,16 @@ func (c *Client) readLoop() {
 	for {
 		data, err := readFrame(reader)
 		if err != nil {
-			code, message := "protocol_error", "invalid LSP framing; start with exec SERVER, emit no ordinary stdout, and restart the job: "+err.Error()
+			code, message := "protocol_error", fmt.Sprintf(prompts.LSPInvalidFraming, err.Error())
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || c.ctx.Err() != nil {
-				code, message = "job_not_running", "language server output closed; inspect job_read(stream=stderr) and restart the job"
+				code, message = "job_not_running", prompts.LSPOutputClosed
 			}
 			c.stop(fail(code, message))
 			return
 		}
 		var message rpcMessage
 		if err := json.Unmarshal(data, &message); err != nil || message.Version != "2.0" {
-			c.stop(fail("protocol_error", "invalid language server JSON-RPC message; restart with a stdio LSP server"))
+			c.stop(fail("protocol_error", prompts.LSPInvalidJSONRPCMessage))
 			return
 		}
 		if message.Method != "" {
@@ -192,7 +193,7 @@ func (c *Client) send(ctx context.Context, message any) error {
 		return err
 	}
 	if len(data) > maxMessageBytes {
-		return fail("request_too_large", "LSP request exceeds 8 MiB; narrow the file or request")
+		return fail("request_too_large", prompts.LSPRequestTooLarge)
 	}
 	select {
 	case c.write <- struct{}{}:
@@ -206,7 +207,7 @@ func (c *Client) send(ctx context.Context, message any) error {
 		return err
 	}
 	// A blocked pipe write cannot safely resume after cancellation mid-frame.
-	stop := context.AfterFunc(ctx, func() { c.stop(fail("job_not_running", "LSP write interrupted; restart the language server job")) })
+	stop := context.AfterFunc(ctx, func() { c.stop(fail("job_not_running", prompts.LSPWriteInterrupted)) })
 	defer stop()
 	frame := append([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))), data...)
 	for len(frame) > 0 {
@@ -215,11 +216,11 @@ func (c *Client) send(ctx context.Context, message any) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			c.stop(fail("job_not_running", "language server stdin closed; inspect stderr and restart the job"))
+			c.stop(fail("job_not_running", prompts.LSPInputClosed))
 			return c.failure()
 		}
 		if n == 0 {
-			c.stop(fail("protocol_error", "language server pipe made no progress; restart the job"))
+			c.stop(fail("protocol_error", prompts.LSPPipeNoProgress))
 			return c.failure()
 		}
 		frame = frame[n:]
@@ -268,10 +269,10 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 					message = message[:len(message)-1]
 				}
 			}
-			return nil, fail(code, fmt.Sprintf("LSP %s error %d: %s; check path/position and server configuration, then retry", method, result.Error.Code, message))
+			return nil, fail(code, fmt.Sprintf(prompts.LSPServerError, method, result.Error.Code, message))
 		}
 		if len(result.Result) == 0 {
-			return nil, fail("protocol_error", "LSP reply has no result or error; restart the server")
+			return nil, fail("protocol_error", prompts.LSPReplyMissingResult)
 		}
 		return result.Result, nil
 	case <-ctx.Done():
@@ -292,7 +293,7 @@ func (c *Client) answer(ctx context.Context, request rpcMessage) error {
 			Items []json.RawMessage `json:"items"`
 		}
 		if err := json.Unmarshal(request.Params, &params); err != nil || len(params.Items) > 256 {
-			return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32602, "message": "configuration requires at most 256 items"}})
+			return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32602, "message": prompts.LSPConfigurationItemsLimit}})
 		}
 		result = make([]any, len(params.Items)) // Null settings select each server's defaults.
 	case "workspace/workspaceFolders":
@@ -300,9 +301,9 @@ func (c *Client) answer(ctx context.Context, request rpcMessage) error {
 	case "window/showMessageRequest":
 		result = nil
 	case "workspace/applyEdit":
-		result = map[string]any{"applied": false, "failureReason": "TTC LSP queries are read-only; use edit or patch for file changes"}
+		result = map[string]any{"applied": false, "failureReason": prompts.LSPReadOnlyEdits}
 	default:
-		return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32601, "message": "TTC does not advertise this client capability"}})
+		return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32601, "message": prompts.LSPClientCapabilityUnsupported}})
 	}
 	return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 }

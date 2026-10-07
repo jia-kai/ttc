@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -69,11 +70,11 @@ type Tool interface {
 // Strict rejects unknown fields, trailing values, non-object JSON, and oversized input.
 func Strict(data []byte, v any) error {
 	if len(data) > 16<<20 {
-		return errors.New("input exceeds 16 MiB")
+		return errors.New(prompts.ToolInputTooLarge)
 	}
 	trim := bytes.TrimSpace(data)
 	if len(trim) == 0 || trim[0] != '{' {
-		return errors.New("expected JSON object")
+		return errors.New(prompts.ToolExpectedJSONObject)
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
@@ -81,7 +82,7 @@ func Strict(data []byte, v any) error {
 		return e
 	}
 	if e := d.Decode(new(any)); e != io.EOF {
-		return errors.New("trailing JSON value")
+		return errors.New(prompts.ToolTrailingJSON)
 	}
 	return nil
 }
@@ -197,7 +198,7 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 	var err error
 	t, ok := r.tools[name]
 	if !ok {
-		err = Fail("unknown_tool", "unknown tool "+name)
+		err = Fail("unknown_tool", fmt.Sprintf(prompts.ToolUnknown, name))
 	} else {
 		var call Call
 		call, err = t.DecodeCall(1, args)
@@ -247,7 +248,7 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 	}
 	b, e := json.Marshal(result)
 	if e != nil {
-		b = []byte(`{"ok":false,"error":{"code":"execution_failed","message":"result encoding failed"}}`)
+		b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("execution_failed", prompts.ToolResultEncodingFailed)})
 		files = nil
 	}
 	md := render.Tool(name, args, b)
@@ -262,11 +263,11 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 			path, e = r.Detail(x, b)
 		}
 		if path == "" || e != nil {
-			b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("result_too_large", "result exceeds 64 KiB; narrow the call or reduce its page limit")})
+			b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("result_too_large", prompts.ToolResultTooLarge)})
 		} else {
-			b, _ = json.Marshal(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", "complete JSON retained at detail_path; narrow the original call, or use shell if available for bounded JSON/byte extraction")})
+			b, _ = json.Marshal(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", prompts.ToolResultRetained)})
 		}
-		md.Summary = render.Inline(name + " · result too large")
+		md.Summary = render.Inline(name + prompts.ToolSummaryResultTooLarge)
 	}
 	return Record{Name: name, Arguments: args, Result: b, Markdown: md, Files: files}
 }
@@ -274,7 +275,7 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 // Required validates nonempty required text without changing whitespace semantics.
 func Required(name, value string) error {
 	if strings.TrimSpace(value) == "" {
-		return fmt.Errorf("%s is required", name)
+		return fmt.Errorf(prompts.ToolRequired, name)
 	}
 	return nil
 }

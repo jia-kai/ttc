@@ -19,13 +19,14 @@ import (
 	"time"
 
 	"ttc/internal/filelock"
+	"ttc/internal/prompts"
 )
 
 // MaxBytes bounds each binary blob, including reads of externally changed files.
 const MaxBytes = 32 << 20
 
 // ErrMiss identifies an absent or expired entry, not a cache-storage failure.
-var ErrMiss = errors.New("blob cache miss")
+var ErrMiss = errors.New(prompts.BlobCacheMiss)
 
 // Cache coordinates operations with short-lived cancelable filesystem locks.
 // Entries are never pinned. Configure Limit and TTL before concurrent use.
@@ -77,7 +78,7 @@ func Default() (*Cache, error) {
 // not acquire the filesystem lock; operations acquire it with their context.
 func New(root string) (*Cache, error) {
 	if !filepath.IsAbs(root) {
-		return nil, fmt.Errorf("blob cache root must be absolute")
+		return nil, fmt.Errorf(prompts.BlobCacheRootAbsolute)
 	}
 	root = filepath.Clean(root)
 	if err := os.MkdirAll(root, 0700); err != nil {
@@ -88,14 +89,14 @@ func New(root string) (*Cache, error) {
 		return nil, err
 	}
 	if !st.IsDir() {
-		return nil, fmt.Errorf("blob cache root is not a directory")
+		return nil, fmt.Errorf(prompts.BlobCacheRootDirectory)
 	}
 	if err := os.Chmod(root, 0700); err != nil {
 		return nil, err
 	}
 	if st, err := os.Lstat(filepath.Join(root, ".lock")); err == nil {
 		if err := regular(st); err != nil {
-			return nil, fmt.Errorf("invalid cache lock: %w", err)
+			return nil, fmt.Errorf(prompts.BlobCacheInvalidLock, err)
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -106,10 +107,10 @@ func New(root string) (*Cache, error) {
 func validKey(key string) bool { return len(key) == 64 && strings.Trim(key, "0123456789abcdef") == "" }
 func validate(kind, key string) error {
 	if kind != "original" && kind != "render" {
-		return fmt.Errorf("invalid blob kind %q", kind)
+		return fmt.Errorf(prompts.BlobCacheInvalidKind, kind)
 	}
 	if !validKey(key) {
-		return fmt.Errorf("invalid blob key")
+		return fmt.Errorf(prompts.BlobCacheInvalidKey)
 	}
 	return nil
 }
@@ -119,10 +120,10 @@ func refName(key string) string  { return "render-" + key + ".ref" }
 
 func regular(st os.FileInfo) error {
 	if !st.Mode().IsRegular() {
-		return fmt.Errorf("blob cache entry is not a regular file")
+		return fmt.Errorf(prompts.BlobCacheEntryRegular)
 	}
 	if stat, ok := st.Sys().(*syscall.Stat_t); ok && stat.Nlink != 1 {
-		return fmt.Errorf("blob cache entry has multiple hard links")
+		return fmt.Errorf(prompts.BlobCacheEntryHardLinks)
 	}
 	return nil
 }
@@ -132,14 +133,14 @@ func (c *Cache) lock(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	if !filepath.IsAbs(c.Root) || c.Limit < 0 || c.TTL < 0 {
-		return nil, fmt.Errorf("invalid blob cache configuration")
+		return nil, fmt.Errorf(prompts.BlobCacheInvalidConfiguration)
 	}
 	st, err := os.Lstat(c.Root)
 	if err != nil {
 		return nil, err
 	}
 	if !st.IsDir() {
-		return nil, fmt.Errorf("blob cache root is not a directory")
+		return nil, fmt.Errorf(prompts.BlobCacheRootDirectory)
 	}
 	f, err := filelock.Acquire(ctx, filepath.Join(c.Root, ".lock"))
 	if err != nil {
@@ -185,7 +186,7 @@ func (c *Cache) load(ctx context.Context, name, expected string) ([]byte, os.Fil
 		limit = 64
 	}
 	if st.Size() > limit {
-		return nil, nil, fmt.Errorf("%s exceeds %d bytes", name, limit)
+		return nil, nil, fmt.Errorf(prompts.BlobCacheEntryTooLarge, name, limit)
 	}
 	b, err := readBounded(ctx, f, st.Size(), int(limit))
 	if err != nil {
@@ -193,10 +194,10 @@ func (c *Cache) load(ctx context.Context, name, expected string) ([]byte, os.Fil
 	}
 	if expected == "" {
 		if !validKey(string(b)) {
-			return nil, nil, fmt.Errorf("corrupt cache reference %s", name)
+			return nil, nil, fmt.Errorf(prompts.BlobCacheCorruptReference, name)
 		}
 	} else if digest(b) != expected {
-		return nil, nil, fmt.Errorf("cache content checksum mismatch: %s", name)
+		return nil, nil, fmt.Errorf(prompts.BlobCacheChecksumMismatch, name)
 	}
 	return b, st, nil
 }
@@ -268,7 +269,7 @@ func (c *Cache) Get(ctx context.Context, kind, key string) ([]byte, error) {
 		if err := c.prune(ctx, c.Limit, "", ""); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: expired %s", ErrMiss, name)
+		return nil, fmt.Errorf(prompts.BlobCacheExpiredMiss, ErrMiss, name)
 	}
 	if err := c.touch(name); err != nil {
 		return nil, err
@@ -297,7 +298,7 @@ func readBounded(ctx context.Context, f *os.File, size int64, limit int) ([]byte
 		}
 		n, err := f.Read(buf)
 		if len(b)+n > limit {
-			return nil, fmt.Errorf("blob exceeds %d bytes", limit)
+			return nil, fmt.Errorf(prompts.BlobCacheBlobTooLarge, limit)
 		}
 		b = append(b, buf[:n]...)
 		if err == io.EOF {
@@ -320,14 +321,14 @@ func (c *Cache) Put(ctx context.Context, kind, key string, data []byte) error {
 		return err
 	}
 	if len(data) > MaxBytes {
-		return fmt.Errorf("blob exceeds %d bytes", MaxBytes)
+		return fmt.Errorf(prompts.BlobCacheBlobTooLarge, MaxBytes)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	sha := digest(data)
 	if kind == "original" && key != sha {
-		return fmt.Errorf("original key does not match content SHA256")
+		return fmt.Errorf(prompts.BlobCacheOriginalChecksum)
 	}
 	unlock, err := c.lock(ctx)
 	if err != nil {
@@ -492,7 +493,7 @@ func (c *Cache) prune(ctx context.Context, budget int64, protected, protectedRef
 		}
 		if name == ".lock" {
 			if st.Size() != 0 {
-				return fmt.Errorf("cache lock must be empty")
+				return fmt.Errorf(prompts.BlobCacheLockEmpty)
 			}
 			continue
 		}
@@ -500,7 +501,7 @@ func (c *Cache) prune(ctx context.Context, budget int64, protected, protectedRef
 		if strings.HasPrefix(name, "blob-") && strings.HasSuffix(name, ".blob") && validKey(strings.TrimSuffix(strings.TrimPrefix(name, "blob-"), ".blob")) {
 			f.sha = strings.TrimSuffix(strings.TrimPrefix(name, "blob-"), ".blob")
 			if st.Size() > MaxBytes {
-				return fmt.Errorf("%s: blob exceeds %d bytes", name, MaxBytes)
+				return fmt.Errorf(prompts.BlobCachePruneBlobTooLarge, name, MaxBytes)
 			}
 		} else if strings.HasPrefix(name, "render-") && strings.HasSuffix(name, ".ref") && validKey(strings.TrimSuffix(strings.TrimPrefix(name, "render-"), ".ref")) {
 			b, _, err := c.load(ctx, name, "")
@@ -581,7 +582,7 @@ func (c *Cache) prune(ctx context.Context, budget int64, protected, protectedRef
 		}
 	}
 	if total > budget {
-		return fmt.Errorf("cache cannot reserve space within total limit")
+		return fmt.Errorf(prompts.BlobCacheReserveSpace)
 	}
 	c.pruneLimit.Store(c.Limit)
 	c.pruneTTL.Store(int64(c.TTL))

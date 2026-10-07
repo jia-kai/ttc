@@ -1,28 +1,44 @@
-# Embedded LLM prompts
+# Embedded LLM text
 
-Edit assets here, then run `make prompts`. `make build`, `make test`, and
-`make check` generate `internal/prompts/assets_generated.go` first. The generated
-file is git-ignored; the executable needs no prompt files or YAML parser at runtime.
+All TTC-authored text sent to models belongs here: instructions, tool descriptions,
+validation/recovery guidance, runtime warnings, fallback notices and message
+framing. Go owns behavior and supplies dynamic values, not the authored prose.
+UI-only wording, protocol/schema keys, status values, external diagnostic payloads
+and user/project content are not prompt assets. TTC-authored diagnostic captions
+and validation text are assets, even when wrapped by another error. Synthetic test
+conversations stay in fixtures.
 
-- `system.md`: stable coding instructions, shared by main and children.
-- `child.md`: child-only suffix; never duplicate the main instructions.
+## Sources
+
+- `system.md`: stable coding instructions shared by main and children.
+- `child.md`: child-only suffix; do not duplicate main instructions.
 - `btw.md`: read-only aside instructions.
-- `recovery.md`: continuation warning after a transient partial coding response.
-- `compaction.yaml`: summary `instructions`, `input` with two `%s` slots
-  (focus/transcript), and `links` with three (summary/Markdown/JSONL archives).
-- `naming.yaml`: title instructions and output-token/attempt/deadline limits.
-- `tools.yaml`: descriptions keyed by exact tool name, with optional reusable notes.
+- `recovery.md`: continuation warning after a partial coding failure.
+- `retained-input.md`: provenance guidance for retained human input.
+- `compaction.yaml`: summary instructions, input with two `%s` slots
+  (focus/transcript), and links with three (summary/Markdown/JSONL archives).
+- `naming.yaml`: title instructions and output-token/deadline limits.
+- `tools.yaml`: descriptions keyed by tool name, with reusable notes.
+- `runtime.yaml`: failed-child caller guidance and fallback messages.
+- `*-messages.yaml`: tool/session guidance, diagnostic prose, and shared
+  attachment/archive/presentation framing. Each key is an exported Go constant
+  name; values are nonempty UTF-8 strings.
+  Preserve printf slots and whitespace; static constants let `go vet` check callers.
+- `skills/*/SKILL.md`: bundled skill instructions, embedded by `skills/embed.go`.
+  External project/user skills retain their own source files and precedence.
 
-System prompts guide decisions and refer to tools by name. Tool descriptions
-explain important parameter semantics, defaults and results; schemas carry types
-and required fields. Keep UI and harness mechanics out of model instructions.
-Recoverable errors explain how to adjust the call instead of making descriptions
-enumerate edge cases.
+## Build and validation
 
-Generation validates UTF-8, required assets, YAML fields, tool coverage and naming
-limits. It preserves Markdown bytes and writes deterministic Go source atomically.
+Edit assets, then run `make prompts`. `make build`, `make test` and `make check`
+generate git-ignored `internal/prompts/assets_generated.go` before compiling.
+The executable needs no prompt files or YAML parser at runtime.
 
-Dynamic values, parameter schemas, result labels and recoverable validation errors
-stay with their Go behavior. User/project instructions and loaded skills retain
-existing sources; bundled skills are authored in `default-skills/*/SKILL.md`.
-Synthetic test conversations belong to their fixtures.
+Generation validates text, asset names, duplicate/reserved symbols, YAML fields,
+tool coverage and naming limits. Markdown bytes are preserved and generated Go
+source is deterministic and written atomically. Bundled skills use Go embedding.
+Regression checks reject prose literals at tool-error sinks; audits must also
+trace indirect model-input paths when adding runtime features.
+
+Keep system instructions focused on decisions and tool descriptions focused on
+parameter semantics, defaults and results. Recoverable errors should explain how
+to adjust the call rather than expanding descriptions into lists of edge cases.

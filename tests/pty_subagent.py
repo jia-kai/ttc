@@ -23,7 +23,11 @@ def main():
     parser.add_argument('--binary', default='./ttc')
     parser.add_argument('--offline', action='store_true',
                         help='Use the scripted provider: foreground disposal and bounded answer, no sockets')
+    parser.add_argument('--failure', action='store_true',
+                        help='Exhaust upstream retries after partial child text; verify warning and transcripts')
     args = parser.parse_args()
+    if args.failure and args.offline:
+        parser.error('--failure requires the mock HTTP provider')
     root = Path(tempfile.mkdtemp(prefix='pty-subagent-', dir=private_scratch()))
     print(f'Artifacts: {root}', flush=True)
     project = root / 'project'
@@ -31,6 +35,8 @@ def main():
     (project / 'evidence.txt').write_text('Measured value: 42 µm.\n')
     prompt = 'Audit the fixture. PARENT-ONLY-MARKER'
     answer = '## Audit complete\n\nThe evidence reports **42 µm**. Unicode: α → β.'
+    if args.failure:
+        answer = 'Partial audit evidence: the measured value is 42 µm.'
     if args.offline:
         answer += '\n测量 **42 µm**. α → β.\n' * 800
     requests, errors, counts = [], [], {}
@@ -63,7 +69,10 @@ def main():
             try:
                 assert self.path == '/responses'
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                context = json.loads(texts(body, 'developer')[-1])
+                # A continuation adds developer recovery instructions after
+                # runtime context; select the context rather than the last text.
+                context = next(json.loads(text) for text in texts(body, 'developer')
+                               if text.startswith('{') and 'actor' in json.loads(text))
                 actor = context['actor']
                 child = actor != 'main'
                 with lock:
@@ -83,7 +92,7 @@ def main():
                            for item in body['input'] if item['type'] == 'function_call_output'}
                 calls, text = [], ''
                 if child:
-                    assert step < 2, 'unexpected child request'
+                    assert step < (4 if args.failure else 2), 'unexpected child request'
                     assert all('PARENT-ONLY-MARKER' not in text for text in texts(body))
                     assert 'subagent' not in [tool['name'] for tool in body['tools']]
                     if step == 0:
@@ -92,7 +101,7 @@ def main():
                     else:
                         assert results['read-evidence']['ok'] is True
                         assert '42 µm' in results['read-evidence']['content']
-                        text = answer
+                        text = answer if step == 1 else ''
                 elif step == 0:
                     assert texts(body, 'user')[0] == prompt
                     definition = next(tool for tool in body['tools'] if tool['name'] == 'subagent')
@@ -113,6 +122,17 @@ def main():
                                 notices.append(event)
                     if notices:
                         assert len(notices) == 1 and notices[0]['answer'] == answer
+                        if args.failure:
+                            notice = notices[0]
+                            assert notice['status'] == 'failed'
+                            assert 'Partial work may have side effects' in notice['warning']
+                            assert 'unknown_backend_fault' in notice['error']
+                            transcript = Path(notice['transcript_path'])
+                            exact = Path(notice['transcript_jsonl_path'])
+                            assert str(exact) == str(transcript) + '.jsonl'
+                            assert answer in transcript.read_text()
+                            assert 'unknown_backend_fault' in exact.read_text()
+                            assert 'evidence.txt' in exact.read_text()
                         assert not notices[0].get('answer_truncated', False)
                         assert notices[0]['result_entry_id'] > 0
                         assert notices[0]['persistent'] is False
@@ -123,6 +143,8 @@ def main():
                         text = 'Background audit launched.'
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/event-stream')
+                self.send_header('Retry-After', '0')
+                self.send_header('x-request-id', f'mock-{actor}-{step}')
                 self.end_headers()
 
                 def emit(event):
@@ -143,6 +165,11 @@ def main():
                     emit({'type': 'response.output_item.done', 'output_index': index, 'item': item})
                 if text:
                     emit({'type': 'response.output_text.delta', 'delta': text})
+                if args.failure and child and step > 0:
+                    emit({'type': 'error', 'error': {'code': 'unknown_backend_fault',
+                          'message': f'Synthetic backend failure {step}'}})
+                    return
+                if text:
                     emit({'type': 'response.output_item.done', 'output_index': 0,
                           'item': {'type': 'message', 'id': f'msg_{actor}_{step}',
                                    'role': 'assistant', 'status': 'completed', 'phase': 'final_answer',
@@ -216,7 +243,7 @@ def main():
             assert len(notice_requests) == 1, notice_requests
             assert len(counts) == 2 and counts['main'] in (2, 3), counts
             child_actor = next(actor for actor in counts if actor != 'main')
-            assert counts[child_actor] == 2
+            assert counts[child_actor] == (4 if args.failure else 2)
             main_key = next(r['body']['prompt_cache_key'] for r in requests if r['actor'] == 'main')
             child_keys = {r['body']['prompt_cache_key'] for r in requests if r['actor'] == child_actor}
             assert len(child_keys) == 1 and main_key not in child_keys
@@ -225,7 +252,8 @@ def main():
             assert len(finishes) == 1
             event_id, finish_json = finishes[0]
             finish = json.loads(finish_json)
-            assert finish['status'] == 'completed' and finish['persistent'] is False
+            assert finish['status'] == ('failed' if args.failure else 'completed')
+            assert finish['persistent'] is False
             if args.offline:
                 assert finish['answer_truncated'] is True
                 assert answer.startswith(finish['answer']) and len(finish['answer'].encode()) <= 8192
@@ -242,14 +270,23 @@ def main():
             assert db.execute("SELECT count(*) FROM model_requests,json_each(delivered_events_json) WHERE value=?", (event_id,)).fetchone()[0] == 1
             meters = db.execute('SELECT status,attempts_json FROM model_requests').fetchall()
             expected_requests = 3 if args.offline else len(requests)
+            if args.failure:
+                expected_requests -= 1  # Last two pre-output attempts share one request record.
             assert len(meters) == expected_requests
             usage = [json.loads(attempts)[-1]['usage'] for status, attempts in meters if status == 'completed']
-            assert len(usage) == expected_requests
+            completed_requests = expected_requests - (2 if args.failure else 0)
+            assert len(usage) == completed_requests
             if not args.offline:
-                assert sum(u['input_tokens'] for u in usage) == 100 * expected_requests
-                assert sum(u['cached_input_tokens'] for u in usage) == 32 * expected_requests
+                assert sum(u['input_tokens'] for u in usage) == 100 * completed_requests
+                assert sum(u['cached_input_tokens'] for u in usage) == 32 * completed_requests
+            if args.failure:
+                retries = db.execute("SELECT content_json FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='model_retry'", (finish['child_id'],)).fetchall()
+                assert len(retries) == 2
+                assert [json.loads(row[0])['retry']['attempt'] for row in retries] == [2, 3]
         coverage = ('offline foreground disposal, UTF-8 bounded answer, exact durable reply, three metered requests'
                     if args.offline else 'HTTP low-variant child, isolated read, background answer delivered once, metering')
+        if args.failure:
+            coverage = 'bounded child retry exhaustion, partial answer, caller warning, durable full transcripts'
         print(f'PASS: {coverage}, closed context; artifacts: {root}')
     except BaseException:
         (root / 'failure.txt').write_text(traceback.format_exc())

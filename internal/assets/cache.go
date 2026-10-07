@@ -18,6 +18,7 @@ import (
 
 	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
+	"ttc/internal/prompts"
 )
 
 // MaxBytes bounds encoded source bytes and rendered blobs.
@@ -46,10 +47,10 @@ func Read(path string) ([]byte, image.Image, error) {
 		return nil, nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("image is not a regular file; provide a regular PNG, JPEG or GIF")
+		return nil, nil, fmt.Errorf(prompts.ImageNotRegularFile)
 	}
 	if st.Size() > MaxBytes {
-		return nil, nil, fmt.Errorf("image exceeds %d bytes; resize or compress it before retrying", MaxBytes)
+		return nil, nil, fmt.Errorf(prompts.ImageTooLarge, MaxBytes)
 	}
 	b, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
 	if err != nil {

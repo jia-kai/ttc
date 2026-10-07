@@ -33,36 +33,36 @@ func validateLSP(a lspArgs) error {
 	switch a.Operation {
 	case "definition", "references", "hover", "document_symbols":
 		if a.Path == nil || strings.TrimSpace(*a.Path) == "" {
-			return errors.New("path is required for this operation")
+			return errors.New(prompts.LSPPathRequired)
 		}
 		if a.Query != nil {
-			return errors.New("query is only accepted by workspace_symbols; omit it")
+			return errors.New(prompts.ToolLSPQueryArgument)
 		}
 		if a.Operation == "document_symbols" {
 			if a.Line != nil || a.Column != nil {
-				return errors.New("document_symbols does not take line or column; omit them")
+				return errors.New(prompts.ToolLSPDocumentPosition)
 			}
 		} else if a.Line == nil || a.Column == nil || *a.Line < 1 || *a.Column < 1 {
-			return errors.New("line and column are required positive 1-based Unicode code-point positions")
+			return errors.New(prompts.ToolLSPPositionRequired)
 		}
 	case "workspace_symbols":
 		if a.Query == nil {
-			return errors.New("workspace_symbols requires query (an empty string is allowed)")
+			return errors.New(prompts.ToolLSPQueryRequired)
 		}
 		if a.Path != nil || a.LanguageID != nil || a.Line != nil || a.Column != nil {
-			return errors.New("workspace_symbols only accepts query and pagination; omit path, language_id, line and column")
+			return errors.New(prompts.ToolLSPWorkspaceArguments)
 		}
 	default:
-		return errors.New("operation must be definition, references, hover, document_symbols or workspace_symbols")
+		return errors.New(prompts.LSPInvalidOperation)
 	}
 	if a.LanguageID != nil && (strings.TrimSpace(*a.LanguageID) == "" || strings.ContainsAny(*a.LanguageID, "\x00\r\n")) {
-		return errors.New("language_id must be a nonempty language identifier")
+		return errors.New(prompts.ToolLSPLanguageID)
 	}
 	if a.Operation == "hover" && (a.Offset != nil || a.Limit != nil) {
-		return errors.New("hover is not paginated; omit offset and limit")
+		return errors.New(prompts.ToolLSPHoverPagination)
 	}
 	if a.Offset != nil && *a.Offset < 0 {
-		return errors.New("offset must be nonnegative")
+		return errors.New(prompts.ToolNonnegativeOffset)
 	}
 	if err := rangeInt("limit", a.Limit, 1, 500); err != nil {
 		return err
@@ -105,7 +105,7 @@ func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 		}
 		result, err := m.QueryLSP(ctx, x.Actor, a.JobID, query)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
-			return nil, Fail("timeout", fmt.Sprintf("LSP query exceeded %d ms; increase timeout_ms (max 120000), narrow query, or inspect server stderr", intDefault(a.Timeout, 30000)))
+			return nil, Fail("timeout", fmt.Sprintf(prompts.ToolLSPTimeout, intDefault(a.Timeout, 30000)))
 		}
 		return result, jobToolError(err)
 	})

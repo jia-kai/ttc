@@ -69,11 +69,11 @@ func (r *Runtime) addImageTool() {
 		if a.Click {
 			if !r.images.enabled {
 				r.images.mu.Unlock()
-				return nil, tool.Fail("unsupported_interaction", "image clicks require the Kitty graphics/mouse TUI; omit request_click to display without requesting a point")
+				return nil, tool.Fail("unsupported_interaction", prompts.ImageClicksUnsupported)
 			}
 			if r.images.actors[x.Actor] != "" {
 				r.images.mu.Unlock()
-				return nil, tool.Fail("click_already_pending", "an image selection is pending or its reply is unconsumed; wait for and process that reply before requesting another click")
+				return nil, tool.Fail("click_already_pending", prompts.ImageSelectionPending)
 			}
 			r.images.actors[x.Actor] = x.CallID
 		}

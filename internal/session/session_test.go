@@ -242,8 +242,8 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 		if request.ConversationID != r.Current()+"/naming" {
 			t.Fatal("incorrect naming identity", request.ConversationID)
 		}
-		if request.MaxAttempts != 1 {
-			t.Fatal("naming may retry")
+		if request.MaxAttempts != 0 {
+			t.Fatal("naming must use the unified default attempt limit", request.MaxAttempts)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("naming not started")

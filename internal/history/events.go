@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 type historyReader interface {
@@ -47,7 +48,7 @@ type requestInputMetadata struct {
 // input, with any new runtime context appended.
 func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, contextMessage *llm.Message, notices, childInput []llm.Message, steers ...llm.Message) (v Admission, err error) {
 	if contextMessage != nil && (contextMessage.Role != "developer" || !contextMessage.Runtime || contextMessage.Content == "") {
-		return v, errors.New("runtime context must be a nonempty developer runtime message")
+		return v, errors.New(prompts.HistoryRuntimeContext)
 	}
 	data, err := json.Marshal(model)
 	if err != nil {
@@ -65,7 +66,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 			return err
 		}
 		if invalid != "" {
-			return fmt.Errorf("session unusable after compaction: %s; start or load another session", invalid)
+			return fmt.Errorf(prompts.HistoryCompactionContextUnusable, invalid)
 		}
 		if err := tx.QueryRow("SELECT coalesce(max(id),0) FROM entries").Scan(&v.Cutoff); err != nil {
 			return err
@@ -73,14 +74,14 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 		delivered := make([]int64, 0, len(notices))
 		for _, m := range notices {
 			if m.EventSeq <= 0 || m.EventSeq > v.Cutoff {
-				return errors.New("notification is not a committed event at request cutoff")
+				return errors.New(prompts.HistoryNotificationCutoff)
 			}
 			var source, deliveredRequest sql.NullInt64
 			if err := tx.QueryRow(ancestors+"SELECT source_id,delivered_request_id FROM entries WHERE id=? AND session_id IN (SELECT id FROM ancestors)", session, m.EventSeq).Scan(&source, &deliveredRequest); err != nil {
-				return fmt.Errorf("notification source: %w", err)
+				return fmt.Errorf(prompts.HistoryNotificationSource, err)
 			}
 			if source.Valid || deliveredRequest.Valid {
-				return errors.New("notification source is copied or already delivered")
+				return errors.New(prompts.HistoryNotificationDelivered)
 			}
 			delivered = append(delivered, m.EventSeq)
 			m.Runtime = true
@@ -95,11 +96,11 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 			v.NoticeEntries = append(v.NoticeEntries, id)
 		}
 		if actor != "main" && len(steers) > 0 {
-			return errors.New("only main requests accept human steering")
+			return errors.New(prompts.HistorySteeringActor)
 		}
 		for _, m := range steers {
 			if m.Role != "user" || m.Runtime {
-				return errors.New("steering must be a human user message")
+				return errors.New(prompts.HistorySteeringMessage)
 			}
 			m.InputSource = "steer"
 			checkpoint := NewID("steer")
@@ -176,7 +177,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 				continue
 			}
 			if result.Finish > v.Cutoff {
-				return errors.New("child finish exceeds request cutoff")
+				return errors.New(prompts.HistoryChildFinishCutoff)
 			}
 			delivered = append(delivered, result.Finish)
 		}
@@ -237,14 +238,14 @@ func (s *Store) BeginChildTurn(session, actor string, model llm.Selection) (stri
 // deleting its inspectable history. Reloading does not clear the failure.
 func (s *Store) InvalidateContext(session, reason string) error {
 	if reason == "" {
-		return errors.New("missing compaction failure reason")
+		return errors.New(prompts.HistoryCompactionFailureReason)
 	}
 	return s.transact(func(tx *sql.Tx) error {
 		_, err := tx.Exec("UPDATE sessions SET metadata_json=json_set(metadata_json,'$.compaction_error',?) WHERE id=?", reason, session)
 		if err != nil {
 			return err
 		}
-		b, err := json.Marshal(map[string]string{"type": "compaction_failed", "error": reason, "text": "Context unusable after compaction: " + reason})
+		b, err := json.Marshal(map[string]string{"type": "compaction_failed", "error": reason, "text": fmt.Sprintf(prompts.HistoryCompactionFailureText, reason)})
 		if err != nil {
 			return err
 		}

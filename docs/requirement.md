@@ -62,7 +62,7 @@
 - [tools.md](tools.md) defines exact inputs/results; [prompt/tools.yaml](../prompt/tools.yaml)
   is canonical model guidance. Tool permissions belong to the host/container;
   TTC asks for no tool approvals.
-- Embed/discover `default-skills` without disk copies; project overrides user,
+- Embed/discover `prompt/skills` without disk copies; project overrides user,
   then bundled. The LSP skill owns language/server setup; the backend owns protocol
   and cleanup. [LSP contracts](tools.md#lsp) define managed stdio and file sync.
 

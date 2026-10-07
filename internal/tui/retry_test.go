@@ -12,7 +12,7 @@ import (
 type retryUIProvider struct{ llm.Script }
 
 func (p *retryUIProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-	if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 5, DelayMilliseconds: 1500, Reason: "HTTP 429"}}); err != nil {
+	if err := emit(llm.StreamEvent{Kind: "retry", Retry: &llm.Retry{Attempt: 5, MaxAttempts: 5, DelayMilliseconds: 1500, Reason: "HTTP 429"}}); err != nil {
 		return err
 	}
 	return emit(llm.StreamEvent{Kind: "text", Text: "Recovered"})
@@ -22,7 +22,7 @@ func TestRetrySystemMessageOpensInspector(t *testing.T) {
 	u := newQuestionTestUI(t, &retryUIProvider{})
 	u.typeText("retry")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "Retrying · attempt 5 in 1.5s · HTTP 429")
+	u.wait(t, "Retrying · attempt 5/5 in 1.5s · HTTP 429")
 	u.wait(t, "Turn complete")
 	var id int64
 	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='model_retry'").Scan(&id); err != nil {

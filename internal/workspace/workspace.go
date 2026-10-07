@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 	"ttc/internal/history"
 	"ttc/internal/privatefile"
+	"ttc/internal/prompts"
 )
 
 // MaxFileBytes bounds each mutation's original and resulting file contents.
@@ -108,18 +109,18 @@ func safePath(path string) error {
 			return e
 		}
 		if st.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink mutation path: %s; resolve the real target and retry with its path", p)
+			return fmt.Errorf(prompts.WorkspaceSymlinkMutation, p)
 		}
 		if p == path {
 			if !st.Mode().IsRegular() {
-				return fmt.Errorf("not a regular file: %s", p)
+				return fmt.Errorf(prompts.WorkspaceNotRegularFile, p)
 			}
 			sys, ok := st.Sys().(*syscall.Stat_t)
 			if !ok || sys.Nlink > 1 {
-				return fmt.Errorf("multiply linked file: %s", p)
+				return fmt.Errorf(prompts.WorkspaceMultiplyLinkedFile, p)
 			}
 		} else if !st.IsDir() {
-			return fmt.Errorf("parent is not a directory: %s", p)
+			return fmt.Errorf(prompts.WorkspaceParentNotDirectory, p)
 		}
 		if p == filepath.Dir(p) {
 			break
@@ -139,17 +140,17 @@ func readFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("not a regular file: %s", path)
+		return nil, fmt.Errorf(prompts.WorkspaceNotRegularFile, path)
 	}
 	if st.Size() > MaxFileBytes {
-		return nil, errors.New("file exceeds 8 MiB mutation limit")
+		return nil, errors.New(prompts.WorkspaceMutationTooLarge)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > MaxFileBytes {
-		return nil, errors.New("file exceeds 8 MiB mutation limit")
+		return nil, errors.New(prompts.WorkspaceMutationTooLarge)
 	}
 	return data, nil
 }
@@ -165,7 +166,7 @@ func (m *Manager) capture(session, path string) (State, []byte, error) {
 		return State{}, nil, e
 	}
 	if st.Size() > MaxFileBytes {
-		return State{}, nil, errors.New("file exceeds 8 MiB mutation limit")
+		return State{}, nil, errors.New(prompts.WorkspaceMutationTooLarge)
 	}
 	data, e := readFile(path)
 	if e != nil {
@@ -186,14 +187,14 @@ func current(path string, s State) error {
 		return e
 	}
 	if !s.Exists || uint32(st.Mode().Perm()) != s.Mode {
-		return fmt.Errorf("workspace conflict: %s", path)
+		return fmt.Errorf(prompts.WorkspaceConflict, path)
 	}
 	data, e := readFile(path)
 	if e != nil {
 		return e
 	}
 	if hash(data) != s.Hash {
-		return fmt.Errorf("workspace conflict: %s", path)
+		return fmt.Errorf(prompts.WorkspaceConflict, path)
 	}
 	return nil
 }
@@ -229,7 +230,7 @@ func apply(path string, s State) error {
 		return e
 	}
 	if hash(data) != s.Hash {
-		return errors.New("corrupt snapshot blob")
+		return errors.New(prompts.WorkspaceCorruptSnapshot)
 	}
 	if e = os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 		return e
@@ -247,10 +248,10 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 		return Result{}, err
 	}
 	if metadata.CompactionError != "" {
-		return Result{}, fmt.Errorf("session unusable after compaction: %s", metadata.CompactionError)
+		return Result{}, fmt.Errorf(prompts.WorkspaceUnusableSession, metadata.CompactionError)
 	}
 	if len(ops) == 0 {
-		return Result{}, errors.New("empty mutation")
+		return Result{}, errors.New(prompts.WorkspaceEmptyMutation)
 	}
 	if e := ctx.Err(); e != nil {
 		return Result{}, e
@@ -261,7 +262,7 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 	for _, op := range ops {
 		path := m.Path(op.Path)
 		if seen[path] {
-			return Result{}, fmt.Errorf("duplicate mutation target %s", path)
+			return Result{}, fmt.Errorf(prompts.WorkspaceDuplicateTarget, path)
 		}
 		seen[path] = true
 		before, data, e := m.capture(session, path)
@@ -269,10 +270,10 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 			return Result{}, e
 		}
 		if op.MustExist && !before.Exists {
-			return Result{}, fmt.Errorf("source not found: %s", path)
+			return Result{}, fmt.Errorf(prompts.WorkspaceSourceNotFound, path)
 		}
 		if op.MustAbsent && before.Exists {
-			return Result{}, fmt.Errorf("target exists: %s; read it and use an update for intended changes, or choose a different add/move destination", path)
+			return Result{}, fmt.Errorf(prompts.WorkspaceTargetExists, path)
 		}
 		after := State{}
 		sourceMode := uint32(0)
@@ -294,7 +295,7 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 				data = op.Data
 			}
 			if len(data) > MaxFileBytes {
-				return Result{}, errors.New("file exceeds 8 MiB mutation limit")
+				return Result{}, errors.New(prompts.WorkspaceMutationTooLarge)
 			}
 			blob, e := m.Store.Artifact(session, "snapshots", data)
 			if e != nil {
@@ -353,10 +354,10 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 	id, e := m.Store.CommitChange(session, call, changes, reversible)
 	r := Result{id, reversible, changes}
 	if e != nil {
-		return r, fmt.Errorf("record file mutation: %w", e)
+		return r, fmt.Errorf(prompts.WorkspaceRecordMutationFailure, e)
 	}
 	if failure != nil {
-		return r, fmt.Errorf("partial mutation: %w", failure)
+		return r, fmt.Errorf(prompts.WorkspacePartialMutation, failure)
 	}
 	return r, nil
 }

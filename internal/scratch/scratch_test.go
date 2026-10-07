@@ -1,12 +1,58 @@
 package scratch
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"ttc/internal/prompts"
 )
+
+func TestDiagnosticAssetsExact(t *testing.T) {
+	for _, tc := range []struct{ got, want string }{
+		{prompts.ScratchOwnedRequirement, "owned 0700 directory"},
+		{prompts.ScratchSharedRequirement, "shared sticky 1777 directory"},
+		{prompts.ScratchSetPermissions, "set scratch permissions %s: %w"},
+		{prompts.ScratchCreate, "create scratch %s: %w"},
+		{prompts.ScratchInspect, "inspect scratch %s: %w"},
+		{prompts.ScratchUnsafeDirectory, "unsafe scratch directory %s: require %s"},
+	} {
+		if tc.got != tc.want {
+			t.Fatalf("diagnostic changed: %q, want %q", tc.got, tc.want)
+		}
+	}
+}
+
+func TestRuntimeDiagnosticsExact(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "scratch")
+	path, err := verifyAt(root, os.Geteuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = verifyAt(root, os.Geteuid())
+	if want := "unsafe scratch directory " + path + ": require owned 0700 directory"; err == nil || err.Error() != want {
+		t.Fatalf("private requirement: %v, want %q", err, want)
+	}
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = verifyAt(root, os.Geteuid())
+	if want := "unsafe scratch directory " + root + ": require shared sticky 1777 directory"; err == nil || err.Error() != want {
+		t.Fatalf("shared requirement: %v, want %q", err, want)
+	}
+	root = filepath.Join(t.TempDir(), "missing", "scratch")
+	_, err = verifyAt(root, os.Geteuid())
+	var cause *os.PathError
+	if !errors.As(err, &cause) || !errors.Is(err, os.ErrNotExist) || err.Error() != "create scratch "+root+": "+cause.Error() {
+		t.Fatalf("create wrapping changed: %v", err)
+	}
+}
 
 func TestPrivateScratchRecreatedAndUnsafeRejected(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "scratch")

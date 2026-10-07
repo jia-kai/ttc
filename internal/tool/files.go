@@ -58,13 +58,13 @@ func intDefault(p *int, def int) int {
 }
 func rangeInt(name string, p *int, min, max int) error {
 	if p != nil && (*p < min || *p > max) {
-		return fmt.Errorf("%s must be %d–%d", name, min, max)
+		return fmt.Errorf(prompts.ToolIntegerRange, name, min, max)
 	}
 	return nil
 }
 func validText(s string) error {
 	if !utf8.ValidString(s) || strings.ContainsRune(s, 0) {
-		return Fail("unsupported_content", "expected UTF-8 text without NUL")
+		return Fail("unsupported_content", prompts.ToolExpectedUTF8)
 	}
 	return nil
 }
@@ -76,7 +76,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			return e
 		}
 		if a.Offset != nil && *a.Offset < 1 {
-			return errors.New("offset must be positive")
+			return errors.New(prompts.ToolPositiveOffset)
 		}
 		return rangeInt("limit", a.Limit, 1, 2000)
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
@@ -90,7 +90,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			return page, nil
 		}
 		if a.Offset != nil || a.Limit != nil {
-			return nil, Fail("invalid_input", "binary reads do not support offset or limit; omit pagination arguments")
+			return nil, Fail("invalid_input", prompts.ToolBinaryPagination)
 		}
 		file, err := binary.Store(ctx, path)
 		if err != nil {
@@ -110,7 +110,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			return e
 		}
 		if a.Content == nil {
-			return errors.New("content required")
+			return errors.New(prompts.ToolContentRequired)
 		}
 		return validText(*a.Content)
 	}, func(ctx context.Context, x Execution, a writeArgs) (any, error) {
@@ -126,7 +126,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			return e
 		}
 		if a.Old == "" || a.New == nil || a.Old == *a.New {
-			return errors.New("old_text must be nonempty and new_text must be present and different; new_text may be empty to delete text")
+			return errors.New(prompts.ToolEditTextRequired)
 		}
 		if e := validText(a.Old); e != nil {
 			return e
@@ -140,17 +140,17 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			}
 			count = strings.Count(string(b), a.Old)
 			if count == 0 {
-				return nil, Fail("ambiguous_match", "old_text matched 0 times; read current contents and adjust old_text to match exactly")
+				return nil, Fail("ambiguous_match", prompts.ToolEditNoMatch)
 			}
 			if !a.All && count != 1 {
-				return nil, Fail("ambiguous_match", fmt.Sprintf("old_text matched %d times; include more surrounding context or set replace_all=true to replace every match", count))
+				return nil, Fail("ambiguous_match", fmt.Sprintf(prompts.ToolEditMultipleMatches, count))
 			}
 			// Matched old text cannot exceed the original file. Divide the
 			// remaining allowance so repeated replacements cannot overflow an
 			// integer or allocate an oversized result before Apply rejects it.
 			remaining := len(b) - count*len(a.Old)
 			if remaining > workspace.MaxFileBytes || len(*a.New) > (workspace.MaxFileBytes-remaining)/count {
-				return nil, Fail("file_too_large", "replacement exceeds the 8 MiB file limit; reduce new_text or replace fewer occurrences")
+				return nil, Fail("file_too_large", prompts.ToolReplacementTooLarge)
 			}
 			return []byte(strings.ReplaceAll(string(b), a.Old, *a.New)), nil
 		}}})
@@ -217,7 +217,7 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 		return map[string]any{"kind": "directory", "path": path, "entries": out, "next_offset": next, "truncated": next != nil}, nil
 	}
 	if !st.Mode().IsRegular() {
-		return nil, Fail("unsupported_content", "not a regular file")
+		return nil, Fail("unsupported_content", prompts.ToolNotRegularFile)
 	}
 	reader := bufio.NewReader(f)
 	binary, err := binaryinput.Read(ctx, reader, path, st.Size(), types)
@@ -267,7 +267,7 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 			}
 		}
 		if err := validText(part); err != nil {
-			return nil, Fail("unsupported_content", "expected UTF-8 text without NUL; no supported binary format was recognized; provide an announced original format or use shell for explicit inspection/conversion")
+			return nil, Fail("unsupported_content", prompts.ToolUnrecognizedBinary)
 		}
 		if line >= offset {
 			content.WriteString(part)
@@ -293,7 +293,7 @@ func readDirectoryEntries(ctx context.Context, f *os.File) ([]fs.DirEntry, error
 		}
 		batch, err := f.ReadDir(256)
 		if len(entries)+len(batch) > directoryEntryLimit {
-			return nil, Fail("directory_too_large", "directory exceeds 10000 entries; use glob with a narrower pattern or read a subdirectory")
+			return nil, Fail("directory_too_large", prompts.ToolDirectoryTooLarge)
 		}
 		entries = append(entries, batch...)
 		if err == io.EOF {
@@ -319,7 +319,7 @@ func boundedLine(reader *bufio.Reader) (string, error) {
 	for {
 		chunk, e := reader.ReadSlice('\n')
 		if b.Len()+len(chunk) > 40000 {
-			return "", Fail("line_too_long", "line exceeds 40000-byte page cap; use shell to extract a bounded byte range instead")
+			return "", Fail("line_too_long", prompts.ToolLineTooLong)
 		}
 		b.Write(chunk)
 		if e == bufio.ErrBufferFull {

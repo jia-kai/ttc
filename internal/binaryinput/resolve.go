@@ -15,6 +15,7 @@ import (
 
 	"ttc/internal/blobcache"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 const maxBinaryFileBytes = 32 << 20
@@ -30,26 +31,26 @@ func Resolve(ctx context.Context, f llm.BinaryFile) (llm.BinaryPayload, error) {
 		return llm.BinaryPayload{}, err
 	}
 	if f.Bytes < 0 || f.Bytes > maxBinaryFileBytes {
-		return llm.BinaryPayload{}, fmt.Errorf("binary file size must be between 0 and %d bytes", maxBinaryFileBytes)
+		return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryReferenceSize, maxBinaryFileBytes)
 	}
 	if f.MIMEType != "" && !llm.ValidBinaryMIME(f.MIMEType) {
-		return llm.BinaryPayload{}, errors.New("binary file requires a canonical MIME type without parameters")
+		return llm.BinaryPayload{}, errors.New(prompts.BinaryReferenceMIME)
 	}
 	if f.Path == "" || f.SHA256 == "" {
-		return llm.BinaryPayload{}, errors.New("file-backed binary requires an absolute path and SHA-256 checksum")
+		return llm.BinaryPayload{}, errors.New(prompts.BinaryReferenceRequired)
 	}
 	if !filepath.IsAbs(f.Path) {
-		return llm.BinaryPayload{}, fmt.Errorf("binary file path must be absolute: %q", f.Path)
+		return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryReferencePath, f.Path)
 	}
 	if len(f.SHA256) != sha256.Size*2 || strings.Trim(f.SHA256, "0123456789abcdef") != "" {
-		return llm.BinaryPayload{}, fmt.Errorf("binary file %q requires a lowercase hex SHA-256 checksum", f.Path)
+		return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryReferenceChecksum, f.Path)
 	}
 	if f.MIMEType != "" && !strings.HasPrefix(f.MIMEType, "image/") && f.Bytes == 0 {
-		return llm.BinaryPayload{}, errors.New("file-backed document requires original byte size")
+		return llm.BinaryPayload{}, errors.New(prompts.BinaryDocumentSizeRequired)
 	}
 	payload, err := resolveOriginal(ctx, f)
 	if err != nil {
-		return llm.BinaryPayload{}, fmt.Errorf("binary file %q: %w", f.Path, err)
+		return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryReferenceFailure, f.Path, err)
 	}
 	return payload, nil
 }
@@ -57,7 +58,7 @@ func Resolve(ctx context.Context, f llm.BinaryFile) (llm.BinaryPayload, error) {
 func resolveOriginal(ctx context.Context, f llm.BinaryFile) (llm.BinaryPayload, error) {
 	cache, err := blobcache.Default()
 	if err != nil {
-		return llm.BinaryPayload{}, fmt.Errorf("open binary file cache: %w", err)
+		return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryOpenFileCache, err)
 	}
 	data, err := cache.Get(ctx, "original", f.SHA256)
 	cached := err == nil
@@ -70,25 +71,25 @@ func resolveOriginal(ctx context.Context, f llm.BinaryFile) (llm.BinaryPayload, 
 			return llm.BinaryPayload{}, &llm.UnavailableBinaryFileError{File: f, Err: err}
 		}
 	} else if err != nil {
-		return llm.BinaryPayload{}, fmt.Errorf("read cached binary file: %w", err)
+		return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryReadCachedFile, err)
 	}
 	if f.Bytes != 0 && f.Bytes != len(data) {
-		return llm.BinaryPayload{}, errors.New("binary file byte size differs from original")
+		return llm.BinaryPayload{}, errors.New(prompts.BinaryReferenceSizeMismatch)
 	}
 	mt := f.MIMEType
 	if mt == "" || strings.HasPrefix(mt, "image/") {
 		detected := http.DetectContentType(data)
 		if detected != "image/png" && detected != "image/jpeg" && detected != "image/gif" {
-			return llm.BinaryPayload{}, fmt.Errorf("unsupported image type %q; document references require MIME type", detected)
+			return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryReferenceImageType, detected)
 		}
 		if mt != "" && mt != detected {
-			return llm.BinaryPayload{}, errors.New("binary file MIME type differs from original image")
+			return llm.BinaryPayload{}, errors.New(prompts.BinaryReferenceMIMEMismatch)
 		}
 		mt = detected
 	}
 	if !cached {
 		if err := cache.Put(ctx, "original", f.SHA256, data); err != nil {
-			return llm.BinaryPayload{}, fmt.Errorf("cache reconstructed binary file: %w", err)
+			return llm.BinaryPayload{}, fmt.Errorf(prompts.BinaryCacheReconstructedFile, err)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -114,10 +115,10 @@ func sourceBytes(ctx context.Context, f llm.BinaryFile) ([]byte, error) {
 		return nil, err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, errors.New("source is not a regular file")
+		return nil, errors.New(prompts.BinarySourceRegularFile)
 	}
 	if st.Size() > maxBinaryFileBytes {
-		return nil, fmt.Errorf("source exceeds %d bytes", maxBinaryFileBytes)
+		return nil, fmt.Errorf(prompts.BinarySourceTooLarge, maxBinaryFileBytes)
 	}
 	data, err := io.ReadAll(binaryContextReader{ctx: ctx, r: io.LimitReader(source, maxBinaryFileBytes+1)})
 	if ctx.Err() != nil {
@@ -127,11 +128,11 @@ func sourceBytes(ctx context.Context, f llm.BinaryFile) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) > maxBinaryFileBytes {
-		return nil, fmt.Errorf("source exceeds %d bytes", maxBinaryFileBytes)
+		return nil, fmt.Errorf(prompts.BinarySourceTooLarge, maxBinaryFileBytes)
 	}
 	checksum := sha256.Sum256(data)
 	if hex.EncodeToString(checksum[:]) != f.SHA256 {
-		return nil, errors.New("source SHA-256 checksum mismatch; original binary file has changed")
+		return nil, errors.New(prompts.BinarySourceChecksumMismatch)
 	}
 	return data, nil
 }

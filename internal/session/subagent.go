@@ -33,24 +33,24 @@ func (r *Runtime) addSubagentTool() {
 			return err
 		}
 		if a.Persistent == nil {
-			return tool.Fail("invalid_arguments", "persistent must be explicitly true or false on every assignment; use false for a disposable child")
+			return tool.Fail("invalid_arguments", prompts.ChildExplicitPersistence)
 		}
 		if a.Variant != nil && strings.TrimSpace(*a.Variant) == "" {
-			return tool.Fail("invalid_arguments", "variant must be nonempty; omit it to inherit the current reasoning selection")
+			return tool.Fail("invalid_arguments", prompts.ChildNonemptyVariant)
 		}
 		if a.ChildID != "" {
 			if a.Label != "" {
-				return tool.Fail("invalid_arguments", "omit label for a follow-up; the existing child retains its title")
+				return tool.Fail("invalid_arguments", prompts.ChildFollowupLabel)
 			}
 			return nil
 		}
 		if words := len(strings.Fields(a.Label)); words < 1 || words > 4 || utf8.RuneCountInString(a.Label) > 64 || strings.IndexFunc(a.Label, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }) >= 0 {
-			return tool.Fail("invalid_arguments", "choose a label of 1–4 words and at most 64 characters, on one line without controls; shorten the name and retry")
+			return tool.Fail("invalid_arguments", prompts.ChildValidLabel)
 		}
 		return nil
 	}, func(ctx context.Context, x tool.Execution, a args) (any, error) {
 		if x.Actor != "main" {
-			return nil, tool.Fail("ownership", "children cannot spawn children or assign follow-ups")
+			return nil, tool.Fail("ownership", prompts.ChildCannotAssign)
 		}
 		if err := r.checkContext(); err != nil {
 			return nil, err
@@ -68,18 +68,18 @@ func (r *Runtime) addSubagentTool() {
 		if a.ChildID != "" {
 			if child == nil {
 				r.childStartMu.Unlock()
-				return nil, tool.Fail("not_found", "unknown or closed child_id; create a fresh child")
+				return nil, tool.Fail("not_found", prompts.ChildUnknownFollowup)
 			}
 			if child.state != "idle" || child.closing {
 				r.childStartMu.Unlock()
-				return nil, tool.Fail("child_busy", "child is still running; wait for child_turn_finished before assigning a follow-up")
+				return nil, tool.Fail("child_busy", prompts.ChildFollowupBusy)
 			}
 			selection = child.selection
 		}
 		if a.Variant != nil {
 			if !slices.Contains(selection.Model.Variants, *a.Variant) {
 				r.childStartMu.Unlock()
-				return nil, tool.Fail("invalid_arguments", fmt.Sprintf("unsupported variant %q for %s; supported variants: %s; choose one or omit variant to retain the current selection", *a.Variant, selection.Model.ID, strings.Join(selection.Model.Variants, ", ")))
+				return nil, tool.Fail("invalid_arguments", fmt.Sprintf(prompts.ChildUnsupportedVariant, *a.Variant, selection.Model.ID, strings.Join(selection.Model.Variants, ", ")))
 			}
 			selection.Variant = *a.Variant
 		}
@@ -92,7 +92,7 @@ func (r *Runtime) addSubagentTool() {
 			}
 			if len(r.children) >= 4 || len(r.children)+asideCount >= 4 {
 				r.childStartMu.Unlock()
-				return nil, tool.Fail("capacity", "four child contexts/tasks are retained; close an idle child with job_stop(child_id=...) or wait for an aside")
+				return nil, tool.Fail("capacity", prompts.ChildCapacity)
 			}
 			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "question" })}
 			r.children[child.id] = child
@@ -107,7 +107,11 @@ func (r *Runtime) addSubagentTool() {
 			return nil, err
 		}
 		child.turn = turn
-		assignment := &childAssignment{turn: turn, persistent: *a.Persistent, background: a.Background}
+		assignment := &childAssignment{
+			turn: turn, persistent: *a.Persistent, background: a.Background,
+			answer: child.lastAnswer, truncated: child.lastTruncated, result: child.lastResult,
+			inheritedAnswer: child.lastAnswer != "",
+		}
 		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
@@ -134,6 +138,11 @@ func (r *Runtime) addSubagentTool() {
 				_, _ = r.Jobs.Stop("main", id)
 			} else {
 				err = errors.Join(err, r.finishChild(child, task, err))
+				result := r.childResult(child, assignment, jobs.Snapshot{Kind: "subagent", Owner: child.id, Label: child.label, Status: "failed"})
+				if !a.Background {
+					result["error"] = err.Error()
+				}
+				return result, nil // Failed completion/launch metadata is the tool result; storage failures also abort the runtime.
 			}
 			return nil, err
 		}
@@ -258,7 +267,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 					limit = 64 << 10
 				}
 				if text.Len()+len(ev.Text) > limit {
-					return fmt.Errorf("child response exceeds %d bytes", limit)
+					return fmt.Errorf(prompts.ChildResponseTooLarge, limit)
 				}
 				text.WriteString(ev.Text)
 				if task.aside {
@@ -268,7 +277,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				return err
 			case "call":
 				if ev.Call == nil {
-					return errors.New("provider emitted nil call")
+					return errors.New(prompts.SessionProviderNilCall)
 				}
 				reply.Calls = append(reply.Calls, *ev.Call)
 			case "phase":
@@ -279,9 +288,23 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return nil
 		})
 		reply.Content = text.String()
+		if task.child != nil && strings.TrimSpace(reply.Content) != "" {
+			// Capture before storage/tool settlement: local failures must still
+			// hand back the last assistant text, including an interrupted stream.
+			r.childStartMu.Lock()
+			task.assignment.answer, task.assignment.truncated = childAnswer(reply.Content)
+			task.assignment.result = 0
+			task.assignment.inheritedAnswer = false
+			r.childStartMu.Unlock()
+		}
 		r.recordUsage(usage)
 		if streamErr != nil {
 			reply.State = nil // Interrupted completion callbacks may leave an incomplete replay payload.
+		}
+		if task.child != nil {
+			r.childStartMu.Lock()
+			task.assignment.pending = &reply
+			r.childStartMu.Unlock()
 		}
 		r.emit(Event{Kind: "tool_stream_end", PendingKey: pendingToolKey(request, ""), Text: streamState(streamErr)})
 		status := "completed"
@@ -309,7 +332,10 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		messages = append(messages, reply)
 		if task.child != nil {
 			r.childStartMu.Lock()
-			task.assignment.result = entry
+			if strings.TrimSpace(reply.Content) != "" {
+				task.assignment.result = entry
+			}
+			task.assignment.pending = nil
 			r.childStartMu.Unlock()
 		}
 		records, err := r.runToolBatch(ctx, turn, actor, task.tools, reply.Calls, ids, streamErr)
@@ -356,10 +382,12 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id})
 		} else if len(reply.Calls) == 0 {
 			if task.child != nil {
+				if strings.TrimSpace(reply.Content) == "" {
+					return errors.New(prompts.ChildCompletedWithoutText)
+				}
 				r.childStartMu.Lock()
 				task.child.messages = messages
 				task.child.cursor = cursor
-				task.assignment.answer, task.assignment.truncated = childAnswer(reply.Content)
 				r.childStartMu.Unlock()
 			}
 			return nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 type inputMetadata struct {
@@ -38,7 +39,7 @@ func inputMetadataWith(q historyReader, entries []Entry) (map[int64]inputMetadat
 		FROM entries e LEFT JOIN turns t ON t.id=e.turn_id
 		WHERE e.id IN (SELECT value FROM json_each(?))`, string(encoded))
 	if err != nil {
-		return nil, fmt.Errorf("original human input metadata: %w", err)
+		return nil, fmt.Errorf(prompts.HistoryInputMetadata, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -60,7 +61,7 @@ func enrichInput(metadata map[int64]inputMetadata, entry Entry, message llm.Mess
 	}
 	input, ok := metadata[entry.EventSeq()]
 	if !ok {
-		return llm.Message{}, fmt.Errorf("original human input #%d: %w", entry.EventSeq(), sql.ErrNoRows)
+		return llm.Message{}, fmt.Errorf(prompts.HistoryInputMissing, entry.EventSeq(), sql.ErrNoRows)
 	}
 	source := input.source
 	if input.trigger == "steer" {
@@ -69,7 +70,7 @@ func enrichInput(metadata map[int64]inputMetadata, entry Entry, message llm.Mess
 		source = "normal"
 	}
 	if source != "normal" && source != "queue" && source != "steer" {
-		return llm.Message{}, fmt.Errorf("original human input #%d has invalid source %q", entry.EventSeq(), source)
+		return llm.Message{}, fmt.Errorf(prompts.HistoryInputSource, entry.EventSeq(), source)
 	}
 	message.InputSource = source
 	message.InputTimeMS = input.committedMS

@@ -20,6 +20,9 @@ platform. See `docs/design.md` for module and persistence contracts.
   conventions already present in the files you touch.
 - Keep changes scoped to the requested behavior. Update `README.md` when a
   change affects documented capabilities, setup, or supported environments.
+- Keep all TTC-authored LLM-facing text in `prompt/`, including runtime/tool
+  guidance and bundled skills. Go supplies behavior and dynamic values; use
+  generated prompt constants and run `make prompts` after changing assets.
 - Validate changes with the checks available in the repository. For terminal
   behavior, exercise the affected workflow in a headless terminal when
   practical; for rendering changes, verify Kitty-specific behavior.

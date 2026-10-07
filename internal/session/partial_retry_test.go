@@ -21,7 +21,7 @@ import (
 func partialRetryFailure(req llm.Request) *llm.PartialError {
 	return &llm.PartialError{
 		Err:   errors.New("synthetic stream interruption"),
-		Retry: llm.Retry{Attempt: req.PriorAttempts + 2, DelayMilliseconds: 0, Reason: "stream interrupted", MaxAttempts: 0},
+		Retry: llm.Retry{Attempt: req.PriorAttempts + 2, DelayMilliseconds: 0, Reason: "stream interrupted", MaxAttempts: llm.DefaultMaxAttempts},
 	}
 }
 
@@ -512,11 +512,12 @@ func TestPartialRetryCallbackErrorsCannotAuthorizeRecovery(t *testing.T) {
 
 func TestPartialRetryMalformedMetadataIsFinal(t *testing.T) {
 	cases := map[string]llm.Retry{
-		"attempt":           {Attempt: 1, Reason: "stream interrupted"},
+		"attempt":           {Attempt: 1, MaxAttempts: llm.DefaultMaxAttempts, Reason: "stream interrupted"},
+		"zero maximum":      {Attempt: 2, Reason: "stream interrupted"},
 		"negative maximum":  {Attempt: 2, MaxAttempts: -1, Reason: "stream interrupted"},
 		"exhausted maximum": {Attempt: 3, MaxAttempts: 2, Reason: "stream interrupted"},
-		"negative delay":    {Attempt: 2, DelayMilliseconds: -1, Reason: "stream interrupted"},
-		"missing reason":    {Attempt: 2},
+		"negative delay":    {Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts, DelayMilliseconds: -1, Reason: "stream interrupted"},
+		"missing reason":    {Attempt: 2, MaxAttempts: llm.DefaultMaxAttempts},
 	}
 	for name, retry := range cases {
 		t.Run(name, func(t *testing.T) {

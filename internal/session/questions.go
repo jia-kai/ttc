@@ -67,44 +67,44 @@ func (r *Runtime) addQuestionTool() {
 	}
 	tool.Register(r.Tools, "question", prompts.ToolDescription("question"), map[string]any{"questions": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": tool.Property("string"), "prompt": tool.Property("string"), "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"id": tool.Property("string"), "label": tool.Property("string"), "description": tool.Property("string")}, "required": []string{"id", "label"}, "additionalProperties": false}}, "recommended_option_id": tool.Property("string")}, "required": []string{"id", "prompt"}, "additionalProperties": false}}}, []string{"questions"}, func(a args) error {
 		if len(a.Questions) < 1 || len(a.Questions) > 3 {
-			return errors.New("require 1–3 questions")
+			return errors.New(prompts.QuestionCount)
 		}
 		ids := map[string]bool{}
 		for _, q := range a.Questions {
 			if q.ID == "" || q.Prompt == "" || ids[q.ID] {
-				return errors.New("question IDs must be unique and prompts nonempty")
+				return errors.New(prompts.QuestionIdentityAndPrompt)
 			}
 			ids[q.ID] = true
 			if q.Options != nil && (len(q.Options) < 2 || len(q.Options) > 5) {
-				return errors.New("require 2–5 choices")
+				return errors.New(prompts.QuestionChoiceCount)
 			}
 			options := map[string]bool{}
 			for _, o := range q.Options {
 				if o.ID == "" || o.Label == "" || options[o.ID] {
-					return errors.New("option IDs must be nonempty and unique within each question; labels must be nonempty")
+					return errors.New(prompts.QuestionOptionIdentityAndLabel)
 				}
 				options[o.ID] = true
 			}
 			if q.RecommendedOptionID != "" && !options[q.RecommendedOptionID] {
-				return errors.New("recommended_option_id must identify an existing option")
+				return errors.New(prompts.QuestionRecommendation)
 			}
 		}
 		return nil
 	}, func(ctx context.Context, x tool.Execution, a args) (any, error) {
 		if x.Actor != "main" {
-			return nil, errors.New("question is available only to the main agent")
+			return nil, errors.New(prompts.QuestionMainOnly)
 		}
 		id := history.NewID("form")
 		var entry int64
 		if err := r.Store.DB.QueryRowContext(ctx, "SELECT id FROM entries WHERE kind='tool_call' AND json_extract(content_json,'$.call_id')=? ORDER BY id DESC LIMIT 1", x.CallID).Scan(&entry); err != nil {
-			return nil, fmt.Errorf("question intent: %w", err)
+			return nil, fmt.Errorf(prompts.QuestionIntent, err)
 		}
 		view := QuestionForm{ID: id, Questions: a.Questions, EntryID: entry}
 		form := &questionForm{view: view, reply: make(chan questionReply, 1)}
 		r.questions.mu.Lock()
 		if r.questions.pending != nil {
 			r.questions.mu.Unlock()
-			return nil, errors.New("a main question is already pending")
+			return nil, errors.New(prompts.QuestionAlreadyPending)
 		}
 		r.questions.pending = form
 		r.questions.mu.Unlock()

@@ -16,7 +16,7 @@ import (
 // messages are errors. Native replay state remains the caller's responsibility.
 func InputMarker(message llm.Message, compactedAt time.Time) (llm.Message, error) {
 	if message.Role != "user" || message.Runtime {
-		return llm.Message{}, fmt.Errorf("retained input must be a non-runtime user message")
+		return llm.Message{}, fmt.Errorf(prompts.ContextRetainedInputRole)
 	}
 	source, err := inputSource(message)
 	if err != nil {
@@ -24,10 +24,10 @@ func InputMarker(message llm.Message, compactedAt time.Time) (llm.Message, error
 	}
 	at := compactedAt.UnixMilli()
 	if message.InputTimeMS <= 0 || at <= 0 {
-		return llm.Message{}, fmt.Errorf("retained input requires positive commit and compaction timestamps")
+		return llm.Message{}, fmt.Errorf(prompts.ContextRetainedInputTimestamps)
 	}
 	if message.InputTimeMS > at {
-		return llm.Message{}, fmt.Errorf("retained input commit timestamp %d is after compaction timestamp %d", message.InputTimeMS, at)
+		return llm.Message{}, fmt.Errorf(prompts.ContextRetainedInputFuture, message.InputTimeMS, at)
 	}
 	metadata := struct {
 		Type                  string `json:"type"`
@@ -38,7 +38,7 @@ func InputMarker(message llm.Message, compactedAt time.Time) (llm.Message, error
 	}{"retained_input", source, message.InputTimeMS, at, at - message.InputTimeMS}
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
-		return llm.Message{}, fmt.Errorf("encode retained input metadata: %w", err)
+		return llm.Message{}, fmt.Errorf(prompts.ContextEncodeRetainedInput, err)
 	}
 	return llm.Message{Role: "developer", Content: prompts.RetainedInput + "\n" + string(encoded)}, nil
 }
@@ -49,17 +49,17 @@ func InputMarker(message llm.Message, compactedAt time.Time) (llm.Message, error
 // callers preparing canonical replay are responsible for excluding native State.
 func RetainedInputMessages(messages []llm.Message, inputs []int, at time.Time) ([]llm.Message, error) {
 	if len(inputs) > 4 {
-		return nil, fmt.Errorf("retained input selection exceeds four messages")
+		return nil, fmt.Errorf(prompts.ContextRetainedInputLimit)
 	}
 	retained := make([]llm.Message, 0, 2*len(inputs))
 	previous := -1
 	for _, index := range inputs {
 		if index <= previous || index < 0 || index >= len(messages) {
-			return nil, fmt.Errorf("invalid retained input index %d: indices must be ordered and in bounds", index)
+			return nil, fmt.Errorf(prompts.ContextRetainedInputIndex, index)
 		}
 		marker, err := InputMarker(messages[index], at)
 		if err != nil {
-			return nil, fmt.Errorf("retained input %d: %w", index, err)
+			return nil, fmt.Errorf(prompts.ContextRetainedInputFailure, index, err)
 		}
 		retained = append(retained, marker, messages[index])
 		previous = index

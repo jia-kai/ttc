@@ -1,0 +1,16 @@
+# Authored guidance delivered in runtime messages and child handoffs.
+# Keys are generated Go constant names; printf slots are checked by go vet.
+ChildNoAssistantText: No assistant text was produced for this assignment.
+ChildFailureWarning: >-
+  Child assignment %s; this is partial work, not a completed result. Partial work
+  may have side effects; inspect the workspace and complete child transcript
+  before continuing.
+ChildInheritedAnswerWarning: " This assignment produced no new assistant text; the returned text is from the previous assignment."
+ChildTranscriptExportFailure: " Complete child transcript export failed: %s"
+ChildTranscriptReferences: " Transcript: %s; exact JSONL: %s"
+ChildCompletionPublicationFailure: " Completion publication failed; the runtime cannot continue."
+ChildStopOwnership: only the main agent can close coding children
+ChildStopUnknown: unknown or closed child_id; use job_list or create a new child
+ChildAlreadyClosing: child is already closing; wait for its terminal event
+ChildLaunchPending: child launch is still being admitted; retry job_stop after its job_id is visible
+ChildCompletionCommitFailure: 'commit child completion: %w'

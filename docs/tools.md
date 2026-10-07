@@ -284,7 +284,29 @@ it never replaces or changes model-facing results.
   never contains the full child transcript. Background finish notifications
   carry the same answer and reference. Ordinary answers need no `job_read`,
   and disposable children need no `job_stop`.
-  Completed answers replace the stdout preview to avoid repetition. Background
+  If automatic recovery cannot continue, status remains `failed` (or `cancelled`
+  for a stop). `error` reports the terminal cause as text; `answer` contains the
+  last nonempty assistant message from the child conversation, including partial
+  stream text, not concatenated stdout.
+  If a persistent follow-up produced none, its warning identifies text retained
+  from the previous assignment rather than presenting it as new work.
+  `result_entry_id` may then refer to the previous assignment; it is absent or
+  zero when no assistant entry was committed. Uncommitted partial text is
+  preserved explicitly in the transcript rather than given an invented entry ID.
+  No-text failures use an explicit fallback; an empty final stream is a failure.
+  A separate `warning` identifies partial work and possible side effects.
+  `transcript_path` (Markdown) and `transcript_jsonl_path` (exact records) point
+  to private, durable lineage artifacts containing the child's whole selected
+  conversation, including original pre-compaction entries and earlier persistent
+  assignments. Export failure instead reports `transcript_export_error` and an
+  explicit warning, without inventing a path. Warning and paths are not clipped
+  with the 8 KiB answer. Foreground results and background finish notifications
+  carry the same failure metadata. Transcript artifacts share lineage retention.
+  If completion storage/publication itself fails, the runtime aborts explicitly;
+  its fatal error includes the warning and transcript paths (or export error),
+  without claiming delivery of a background notification. A failed completion
+  commit creates no finish-event reference.
+  Terminal answers replace the stdout preview to avoid repetition. Background
   launch results omit stdout and final-answer references; their completion
   notification delivers the answer once, including when the child finishes fast.
   Raw captured stdout remains available in inspection and `job_read`.
@@ -534,9 +556,9 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 - Result: `{name:string, path:string, source:"project"|"user"|"bundled",
   content:string}`. `content` is the loaded skill text and is included in
   the model's context. For a bundled skill, `path` is its logical
-  `default-skills/<name>/SKILL.md` path inside the binary. Missing skills
+  `prompt/skills/<name>/SKILL.md` path inside the binary. Missing skills
   return `not_found`.
-- The available-skills list includes embedded `default-skills` even when
+- The available-skills list includes embedded bundled skills even when
   those files are absent from disk. Project skills override user skills,
   which override bundled skills of the same name.
 

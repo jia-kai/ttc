@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"ttc/internal/prompts"
 )
 
 // PrivateDir creates a directory with mode 0700 and rejects an existing final
@@ -19,7 +21,7 @@ func PrivateDir(path string) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
-		return fmt.Errorf("unsafe private directory %s", path)
+		return fmt.Errorf(prompts.PrivateFileUnsafeDirectory, path)
 	}
 	return nil
 }

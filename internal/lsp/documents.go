@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"unicode/utf8"
+
+	"ttc/internal/prompts"
 )
 
 type position struct {
@@ -30,7 +32,7 @@ func fileURI(path string) string { return (&url.URL{Scheme: "file", Path: path})
 func filePath(uri string) (string, error) {
 	u, err := url.Parse(uri)
 	if err != nil || u.Scheme != "file" || u.Host != "" && u.Host != "localhost" || !filepath.IsAbs(u.Path) || u.RawQuery != "" || u.Fragment != "" {
-		return "", fail("unsupported_content", "LSP result needs a local file URI; virtual/remote documents are unsupported")
+		return "", fail("unsupported_content", prompts.LSPLocalFileURIRequired)
 	}
 	return filepath.Clean(u.Path), nil
 }
@@ -41,7 +43,7 @@ func readText(ctx context.Context, path string) (string, error) {
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", fmt.Errorf("read LSP file %s: %w; check path and permissions", path, err)
+		return "", fmt.Errorf(prompts.LSPReadFileFailed, path, err)
 	}
 	defer f.Close()
 	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
@@ -51,7 +53,7 @@ func readText(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Size() > maxMessageBytes {
-		return "", fail("unsupported_content", "LSP input must be a regular UTF-8 file of at most 8 MiB; narrow the file")
+		return "", fail("unsupported_content", prompts.LSPRegularFileRequired)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxMessageBytes+1))
 	if ctx.Err() != nil {
@@ -61,7 +63,7 @@ func readText(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	if len(data) > maxMessageBytes || !utf8.Valid(data) || strings.ContainsRune(string(data), 0) {
-		return "", fail("unsupported_content", "LSP input must contain at most 8 MiB of UTF-8 text without NUL")
+		return "", fail("unsupported_content", prompts.LSPInvalidFileText)
 	}
 	return string(data), nil
 }
@@ -72,7 +74,7 @@ func language(path, supplied string) (string, error) {
 	}
 	name := map[string]string{".go": "go", ".py": "python", ".rs": "rust", ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp", ".hpp": "cpp", ".js": "javascript", ".jsx": "javascriptreact", ".ts": "typescript", ".tsx": "typescriptreact", ".java": "java", ".json": "json", ".md": "markdown", ".tex": "latex", ".sh": "shellscript", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".lua": "lua", ".rb": "ruby", ".html": "html", ".css": "css"}[strings.ToLower(filepath.Ext(path))]
 	if name == "" {
-		return "", fail("invalid_input", "cannot infer language_id from this extension; specify the language server's language_id")
+		return "", fail("invalid_input", prompts.LSPLanguageIDRequired)
 	}
 	return name, nil
 }
@@ -82,7 +84,7 @@ func physicalLine(ctx context.Context, text string, line int) (string, error) {
 		return "", err
 	}
 	if line < 0 {
-		return "", fail("invalid_position", "line must be 1-based and positive")
+		return "", fail("invalid_position", prompts.LSPInvalidLine)
 	}
 	start := 0
 	for i := 0; i < line; i++ {
@@ -93,7 +95,7 @@ func physicalLine(ctx context.Context, text string, line int) (string, error) {
 		}
 		end := strings.IndexByte(text[start:], '\n')
 		if end < 0 {
-			return "", fail("invalid_position", fmt.Sprintf("line %d is beyond the file; read it and choose an existing line", line+1))
+			return "", fail("invalid_position", fmt.Sprintf(prompts.LSPLineBeyondFile, line+1))
 		}
 		start += end + 1
 	}
@@ -122,7 +124,7 @@ func wirePosition(ctx context.Context, text string, line, column int, encoding s
 		return position{}, err
 	}
 	if column < 1 {
-		return position{}, fail("invalid_position", "column must be a 1-based Unicode code-point column")
+		return position{}, fail("invalid_position", prompts.LSPInvalidColumn)
 	}
 	index, offset := 1, 0
 	for _, char := range value {
@@ -140,7 +142,7 @@ func wirePosition(ctx context.Context, text string, line, column int, encoding s
 	if index == column {
 		return position{line - 1, offset}, nil
 	}
-	return position{}, fail("invalid_position", fmt.Sprintf("column %d exceeds line %d's end column %d; use Unicode code-point columns, not bytes", column, line, index))
+	return position{}, fail("invalid_position", fmt.Sprintf(prompts.LSPColumnBeyondLine, column, line, index))
 }
 
 func userPosition(ctx context.Context, text string, p position, encoding string) (int, int, error) {
@@ -149,7 +151,7 @@ func userPosition(ctx context.Context, text string, p position, encoding string)
 		return 0, 0, ctx.Err()
 	}
 	if err != nil || p.Character < 0 {
-		return 0, 0, fail("invalid_server_result", "LSP returned a position outside the file; retry after synchronizing its disk contents")
+		return 0, 0, fail("invalid_server_result", prompts.LSPPositionOutsideFile)
 	}
 	column, offset := 1, 0
 	for _, char := range value {
@@ -163,7 +165,7 @@ func userPosition(ctx context.Context, text string, p position, encoding string)
 		}
 		next := offset + units(char, encoding)
 		if next > p.Character {
-			return 0, 0, fail("invalid_server_result", "LSP returned a character offset inside an encoded Unicode character")
+			return 0, 0, fail("invalid_server_result", prompts.LSPPositionInsideCharacter)
 		}
 		offset = next
 		column++
@@ -210,13 +212,13 @@ func (c *Client) syncDocument(ctx context.Context, path, id string) (string, err
 		}
 		doc := &c.documents[index]
 		if doc.language != id {
-			return "", fail("invalid_input", "language_id changed for an open document; use its original language_id or restart the server")
+			return "", fail("invalid_input", prompts.LSPLanguageIDChanged)
 		}
 		if doc.text == text {
 			return text, nil
 		}
 		if c.change == 0 {
-			return "", fail("unsupported_operation", "language server does not support text changes; stop and restart it after editing the file")
+			return "", fail("unsupported_operation", prompts.LSPTextChangesUnsupported)
 		}
 		version := doc.version + 1
 		change := map[string]any{"text": text}

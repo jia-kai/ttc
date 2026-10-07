@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 // AccessTokens contains only the access token and account identity required for
@@ -49,7 +50,7 @@ func (a *Adapter) credentials(ctx context.Context) (AccessTokens, error) {
 		return AccessTokens{}, err
 	}
 	if a.tokenSource == nil {
-		return AccessTokens{}, errors.New("OpenAI transport requires a credentials source")
+		return AccessTokens{}, errors.New(prompts.OpenAIRequiresCredentialsSource)
 	}
 	tokens, err := a.tokenSource(ctx)
 	if err != nil {
@@ -59,7 +60,7 @@ func (a *Adapter) credentials(ctx context.Context) (AccessTokens, error) {
 		return AccessTokens{}, err
 	}
 	if tokens.Access == "" || tokens.AccountID == "" {
-		return AccessTokens{}, errors.New("OpenAI credentials require access token and account ID")
+		return AccessTokens{}, errors.New(prompts.OpenAIRequiresAccessAndAccount)
 	}
 	return tokens, nil
 }

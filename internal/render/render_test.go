@@ -46,6 +46,13 @@ func TestToolCardsBoundPreviewAndKeepExactDetails(t *testing.T) {
 	}
 }
 
+func TestSharedToolSummaryPreservesDiagnosticBytes(t *testing.T) {
+	md := Tool("shell", []byte(`{}`), []byte(`{"exit_code":7,"error":{"message":"fixture failure"},"truncated":true}`))
+	if want := "**shell** · exit 7 · error: fixture failure · tail truncated"; md.Summary != want {
+		t.Fatalf("summary = %q; want %q", md.Summary, want)
+	}
+}
+
 func TestGlobBriefingShowsOnlyPatternAndFailures(t *testing.T) {
 	md := Tool("glob", []byte(`{"pattern":"**/*.go","path":"private/root"}`), []byte(`{"ok":true,"status":"running","paths":["result.go"],"root":"private/root"}`))
 	plain, err := TerminalBriefing(md.Summary, 100, false)

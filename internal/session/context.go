@@ -64,7 +64,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 			for !utf8.ValidString(s) {
 				s = s[:len(s)-1]
 			}
-			return s + "\n[truncated]"
+			return s + prompts.SessionNamingTruncated
 		}
 		return s
 	}
@@ -80,7 +80,13 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		if ownerCtx.Err() != nil {
 			status = "interrupted"
 		}
-		if err := r.Store.FinishRequest(request, status, []any{map[string]any{"status": status, "usage": usage}}); err != nil {
+		attempt := map[string]any{"status": status, "usage": usage}
+		if e != nil {
+			attempt["error"] = e.Error()
+		} else if status != "completed" {
+			attempt["error"] = "naming request did not produce a valid title"
+		}
+		if err := r.Store.FinishRequest(request, status, []any{attempt}); err != nil {
 			r.namingFailure(ownerCtx, sessionID, turn, "record result: "+err.Error())
 		}
 	}()
@@ -95,7 +101,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		if i == 4 {
 			break
 		}
-		message.Content += "\nTool: " + render.Clean(call.Name)
+		message.Content += prompts.SessionNamingTool + render.Clean(call.Name)
 	}
 	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "user", request, message); e == nil {
 		r.emit(Event{Kind: "message_placeholder", Text: "Session naming input · inspect", EntryID: id})
@@ -104,7 +110,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		return
 	}
 	var title strings.Builder
-	e = r.Provider.Stream(ctx, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: settings.OutputTokens, MaxAttempts: settings.MaxAttempts}, func(ev llm.StreamEvent) error {
+	e = r.Provider.Stream(ctx, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: settings.OutputTokens}, func(ev llm.StreamEvent) error {
 		if ev.Kind == "completed" {
 			usage = ev.Usage
 		}
