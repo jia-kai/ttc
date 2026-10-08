@@ -258,6 +258,7 @@ requests:
 
 ```sh
 make test
+make ci-test                  # automated suites without real Kitty; used by CI
 make full-test                # all automated suites; prerequisites in tests/README.md
 make check                    # race tests and vet
 make integration              # PTY workflows and automated demos; needs Python 3

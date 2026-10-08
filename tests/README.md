@@ -71,6 +71,7 @@ For reproducible headless validation:
 
 ```sh
 make full-test                    # all automated suites, including graphics/math
+make ci-test                      # all automated suites except real Kitty tests
 make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
@@ -88,9 +89,11 @@ make check                        # race tests and vet
 make rail-integration             # real filesystem sandbox and tmux lifecycle
 ```
 
-`make full-test` runs Go tests/race/vet, PTY and rail regressions, Python unit
-tests, all direct/tmux and mock/offline Kitty modes, and math protocol tests with
-both explicit color-disable settings. Suites run sequentially even with `-j`;
+`make ci-test` runs Go tests/race/vet, PTY and rail regressions, Python unit
+tests, and math protocol tests with both explicit color-disable settings.
+GitHub Actions runs this target without Kitty or Xvfb dependencies.
+`make full-test` depends on `ci-test` and adds all direct/tmux and mock/offline
+Kitty modes, including PNG captures. Suites run sequentially even with `-j`;
 the first failure stops the run. Manual demos and benchmarks are excluded.
 Run it outside rail if `./ttc` is read-only. Install the rail and graphics/math
 dependencies listed below and prepare MathJax with `make build` followed by
@@ -137,7 +140,8 @@ python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
 python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
 
-Kitty 0.49.1 was verified; the driver requires `kitten @ screenshot`. Xvfb runs
+Kitty 0.49.1 was verified; the driver requires `kitten @ screenshot`. PNGs are
+diagnostic artifacts, not automated pixel comparisons. Xvfb runs
 on an automatically selected private display and Mesa supplies software OpenGL.
 Fonts cover the math/Unicode/CJK fixture. No desktop, real auth, or inference is
 needed. The driver clears inherited NO_COLOR and TMUX in its new Kitty environment,

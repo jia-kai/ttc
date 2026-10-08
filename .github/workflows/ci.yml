@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  full-test:
-    name: Full test
+  ci-test:
+    name: CI test
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     defaults:
@@ -43,15 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bubblewrap tmux zsh openssh-client ripgrep diffutils python3 kitty \
-            xvfb xauth libgl1 libegl1 libopengl0 libgl1-mesa-dri \
-            libxkbcommon-x11-0 libxcb-cursor0 \
-            fonts-dejavu-core fonts-noto-core fonts-noto-cjk librsvg2-bin
-
-      - name: Verify Kitty tools
-        run: |
-          kitty --version
-          kitten @ screenshot --help
+            bubblewrap tmux zsh openssh-client ripgrep diffutils python3 librsvg2-bin
 
       - name: Enable and verify sandbox namespaces
         run: |
@@ -76,18 +68,18 @@ jobs:
           make build
           ./ttc --install-math
 
-      - name: Run all tests
+      - name: Run CI tests
         run: |
           set -o pipefail
-          make full-test 2>&1 | tee "$RUNNER_TEMP/full-test.log"
+          make ci-test 2>&1 | tee "$RUNNER_TEMP/ci-test.log"
 
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: full-test-diagnostics
+          name: ci-test-diagnostics
           path: |
-            ${{ runner.temp }}/full-test.log
+            ${{ runner.temp }}/ci-test.log
             /tmp/ttc/
           include-hidden-files: true
           if-no-files-found: ignore
