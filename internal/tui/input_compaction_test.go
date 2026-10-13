@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/session"
@@ -121,7 +121,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		u.wait(t, "Attached")
 		u.typeText(text)
 		if i < 2 {
-			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+			u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 			u.wait(t, "Queued · "+text)
 		} else {
 			u.key(tcell.KeyEnter)
@@ -148,7 +148,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	if err := u.runtime.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE model_visible=1 AND role='user' AND json_extract(content_json,'$.content') LIKE 'Queued %'`).Scan(&queuedEntries); err != nil || queuedEntries != 0 {
 		t.Fatal("queued or cancelled input entered history before admission", queuedEntries, err)
 	}
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 	u.wait(t, "Queued · Queued second")
 	close(p.finishContinuation)
 	u.wait(t, "Input compaction response 3.")

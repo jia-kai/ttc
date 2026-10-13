@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/session"
 )
 
@@ -20,7 +20,7 @@ func questionFixture() session.QuestionForm {
 
 func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 	d := newQuestionDialog(questionFixture())
-	key := func(k tcell.Key) ([]session.Answer, bool) { return d.key(tcell.NewEventKey(k, 0, 0), 8) }
+	key := func(k tcell.Key) ([]session.Answer, bool) { return d.key(tcell.NewEventKey(k, "", 0), 8) }
 	if !strings.Contains(d.Window.Text, "> ( ) Second (Recommended)") {
 		t.Fatal(d.Window.Text)
 	}
@@ -42,13 +42,13 @@ func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 	key(tcell.KeyEnd)
 	key(tcell.KeyEnter)
 	for _, r := range "Looks good 界" {
-		d.key(tcell.NewEventKey(tcell.KeyRune, r, 0), 8)
+		d.key(tcell.NewEventKey(tcell.KeyRune, string(r), 0), 8)
 	}
 	key(tcell.KeyTab)
-	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 8)
 	key(tcell.KeyDown)
-	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
-	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 8)
 	if d.tab != 2 || d.answers[2].selected != 1 {
 		t.Fatal("Space must replace the selection idempotently without advancing", d.tab, d.answers[2])
 	}
@@ -69,25 +69,25 @@ func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 
 func TestCustomChoiceDraftAndTextEditing(t *testing.T) {
 	d := newQuestionDialog(questionFixture())
-	key := func(k tcell.Key) { d.key(tcell.NewEventKey(k, 0, 0), 8) }
+	key := func(k tcell.Key) { d.key(tcell.NewEventKey(k, "", 0), 8) }
 	key(tcell.KeyEnd)
 	key(tcell.KeyEnter)
 	for _, r := range "ab界" {
-		d.key(tcell.NewEventKey(tcell.KeyRune, r, 0), 8)
+		d.key(tcell.NewEventKey(tcell.KeyRune, string(r), 0), 8)
 	}
-	key(tcell.KeyBackspace2)
+	key(tcell.KeyBackspace)
 	key(tcell.KeyHome)
-	d.key(tcell.NewEventKey(tcell.KeyRune, 'X', 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyRune, "X", 0), 8)
 	key(tcell.KeyDelete)
 	key(tcell.KeyEnd)
-	d.key(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift), 8)
-	d.key(tcell.NewEventKey(tcell.KeyRune, 'Y', 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift), 8)
+	d.key(tcell.NewEventKey(tcell.KeyRune, "Y", 0), 8)
 	if got := d.answers[0].custom.text; got != "Xb\nY" {
 		t.Fatal(got)
 	}
 	key(tcell.KeyEscape)
 	key(tcell.KeyHome)
-	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 8)
 	if d.answers[0].useCustom {
 		t.Fatal("custom text mixed with option")
 	}
@@ -96,10 +96,10 @@ func TestCustomChoiceDraftAndTextEditing(t *testing.T) {
 	if d.answers[0].custom.text != "Xb\nY" || !d.answers[0].useCustom {
 		t.Fatal("custom draft lost")
 	}
-	if _, dismissed := d.key(tcell.NewEventKey(tcell.KeyEscape, 0, 0), 8); dismissed {
+	if _, dismissed := d.key(tcell.NewEventKey(tcell.KeyEscape, "", 0), 8); dismissed {
 		t.Fatal("first Esc should leave text entry")
 	}
-	if _, dismissed := d.key(tcell.NewEventKey(tcell.KeyEscape, 0, 0), 8); !dismissed {
+	if _, dismissed := d.key(tcell.NewEventKey(tcell.KeyEscape, "", 0), 8); !dismissed {
 		t.Fatal("second Esc should dismiss without cancelling")
 	}
 }
@@ -123,16 +123,16 @@ func TestQuestionUsesComposerEditing(t *testing.T) {
 }
 
 func TestQuestionTextLimitPreservesDraft(t *testing.T) {
-	key := func(k tcell.Key) *tcell.EventKey { return tcell.NewEventKey(k, 0, 0) }
+	key := func(k tcell.Key) *tcell.EventKey { return tcell.NewEventKey(k, "", 0) }
 	for _, tt := range []struct {
 		name    string
 		event   *tcell.EventKey
 		pasting bool
 	}{
-		{"rune", tcell.NewEventKey(tcell.KeyRune, '界', 0), false},
+		{"rune", tcell.NewEventKey(tcell.KeyRune, "界", 0), false},
 		{"yank", key(tcell.KeyCtrlY), false},
 		{"newline", key(tcell.KeyCtrlJ), false},
-		{"shift enter", tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift), false},
+		{"shift enter", tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift), false},
 		{"paste", key(tcell.KeyEnter), true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -149,7 +149,7 @@ func TestQuestionTextLimitPreservesDraft(t *testing.T) {
 				t.Fatal("rejected edit changed the draft", after.cursor, d.errorText)
 			}
 			d.pasting = false
-			d.key(key(tcell.KeyBackspace2), 8)
+			d.key(key(tcell.KeyBackspace), 8)
 			d.key(key(tcell.KeyCtrlJ), 8)
 			if len(d.answers[0].custom.text) != session.MaxAnswerBytes || d.errorText != "" {
 				t.Fatal("could not edit at the byte limit", d.errorText)
@@ -174,7 +174,7 @@ func TestQuestionFreeTextEnterAdvancesWithoutSubmitting(t *testing.T) {
 			}
 			d := newQuestionDialog(form)
 			key := func(k tcell.Key) ([]session.Answer, bool) {
-				return d.key(tcell.NewEventKey(k, 0, 0), 8)
+				return d.key(tcell.NewEventKey(k, "", 0), 8)
 			}
 			var want []session.Answer
 			for i, q := range form.Questions {
@@ -182,11 +182,11 @@ func TestQuestionFreeTextEnterAdvancesWithoutSubmitting(t *testing.T) {
 					key(tcell.KeyEnd)
 					key(tcell.KeyEnter)
 				}
-				d.key(tcell.NewEventKey(tcell.KeyRune, '界', 0), 8)
-				if answers, dismissed := d.key(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModShift), 8); answers != nil || dismissed || d.tab != i || !d.answers[i].editing {
+				d.key(tcell.NewEventKey(tcell.KeyRune, "界", 0), 8)
+				if answers, dismissed := d.key(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift), 8); answers != nil || dismissed || d.tab != i || !d.answers[i].editing {
 					t.Fatal("Shift+Enter must keep editing the current answer", answers, dismissed, d.tab)
 				}
-				d.key(tcell.NewEventKey(tcell.KeyRune, 'x', 0), 8)
+				d.key(tcell.NewEventKey(tcell.KeyRune, "x", 0), 8)
 				d.Window.Scroll = 10
 				if answers, dismissed := key(tcell.KeyEnter); answers != nil || dismissed || d.tab != i+1 || d.Window.Scroll != 0 {
 					t.Fatal("Enter must advance without submitting and reset scroll", answers, dismissed, d.tab, d.Window.Scroll)
@@ -216,20 +216,20 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 	if !d.answers[0].editing {
 		t.Fatal("text-only form requires unnecessary choice")
 	}
-	d.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8)
-	d.key(tcell.NewEventKey(tcell.KeyTab, 0, 0), 8)
-	if values, _ := d.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 8); values != nil {
+	d.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyTab, "", 0), 8)
+	if values, _ := d.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 8); values != nil {
 		t.Fatal("blank text accepted")
 	}
 	for _, r := range strings.Repeat("界", 40) {
-		d.key(tcell.NewEventKey(tcell.KeyRune, r, 0), 8)
+		d.key(tcell.NewEventKey(tcell.KeyRune, string(r), 0), 8)
 	}
 	d.reveal(12, 3)
 	view := strings.Join(d.Window.Lines(12, 3), "\n")
 	if !strings.Contains(view, "▏") {
 		t.Fatal("text caret outside narrow viewport", view)
 	}
-	d.key(tcell.NewEventKey(tcell.KeyTab, 0, 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyTab, "", 0), 8)
 	d.reveal(12, 3)
 	if view := strings.Join(d.Window.Lines(12, 3), "\n"); !strings.Contains(view, "Submit") {
 		t.Fatal(view)
@@ -242,7 +242,7 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 func TestQuestionPasteDoesNotNavigateOrSubmit(t *testing.T) {
 	d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
 	d.pasting = true
-	for _, event := range []*tcell.EventKey{tcell.NewEventKey(tcell.KeyRune, 'a', 0), tcell.NewEventKey(tcell.KeyTab, 0, 0), tcell.NewEventKey(tcell.KeyEnter, 0, 0), tcell.NewEventKey(tcell.KeyRune, 'b', 0), tcell.NewEventKey(tcell.KeyRight, 0, 0), tcell.NewEventKey(tcell.KeyEscape, 0, 0)} {
+	for _, event := range []*tcell.EventKey{tcell.NewEventKey(tcell.KeyRune, "a", 0), tcell.NewEventKey(tcell.KeyTab, "", 0), tcell.NewEventKey(tcell.KeyEnter, "", 0), tcell.NewEventKey(tcell.KeyRune, "b", 0), tcell.NewEventKey(tcell.KeyRight, "", 0), tcell.NewEventKey(tcell.KeyEscape, "", 0)} {
 		if values, dismissed := d.key(event, 8); values != nil || dismissed || d.tab != 0 {
 			t.Fatal("paste triggered navigation", values, dismissed, d.tab)
 		}
@@ -270,8 +270,8 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 		t.Fatal("question controls should not precede content in the title bar")
 	}
 
-	d.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 8)
-	d.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 8)
+	d.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 8)
 	d.answers[0].custom.set("custom\nanswer")
 	d.update()
 	assertOrder("Which method?", "Other · free-text input", "Text: custom\nanswer▏", "Enter advances", "←/→ cursor", "Tab/Shift+Tab tabs", "Ctrl+X E editor")
@@ -288,7 +288,7 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 }
 
 func TestQuestionTitleHasNoControlHints(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -299,8 +299,8 @@ func TestQuestionTitleHasNoControlHints(t *testing.T) {
 	left, top, width, _ := windowBounds(100, 30)
 	var title strings.Builder
 	for x := left; x < left+width; x++ {
-		r, _, _, _ := s.GetContent(x, top)
-		title.WriteRune(r)
+		r, _, _ := s.Get(x, top)
+		title.WriteString(r)
 	}
 	if !strings.Contains(title.String(), "Questions") || strings.Contains(title.String(), "Esc") || strings.Contains(title.String(), "tabs") {
 		t.Fatal(title.String())

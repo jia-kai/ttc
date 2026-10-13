@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/blobcache"
 	"ttc/internal/filelock"
 	"ttc/internal/llm"

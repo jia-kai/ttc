@@ -2,13 +2,14 @@ package tui
 
 import (
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
+	"github.com/gdamore/tcell/v3/color"
 	"testing"
 	"ttc/internal/render"
 )
 
 func TestWrappedRowsCarryStyleAndIgnoreControls(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -20,31 +21,31 @@ func TestWrappedRowsCarryStyleAndIgnoreControls(t *testing.T) {
 	}
 	for y := range 2 {
 		for x := range 2 {
-			_, _, style, _ := s.GetContent(x, y)
-			fg, _, attrs := style.Decompose()
-			if fg == tcell.ColorDefault || attrs&tcell.AttrBold == 0 {
+			_, style, _ := s.Get(x, y)
+			fg, attrs := style.GetForeground(), style.GetAttributes()
+			if fg == color.Default || attrs&tcell.AttrBold == 0 {
 				t.Fatalf("lost style at %d,%d", x, y)
 			}
 		}
 	}
-	_, _, style, _ := s.GetContent(0, 2)
-	_, _, attrs := style.Decompose()
+	_, style, _ := s.Get(0, 2)
+	attrs := style.GetAttributes()
 	if attrs&tcell.AttrBold != 0 {
 		t.Fatal("reset ignored")
 	}
 	putStyled(s, 0, 3, 4, "\x1b[2J\x1b]8;;https://example.org\a界é\x1b]8;;\a", tcell.StyleDefault)
-	r, comb, _, width := s.GetContent(0, 3)
-	if r != '界' || width != 2 || len(comb) != 0 {
-		t.Fatal(r, comb, width)
+	cluster, _, width := s.Get(0, 3)
+	if cluster != "界" || width != 2 {
+		t.Fatal(cluster, width)
 	}
-	r, comb, _, _ = s.GetContent(2, 3)
-	if r != 'e' || string(comb) != "́" {
-		t.Fatal(r, comb)
+	cluster, _, _ = s.Get(2, 3)
+	if cluster != "é" {
+		t.Fatal(cluster)
 	}
 }
 
 func TestMarkdownTableHeaderColorDiffersFromBody(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -61,18 +62,18 @@ func TestMarkdownTableHeaderColorDiffersFromBody(t *testing.T) {
 	var header, body tcell.Style
 	for y := range 20 {
 		for x := range 50 {
-			r, _, style, _ := s.GetContent(x, y)
-			if r == 'H' {
+			r, style, _ := s.Get(x, y)
+			if r == "H" {
 				header = style
 			}
-			if r == 'b' {
+			if r == "b" {
 				body = style
 			}
 		}
 	}
-	hfg, _, attrs := header.Decompose()
-	bfg, _, _ := body.Decompose()
-	if hfg == bfg || hfg == tcell.ColorDefault || attrs&tcell.AttrBold == 0 {
+	hfg, attrs := header.GetForeground(), header.GetAttributes()
+	bfg := body.GetForeground()
+	if hfg == bfg || hfg == color.Default || attrs&tcell.AttrBold == 0 {
 		t.Fatal("table header is not distinct", header, body, text)
 	}
 }

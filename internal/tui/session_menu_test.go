@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 )
@@ -73,17 +73,17 @@ func TestSessionMenuDateGroupingSelectionAndWrapping(t *testing.T) {
 			t.Fatal(want, m.Window.Text)
 		}
 	}
-	m.key(tcell.NewEventKey(tcell.KeyDown, 0, 0), 10)
+	m.key(tcell.NewEventKey(tcell.KeyDown, "", 0), 10)
 	m.reveal(12, 5)
 	if m.selected != 1 || m.Window.Scroll == 0 {
 		t.Fatal(m.selected, m.Window.Scroll)
 	}
-	id, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10)
+	id, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10)
 	if !closed || id != "b" {
 		t.Fatal(id, closed)
 	}
 	empty := newSessionMenu(nil, "", now)
-	if id, _ := empty.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); id != "" {
+	if id, _ := empty.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10); id != "" {
 		t.Fatal(id)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
 	"ttc/internal/render"
 )
@@ -86,25 +86,25 @@ func (m *sessionMenu) update() {
 }
 func (m *sessionMenu) key(ev *tcell.EventKey, height int) (id string, closed bool) {
 	m.manualScroll = false
-	switch ev.Key() {
-	case tcell.KeyEscape:
+	switch {
+	case ev.Key() == tcell.KeyEscape:
 		return "", true
-	case tcell.KeyUp:
+	case ev.Key() == tcell.KeyUp:
 		m.selected = max(0, m.selected-1)
-	case tcell.KeyDown:
+	case ev.Key() == tcell.KeyDown:
 		m.selected = min(max(0, len(m.sessions)-1), m.selected+1)
-	case tcell.KeyHome:
+	case ev.Key() == tcell.KeyHome:
 		m.selected = 0
-	case tcell.KeyEnd:
+	case ev.Key() == tcell.KeyEnd:
 		m.selected = max(0, len(m.sessions)-1)
-	case tcell.KeyPgUp:
+	case ev.Key() == tcell.KeyPgUp:
 		m.selected = max(0, m.selected-max(1, height/2))
-	case tcell.KeyPgDn:
+	case ev.Key() == tcell.KeyPgDn:
 		m.selected = min(max(0, len(m.sessions)-1), m.selected+max(1, height/2))
-	case tcell.KeyCtrlU, tcell.KeyCtrlD:
+	case isCtrl(ev, "u") || isCtrl(ev, "d"):
 		m.Window.Key(ev, height)
 		m.manualScroll = true
-	case tcell.KeyEnter:
+	case ev.Key() == tcell.KeyEnter:
 		if len(m.sessions) > 0 {
 			return m.sessions[m.selected].ID, true
 		}

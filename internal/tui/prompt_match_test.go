@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 func TestPromptSearchAllTermsAnyOrderWhitespaceAndSubstrings(t *testing.T) {
@@ -30,7 +30,7 @@ func TestPromptSearchAllTermsAnyOrderWhitespaceAndSubstrings(t *testing.T) {
 			t.Fatal(test.query, m.matches, test.want)
 		}
 		if len(m.matches) > 0 {
-			text, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10)
+			text, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10)
 			if !closed || text != entries[test.want[0]] {
 				t.Fatal("recall altered prompt", text)
 			}
@@ -60,7 +60,7 @@ func TestPromptHighlightDrawAndWrappedSelection(t *testing.T) {
 	m := newPromptSearch([]string{"older Alpha beta", "newer alpha and BETA"})
 	m.query.set("beta alpha")
 	m.filter()
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -70,9 +70,8 @@ func TestPromptHighlightDrawAndWrappedSelection(t *testing.T) {
 	underlined := 0
 	for y := 0; y < 24; y++ {
 		for x := 0; x < 30; x++ {
-			_, _, style, _ := s.GetContent(x, y)
-			_, _, attrs := style.Decompose()
-			if attrs&tcell.AttrUnderline != 0 {
+			_, style, _ := s.Get(x, y)
+			if style.GetUnderlineStyle() != tcell.UnderlineStyleNone {
 				underlined++
 			}
 		}

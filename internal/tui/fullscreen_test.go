@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 )
 
@@ -39,7 +39,7 @@ func TestFullscreenCopiesWithoutMouseAndRestoresEveryExit(t *testing.T) {
 			t.Fatal("fullscreen has scrollbar")
 		}
 		// A mouse report queued before disabling must not open a conversation modal.
-		u.screen.PostEventWait(tcell.NewEventMouse(3, 1, tcell.Button1, 0))
+		u.screen.EventQ() <- tcell.NewEventMouse(3, 1, tcell.Button1, 0)
 		u.key(tcell.KeyCtrlU)
 		frame = waitMode(true)
 		if strings.Contains(frame, "╭") {
@@ -60,7 +60,7 @@ func TestFullscreenCopiesWithoutMouseAndRestoresEveryExit(t *testing.T) {
 }
 
 func TestFullscreenConversationUsesLastColumnWithoutScrollbar(t *testing.T) {
-	screen := tcell.NewSimulationScreen("UTF-8")
+	screen := newTestScreen(t)
 	if err := screen.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -75,14 +75,14 @@ func TestFullscreenConversationUsesLastColumnWithoutScrollbar(t *testing.T) {
 		t.Fatal(err)
 	}
 	for y := range 11 {
-		r, _, _, _ := screen.GetContent(19, y)
-		if r != 'x' {
+		r, _, _ := screen.Get(19, y)
+		if r != "x" {
 			t.Fatal("fullscreen column reserved for scrollbar", y, r)
 		}
 	}
 	for x := range 20 {
-		r, _, _, _ := screen.GetContent(x, 11)
-		if r == '%' || r == '~' {
+		r, _, _ := screen.Get(x, 11)
+		if r == "%" || r == "~" {
 			t.Fatal("fullscreen scroll indicator retained")
 		}
 	}

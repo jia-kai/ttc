@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 )
 
@@ -35,19 +35,19 @@ func TestRetrySystemMessageOpensInspector(t *testing.T) {
 }
 
 func TestComposerCursorTracksWidthAndHidesForWindow(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
 	defer s.Fini()
 	s.SetSize(20, 10)
 	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", nil, llm.Selection{})
-	x, y, visible := s.GetCursor()
+	x, y, visible := s.cursorX, s.cursorY, s.cursorVisible
 	if !visible || x != 5 || y != 8 {
 		t.Fatal(x, y, visible)
 	}
 	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", &Window{Title: "Inspector"}, llm.Selection{})
-	_, _, visible = s.GetCursor()
+	visible = s.cursorVisible
 	if visible {
 		t.Fatal("composer cursor visible inside viewer")
 	}

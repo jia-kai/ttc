@@ -16,7 +16,7 @@ import (
 	"ttc/internal/skills"
 	"ttc/internal/workspace"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 func menuModels() []llm.ModelSpec {
@@ -34,7 +34,7 @@ func TestModelMenuChoicesAndCancellation(t *testing.T) {
 	current := llm.Selection{Provider: "script", Model: models[0], Variant: "high"}
 	m := newModelMenu(models, current)
 	key := func(k tcell.Key) (string, string, bool) {
-		return m.key(tcell.NewEventKey(k, 0, 0), 20)
+		return m.key(tcell.NewEventKey(k, "", 0), 20)
 	}
 	if !strings.Contains(m.Window.Text, "> Family A") {
 		t.Fatal("current family is not focused")
@@ -64,18 +64,18 @@ func TestModelMenuChoicesAndCancellation(t *testing.T) {
 func TestModelMenuNarrowViewportKeepsSelectionVisible(t *testing.T) {
 	models := menuModels()
 	m := newModelMenu(models, llm.Selection{Model: models[0], Variant: "low"})
-	m.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 20)
+	m.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 20)
 	m.reveal(16, 2)
 	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> Family B") {
 		t.Fatal("wrapped family cursor is outside viewport", lines)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 20)
-	m.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 20)
+	m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 20)
+	m.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 20)
 	m.reveal(16, 2)
 	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> max") {
 		t.Fatal("variant cursor is outside viewport", lines)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyHome, 0, 0), 20)
+	m.key(tcell.NewEventKey(tcell.KeyHome, "", 0), 20)
 	m.reveal(16, 2)
 	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> low") {
 		t.Fatal("scroll did not return to first variant", lines)
@@ -145,7 +145,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	}
 	r.AutoName = false
 	defer func() { cancel(); r.Close() }()
-	screen := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 64)}
+	screen := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 64)}
 	f := Frontend{Runtime: r, Events: events, Screen: screen, Output: io.Discard, Models: models}
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx) }()
@@ -174,10 +174,10 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	}
 	typeText := func(text string) {
 		for _, ch := range text {
-			screen.InjectKey(tcell.KeyRune, ch, 0)
+			screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(ch), 0)
 		}
 	}
-	key := func(k tcell.Key) { screen.InjectKey(k, 0, 0) }
+	key := func(k tcell.Key) { screen.EventQ() <- tcell.NewEventKey(k, "", 0) }
 	request := func() llm.Request {
 		t.Helper()
 		select {
@@ -190,7 +190,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	}
 	waitFrame("/help")
 	screen.SetSize(100, 30)
-	screen.PostEventWait(tcell.NewEventResize(100, 30))
+	screen.EventQ() <- tcell.NewEventResize(100, 30)
 	typeText("/model")
 	key(tcell.KeyEnter)
 	waitFrame("Model family")

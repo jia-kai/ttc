@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"golang.org/x/sys/unix"
 	"ttc/internal/llm"
 )

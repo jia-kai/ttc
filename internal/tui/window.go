@@ -7,7 +7,7 @@ import (
 	"ttc/internal/render"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -115,25 +115,25 @@ func (w *Window) Lines(width, height int) []string {
 // Key handles scrolling; false means the caller should handle the key.
 func (w *Window) Key(ev *tcell.EventKey, height int) bool {
 	height = max(1, height)
-	if ev.Key() == tcell.KeyRune && w.pageKey(ev.Rune()) {
+	if ev.Key() == tcell.KeyRune && w.pageKey(ev.Str()) {
 		return true
 	}
-	switch ev.Key() {
-	case tcell.KeyUp:
+	switch {
+	case ev.Key() == tcell.KeyUp:
 		w.Scroll--
-	case tcell.KeyDown:
+	case ev.Key() == tcell.KeyDown:
 		w.Scroll++
-	case tcell.KeyPgUp:
+	case ev.Key() == tcell.KeyPgUp:
 		w.Scroll -= height
-	case tcell.KeyPgDn:
+	case ev.Key() == tcell.KeyPgDn:
 		w.Scroll += height
-	case tcell.KeyCtrlU:
+	case isCtrl(ev, "u"):
 		w.Scroll -= max(1, height/2)
-	case tcell.KeyCtrlD:
+	case isCtrl(ev, "d"):
 		w.Scroll += max(1, height/2)
-	case tcell.KeyHome:
+	case ev.Key() == tcell.KeyHome:
 		w.Scroll = 0
-	case tcell.KeyEnd:
+	case ev.Key() == tcell.KeyEnd:
 		w.Scroll = 1 << 30
 	default:
 		return false

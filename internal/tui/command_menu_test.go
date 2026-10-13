@@ -6,21 +6,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 )
 
 func TestCommandMenuNarrowRevealAndCancel(t *testing.T) {
 	m := newCommandMenu()
-	m.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 3)
+	m.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 3)
 	m.reveal(12, 3)
 	if m.Window.Scroll <= 0 {
 		t.Fatal("last action stayed outside the narrow viewport")
 	}
-	if command, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 3); !closed || command != "/quit" {
+	if command, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 3); !closed || command != "/quit" {
 		t.Fatal(command, closed)
 	}
-	if command, closed := m.key(tcell.NewEventKey(tcell.KeyEscape, 0, 0), 3); !closed || command != "" {
+	if command, closed := m.key(tcell.NewEventKey(tcell.KeyEscape, "", 0), 3); !closed || command != "" {
 		t.Fatal(command, closed)
 	}
 }

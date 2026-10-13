@@ -6,7 +6,7 @@ require (
 	charm.land/glamour/v2 v2.0.1
 	github.com/charmbracelet/ultraviolet v0.0.0-20251205161215-1948445e3318
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/gdamore/tcell/v2 v2.13.10
+	github.com/gdamore/tcell/v3 v3.6.0
 	github.com/mattn/go-runewidth v0.0.30
 	github.com/yuin/goldmark v1.7.8
 	golang.org/x/net v0.59.0
@@ -32,7 +32,7 @@ require (
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect

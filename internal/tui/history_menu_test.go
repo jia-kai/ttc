@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 )
@@ -27,15 +27,15 @@ func TestHistoryMenuSerialInputsStayFlatAndKeepCheckpoints(t *testing.T) {
 	if want := []string{"  #1 · First", "  #3 · Second", "> #5 · Third · current"}; !reflect.DeepEqual(m.rows, want) {
 		t.Fatalf("serial input labels are not flat: %q", m.rows)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyLeft, 0, 0), 10)
+	m.key(tcell.NewEventKey(tcell.KeyLeft, "", 0), 10)
 	if m.nodes[m.selected].ID != 3 {
 		t.Fatal("flattening changed parent navigation")
 	}
-	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); action != "restore" || id != 2 {
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10); action != "restore" || id != 2 {
 		t.Fatal("flattening changed pre-input checkpoint", action, id)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyRight, 0, 0), 10)
-	if action, id := m.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 10); action != "inspect" || id != 5 {
+	m.key(tcell.NewEventKey(tcell.KeyRight, "", 0), 10)
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 10); action != "inspect" || id != 5 {
 		t.Fatal("flattening changed inspection", action, id)
 	}
 }
@@ -115,7 +115,7 @@ func TestHistoryMenuBranchNavigationAndInspectOnly(t *testing.T) {
 		{ID: 3, Parent: 1, Label: "Second branch", Restorable: true, UserInput: true},
 	}}
 	m := newHistoryMenu(tree)
-	key := func(k tcell.Key) (string, int64) { return m.key(tcell.NewEventKey(k, 0, 0), 8) }
+	key := func(k tcell.Key) (string, int64) { return m.key(tcell.NewEventKey(k, "", 0), 8) }
 	key(tcell.KeyLeft)
 	if m.nodes[m.selected].ID != 1 {
 		t.Fatal("left did not choose parent")
@@ -125,7 +125,7 @@ func TestHistoryMenuBranchNavigationAndInspectOnly(t *testing.T) {
 		t.Fatal(action, id)
 	}
 	key(tcell.KeyDown)
-	if action, id := m.key(tcell.NewEventKey(tcell.KeyRune, ' ', 0), 8); action != "inspect" || id != 3 {
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyRune, " ", 0), 8); action != "inspect" || id != 3 {
 		t.Fatal(action, id)
 	}
 	key(tcell.KeyHome)
@@ -140,7 +140,7 @@ func BenchmarkHistoryMenuSerialNavigation(b *testing.B) {
 		tree.Nodes = append(tree.Nodes, history.BranchNode{ID: id, Parent: id - 1, UserInput: true, Restorable: true, Label: fmt.Sprintf("Input %d", id)})
 	}
 	m := newHistoryMenu(tree)
-	ev := tcell.NewEventKey(tcell.KeyUp, 0, 0)
+	ev := tcell.NewEventKey(tcell.KeyUp, "", 0)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -161,7 +161,7 @@ func TestHistoryMenuLongHistoryHasBoundedWindow(t *testing.T) {
 		}
 	}
 	for i := 0; i < 100; i++ {
-		m.key(tcell.NewEventKey(tcell.KeyPgUp, 0, 0), 30)
+		m.key(tcell.NewEventKey(tcell.KeyPgUp, "", 0), 30)
 		m.reveal(40, 15)
 		if len(m.rows) > historyWindowRows || len(m.Window.Text) > historyWindowRows*300 {
 			t.Fatal("rewrapped unbounded history", len(m.rows), len(m.Window.Text))
@@ -209,15 +209,15 @@ func TestHistoryMenuProjectsHumanBranchesAndCheckpointRestrictions(t *testing.T)
 	if len(m.nodes) != 3 || m.nodes[m.selected].ID != 5 || m.nodes[1].Parent != 2 || m.nodes[2].Parent != 2 {
 		t.Fatal("hidden events leaked into input tree", m.nodes)
 	}
-	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); action != "restore" || id != 4 {
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10); action != "restore" || id != 4 {
 		t.Fatal("did not restore pre-input checkpoint", action, id)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyLeft, 0, 0), 10)
+	m.key(tcell.NewEventKey(tcell.KeyLeft, "", 0), 10)
 	if m.nodes[m.selected].Restorable || m.nodes[m.selected].Reason != "before undo boundary" {
 		t.Fatal("input's checkpoint restriction was lost")
 	}
-	m.key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 10)
-	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); action != "restore" || id != 2 {
+	m.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 10)
+	if action, id := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10); action != "restore" || id != 2 {
 		t.Fatal("projected ancestor restriction incorrectly inherited", action, id)
 	}
 	empty := newHistoryMenu(history.BranchTree{Nodes: tree.Nodes[:2]})

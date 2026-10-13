@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/session"
@@ -20,36 +20,36 @@ func TestPromptSearchNewestFirstEditingAndExactSelection(t *testing.T) {
 	long := "ALPHA\n" + strings.Repeat("界", 5000)
 	m := newPromptSearch([]string{"old alpha", "βeta", long, "new alpha"})
 	for _, r := range "AlPhA" {
-		m.key(tcell.NewEventKey(tcell.KeyRune, r, 0), 10)
+		m.key(tcell.NewEventKey(tcell.KeyRune, string(r), 0), 10)
 	}
 	if !reflect.DeepEqual(m.matches, []int{3, 2, 0}) || !utf8.ValidString(m.Window.Text) || strings.Contains(m.Window.Text, "βeta") {
 		t.Fatal(m.matches, m.Window.Text)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyCtrlR, 0, 0), 10)
-	if text, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); !closed || text != long {
+	m.key(tcell.NewEventKey(tcell.KeyCtrlR, "", 0), 10)
+	if text, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10); !closed || text != long {
 		t.Fatal("selection was truncated")
 	}
-	m.key(tcell.NewEventKey(tcell.KeyCtrlU, 0, 0), 10)
-	m.key(tcell.NewEventKey(tcell.KeyRune, 'β', 0), 10)
+	m.key(tcell.NewEventKey(tcell.KeyCtrlU, "", 0), 10)
+	m.key(tcell.NewEventKey(tcell.KeyRune, "β", 0), 10)
 	if len(m.matches) != 1 || m.entries[m.matches[0]] != "βeta" {
 		t.Fatal(m.matches)
 	}
-	m.key(tcell.NewEventKey(tcell.KeyBackspace2, 0, 0), 10)
+	m.key(tcell.NewEventKey(tcell.KeyBackspace, "", 0), 10)
 	if len(m.matches) != 4 {
 		t.Fatal("editing failed to refilter")
 	}
 	m.query.pasting = true
 	for range 400 {
-		m.key(tcell.NewEventKey(tcell.KeyRune, 'x', 0), 10)
+		m.key(tcell.NewEventKey(tcell.KeyRune, "x", 0), 10)
 	}
 	m.query.pasting = false
 	if utf8.RuneCountInString(m.query.text) != 256 {
 		t.Fatal("unbounded query")
 	}
-	if text, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0), 10); text != "" || closed {
+	if text, closed := m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10); text != "" || closed {
 		t.Fatal("empty match accepted")
 	}
-	if text, closed := m.key(tcell.NewEventKey(tcell.KeyEscape, 0, 0), 10); text != "" || !closed {
+	if text, closed := m.key(tcell.NewEventKey(tcell.KeyEscape, "", 0), 10); text != "" || !closed {
 		t.Fatal("cancel failed")
 	}
 }
@@ -61,7 +61,7 @@ func TestPromptSearchBoundedRowsAndWrappedMouse(t *testing.T) {
 	}
 	m := newPromptSearch(entries)
 	for range 100 {
-		m.key(tcell.NewEventKey(tcell.KeyPgDn, 0, 0), 20)
+		m.key(tcell.NewEventKey(tcell.KeyPgDn, "", 0), 20)
 		m.reveal(40, 12)
 	}
 	if len(m.rows) > historyWindowRows || len(m.Window.Text) > historyWindowRows*600 || m.selected != len(entries)-1 {

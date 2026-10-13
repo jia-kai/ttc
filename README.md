@@ -104,6 +104,10 @@ restart TTC after changes. Inside rail, also recreate it if the host replaced an
 imported config file; see [restart rules](prompt/skills/ttc-config/SKILL.md#restart-rules).
 Keep credential files private (mode 0600). No key is supplied through tool arguments.
 
+The TUI uses tcell v3's built-in parser timeout: unfinished terminal control
+strings expire after one second without input, allowing typing to recover from
+a truncated reply.
+
 Use Kitty as the terminal client for TTC's graphics features. When
 running through tmux, enable graphics passthrough in your tmux configuration:
 

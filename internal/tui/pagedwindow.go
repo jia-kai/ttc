@@ -120,13 +120,13 @@ func advanceInspectionFence(text string, state inspectionFence) inspectionFence 
 	return state
 }
 
-func (w *Window) pageKey(key rune) bool {
-	if w.pages == nil || key != '[' && key != ']' {
+func (w *Window) pageKey(key string) bool {
+	if w.pages == nil || key != "[" && key != "]" {
 		return false
 	}
 	p := w.pages
 	offset := p.page.Offset
-	if key == '[' {
+	if key == "[" {
 		offset = max(0, offset-p.page.Limit)
 	} else {
 		offset += p.page.Limit

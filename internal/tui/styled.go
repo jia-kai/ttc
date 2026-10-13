@@ -7,7 +7,7 @@ import (
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 // wrapStyled preserves trusted SGR and makes each wrapped row self-contained.
@@ -53,8 +53,8 @@ func putStyled(screen tcell.Screen, x, y, width int, text string, base tcell.Sty
 			if parser.Command() == 'm' {
 				uv.ReadStyle(parser.Params(), &pen)
 			} else if runes := []rune(seq); previous >= 0 && len(runes) > 0 && unicode.IsMark(runes[0]) {
-				main, combining, style, _ := screen.GetContent(previous, y)
-				screen.SetContent(previous, y, main, append(combining, runes...), style)
+				text, style, _ := screen.Get(previous, y)
+				screen.Put(previous, y, text+seq, style)
 			}
 			continue
 		}
@@ -68,8 +68,7 @@ func putStyled(screen tcell.Screen, x, y, width int, text string, base tcell.Sty
 		if pen.Bg != nil {
 			style = style.Background(terminalColor(pen.Bg))
 		}
-		runes := []rune(seq)
-		screen.SetContent(x, y, runes[0], runes[1:], style)
+		screen.Put(x, y, seq, style)
 		previous = x
 		x, width = x+cells, width-cells
 	}

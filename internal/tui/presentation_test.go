@@ -2,7 +2,6 @@ package tui
 
 import (
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
 	"strings"
 	"testing"
 	"ttc/internal/llm"
@@ -68,7 +67,7 @@ func TestFrozenPresentationDoesNotChangeOnPublishOrResize(t *testing.T) {
 }
 
 func TestStreamingSpeakerDrawUsesStyledCells(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +79,14 @@ func TestStreamingSpeakerDrawUsesStyledCells(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, r := range "assistant" {
-		got, _, _, _ := s.GetContent(i, 0)
-		if got != r {
+		got, _, _ := s.Get(i, 0)
+		if got != string(r) {
 			t.Fatal("speaker ANSI leaked", i, got, r)
 		}
 	}
 	body := ""
 	for x := range 50 {
-		r, _, _, _ := s.GetContent(x, 1)
+		r, _, _ := s.Get(x, 1)
 		body += string(r)
 	}
 	if !strings.HasPrefix(body, "  plain *streamed* body") {

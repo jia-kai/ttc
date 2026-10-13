@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 // composer owns a draft, a rune-offset cursor and the last killed text. Editing
@@ -69,6 +69,14 @@ func wordAfter(runes []rune, at int) int {
 	return at
 }
 
+// isCtrl matches a Ctrl-letter shortcut in both legacy and advanced key reports.
+// Text input stays string-valued; this only identifies explicit command keys.
+func isCtrl(ev *tcell.EventKey, letter string) bool {
+	key := tcell.KeyCtrlA + tcell.Key(letter[0]-'a')
+	return ev.Key() == key || ev.Key() == tcell.KeyRune &&
+		ev.Modifiers()&tcell.ModCtrl != 0 && ev.Modifiers()&tcell.ModAlt == 0 && ev.Str() == letter
+}
+
 // key handles composer editing only; scrolling, submission, menus and recall
 // belong to the frontend. Line keys use logical newline boundaries.
 func (c *composer) key(ev *tcell.EventKey) bool {
@@ -76,41 +84,41 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 	if ev.Modifiers()&tcell.ModAlt != 0 {
 		switch ev.Key() {
 		case tcell.KeyRune:
-			switch ev.Rune() {
-			case 'b':
+			switch ev.Str() {
+			case "b":
 				c.cursor = wordBefore(runes, c.cursor)
-			case 'f':
+			case "f":
 				c.cursor = wordAfter(runes, c.cursor)
-			case 'd':
+			case "d":
 				c.erase(c.cursor, wordAfter(runes, c.cursor), true)
 			default:
 				return false
 			}
-		case tcell.KeyBackspace, tcell.KeyBackspace2:
+		case tcell.KeyBackspace:
 			c.erase(wordBefore(runes, c.cursor), c.cursor, true)
 		default:
 			return false
 		}
 		return true
 	}
-	switch ev.Key() {
-	case tcell.KeyLeft, tcell.KeyCtrlB:
+	switch {
+	case ev.Key() == tcell.KeyLeft || isCtrl(ev, "b"):
 		c.cursor = max(0, c.cursor-1)
-	case tcell.KeyRight, tcell.KeyCtrlF:
+	case ev.Key() == tcell.KeyRight || isCtrl(ev, "f"):
 		c.cursor = min(len(runes), c.cursor+1)
-	case tcell.KeyHome, tcell.KeyCtrlA:
+	case ev.Key() == tcell.KeyHome || isCtrl(ev, "a"):
 		for c.cursor > 0 && runes[c.cursor-1] != '\n' {
 			c.cursor--
 		}
-	case tcell.KeyEnd, tcell.KeyCtrlE:
+	case ev.Key() == tcell.KeyEnd || isCtrl(ev, "e"):
 		for c.cursor < len(runes) && runes[c.cursor] != '\n' {
 			c.cursor++
 		}
-	case tcell.KeyBackspace, tcell.KeyBackspace2:
+	case ev.Key() == tcell.KeyBackspace || isCtrl(ev, "h"):
 		c.erase(max(0, c.cursor-1), c.cursor, false)
-	case tcell.KeyDelete:
+	case ev.Key() == tcell.KeyDelete:
 		c.erase(c.cursor, min(len(runes), c.cursor+1), false)
-	case tcell.KeyCtrlW:
+	case isCtrl(ev, "w"):
 		start := c.cursor
 		for start > 0 && unicode.IsSpace(runes[start-1]) {
 			start--
@@ -119,7 +127,7 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 			start--
 		}
 		c.erase(start, c.cursor, true)
-	case tcell.KeyCtrlK:
+	case isCtrl(ev, "k"):
 		end := c.cursor
 		for end < len(runes) && runes[end] != '\n' {
 			end++
@@ -128,17 +136,20 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 			end++ // Kill the newline when already at the end of a logical line.
 		}
 		c.erase(c.cursor, end, true)
-	case tcell.KeyCtrlY:
+	case isCtrl(ev, "y"):
 		c.insert(c.killed)
-	case tcell.KeyCtrlJ:
+	case isCtrl(ev, "j"):
 		c.insert("\n")
-	case tcell.KeyEnter:
+	case ev.Key() == tcell.KeyEnter:
 		if ev.Modifiers()&tcell.ModShift == 0 {
 			return false
 		}
 		c.insert("\n")
-	case tcell.KeyRune:
-		c.insert(string(ev.Rune()))
+	case ev.Key() == tcell.KeyRune:
+		if ev.Modifiers()&tcell.ModCtrl != 0 {
+			return false
+		}
+		c.insert(ev.Str())
 	default:
 		return false
 	}
@@ -148,13 +159,13 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 // pasteKey inserts decoded bracketed-paste text without interpreting it as a
 // command, menu key or submission. Other control keys are ignored.
 func (c *composer) pasteKey(ev *tcell.EventKey) {
-	switch ev.Key() {
-	case tcell.KeyRune:
-		c.insert(string(ev.Rune()))
-	case tcell.KeyEnter, tcell.KeyCtrlJ:
+	switch {
+	case ev.Key() == tcell.KeyEnter || isCtrl(ev, "j"):
 		c.insert("\n")
-	case tcell.KeyTab:
+	case ev.Key() == tcell.KeyTab:
 		c.insert("\t")
+	case ev.Key() == tcell.KeyRune && ev.Modifiers()&tcell.ModCtrl == 0:
+		c.insert(ev.Str())
 	}
 }
 

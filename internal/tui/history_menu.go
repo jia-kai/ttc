@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
 	"ttc/internal/render"
 )
@@ -165,34 +165,34 @@ func (m *historyMenu) key(ev *tcell.EventKey, height int) (action string, id int
 		return "", 0
 	}
 	node := m.nodes[m.selected]
-	switch ev.Key() {
-	case tcell.KeyUp:
+	switch {
+	case ev.Key() == tcell.KeyUp:
 		m.selected--
-	case tcell.KeyDown:
+	case ev.Key() == tcell.KeyDown:
 		m.selected++
-	case tcell.KeyHome:
+	case ev.Key() == tcell.KeyHome:
 		m.selected = 0
-	case tcell.KeyEnd:
+	case ev.Key() == tcell.KeyEnd:
 		m.selected = len(m.nodes) - 1
-	case tcell.KeyLeft:
+	case ev.Key() == tcell.KeyLeft:
 		if index, found := m.indices[node.Parent]; found {
 			m.selected = index
 		}
-	case tcell.KeyRight:
+	case ev.Key() == tcell.KeyRight:
 		if children := m.children[node.ID]; len(children) > 0 {
 			m.selected = m.indices[children[0]]
 		}
-	case tcell.KeyPgUp, tcell.KeyCtrlU:
+	case ev.Key() == tcell.KeyPgUp || isCtrl(ev, "u"):
 		m.selected -= max(1, height/2)
-	case tcell.KeyPgDn, tcell.KeyCtrlD:
+	case ev.Key() == tcell.KeyPgDn || isCtrl(ev, "d"):
 		m.selected += max(1, height/2)
-	case tcell.KeyEnter:
+	case ev.Key() == tcell.KeyEnter:
 		if node.Restorable {
 			return "restore", m.targets[node.ID]
 		}
 		return "inspect", node.ID
-	case tcell.KeyRune:
-		if ev.Rune() == ' ' {
+	case ev.Key() == tcell.KeyRune:
+		if ev.Str() == " " {
 			return "inspect", node.ID
 		}
 	}

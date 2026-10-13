@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/session"
@@ -120,7 +120,7 @@ func TestCancelQueueNewerQueuedInputPrecedesAdmissionTicket(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Working")
 	u.typeText("newer queued input")
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 	u.wait(t, "Queued · newer queued input")
 	u.typeText("/cancel-queue")
 	u.key(tcell.KeyEnter)

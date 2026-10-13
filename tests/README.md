@@ -76,6 +76,7 @@ make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
 python3 tests/pty_input.py          # offline editor/completion/export, Ctrl+J and /rename
+python3 tests/pty_control_strings.py # offline control-string idle timeout and fragmented APC
 python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
 python3 tests/pty_parallel.py       # shared data/workspace, independent loads, no recovery
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery

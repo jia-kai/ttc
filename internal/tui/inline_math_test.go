@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
 	"ttc/internal/llm"
@@ -26,7 +26,7 @@ func TestMarkdownWindowRefreshesPendingMathAndRequestsOnlyVisibleAssets(t *testi
 		tasks: make(chan renderTask, 32),
 	}
 	w := &Window{Title: "Assistant", Markdown: true, Text: "before $x^2$ after\n\n" + strings.Repeat("Other paragraph.\n\n", 80) + "$y^2$"}
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -63,11 +63,11 @@ func TestMarkdownWindowRefreshesPendingMathAndRequestsOnlyVisibleAssets(t *testi
 	count := 0
 	for y := range 16 {
 		for x := range 60 {
-			main, marks, _, _ := s.GetContent(x, y)
-			if main == '\U0010eeee' {
+			cluster, _, _ := s.Get(x, y)
+			if strings.HasPrefix(cluster, "\U0010eeee") {
 				count++
-				if len(marks) != 3 {
-					t.Fatal("popup lost image coordinates", marks)
+				if len([]rune(cluster)) != 4 {
+					t.Fatal("popup lost image coordinates", cluster)
 				}
 			}
 		}
@@ -138,7 +138,7 @@ func TestInlineMathPaintsKittyIdentityAndCoordinates(t *testing.T) {
 				r := &imageRenderer{graphics: g, backend: "test", cellWidth: 8, cellHeight: 16, ready: map[string]renderReply{key: {pixels: pixels}}, pending: map[string]context.CancelFunc{}}
 				v := transcriptOf([]line{{text: source, speaker: "assistant", markdown: true}})
 				v.layout = r.layout
-				s := tcell.NewSimulationScreen("UTF-8")
+				s := newTestScreen(t)
 				if err := s.Init(); err != nil {
 					t.Fatal(err)
 				}
@@ -153,25 +153,25 @@ func TestInlineMathPaintsKittyIdentityAndCoordinates(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				ref := tcell.NewSimulationScreen("UTF-8")
+				ref := newTestScreen(t)
 				if err := ref.Init(); err != nil {
 					t.Fatal(err)
 				}
 				defer ref.Fini()
 				ref.SetSize(5, 1)
 				putStyled(ref, 0, 0, 5, grid[0], tcell.StyleDefault)
-				_, _, expectedStyle, _ := ref.GetContent(0, 0)
-				expectedFG, _, _ := expectedStyle.Decompose()
+				_, expectedStyle, _ := ref.Get(0, 0)
+				expectedFG := expectedStyle.GetForeground()
 				count := 0
 				for y := range 27 {
 					for x := range width {
-						main, marks, style, _ := s.GetContent(x, y)
-						if main != '\U0010eeee' {
+						cluster, style, _ := s.Get(x, y)
+						if !strings.HasPrefix(cluster, "\U0010eeee") {
 							continue
 						}
-						fg, _, _ := style.Decompose()
-						if fg != expectedFG || len(marks) != 3 {
-							t.Fatalf("lost Kitty image identity at %d,%d: fg=%v want=%v marks=%v", x, y, fg, expectedFG, marks)
+						fg := style.GetForeground()
+						if fg != expectedFG || len([]rune(cluster)) != 4 {
+							t.Fatalf("lost Kitty image identity at %d,%d: fg=%v want=%v cluster=%q", x, y, fg, expectedFG, cluster)
 						}
 						count++
 					}

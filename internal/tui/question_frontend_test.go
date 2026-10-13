@@ -11,7 +11,7 @@ import (
 	"time"
 	"ttc/internal/tool"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/graphics"
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -96,7 +96,7 @@ func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(c
 	if setup != nil {
 		setup(r)
 	}
-	s := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 128)}
+	s := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 128)}
 	ui := &questionTestUI{screen: s, runtime: r, done: make(chan error, 1), questionEvents: questionEvents, cancel: cancel}
 	f := Frontend{Runtime: r, Events: events, Screen: s, Output: io.Discard, Models: []llm.ModelSpec{selection.Model}, EditInput: editor}
 	if len(sinks) > 0 {
@@ -115,7 +115,7 @@ func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(c
 	})
 	ui.wait(t, "/help")
 	s.SetSize(100, 30)
-	s.PostEventWait(tcell.NewEventResize(100, 30))
+	s.EventQ() <- tcell.NewEventResize(100, 30)
 	return ui
 }
 
@@ -136,10 +136,10 @@ func (u *questionTestUI) wait(t *testing.T, needle string) string {
 }
 func (u *questionTestUI) typeText(text string) {
 	for _, r := range text {
-		u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyRune, r, 0))
+		u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(r), 0)
 	}
 }
-func (u *questionTestUI) key(k tcell.Key) { u.screen.PostEventWait(tcell.NewEventKey(k, 0, 0)) }
+func (u *questionTestUI) key(k tcell.Key) { u.screen.EventQ() <- tcell.NewEventKey(k, "", 0) }
 
 func questionScript() []llm.ScriptResponse {
 	return []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"choice","prompt":"Choose a method?","recommended_option_id":"b","options":[{"id":"a","label":"First"},{"id":"b","label":"Second"}]},{"id":"notes","prompt":"Add notes?"}]}`)}}}, {Text: "Done answering."}}
@@ -195,7 +195,7 @@ func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
 			}
 			u.key(tcell.KeyEscape)
 			u.typeText("Do something else")
-			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, modifier))
+			u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", modifier)
 			u.wait(t, "Redirect received.")
 			u.wait(t, "Turn complete")
 			messages, err := u.runtime.Store.Messages(u.runtime.Current())
@@ -300,12 +300,12 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 	u.wait(t, "Second (Recommended)")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Add notes?")
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("custom notes")
 	u.key(tcell.KeyTab)
 	u.key(tcell.KeyEnter)
 	u.typeText("second line")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.key(tcell.KeyTab)
 	u.wait(t, "Submit answers")
 	u.key(tcell.KeyEnter)

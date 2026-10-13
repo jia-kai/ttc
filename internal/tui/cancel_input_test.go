@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/session"
@@ -73,7 +73,7 @@ func newCancelInputUI(t *testing.T, responses []llm.ScriptResponse) (*questionTe
 }
 
 func pasteCancelInput(u *questionTestUI, text string) {
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	for _, r := range text {
 		switch r {
 		case '\n':
@@ -81,17 +81,17 @@ func pasteCancelInput(u *questionTestUI, text string) {
 		case '\t':
 			u.key(tcell.KeyTab)
 		default:
-			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyRune, r, 0))
+			u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(r), 0)
 		}
 	}
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 }
 
 func submitCancelInput(u *questionTestUI, steer bool) {
 	if steer {
 		u.key(tcell.KeyEnter)
 	} else {
-		u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+		u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 	}
 }
 

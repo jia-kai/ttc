@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 	"ttc/internal/session"
 )
@@ -196,7 +196,7 @@ func TestNotificationCompactionInterruptionDoesNotStarveQueuedPrompt(t *testing.
 	id := queueTestNotification(t, u, "completion before interrupt")
 	waitNotificationRetryRequest(t, p.ready)
 	u.typeText("Queued retry after interruption")
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 	u.wait(t, "Queued · Queued retry after interruption")
 	u.key(tcell.KeyEscape)
 	u.key(tcell.KeyEscape)

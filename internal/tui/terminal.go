@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
-	"github.com/gdamore/tcell/v2"
 	"os"
 	"sync"
+
+	"github.com/gdamore/tcell/v3"
+
 	"ttc/internal/graphics"
 )
 
@@ -39,22 +41,15 @@ func newTerminal(ctx context.Context) (tcell.Screen, *terminalTTY, *graphics.Kit
 		return nil, nil, nil, err
 	}
 	shared := &terminalTTY{Tty: tty, pending: pending, graphicsError: graphicsError}
-	info, err := tcell.LookupTerminfo(os.Getenv("TERM"))
-	if err != nil {
-		tty.Close()
-		return nil, nil, nil, err
-	}
-	if enabled {
+	var options []tcell.TerminfoScreenOption
+	if enabled && os.Getenv("NO_COLOR") == "" && os.Getenv("TCELL_TRUECOLOR") != "disable" {
 		// A successful Kitty query establishes RGB support even when SSH/tmux
 		// drops COLORTERM. Unicode placeholders encode image IDs in RGB values.
-		// Copy the shared terminfo entry so other screens keep their own settings.
-		copy := *info
-		copy.SetFgRGB = "\x1b[38;2;%p1%d;%p2%d;%p3%dm"
-		copy.SetBgRGB = "\x1b[48;2;%p1%d;%p2%d;%p3%dm"
-		copy.SetFgBgRGB = "\x1b[38;2;%p1%d;%p2%d;%p3%d;48;2;%p4%d;%p5%d;%p6%dm"
-		info = &copy
+		// OptColors bypasses tcell's environment detection, so leave explicit
+		// color-disable settings to its default path.
+		options = append(options, tcell.OptColors(1<<24))
 	}
-	screen, err := tcell.NewTerminfoScreenFromTtyTerminfo(shared, info)
+	screen, err := tcell.NewTerminfoScreenFromTty(shared, options...)
 	if err != nil {
 		tty.Close()
 		return nil, nil, nil, err

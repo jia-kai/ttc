@@ -20,7 +20,8 @@ import (
 	"ttc/internal/render"
 	"ttc/internal/session"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/gdamore/tcell/v3"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -121,23 +122,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	inputs := make(chan input, 32)
 	modelUpdates := f.ModelUpdates
-	keys := make(chan tcell.Event, 32)
+	var keys <-chan tcell.Event
 	stop := make(chan struct{})
 	defer close(stop)
 	if screen != nil {
-		go func() {
-			for {
-				ev := screen.PollEvent()
-				if ev == nil {
-					return
-				}
-				select {
-				case keys <- ev:
-				case <-stop:
-					return
-				}
-			}
-		}()
+		keys = screen.EventQ()
 	} else {
 		go func() {
 			scanner := bufio.NewScanner(f.Input)
@@ -1275,7 +1264,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		case v := <-inputs:
 			submit = v.text
 			haveInput = true
-		case ev := <-keys:
+		case ev, ok := <-keys:
+			if !ok {
+				keys = nil
+				continue
+			}
 			if editing {
 				continue
 			}
@@ -1398,11 +1391,26 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 				}
 			case *tcell.EventKey:
-				// Legacy tty Alt+Enter is ESC CR; tcell decodes it as Alt+Ctrl+M.
-				if ev.Key() == tcell.KeyRune && (ev.Rune() == 'm' || ev.Rune() == 'j') && ev.Modifiers()&(tcell.ModAlt|tcell.ModCtrl) == tcell.ModAlt|tcell.ModCtrl {
-					ev = tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt)
+				if !ev.Pressed() {
+					continue
 				}
-				if ev.Key() == tcell.KeyCtrlC {
+				// Legacy tty Alt+Enter is ESC CR; tcell decodes it as Alt+Ctrl+M.
+				if ev.Key() == tcell.KeyRune && (ev.Str() == "m" || ev.Str() == "j") && ev.Modifiers()&(tcell.ModAlt|tcell.ModCtrl) == tcell.ModAlt|tcell.ModCtrl {
+					ev = tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
+				}
+				// Ctrl-H/I/M retain their Backspace/Tab/Enter meanings when
+				// advanced reporting exposes the actual control-letter chord.
+				if ev.Key() == tcell.KeyRune && ev.Modifiers()&tcell.ModCtrl != 0 && ev.Modifiers()&tcell.ModAlt == 0 {
+					switch ev.Str() {
+					case "h":
+						ev = tcell.NewEventKey(tcell.KeyBackspace, "", ev.Modifiers()&^tcell.ModCtrl)
+					case "i":
+						ev = tcell.NewEventKeyEx(tcell.KeyTab, "", ev.Modifiers()&^tcell.ModCtrl, true, ev.Physical(), ev.Repeat())
+					case "m":
+						ev = tcell.NewEventKey(tcell.KeyEnter, "", ev.Modifiers()&^tcell.ModCtrl)
+					}
+				}
+				if isCtrl(ev, "c") {
 					submit, haveInput = "/quit", true
 					break
 				}
@@ -1433,7 +1441,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 					continue
 				}
-				if viewChord && ev.Key() == tcell.KeyRune && (ev.Rune() == 'e' || ev.Rune() == 'E') {
+				if viewChord && ev.Key() == tcell.KeyRune && (ev.Str() == "e" || ev.Str() == "E") {
 					viewChord = false
 					startEditor()
 					continue
@@ -1441,7 +1449,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				if modal.question != nil {
 					esc = false
 					viewChord = false
-					if !modal.question.pasting && modal.question.textEntry() && ev.Key() == tcell.KeyCtrlX {
+					if !modal.question.pasting && modal.question.textEntry() && isCtrl(ev, "x") {
 						viewChord = true
 						continue
 					}
@@ -1471,39 +1479,39 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				}
 				if viewChord {
 					viewChord = false
-					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'f' || ev.Rune() == 'F') {
+					if ev.Key() == tcell.KeyRune && (ev.Str() == "f" || ev.Str() == "F") {
 						setFullscreen(!fullscreen)
 						sidebar.overlay = false
 						continue
 					}
-					if ev.Key() == tcell.KeyRune && (ev.Rune() == 's' || ev.Rune() == 'S') {
+					if ev.Key() == tcell.KeyRune && (ev.Str() == "s" || ev.Str() == "S") {
 						sidebar.overlay = !sidebar.overlay
 						continue
 					}
-					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'm' || ev.Rune() == 'M') {
+					if ev.Key() == tcell.KeyRune && (ev.Str() == "m" || ev.Str() == "M") {
 						openModelMenu()
 						continue
 					}
-					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'l' || ev.Rune() == 'L') {
+					if ev.Key() == tcell.KeyRune && (ev.Str() == "l" || ev.Str() == "L") {
 						openSessionMenu()
 						continue
 					}
-					if ev.Key() == tcell.KeyRune && (ev.Rune() == 'g' || ev.Rune() == 'G') {
+					if ev.Key() == tcell.KeyRune && (ev.Str() == "g" || ev.Str() == "G") {
 						openHistoryMenu()
 						continue
 					}
 					if ev.Key() == tcell.KeyRune {
-						switch ev.Rune() {
-						case '?':
+						switch ev.Str() {
+						case "?":
 							openQuestions("")
 							continue
-						case 'j', 'J':
+						case "j", "J":
 							submit = "/jobs"
-						case 't', 'T':
+						case "t", "T":
 							submit = "/timers"
-						case 'n', 'N':
+						case "n", "N":
 							submit = "/new"
-						case 'q', 'Q':
+						case "q", "Q":
 							submit = "/quit"
 						}
 						if submit != "" {
@@ -1514,18 +1522,18 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						}
 					}
 				}
-				if ev.Key() == tcell.KeyCtrlX {
+				if isCtrl(ev, "x") {
 					viewChord = true
 					continue
 				}
-				if ev.Key() == tcell.KeyCtrlP {
+				if isCtrl(ev, "p") {
 					modal.clear()
 					modal.generation = f.Runtime.Generation()
 					modal.commands = newCommandMenu()
 					modal.window = &modal.commands.Window
 					continue
 				}
-				if ev.Key() == tcell.KeyCtrlR {
+				if isCtrl(ev, "r") {
 					modal.clear()
 					setFullscreen(false)
 					modal.generation = f.Runtime.Generation()
@@ -1672,7 +1680,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					break
 				}
 				esc = false
-				if ev.Key() == tcell.KeyCtrlB && modal.empty() && !commandBusy {
+				if isCtrl(ev, "b") && modal.empty() && !commandBusy {
 					foreground := f.Runtime.Jobs.Foreground("main")
 					if len(foreground) > 0 {
 						for _, job := range foreground {
@@ -1687,12 +1695,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					modal.clear()
 					continue
 				}
-				switch ev.Key() {
-				case tcell.KeyCtrlD:
+				switch {
+				case isCtrl(ev, "d"):
 					displayView().pageDown(len(displayView().visible))
-				case tcell.KeyCtrlU:
+				case isCtrl(ev, "u"):
 					displayView().scroll(-max(1, len(displayView().visible)/2), len(displayView().visible))
-				case tcell.KeyUp:
+				case ev.Key() == tcell.KeyUp:
 					if ev.Modifiers()&tcell.ModAlt != 0 {
 						if fullscreen {
 							copyFocused = max(0, copyFocused-1)
@@ -1702,7 +1710,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					} else {
 						recallInput(recall.move(draft.text, -1))
 					}
-				case tcell.KeyDown:
+				case ev.Key() == tcell.KeyDown:
 					if ev.Modifiers()&tcell.ModAlt != 0 {
 						if fullscreen {
 							copyFocused = min(len(copyView.lines)-1, copyFocused+1)
@@ -1712,7 +1720,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					} else {
 						recallInput(recall.move(draft.text, 1))
 					}
-				case tcell.KeyTab:
+				case ev.Key() == tcell.KeyTab:
 					target := focused
 					if fullscreen {
 						target = copyFocused
@@ -1720,7 +1728,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					if target >= 0 && target < len(displayView().lines) && displayView().lines[target].id > 0 {
 						inspect(displayView().lines[target].id)
 					}
-				case tcell.KeyEnter:
+				case ev.Key() == tcell.KeyEnter:
 					if attaching {
 						add("Preparing attachment; press Enter when ready", 0)
 						continue
@@ -1985,18 +1993,13 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 }
 func put(s tcell.Screen, x, y, width int, text string, style tcell.Style) {
-	for _, r := range text {
-		if width <= 0 {
-			return
-		}
-		cells := runewidth.RuneWidth(r)
-		if cells < 1 {
-			cells = 1
-		}
+	for len(text) > 0 && width > 0 {
+		cluster, cells := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
+		text = text[len(cluster):]
 		if cells > width {
 			return
 		}
-		s.SetContent(x, y, r, nil, style)
+		s.Put(x, y, cluster, style)
 		x += cells
 		width -= cells
 	}
@@ -2141,7 +2144,7 @@ func drawScrollBar(s tcell.Screen, x, top, height, total, offset int, style tcel
 		if y >= position && y < position+thumb {
 			r = '█'
 		}
-		s.SetContent(x, top+y, r, nil, style)
+		s.Put(x, top+y, string(r), style)
 	}
 }
 
@@ -2159,17 +2162,17 @@ func drawWindowFrame(s tcell.Screen, window *Window) {
 		put(s, left, top+y, width, strings.Repeat(" ", width), style)
 	}
 	for x := 1; x < width-1; x++ {
-		s.SetContent(left+x, top, '─', nil, style)
-		s.SetContent(left+x, top+height-1, '─', nil, style)
+		s.Put(left+x, top, "─", style)
+		s.Put(left+x, top+height-1, "─", style)
 	}
 	for y := 1; y < height-1; y++ {
-		s.SetContent(left, top+y, '│', nil, style)
-		s.SetContent(left+width-1, top+y, '│', nil, style)
+		s.Put(left, top+y, "│", style)
+		s.Put(left+width-1, top+y, "│", style)
 	}
-	s.SetContent(left, top, '┌', nil, style)
-	s.SetContent(left+width-1, top, '┐', nil, style)
-	s.SetContent(left, top+height-1, '└', nil, style)
-	s.SetContent(left+width-1, top+height-1, '┘', nil, style)
+	s.Put(left, top, "┌", style)
+	s.Put(left+width-1, top, "┐", style)
+	s.Put(left, top+height-1, "└", style)
+	s.Put(left+width-1, top+height-1, "┘", style)
 	title := render.Clean(window.Title)
 	if !window.HideHint {
 		hint := window.Hint

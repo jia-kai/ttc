@@ -7,7 +7,7 @@ import (
 
 	"ttc/internal/session"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 type questionAnswer struct {
@@ -76,18 +76,25 @@ func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.
 			return nil, false
 		}
 	}
-	switch ev.Key() {
-	case tcell.KeyLeft, tcell.KeyBacktab:
+	switch {
+	case ev.Key() == tcell.KeyLeft || ev.Key() == tcell.KeyBacktab:
 		if d.tab > 0 {
 			d.tab--
 		}
 		d.Window.Scroll = 0
-	case tcell.KeyRight, tcell.KeyTab:
+	case ev.Key() == tcell.KeyTab:
+		if ev.Modifiers()&tcell.ModShift != 0 {
+			d.tab = max(0, d.tab-1)
+		} else if d.tab < len(d.answers) {
+			d.tab++
+		}
+		d.Window.Scroll = 0
+	case ev.Key() == tcell.KeyRight:
 		if d.tab < len(d.answers) {
 			d.tab++
 		}
 		d.Window.Scroll = 0
-	case tcell.KeyCtrlU, tcell.KeyCtrlD, tcell.KeyPgUp, tcell.KeyPgDn:
+	case isCtrl(ev, "u") || isCtrl(ev, "d") || ev.Key() == tcell.KeyPgUp || ev.Key() == tcell.KeyPgDn:
 		d.Window.Key(ev, height)
 		d.manualScroll = true
 		return nil, false
@@ -119,7 +126,7 @@ func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.
 				case tcell.KeyEnd:
 					a.choice = len(q.Options)
 				case tcell.KeyEnter, tcell.KeyRune:
-					if ev.Key() == tcell.KeyEnter || ev.Rune() == ' ' {
+					if ev.Key() == tcell.KeyEnter || ev.Str() == " " {
 						if a.choice == len(q.Options) {
 							a.useCustom, a.editing = true, true
 						} else {

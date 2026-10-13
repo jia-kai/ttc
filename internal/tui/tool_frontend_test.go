@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/tool"
@@ -61,7 +61,7 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 				t.Helper()
 				for y, row := range strings.Split(frame, "\n") {
 					if strings.Contains(row, "job_read") {
-						u.screen.PostEventWait(tcell.NewEventMouse(3, y, tcell.Button1, 0))
+						u.screen.EventQ() <- tcell.NewEventMouse(3, y, tcell.Button1, 0)
 						return
 					}
 				}

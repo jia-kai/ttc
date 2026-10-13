@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 // commandMenu selects from the same local catalog used by slash completion.

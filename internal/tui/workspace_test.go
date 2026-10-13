@@ -10,7 +10,7 @@ import (
 	"time"
 	"ttc/internal/workspace"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 func TestWorkspaceGitParentsNestedWorktreeAndHead(t *testing.T) {
@@ -86,7 +86,7 @@ func TestSidebarWorkspaceLongUnicodePathsAndClick(t *testing.T) {
 	b := newSidebar()
 	path := "/long/" + strings.Repeat("研究/", 30) + "project"
 	b.workspace = workspace.GitInfo{Cwd: path, Repo: "/long/repository", Branch: "research"}
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}

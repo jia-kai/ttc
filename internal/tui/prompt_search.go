@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/render"
 )
 
@@ -80,23 +80,23 @@ func (m *promptSearch) key(ev *tcell.EventKey, height int) (text string, closed 
 	if m.query.pasting {
 		m.query.pasteKey(ev)
 	} else {
-		switch ev.Key() {
-		case tcell.KeyEscape:
+		switch {
+		case ev.Key() == tcell.KeyEscape:
 			return "", true
-		case tcell.KeyEnter:
+		case ev.Key() == tcell.KeyEnter:
 			if len(m.matches) > 0 {
 				return m.entries[m.matches[m.selected]], true
 			}
 			return "", false
-		case tcell.KeyUp:
+		case ev.Key() == tcell.KeyUp:
 			m.selected--
-		case tcell.KeyDown, tcell.KeyCtrlR:
+		case ev.Key() == tcell.KeyDown || isCtrl(ev, "r"):
 			m.selected++
-		case tcell.KeyPgUp:
+		case ev.Key() == tcell.KeyPgUp:
 			m.selected -= max(1, height/2)
-		case tcell.KeyPgDn:
+		case ev.Key() == tcell.KeyPgDn:
 			m.selected += max(1, height/2)
-		case tcell.KeyCtrlU:
+		case isCtrl(ev, "u"):
 			m.query.set("")
 		default:
 			m.query.key(ev)

@@ -343,7 +343,9 @@ path.write_text('Looks good.')
             os.write(master, b'\r')
             expect('Which evidence')
             os.write(master, b'\r')  # Select Data and advance to Submit.
-            expect('Submit answers')
+            # The renderer may cursor-address unchanged spaces between words;
+            # this single-word instruction is unique to the Submit tab.
+            expect('submits')
             os.write(master, b'\r')
         else:
             expect('Waiting for answer')

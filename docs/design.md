@@ -549,8 +549,10 @@ The concrete boundaries above are TTC decisions, informed by:
   cancels/joins both.
 - Graphics reuse x/ansi's chunked PNG encoder and Unicode image/row/column
   placeholders. Detect before tcell owns input and serialize graphics/screen
-  writes through one TTY wrapper. Positive detection adds RGB to a private
-  terminfo copy even without `COLORTERM`; explicit color disable suppresses it.
+  writes through one TTY wrapper. Positive detection enables tcell v3 RGB
+  output even without `COLORTERM`; explicit color disable suppresses it.
+  Input uses tcell's built-in one-second inactivity timeout for incomplete
+  escape/control sequences; TTC adds no APC filter or timeout.
   Virtual placements follow cell redraws; retain only viewport assets and delete
   only TTC-owned IDs on exit. tmux transfers use DCS passthrough.
 - Direct detection queries the terminal. In tmux, bounded metadata reads client

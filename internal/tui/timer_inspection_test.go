@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -30,7 +30,7 @@ func TestSidebarTimerInspectionShowsStartupAndSourceAfterChildCloses(t *testing.
 		t.Run(name, func(t *testing.T) {
 			u := newQuestionTestUI(t, &llm.Script{Responses: responses})
 			u.screen.SetSize(180, 60)
-			u.screen.PostEventWait(tcell.NewEventResize(180, 60))
+			u.screen.EventQ() <- tcell.NewEventResize(180, 60)
 			u.typeText("schedule a timer")
 			u.key(tcell.KeyEnter)
 			frame := u.wait(t, "Turn complete")
@@ -51,7 +51,7 @@ func TestSidebarTimerInspectionShowsStartupAndSourceAfterChildCloses(t *testing.
 			if row < 0 {
 				t.Fatal("timer missing from sidebar", frame)
 			}
-			u.screen.PostEventWait(tcell.NewEventMouse(150, row, tcell.Button1, 0))
+			u.screen.EventQ() <- tcell.NewEventMouse(150, row, tcell.Button1, 0)
 			u.wait(t, "Source agent: "+name)
 			for _, want := range []string{"delay_seconds", "86400", "repeat_seconds", "180", "Check the detailed timer parameters.", timers[0].ID} {
 				u.wait(t, want)
@@ -138,7 +138,7 @@ func TestOpenTimerInspectorCountsDownAndSurvivesOneShotFiring(t *testing.T) {
 	}}
 	u := newQuestionTestUI(t, p)
 	u.screen.SetSize(180, 60)
-	u.screen.PostEventWait(tcell.NewEventResize(180, 60))
+	u.screen.EventQ() <- tcell.NewEventResize(180, 60)
 	u.typeText("schedule a timer")
 	u.key(tcell.KeyEnter)
 	frame := u.wait(t, "Turn complete")
@@ -152,7 +152,7 @@ func TestOpenTimerInspectorCountsDownAndSurvivesOneShotFiring(t *testing.T) {
 	if row < 0 {
 		t.Fatal("one-shot timer missing", frame)
 	}
-	u.screen.PostEventWait(tcell.NewEventMouse(150, row, tcell.Button1, 0))
+	u.screen.EventQ() <- tcell.NewEventMouse(150, row, tcell.Button1, 0)
 	frame = u.wait(t, "Countdown:")
 	countdown := func(frame string) string {
 		for _, line := range strings.Split(frame, "\n") {

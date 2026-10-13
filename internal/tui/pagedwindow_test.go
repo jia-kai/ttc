@@ -9,7 +9,7 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/render"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 func TestPagedWindowKeepsCapturedOutputLiteral(t *testing.T) {
@@ -38,14 +38,14 @@ func TestPagedWindowKeepsCapturedOutputLiteral(t *testing.T) {
 			}
 			check()
 			for w.pages.page.Offset+w.pages.page.Limit < w.pages.page.Total {
-				w.pageKey(']')
+				w.pageKey("]")
 				if !strings.Contains(w.Text, fence+"text\n") {
 					t.Fatal("fence delimiter, indentation or language lost", w.Text[:min(len(w.Text), 32)])
 				}
 				check()
 			}
 			for w.pages.page.Offset > 0 {
-				w.pageKey('[')
+				w.pageKey("[")
 				check()
 			}
 		})
@@ -70,7 +70,7 @@ func TestPagedWindowPreservesSplitDelimiterRows(t *testing.T) {
 				}
 				first, _ := load(0)
 				w := NewPagedWindow(first, load)
-				w.pageKey(']')
+				w.pageKey("]")
 				formulas := 0
 				render.Math(w.Text, func(string, bool) string { formulas++; return "FORMULA" })
 				if formulas != want {
@@ -88,7 +88,7 @@ func TestPagedWindowBodyFragmentCannotBecomeFence(t *testing.T) {
 	}
 	first, _ := load(0)
 	w := NewPagedWindow(first, load)
-	w.pageKey(']')
+	w.pageKey("]")
 	formulas := 0
 	render.Math(w.Text, func(string, bool) string { formulas++; return "FORMULA" })
 	if formulas != 0 {
@@ -104,7 +104,7 @@ func TestPagedWindowBoundsUnbrokenFenceMetadata(t *testing.T) {
 	first, _ := load(0)
 	w := NewPagedWindow(first, load)
 	for w.pages.page.Offset+w.pages.page.Limit < w.pages.page.Total {
-		w.pageKey(']')
+		w.pageKey("]")
 		for _, hint := range w.pages.fences {
 			if len(hint.partial) > 64<<10 || len(hint.open) > 64<<10 {
 				t.Fatal("unbounded fence metadata")
@@ -136,14 +136,14 @@ func TestPagedWindowNavigationKeepsBoundedRenderAndResize(t *testing.T) {
 	if reads != 1 {
 		t.Fatal("resize or redraw refetched complete source", reads)
 	}
-	if !w.Key(tcell.NewEventKey(tcell.KeyRune, ']', 0), 20) || w.pages.page.Offset != history.InspectionPageChars || w.Scroll != 0 {
+	if !w.Key(tcell.NewEventKey(tcell.KeyRune, "]", 0), 20) || w.pages.page.Offset != history.InspectionPageChars || w.Scroll != 0 {
 		t.Fatal("next page failed")
 	}
 	w.Lines(80, 20)
 	if !strings.Contains(w.Progress(20, 80), "page 2/512") {
 		t.Fatal("missing page progress", w.Progress(20, 80))
 	}
-	w.Key(tcell.NewEventKey(tcell.KeyRune, '[', 0), 20)
+	w.Key(tcell.NewEventKey(tcell.KeyRune, "[", 0), 20)
 	if w.pages.page.Offset != 0 || reads != 3 {
 		t.Fatal("previous page failed")
 	}
@@ -154,7 +154,7 @@ func TestPagedWindowPreservesFenceHintsAndFailedPage(t *testing.T) {
 	w := NewPagedWindow(first, func(offset int) (history.InspectionPage, error) {
 		return history.InspectionPage{Title: "Code", Text: "func main() {}\n```", Offset: offset, Limit: 20, Total: 40, Supported: true, Markdown: true}, nil
 	})
-	w.pageKey(']')
+	w.pageKey("]")
 	if !strings.HasPrefix(w.Text, "```go\n") {
 		t.Fatal("code language lost across page", w.Text)
 	}
@@ -162,7 +162,7 @@ func TestPagedWindowPreservesFenceHintsAndFailedPage(t *testing.T) {
 	w.pages.load = func(int) (history.InspectionPage, error) {
 		return history.InspectionPage{}, errors.New("history unavailable")
 	}
-	w.pageKey('[')
+	w.pageKey("[")
 	if w.Text != text || !strings.Contains(w.Header, "history unavailable") {
 		t.Fatal("failed page destroyed inspectable content", w.Header)
 	}
@@ -174,7 +174,7 @@ func TestPagedWindowEmptyEnvelopeHasOnePage(t *testing.T) {
 	if !strings.Contains(w.Progress(20, 80), "page 1/1") {
 		t.Fatal("empty canonical message has invalid page count", w.Progress(20, 80))
 	}
-	if !w.pageKey(']') || w.pages.page.Offset != 0 {
+	if !w.pageKey("]") || w.pages.page.Offset != 0 {
 		t.Fatal("empty message attempted to load another page")
 	}
 }

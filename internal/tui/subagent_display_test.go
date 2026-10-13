@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 )
 
@@ -22,7 +22,7 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 	}}
 	u := newQuestionTestUI(t, p)
 	u.screen.SetSize(180, 60)
-	u.screen.PostEventWait(tcell.NewEventResize(180, 60))
+	u.screen.EventQ() <- tcell.NewEventResize(180, 60)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
 	frame := u.wait(t, "Turn complete")
@@ -40,7 +40,7 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 	if row < 0 {
 		t.Fatal("shell missing from sidebar", frame)
 	}
-	u.screen.PostEventWait(tcell.NewEventMouse(150, row, tcell.Button1, 0))
+	u.screen.EventQ() <- tcell.NewEventMouse(150, row, tcell.Button1, 0)
 	u.wait(t, "[Sub shell helper] Running job")
 	u.wait(t, "Source agent: shell helper")
 	u.wait(t, "Command:")
@@ -87,7 +87,7 @@ func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	}}}
 	u := newQuestionTestUI(t, p)
 	u.screen.SetSize(140, 45)
-	u.screen.PostEventWait(tcell.NewEventResize(140, 45))
+	u.screen.EventQ() <- tcell.NewEventResize(140, 45)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "[Sub one two three four] awaiting read (1seg/4bytes) ...")
@@ -139,7 +139,7 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	}}
 	u := newQuestionTestUI(t, p)
 	u.screen.SetSize(140, 45)
-	u.screen.PostEventWait(tcell.NewEventResize(140, 45))
+	u.screen.EventQ() <- tcell.NewEventResize(140, 45)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
 	frame := u.wait(t, "[Sub research helper] assistant")

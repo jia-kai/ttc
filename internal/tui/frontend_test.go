@@ -17,7 +17,8 @@ import (
 	"ttc/internal/tool"
 	"ttc/internal/workspace"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
+	"github.com/gdamore/tcell/v3/vt"
 )
 
 func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
@@ -43,7 +44,7 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	}
 	r.AutoName = false
 	defer r.Close()
-	screen := &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 64)}
+	screen := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := Frontend{Runtime: r, Events: events, Screen: screen, Output: io.Discard}
@@ -75,21 +76,21 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	}
 	wait("/help")
 	screen.SetSize(100, 30)
-	screen.PostEventWait(tcell.NewEventResize(100, 30))
+	screen.EventQ() <- tcell.NewEventResize(100, 30)
 	for _, ch := range "hello" {
-		screen.InjectKey(tcell.KeyRune, ch, 0)
+		screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(ch), 0)
 	}
-	screen.InjectKey(tcell.KeyEnter, 0, 0)
+	screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", 0)
 	wait("Turn complete")
 	if strings.Contains(latest, "You are TTC") {
 		t.Fatal("system body leaked into main conversation")
 	}
-	screen.InjectMouse(3, 2, tcell.Button1, 0)
+	screen.EventQ() <- tcell.NewEventMouse(3, 2, tcell.Button1, 0)
 	wait("You are TTC")
-	screen.InjectKey(tcell.KeyEscape, 0, 0)
+	screen.EventQ() <- tcell.NewEventKey(tcell.KeyEscape, "", 0)
 	wait("System prompt")
-	screen.InjectKey(tcell.KeyUp, 0, tcell.ModAlt)
-	screen.InjectKey(tcell.KeyTab, 0, 0)
+	screen.EventQ() <- tcell.NewEventKey(tcell.KeyUp, "", tcell.ModAlt)
+	screen.EventQ() <- tcell.NewEventKey(tcell.KeyTab, "", 0)
 	wait("Message metadata:")
 }
 
@@ -189,37 +190,75 @@ func (w eventWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// observedScreen snapshots frames on the frontend goroutine, avoiding tcell's mutable GetContents slice.
+// testScreen uses an in-memory terminal and records cursor requests for draw assertions.
+type testScreen struct {
+	tcell.Screen
+	term             vt.MockTerm
+	cursorX, cursorY int
+	cursorVisible    bool
+}
+
+func newTestScreen(t *testing.T) *testScreen {
+	t.Helper()
+	term := vt.NewMockTerm(vt.MockOptSize{X: 80, Y: 25})
+	// Unit fixtures inject events directly; protocol negotiation is covered by PTYs.
+	screen, err := tcell.NewTerminfoScreenFromTty(term, tcell.OptTerm("xterm"), tcell.OptColors(1<<24), tcell.OptNegotiation(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testScreen{Screen: screen, term: term}
+}
+
+func (s *testScreen) SetSize(width, height int) {
+	s.term.SetSize(vt.Coord{X: vt.Col(width), Y: vt.Row(height)})
+	s.Screen.SetSize(width, height)
+}
+
+func (s *testScreen) ShowCursor(x, y int) {
+	s.cursorX, s.cursorY, s.cursorVisible = x, y, x >= 0 && y >= 0
+	s.Screen.ShowCursor(x, y)
+}
+
+func (s *testScreen) HideCursor() {
+	s.cursorVisible = false
+	s.Screen.HideCursor()
+}
+
+func screenText(s tcell.Screen) string {
+	width, height := s.Size()
+	var b strings.Builder
+	for y := range height {
+		for x := 0; x < width; {
+			text, _, cells := s.Get(x, y)
+			b.WriteString(text)
+			x += max(1, cells)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// observedScreen snapshots frames on the frontend goroutine to avoid concurrent cell access.
 type observedScreen struct {
-	tcell.SimulationScreen
+	tcell.Screen
 	frames       chan string
 	mouseEnabled atomic.Bool
 }
 
 func (s *observedScreen) Show() {
-	s.SimulationScreen.Show()
-	cells, width, _ := s.SimulationScreen.GetContents()
-	var b strings.Builder
-	for i, c := range cells {
-		for _, r := range c.Runes {
-			b.WriteRune(r)
-		}
-		if width > 0 && (i+1)%width == 0 {
-			b.WriteByte('\n')
-		}
-	}
+	s.Screen.Show()
 	select {
-	case s.frames <- b.String():
+	case s.frames <- screenText(s.Screen):
 	default:
 	}
 }
 
 func (s *observedScreen) EnableMouse(flags ...tcell.MouseFlags) {
-	s.SimulationScreen.EnableMouse(flags...)
+	s.Screen.EnableMouse(flags...)
 	s.mouseEnabled.Store(true)
 }
 
 func (s *observedScreen) DisableMouse() {
-	s.SimulationScreen.DisableMouse()
+	s.Screen.DisableMouse()
 	s.mouseEnabled.Store(false)
 }

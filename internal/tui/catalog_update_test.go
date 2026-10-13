@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/catalog"
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -66,7 +66,7 @@ func newCatalogUpdateFixture(t *testing.T) *catalogUpdateFixture {
 		t.Fatal(err)
 	}
 	r.AutoName = false
-	screen := &catalogUpdateScreen{observedScreen: &observedScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8"), frames: make(chan string, 256)}}
+	screen := &catalogUpdateScreen{observedScreen: &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 256)}}
 	h := &catalogUpdateFixture{screen: screen, runtime: r, provider: p, updates: make(chan catalog.Update, 1), cancel: cancel, done: make(chan error, 1)}
 	f := Frontend{Runtime: r, Events: events, Screen: screen, Output: io.Discard, Models: models, ModelUpdates: h.updates}
 	go func() { h.done <- f.Run(ctx) }()
@@ -81,7 +81,7 @@ func newCatalogUpdateFixture(t *testing.T) *catalogUpdateFixture {
 	})
 	h.wait(t, "/help")
 	screen.SetSize(120, 36)
-	screen.PostEventWait(tcell.NewEventResize(120, 36))
+	screen.EventQ() <- tcell.NewEventResize(120, 36)
 	return h
 }
 
@@ -102,10 +102,10 @@ func (h *catalogUpdateFixture) wait(t *testing.T, needle string) string {
 	}
 }
 
-func (h *catalogUpdateFixture) key(k tcell.Key) { h.screen.InjectKey(k, 0, 0) }
+func (h *catalogUpdateFixture) key(k tcell.Key) { h.screen.EventQ() <- tcell.NewEventKey(k, "", 0) }
 func (h *catalogUpdateFixture) command(text string) {
 	for _, ch := range text {
-		h.screen.InjectKey(tcell.KeyRune, ch, 0)
+		h.screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(ch), 0)
 	}
 	h.key(tcell.KeyEnter)
 }
@@ -126,8 +126,8 @@ func TestCatalogRefreshPreservesOpenMenuAndActiveTurn(t *testing.T) {
 	// No update has been delivered: both input and the cached picker are usable.
 	h.command("first")
 	first := h.request(t)
-	h.screen.InjectKey(tcell.KeyCtrlX, 0, 0)
-	h.screen.InjectKey(tcell.KeyRune, 'm', 0)
+	h.screen.EventQ() <- tcell.NewEventKey(tcell.KeyCtrlX, "", 0)
+	h.screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, "m", 0)
 	h.wait(t, "Family B")
 	fresh := menuModels()
 	fresh[0].Name, fresh[0].Revision = "Refreshed A", "new-revision"

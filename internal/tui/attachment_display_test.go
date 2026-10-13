@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 )
 
@@ -94,7 +94,7 @@ func TestAttachedQueueAndSteeringShowAuthoredText(t *testing.T) {
 		u.typeText(text)
 		label := "Queued · "
 		if i == 0 {
-			u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+			u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 		} else {
 			u.key(tcell.KeyEnter)
 			label = "Steer · "

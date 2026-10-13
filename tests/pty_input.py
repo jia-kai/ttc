@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline real-terminal regression for the editor, completion, help and export."""
+import argparse
 import fcntl
 import json
 import os
@@ -19,6 +20,9 @@ import traceback
 from scratch import private_scratch
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', default='./ttc')
+    args = parser.parse_args()
     scratch = private_scratch()
     root = Path(tempfile.mkdtemp(prefix='pty-input-', dir=scratch))
     project = root / 'project'
@@ -59,7 +63,7 @@ if text == 'fail draft':
     sys.exit(2)
 path.write_text('Edited in external editor.\\nsecond line')
 ''')
-    binary = str(Path('./ttc').resolve())
+    binary = str(Path(args.binary).resolve())
     data = root / 'data'
     pid, fd = pty.fork()
     if pid == 0:

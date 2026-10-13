@@ -7,7 +7,8 @@ import (
 	"ttc/internal/llm"
 	"ttc/internal/render"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
+	"github.com/gdamore/tcell/v3/color"
 )
 
 func TestSharedWindowWrapAndScroll(t *testing.T) {
@@ -16,36 +17,36 @@ func TestSharedWindowWrapAndScroll(t *testing.T) {
 	if len(lines) != 2 || lines[0] != "exact" {
 		t.Fatal(lines)
 	}
-	w.Key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 2)
+	w.Key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 2)
 	lines = w.Lines(5, 2)
 	if lines[len(lines)-1] != "last" {
 		t.Fatal(lines)
 	}
-	w.Key(tcell.NewEventKey(tcell.KeyHome, 0, 0), 2)
+	w.Key(tcell.NewEventKey(tcell.KeyHome, "", 0), 2)
 	if w.Scroll != 0 {
 		t.Fatal(w.Scroll)
 	}
-	w.Key(tcell.NewEventKey(tcell.KeyCtrlD, 0, 0), 4)
+	w.Key(tcell.NewEventKey(tcell.KeyCtrlD, "", 0), 4)
 	if w.Scroll != 2 {
 		t.Fatal("Ctrl+D did not scroll down", w.Scroll)
 	}
 }
 func TestNarrowScreenDraw(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if e := s.Init(); e != nil {
 		t.Fatal(e)
 	}
 	defer s.Fini()
 	s.SetSize(20, 8)
 	draw(s, transcriptOf([]line{{text: "System prompt · inspect", id: 1}}), newSidebar(), false, nil, nil, 0, newComposer("draft"), 0, nil, nil, "", &Window{Title: "Inspector", Text: "hello\x1bworld"}, llm.Selection{})
-	cells, _, _ := s.GetContents()
-	if len(cells) != 160 {
-		t.Fatal(len(cells))
+	width, height := s.Size()
+	if width*height != 160 {
+		t.Fatal(width, height)
 	}
 }
 
 func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -54,17 +55,7 @@ func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
 	w := &Window{Title: "System prompt", Text: strings.TrimSuffix(strings.Repeat("row\n", 100), "\n"), System: true}
 	frame := func() string {
 		draw(s, newTranscript(), newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", w, llm.Selection{})
-		cells, width, height := s.GetContents()
-		var out strings.Builder
-		for y := range height {
-			for x := range width {
-				for _, r := range cells[y*width+x].Runes {
-					out.WriteRune(r)
-				}
-			}
-			out.WriteByte('\n')
-		}
-		return out.String()
+		return screenText(s)
 	}
 	if text := frame(); !strings.Contains(text, "┌System prompt") || !strings.Contains(text, "0%") || !strings.Contains(text, "lines 1–") {
 		t.Fatal(text)
@@ -73,7 +64,7 @@ func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
 	if text := frame(); !strings.Contains(text, "50%") {
 		t.Fatal(text)
 	}
-	w.Key(tcell.NewEventKey(tcell.KeyEnd, 0, 0), 10)
+	w.Key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 10)
 	if text := frame(); !strings.Contains(text, "100%") {
 		t.Fatal(text)
 	}
@@ -89,8 +80,8 @@ func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
 				x, y int
 				want rune
 			}{{0, 0, '┌'}, {size[0] - 1, 0, '┐'}, {0, size[1] - 1, '└'}, {size[0] - 1, size[1] - 1, '┘'}} {
-				r, _, _, _ := s.GetContent(cell.x, cell.y)
-				if r != cell.want {
+				r, _, _ := s.Get(cell.x, cell.y)
+				if r != string(cell.want) {
 					t.Fatalf("tiny border overwritten at %d,%d: %q", cell.x, cell.y, r)
 				}
 			}
@@ -99,7 +90,7 @@ func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
 }
 
 func TestHumanBackgroundSystemColorAndQueueRows(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -109,21 +100,21 @@ func TestHumanBackgroundSystemColorAndQueueRows(t *testing.T) {
 	queue := []contextbuild.Input{{Text: "first queued\nsecond part"}, {Text: strings.Repeat("long queued ", 20)}}
 	view := transcriptOf(lines)
 	draw(s, view, newSidebar(), false, nil, nil, -1, newComposer("draft"), 0, queue, nil, "Working · 0s", nil, llm.Selection{})
-	_, _, style, _ := s.GetContent(1, 0)
-	_, bg, _ := style.Decompose()
-	if bg != tcell.GetColor(render.HumanColor) {
+	_, style, _ := s.Get(1, 0)
+	bg := style.GetBackground()
+	if bg != color.GetColor(render.HumanColor) {
 		t.Fatal("human instruction background missing", bg)
 	}
-	_, _, style, _ = s.GetContent(1, 1)
-	fg, _, _ := style.Decompose()
-	if fg != tcell.GetColor(render.LavenderColor) {
+	_, style, _ = s.Get(1, 1)
+	fg := style.GetForeground()
+	if fg != color.GetColor(render.LavenderColor) {
 		t.Fatal("system color missing", fg)
 	}
 	row := func(y int) string {
 		var out strings.Builder
 		for x := range 60 {
-			r, _, _, _ := s.GetContent(x, y)
-			out.WriteRune(r)
+			r, _, _ := s.Get(x, y)
+			out.WriteString(r)
 		}
 		return out.String()
 	}

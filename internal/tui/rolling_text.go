@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/render"
 )
 
@@ -22,7 +22,7 @@ type rollingText struct {
 }
 
 type textGlyph struct {
-	runes        []rune
+	text         string
 	start, cells int
 }
 
@@ -43,7 +43,7 @@ func (t *rollingText) draw(s tcell.Screen, x, y, width int, now time.Time, style
 			cluster, cells := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
 			text = text[len(cluster):]
 			if cells > 0 {
-				t.glyphs = append(t.glyphs, textGlyph{runes: []rune(cluster), start: t.cells, cells: cells})
+				t.glyphs = append(t.glyphs, textGlyph{text: cluster, start: t.cells, cells: cells})
 				t.cells += cells
 			}
 		}
@@ -61,7 +61,7 @@ func (t *rollingText) draw(s tcell.Screen, x, y, width int, now time.Time, style
 		if at < 0 || at+glyph.cells > width {
 			continue
 		}
-		s.SetContent(x+at, y, glyph.runes[0], glyph.runes[1:], style)
+		s.Put(x+at, y, glyph.text, style)
 	}
 }
 

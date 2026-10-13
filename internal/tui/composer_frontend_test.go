@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 	"ttc/internal/session"
 )
@@ -13,10 +13,10 @@ import (
 func TestComposerFrontendEditingRecallAndModelWindow(t *testing.T) {
 	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Edited accepted."}}})
 	u.typeText("alpha obsolete omega")
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyRune, 'b', tcell.ModAlt))
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, "b", tcell.ModAlt)
 	u.key(tcell.KeyCtrlW)
 	u.typeText("βeta ")
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyRune, 'f', tcell.ModAlt))
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, "f", tcell.ModAlt)
 	u.wait(t, "> alpha βeta omega")
 	u.key(tcell.KeyCtrlX)
 	u.typeText("m")
@@ -47,12 +47,12 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 	for range 7 {
 		u.key(tcell.KeyRight)
 	}
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("A")
 	u.key(tcell.KeyEnter)
 	u.key(tcell.KeyTab)
 	u.typeText("B")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.wait(t, "> prefix A↵⇥Bsuffix")
 	var requests int
 	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
@@ -81,9 +81,9 @@ func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
 func TestComposerPasteResetsModelChord(t *testing.T) {
 	u := newQuestionTestUI(t, &llm.Script{})
 	u.key(tcell.KeyCtrlX)
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("x")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.typeText("m")
 	u.wait(t, "> xm")
 }
@@ -105,9 +105,9 @@ func gatedComposerUI(t *testing.T, responses []llm.ScriptResponse) (*questionTes
 func TestComposerPasteResetsInterruptPrefix(t *testing.T) {
 	u, p := gatedComposerUI(t, []llm.ScriptResponse{{Text: "Not interrupted."}})
 	u.key(tcell.KeyEscape)
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("draft")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.key(tcell.KeyEscape)
 	u.wait(t, "> draft")
 	close(p.release)
@@ -116,7 +116,7 @@ func TestComposerPasteResetsInterruptPrefix(t *testing.T) {
 
 func TestComposerPasteDefersQuestionOpening(t *testing.T) {
 	u, p := gatedComposerUI(t, questionScript())
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("A")
 	u.wait(t, "> A")
 	close(p.release)
@@ -125,7 +125,7 @@ func TestComposerPasteDefersQuestionOpening(t *testing.T) {
 	u.key(tcell.KeyTab)
 	u.typeText("B")
 	u.wait(t, "> A↵⇥B")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.wait(t, "Choose a method?")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "> A↵⇥B")
@@ -141,9 +141,9 @@ func TestComposerPasteDoesNotReopenDismissedQuestion(t *testing.T) {
 	u.key(tcell.KeyEscape)
 	u.typeText("kept")
 	u.wait(t, "> kept")
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("x")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.typeText("!")
 	u.wait(t, "> keptx!")
 }
@@ -154,7 +154,7 @@ func TestQuestionPasteRemainderDoesNotEnterComposerAfterClosure(t *testing.T) {
 	u.wait(t, "> untouched")
 	close(p.release)
 	u.wait(t, "Choose a method?")
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("A")
 	u.wait(t, "Other")
 	form := u.runtime.PendingQuestion()
@@ -169,7 +169,7 @@ func TestQuestionPasteRemainderDoesNotEnterComposerAfterClosure(t *testing.T) {
 	}
 	u.wait(t, "Turn complete")
 	u.typeText("discarded remainder")
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.typeText("!")
 	u.wait(t, "> untouched!")
 }
@@ -196,7 +196,7 @@ func assertComposerSubmission(t *testing.T, u *questionTestUI, want string) {
 }
 
 func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -207,19 +207,19 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
 		t.Fatal(err)
 	}
-	x, y, visible := s.GetCursor()
-	r, marks, _, _ := s.GetContent(2, 8)
-	if !visible || x != 3 || y != 8 || r != 'e' || string(marks) != "́" {
-		t.Fatal(x, y, visible, r, marks)
+	x, y, visible := s.cursorX, s.cursorY, s.cursorVisible
+	r, _, _ := s.Get(2, 8)
+	if !visible || x != 3 || y != 8 || r != "é" {
+		t.Fatal(x, y, visible, r)
 	}
 	s.SetSize(6, 10)
 	c.set("abcdef")
 	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
 		t.Fatal(err)
 	}
-	x, y, visible = s.GetCursor()
-	r, _, _, _ = s.GetContent(2, 8)
-	if !visible || x != 5 || y != 8 || r != 'd' {
+	x, y, visible = s.cursorX, s.cursorY, s.cursorVisible
+	r, _, _ = s.Get(2, 8)
+	if !visible || x != 5 || y != 8 || r != "d" {
 		t.Fatal("narrow input viewport", x, y, visible, r)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
@@ -100,7 +100,7 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Steer · steer instruction")
 	u.typeText("queued instruction")
-	u.screen.PostEventWait(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
 	u.wait(t, "Queued · queued instruction")
 	path := filepath.Join(u.runtime.Workspace.Root, "help-attachment.txt")
 	if err := os.WriteFile(path, []byte("preserved snapshot"), 0600); err != nil {

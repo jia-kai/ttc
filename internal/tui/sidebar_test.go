@@ -7,7 +7,7 @@ import (
 	"time"
 	"ttc/internal/workspace"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/session"
@@ -17,7 +17,7 @@ import (
 func TestSidebarVersionHeader(t *testing.T) {
 	for _, width := range []int{120, 80} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
-			s := tcell.NewSimulationScreen("UTF-8")
+			s := newTestScreen(t)
 			if err := s.Init(); err != nil {
 				t.Fatal(err)
 			}
@@ -58,18 +58,15 @@ func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 func sidebarScreenText(s tcell.Screen, x, y, width int) string {
 	var text strings.Builder
 	for col := 0; col < width; {
-		r, combining, _, cells := s.GetContent(x+col, y)
-		text.WriteRune(r)
-		for _, mark := range combining {
-			text.WriteRune(mark)
-		}
+		cluster, _, cells := s.Get(x+col, y)
+		text.WriteString(cluster)
 		col += max(1, cells)
 	}
 	return text.String()
 }
 
 func TestSidebarJobMarqueeRefreshPrefixAndClickIdentity(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +125,7 @@ func TestRollingTextUnicodeCells(t *testing.T) {
 	if text := newRollingText("path with  spaces\nnext\tvalue\x00").text; text != "path with  spaces next    value" {
 		t.Fatal("single-line sanitization changed readable spacing or retained controls", text)
 	}
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -137,11 +134,11 @@ func TestRollingTextUnicodeCells(t *testing.T) {
 	l := &rollingText{text: "界e\u0301界末"}
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	l.draw(s, 0, 0, 4, at, tcell.StyleDefault)
-	if r, _, _, width := s.GetContent(0, 0); r != '界' || width != 2 {
+	if r, _, width := s.Get(0, 0); r != "界" || width != 2 {
 		t.Fatal("CJK glyph split", r, width)
 	}
-	if r, combining, _, _ := s.GetContent(2, 0); r != 'e' || len(combining) != 1 || combining[0] != '\u0301' {
-		t.Fatal("combining cluster split", r, combining)
+	if cluster, _, _ := s.Get(2, 0); cluster != "e\u0301" {
+		t.Fatal("combining cluster split", cluster)
 	}
 	s.Clear()
 	l.draw(s, 0, 0, 4, at.Add(1250*time.Millisecond), tcell.StyleDefault)
@@ -150,19 +147,19 @@ func TestRollingTextUnicodeCells(t *testing.T) {
 	}
 	s.Clear()
 	l.draw(s, 0, 0, 1, at, tcell.StyleDefault)
-	if r, _, _, _ := s.GetContent(0, 0); r != ' ' {
+	if r, _, _ := s.Get(0, 0); r != " " {
 		t.Fatal("wide glyph drawn in one cell", r)
 	}
 	s.Clear()
 	emoji := &rollingText{text: "👩‍💻abc"}
 	emoji.draw(s, 0, 0, 3, at, tcell.StyleDefault)
-	if r, combining, _, width := s.GetContent(0, 0); r != '👩' || string(combining) != "‍💻" || width != 2 {
-		t.Fatal("emoji cluster split", r, combining, width)
+	if cluster, _, width := s.Get(0, 0); cluster != "👩‍💻" || width != 2 {
+		t.Fatal("emoji cluster split", cluster, width)
 	}
 }
 
 func TestSidebarSharedRollingTextShowsAllOverflowingFields(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +210,7 @@ func TestSidebarSharedRollingTextShowsAllOverflowingFields(t *testing.T) {
 }
 
 func TestSidebarMarqueeKeepsElapsedPrefixAndNarrowClickTarget(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +239,7 @@ func TestSidebarMarqueeKeepsElapsedPrefixAndNarrowClickTarget(t *testing.T) {
 }
 
 func TestSidebarMarqueeOnlyIndexesVisibleLabels(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +274,7 @@ func TestSidebarMarqueeOnlyIndexesVisibleLabels(t *testing.T) {
 }
 
 func TestSidebarVisibleCachesReleasedWhenHiddenOrCompleted(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +336,7 @@ func TestSidebarMetadataCopyIsLazyAndReusesStorage(t *testing.T) {
 }
 
 func TestSidebarDerivedWorkBoundedByVisibleRows(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +389,7 @@ func TestSidebarCountdownAndElapsedUseDrawTime(t *testing.T) {
 }
 
 func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -448,11 +445,11 @@ func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
 		t.Fatal("overlay inaccessible")
 	}
 	b.focus = 0
-	b.key(tcell.NewEventKey(tcell.KeyTab, 0, 0))
+	b.key(tcell.NewEventKey(tcell.KeyTab, "", 0))
 	if b.focus != 1 {
 		t.Fatal("list focus")
 	}
-	b.key(tcell.NewEventKey(tcell.KeyLeft, 0, 0))
+	b.key(tcell.NewEventKey(tcell.KeyLeft, "", 0))
 	if !job.collapsed {
 		t.Fatal("keyboard collapse")
 	}
@@ -464,7 +461,7 @@ func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
 }
 
 func TestSidebarTinyPanes(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +478,7 @@ func TestSidebarTinyPanes(t *testing.T) {
 	}
 }
 func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -500,19 +497,19 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 	if v.entryAt(0) != anchor {
 		t.Fatal("fullscreen changed anchor")
 	}
-	_, _, visible := s.GetCursor()
+	visible := s.cursorVisible
 	if visible || b.width != 0 {
 		t.Fatal("fullscreen left composer/sidebar")
 	}
 	draw(s, v, b, true, nil, nil, -1, newComposer("draft"), 0, nil, nil, "", nil, llm.Selection{})
-	_, _, visible = s.GetCursor()
+	visible = s.cursorVisible
 	if !visible {
 		t.Fatal("typing did not show composer")
 	}
 	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "Working · 0s", nil, llm.Selection{})
 	var status string
 	for x := range 40 {
-		r, _, _, _ := s.GetContent(x, 29)
+		r, _, _ := s.Get(x, 29)
 		status += string(r)
 	}
 	if !strings.Contains(status, "updates paused") {
@@ -558,7 +555,7 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 	if strings.Count(rows, "Output ") != 1 || strings.Index(rows, "Run output") > strings.Index(rows, "Breakdown") {
 		t.Fatal("run output duplicated or hidden below estimates", rows)
 	}
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}

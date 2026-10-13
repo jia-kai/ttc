@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
 )
 
@@ -12,12 +12,12 @@ func TestEnterSteersAndAltEnterQueues(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		key  tcell.Key
-		rune rune
+		text string
 		mods tcell.ModMask
 	}{
-		{"modified_enter", tcell.KeyEnter, 0, tcell.ModAlt},
-		{"legacy_cr", tcell.KeyRune, 'm', tcell.ModAlt | tcell.ModCtrl},
-		{"legacy_lf", tcell.KeyRune, 'j', tcell.ModAlt | tcell.ModCtrl},
+		{"modified_enter", tcell.KeyEnter, "", tcell.ModAlt},
+		{"legacy_cr", tcell.KeyRune, "m", tcell.ModAlt | tcell.ModCtrl},
+		{"legacy_lf", tcell.KeyRune, "j", tcell.ModAlt | tcell.ModCtrl},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &questionTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{
@@ -28,14 +28,14 @@ func TestEnterSteersAndAltEnterQueues(t *testing.T) {
 			u := newQuestionTestUI(t, p)
 			// Alt+Enter still sends an ordinary turn when idle.
 			u.typeText("start")
-			u.screen.PostEventWait(tcell.NewEventKey(tc.key, tc.rune, tc.mods))
+			u.screen.EventQ() <- tcell.NewEventKey(tc.key, tc.text, tc.mods)
 			select {
 			case <-p.ready:
 			case <-time.After(3 * time.Second):
 				t.Fatal("request did not start")
 			}
 			u.typeText("next turn")
-			u.screen.PostEventWait(tcell.NewEventKey(tc.key, tc.rune, tc.mods))
+			u.screen.EventQ() <- tcell.NewEventKey(tc.key, tc.text, tc.mods)
 			u.wait(t, "Queued · next turn")
 			u.typeText("change direction")
 			u.key(tcell.KeyEnter)

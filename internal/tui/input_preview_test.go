@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/render"
@@ -84,7 +84,7 @@ func TestPendingInputPreviewBoundedWorkAndAllocation(t *testing.T) {
 }
 
 func TestPendingInputDrawPreservesOriginalsAndGraphemes(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}

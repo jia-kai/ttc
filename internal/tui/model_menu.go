@@ -6,7 +6,7 @@ import (
 
 	"ttc/internal/llm"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 // modelMenu chooses an exact catalog model followed by one of its reasoning variants.
@@ -36,7 +36,7 @@ func newModelMenu(models []llm.ModelSpec, current llm.Selection) *modelMenu {
 
 // key returns a completed selection or cancellation. Escape backs out of variants first.
 func (m *modelMenu) key(ev *tcell.EventKey, height int) (id, variant string, closed bool) {
-	if ev.Key() == tcell.KeyCtrlD || ev.Key() == tcell.KeyCtrlU || ev.Key() == tcell.KeyPgUp || ev.Key() == tcell.KeyPgDn {
+	if isCtrl(ev, "d") || isCtrl(ev, "u") || ev.Key() == tcell.KeyPgUp || ev.Key() == tcell.KeyPgDn {
 		m.Window.Key(ev, height)
 		m.manualScroll = true
 		return "", "", false

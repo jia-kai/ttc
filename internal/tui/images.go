@@ -16,7 +16,7 @@ import (
 	"ttc/internal/session"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -479,22 +479,22 @@ func (p *imagePreview) key(ev *tcell.EventKey) (close, confirm bool) {
 			return true, true
 		}
 	case tcell.KeyRune:
-		switch ev.Rune() {
-		case 'i':
+		switch ev.Str() {
+		case "i":
 			p.details = &Window{Title: "Image tool details", Text: p.detailText, Markdown: true, actor: p.Window.actor, subagentName: p.Window.subagentName}
-		case 'h':
+		case "h":
 			p.panX -= float64(p.cellWidth) * 4 / p.scale
-		case 'l':
+		case "l":
 			p.panX += float64(p.cellWidth) * 4 / p.scale
-		case 'k':
+		case "k":
 			p.panY -= float64(p.cellHeight) * 2 / p.scale
-		case 'j':
+		case "j":
 			p.panY += float64(p.cellHeight) * 2 / p.scale
-		case '+', '=':
+		case "+", "=":
 			p.zoom = min(16, p.zoom*1.25)
-		case '-':
+		case "-":
 			p.zoom = max(0.25, p.zoom/1.25)
-		case '0':
+		case "0":
 			p.zoom, p.panX, p.panY = 1, 0, 0
 		}
 	}

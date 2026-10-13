@@ -17,7 +17,7 @@ import (
 	"ttc/internal/llm"
 	"ttc/internal/session"
 
-	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v3"
 )
 
 func isolatedImageFrontend(t *testing.T) {
@@ -123,28 +123,28 @@ func TestPreviewCoordinatesPanZoomAndExplicitConfirm(t *testing.T) {
 	if close || confirm || p.point == nil {
 		t.Fatal("click submitted without OK")
 	}
-	p.key(tcell.NewEventKey(tcell.KeyRune, 'l', 0))
+	p.key(tcell.NewEventKey(tcell.KeyRune, "l", 0))
 	p.geometry(100, 30)
 	pan := p.coordinate(x, y)
 	if pan == nil || pan[0] <= point[0] {
 		t.Fatal("pan not mapped", pan)
 	}
-	p.key(tcell.NewEventKey(tcell.KeyRune, '+', 0))
+	p.key(tcell.NewEventKey(tcell.KeyRune, "+", 0))
 	p.geometry(100, 30)
 	if p.zoom <= 1 {
 		t.Fatal("zoom failed")
 	}
-	close, confirm = p.key(tcell.NewEventKey(tcell.KeyEnter, 0, 0))
+	close, confirm = p.key(tcell.NewEventKey(tcell.KeyEnter, "", 0))
 	if !close || !confirm {
 		t.Fatal("OK did not confirm")
 	}
-	p.key(tcell.NewEventKey(tcell.KeyRune, '0', 0))
+	p.key(tcell.NewEventKey(tcell.KeyRune, "0", 0))
 	p.geometry(70, 20)
 	if p.zoom != 1 || p.panX != 0 || p.panY != 0 {
 		t.Fatal("fit failed")
 	}
 	p.pending = false
-	close, confirm = p.key(tcell.NewEventKey(tcell.KeyEscape, 0, 0))
+	close, confirm = p.key(tcell.NewEventKey(tcell.KeyEscape, "", 0))
 	if !close || confirm {
 		t.Fatal("ordinary dismiss confirmed a click")
 	}
@@ -196,7 +196,7 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 	u.typeText(fmt.Sprintf("/inspect %d", entry))
 	u.key(tcell.KeyEnter)
 	u.wait(t, "h/j/k/l pan")
-	u.screen.PostEventWait(tcell.NewEventMouse(50, 14, tcell.Button1, 0))
+	u.screen.EventQ() <- tcell.NewEventMouse(50, 14, tcell.Button1, 0)
 	u.wait(t, "pixel (")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Archived image selection received.")
@@ -249,9 +249,9 @@ func TestConfirmOlderImageFollowsResumedReply(t *testing.T) {
 			t.Fatal("image card not found after scrolling")
 		}
 	}
-	u.screen.PostEventWait(tcell.NewEventMouse(4, y, tcell.Button1, 0))
+	u.screen.EventQ() <- tcell.NewEventMouse(4, y, tcell.Button1, 0)
 	u.wait(t, "h/j/k/l pan")
-	u.screen.PostEventWait(tcell.NewEventMouse(50, 14, tcell.Button1, 0))
+	u.screen.EventQ() <- tcell.NewEventMouse(50, 14, tcell.Button1, 0)
 	u.wait(t, "pixel (")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Confirmed point response visible.")
@@ -481,7 +481,7 @@ func TestFallbackWarningIsVisibleAndNotModelContext(t *testing.T) {
 }
 
 func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
-	s := tcell.NewSimulationScreen("UTF-8")
+	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 	u.wait(t, "Parameters:")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "h/j/k/l pan")
-	u.screen.PostEventWait(tcell.NewEventMouse(50, 14, tcell.Button1, 0))
+	u.screen.EventQ() <- tcell.NewEventMouse(50, 14, tcell.Button1, 0)
 	u.wait(t, "pixel (")
 	var count int
 	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests WHERE purpose='coding'").Scan(&count); err != nil {
@@ -599,10 +599,10 @@ func TestPastePreservesImagePreviewWithDismissedQuestion(t *testing.T) {
 	u.typeText(fmt.Sprintf("/inspect %d", entry))
 	u.key(tcell.KeyEnter)
 	u.wait(t, "h/j/k/l pan")
-	u.screen.PostEventWait(tcell.NewEventPaste(true))
+	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("ignore pasted keys")
 	u.key(tcell.KeyEnter)
-	u.screen.PostEventWait(tcell.NewEventPaste(false))
+	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.typeText("+")
 	u.wait(t, "Zoom 125%")
 }
