@@ -148,7 +148,7 @@ def main():
         with sqlite3.connect(data / 'history.sqlite') as db:
             assert db.execute('SELECT count(*) FROM sessions').fetchone()[0] == 1
             assert db.execute('SELECT count(*) FROM model_requests').fetchone()[0] == 2
-        stop(b'\x03')
+        stop(b'\x03\x03')  # Clear the recalled prompt, then exit with empty input.
         print(f'PASS: restart/session recall, draft restoration, Ctrl-R selection/cancel/paste, no inference; artifacts: {root}')
     except BaseException:
         save()
