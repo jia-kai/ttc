@@ -17,7 +17,7 @@ import (
 	"ttc/internal/tool"
 )
 
-func TestSetupExo(t *testing.T) {
+func TestSetupExa(t *testing.T) {
 	t.Setenv("TTC_EXA_URL", "")
 	for _, tc := range []struct {
 		name, input, response      string
@@ -62,7 +62,7 @@ func TestSetupExo(t *testing.T) {
 				}
 			}
 			var output bytes.Buffer
-			err := setupExo(context.Background(), path, strings.NewReader(tc.input), &output, client)
+			err := setupExa(context.Background(), path, strings.NewReader(tc.input), &output, client)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("error = %v", err)
 			}
@@ -103,7 +103,7 @@ type setupRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f setupRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestSetupExoRejectsUnsafeTargets(t *testing.T) {
+func TestSetupExaRejectsUnsafeTargets(t *testing.T) {
 	for _, kind := range []string{"symlink", "hardlink", "fifo", "directory", "malformed"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
@@ -128,7 +128,7 @@ func TestSetupExoRejectsUnsafeTargets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = setupExo(context.Background(), path, strings.NewReader("synthetic-new\ny\n"), io.Discard, http.DefaultClient); err == nil {
+			if err = setupExa(context.Background(), path, strings.NewReader("synthetic-new\ny\n"), io.Discard, http.DefaultClient); err == nil {
 				t.Fatal("unsafe target accepted")
 			}
 		})
@@ -165,7 +165,7 @@ func TestSaveSetupConfigDoesNotClobberChangedTarget(t *testing.T) {
 	}
 }
 
-func TestSetupExoCLIStandalone(t *testing.T) {
+func TestSetupExaCLIStandalone(t *testing.T) {
 	oldArgs, oldFlags, oldInput, oldClient := os.Args, flag.CommandLine, os.Stdin, http.DefaultClient
 	t.Cleanup(func() {
 		os.Args, flag.CommandLine, os.Stdin, http.DefaultClient = oldArgs, oldFlags, oldInput, oldClient
@@ -186,7 +186,7 @@ func TestSetupExoCLIStandalone(t *testing.T) {
 	}
 	write.Close()
 	os.Stdin = read
-	os.Args = []string{"ttc", "--setup-exo", "--web-search-config", path}
+	os.Args = []string{"ttc", "--setup-exa", "--web-search-config", path}
 	flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 	calls := 0
 	http.DefaultClient = &http.Client{Transport: setupRoundTripper(func(r *http.Request) (*http.Response, error) {
@@ -209,7 +209,7 @@ func TestSetupExoCLIStandalone(t *testing.T) {
 		t.Fatal("default target was used")
 	}
 	for _, conflict := range []string{"--login", "--install-math", "--offline-script=missing", "--import-codex-auth=missing"} {
-		os.Args = []string{"ttc", "--setup-exo", conflict}
+		os.Args = []string{"ttc", "--setup-exa", conflict}
 		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		if err = run(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 			t.Fatalf("conflict %s: %v", conflict, err)
@@ -217,7 +217,7 @@ func TestSetupExoCLIStandalone(t *testing.T) {
 	}
 }
 
-func TestSetupExoIdleInputCancellation(t *testing.T) {
+func TestSetupExaIdleInputCancellation(t *testing.T) {
 	for _, confirmation := range []bool{false, true} {
 		t.Run(map[bool]string{false: "key", true: "confirmation"}[confirmation], func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config")
@@ -240,7 +240,7 @@ func TestSetupExoIdleInputCancellation(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 			start := time.Now()
-			err = setupExo(ctx, path, read, io.Discard, http.DefaultClient)
+			err = setupExa(ctx, path, read, io.Discard, http.DefaultClient)
 			if err == nil || !strings.Contains(err.Error(), "deadline exceeded") || time.Since(start) > time.Second {
 				t.Fatalf("input cancellation: %v", err)
 			}
@@ -248,14 +248,14 @@ func TestSetupExoIdleInputCancellation(t *testing.T) {
 	}
 }
 
-func TestSetupExoRejectsPlaintextRemoteEndpoint(t *testing.T) {
+func TestSetupExaRejectsPlaintextRemoteEndpoint(t *testing.T) {
 	t.Setenv("TTC_EXA_URL", "http://remote.example/mcp")
 	path := filepath.Join(t.TempDir(), "config")
 	client := &http.Client{Transport: setupRoundTripper(func(*http.Request) (*http.Response, error) {
 		t.Fatal("insecure credential transmitted")
 		return nil, nil
 	})}
-	err := setupExo(context.Background(), path, strings.NewReader("synthetic-key\n"), io.Discard, client)
+	err := setupExa(context.Background(), path, strings.NewReader("synthetic-key\n"), io.Discard, client)
 	if err == nil || !strings.Contains(err.Error(), "requires HTTPS") {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestSetupExoRejectsPlaintextRemoteEndpoint(t *testing.T) {
 	if err = os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	err = setupExo(context.Background(), path, strings.NewReader("synthetic-key\nyes\n"), io.Discard, client)
+	err = setupExa(context.Background(), path, strings.NewReader("synthetic-key\nyes\n"), io.Discard, client)
 	if err == nil || !strings.Contains(err.Error(), "requires HTTPS") {
 		t.Fatal(err)
 	}

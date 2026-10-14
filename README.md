@@ -98,10 +98,10 @@ credentials into TTC's private store:
 ```
 
 Web search uses Exa's public, rate-limited endpoint by default. To use your own
-key, run the standalone setup command (the flag is spelled `exo`):
+key, run the standalone setup command:
 
 ```sh
-./ttc --setup-exo
+./ttc --setup-exa
 ```
 
 Setup reads stdin (hidden in a terminal), confirms replacing an existing key,

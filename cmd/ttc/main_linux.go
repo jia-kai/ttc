@@ -81,7 +81,7 @@ func runWithModules(modules []providers.Module) error {
 		return e
 	}
 	searchConfigFile := flag.String("web-search-config", searchPath, "operator web-search JSON configuration")
-	setupExoFlag := flag.Bool("setup-exo", false, "read and verify an Exa search API key from stdin, save config, then exit")
+	setupExaFlag := flag.Bool("setup-exa", false, "read and verify an Exa search API key from stdin, save config, then exit")
 	data := flag.String("data-dir", rootDefault, "private data root")
 	cwd := flag.String("workdir", ".", "workspace directory")
 	plain := flag.Bool("plain", false, "plain terminal output")
@@ -107,7 +107,7 @@ func runWithModules(modules []providers.Module) error {
 		}
 		return e
 	}
-	if *setupExoFlag {
+	if *setupExaFlag {
 		var conflict string
 		flag.CommandLine.Visit(func(f *flag.Flag) {
 			if !appFlags[f.Name] {
@@ -115,11 +115,11 @@ func runWithModules(modules []providers.Module) error {
 			}
 		})
 		if *login || *installMath || *script != "" || conflict != "" {
-			return errors.New("--setup-exo cannot be combined with --login, --install-math, --offline-script or provider-specific options")
+			return errors.New("--setup-exa cannot be combined with --login, --install-math, --offline-script or provider-specific options")
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		return setupExo(ctx, *searchConfigFile, os.Stdin, os.Stderr, http.DefaultClient)
+		return setupExa(ctx, *searchConfigFile, os.Stdin, os.Stderr, http.DefaultClient)
 	}
 	factory, e := providers.Select(configured, *providerIDFlag)
 	if e != nil {

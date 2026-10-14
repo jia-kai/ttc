@@ -20,8 +20,8 @@ import (
 	"ttc/internal/tool"
 )
 
-// setupExo is a standalone operator workflow: credentials never enter history.
-func setupExo(ctx context.Context, path string, input io.Reader, output io.Writer, client *http.Client) error {
+// setupExa is a standalone operator workflow: credentials never enter history.
+func setupExa(ctx context.Context, path string, input io.Reader, output io.Writer, client *http.Client) error {
 	original, err := setupConfigInfo(path)
 	if err != nil {
 		return err

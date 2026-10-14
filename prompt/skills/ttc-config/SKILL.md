@@ -26,7 +26,7 @@ for broad read-write mounts or global Docker/SSH-agent authorization.
 - **Web search:** `${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json`, or
   the file selected by `--web-search-config PATH`. Documented fields are
   `api_key` and optional HTTP(S) `endpoint`; the public Exa endpoint works
-  without a key. Users can run `ttc --setup-exo` privately from the host: it reads
+  without a key. Users can run `ttc --setup-exa` privately from the host: it reads
   stdin (terminal entry is hidden), confirms replacing an existing config's key,
   verifies one test search, and atomically saves mode 0600 while preserving the
   endpoint. `TTC_EXA_URL`, if set, overrides verification without changing the
