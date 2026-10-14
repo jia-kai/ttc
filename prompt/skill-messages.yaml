@@ -1,15 +1,26 @@
 # Tool-facing skill lookup and instruction-source failures.
 SkillNotFound: skill %q not found
 SkillInvalidActor: skill access requires a valid runtime actor ID
-SkillRoleDenied: 'skill %q is unavailable for role %q; choose a skill from available_skills'
-SkillFrontmatterInvalid: opening skill frontmatter must be a valid YAML mapping with unique keys and a closing --- delimiter
-SkillFrontmatterDuplicateKey: skill frontmatter contains a duplicate mapping key; use each key only once
-SkillFrontmatterTooLarge: 'skill frontmatter exceeds its complexity limits (%d YAML bytes, %d pairs per mapping, %d syntax nodes); shorten the metadata'
+SkillRoleDenied:
+  "skill %q is unavailable for role %q; choose a skill from available_skills"
+SkillFrontmatterInvalid:
+  opening skill frontmatter must be a valid YAML mapping with unique keys and a
+  closing --- delimiter
+SkillFrontmatterDuplicateKey:
+  skill frontmatter contains a duplicate mapping key; use each key only once
+SkillFrontmatterTooLarge:
+  "skill frontmatter exceeds its complexity limits (%d YAML bytes, %d pairs per
+  mapping, %d syntax nodes); shorten the metadata"
 SkillDescriptionInvalid: skill frontmatter description must be a string
-SkillRolesInvalid: 'skill frontmatter roles must be a nonempty list of distinct main, child, or aside values'
-SkillMetadataFailure: 'invalid metadata for skill %q: %w'
-SkillLoadFailure: 'cannot read skill %q; correct its selected source and restart TTC if catalog metadata needs refreshing'
-SkillInspectFailure: 'inspect instruction %s: %w'
+SkillRolesInvalid:
+  "skill frontmatter roles must be a nonempty list of distinct main, child, or
+  aside values"
+SkillMetadataFailure: "invalid metadata for skill %q: %w"
+SkillLoadFailure:
+  "cannot read skill %q; correct its selected source and restart TTC if catalog
+  metadata needs refreshing"
+SkillInspectFailure: "inspect instruction %s: %w"
 SkillRegularFileRequired: instruction %s must be a regular file
-SkillInstructionTooLarge: instruction %s exceeds the 1 MiB limit; shorten the document
-SkillReadFailure: 'read instruction %s: %w'
+SkillInstructionTooLarge:
+  instruction %s exceeds the 1 MiB limit; shorten the document
+SkillReadFailure: "read instruction %s: %w"

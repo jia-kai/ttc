@@ -1,26 +1,23 @@
 # Embedded LLM text
 
-All TTC-authored text sent to models belongs here: instructions, tool descriptions,
-validation/recovery guidance, runtime warnings, fallback notices and message
-framing. Go owns behavior and supplies dynamic values, not the authored prose.
-UI-only wording, protocol/schema keys, status values, external diagnostic payloads
-and user/project content are not prompt assets. TTC-authored diagnostic captions
-and validation text are assets, even when wrapped by another error. Synthetic test
-conversations stay in fixtures.
+All TTC-authored text sent to models belongs here: instructions, tool
+descriptions, validation/recovery guidance, runtime warnings, fallback notices
+and message framing. Go owns behavior and supplies dynamic values, not the
+authored prose. UI-only wording, protocol/schema keys, status values, external
+diagnostic payloads and user/project content are not prompt assets. TTC-authored
+diagnostic captions and validation text are assets, even when wrapped by another
+error. Synthetic test conversations stay in fixtures.
 
 ## Sources
 
-- `system.md`: shared evidence, context and response guidance for main, children
-  and read-only asides.
-- `coding.md`: mutation, planning and shell workflows shared by main and children.
-- `main.md`: user clarification and child delegation, supplied only to main.
-- `child-messages.yaml`: child-only suffix and active-assignment message diagnostics;
-  do not duplicate main instructions.
-- `btw.md`: read-only aside instructions.
+- `system.yaml`: role instructions. Main receives `System` + `Coding` + `Main`;
+  coding children receive `System` + `Coding` + `Child`, separated by newlines.
+  Read-only asides receive `System`, with `Btw` as a separate developer message.
+- `child-messages.yaml`: active-assignment message diagnostics.
 - `recovery.md`: continuation warning after a partial coding failure.
 - `retained-inputs.md`: `RetainedInputs` format guidance for the grouped
-  model-facing projection. Provenance is typed message metadata, not prompt prose;
-  legacy marker decoding belongs only in `internal/history/migrate`.
+  model-facing projection. Provenance is typed message metadata, not prompt
+  prose; legacy marker decoding belongs only in `internal/history/migrate`.
 - `compaction.yaml`: summary instructions, input with two `%s` slots
   (focus/transcript), and links with three (summary/Markdown/JSONL archives).
 - `naming.yaml`: title instructions and output-token/deadline limits.
@@ -30,15 +27,21 @@ conversations stay in fixtures.
 - `runtime.yaml`: failed-child caller guidance and fallback messages.
 - `*-messages.yaml`: tool/session guidance, diagnostic prose, and shared
   attachment/archive/presentation framing. Each key is an exported Go constant
-  name; values are nonempty UTF-8 strings.
-  Preserve printf slots and whitespace; static constants let `go vet` check callers.
-- `skills/*/SKILL.md`: bundled skill instructions, embedded by `skills/embed.go`.
-  External project/user skills retain their own source files and precedence.
-  Optional opening YAML `roles` selects `main`, `child` and/or `aside`; omit it
-  for all roles. `file-based-plan` is main-only. Do not declare tool permissions
-  in skill metadata: the runtime registry owns tool availability.
+  name; values are nonempty UTF-8 strings. Preserve printf slots and whitespace;
+  static constants let `go vet` check callers.
+- `skills/*/SKILL.md`: bundled skill instructions, embedded by
+  `skills/embed.go`. External project/user skills retain their own source files
+  and precedence. Optional opening YAML `roles` selects `main`, `child` and/or
+  `aside`; omit it for all roles. `file-based-plan` is main-only. Do not declare
+  tool permissions in skill metadata: the runtime registry owns tool
+  availability.
 
 ## Build and validation
+
+Use folded YAML blocks (`>`) for source-wrapped prose. Use literal blocks (`|`)
+when line breaks are part of the template or structured content; compaction
+input and archive-link templates use `|-` to preserve layout without a trailing
+newline. The generator embeds decoded YAML strings without extra normalization.
 
 Edit assets, then run `make prompts`. `make build`, `make test` and `make check`
 generate git-ignored `internal/prompts/assets_generated.go` before compiling.

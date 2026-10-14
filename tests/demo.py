@@ -507,11 +507,13 @@ path.write_text('Looks good.')
         assert results['question'][0]['answers'][1]['values'] == ['Looks good.']
         assert results['question'][0]['answers'][1]['source'] == 'custom'
         assert results['question'][0]['answers'][2]['values'] == ['data']
-        child_asset = (Path(__file__).resolve().parent.parent / 'prompt/child-messages.yaml').read_text()
-        # The canonical suffix is a two-space-indented YAML literal block.
-        child_block = re.search(r'^Child: \|\n((?:  [^\n]*\n|\n)+)', child_asset, re.MULTILINE)
-        assert child_block is not None, 'missing Child literal block'
-        child_instructions = textwrap.dedent(child_block.group(1)).rstrip('\n') + '\n'
+        child_asset = (Path(__file__).resolve().parent.parent / 'prompt/system.yaml').read_text()
+        # Child is a folded prose block: join wrapped lines within paragraphs,
+        # preserve paragraph breaks and retain the final newline.
+        child_block = re.search(r'^Child: >\n((?:  [^\n]*\n|\n)+)', child_asset, re.MULTILINE)
+        assert child_block is not None, 'missing Child folded block'
+        paragraphs = textwrap.dedent(child_block.group(1)).rstrip('\n').split('\n\n')
+        child_instructions = '\n'.join(' '.join(p.splitlines()) for p in paragraphs) + '\n'
         assert child_requests[0]['instructions'].endswith(child_instructions)
         assert len(child_requests[0]['input']) == 2
         assert child_requests[0]['input'][0]['content'][0]['text'] == 'Check fixture observations independently.'

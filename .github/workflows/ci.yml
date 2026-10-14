@@ -37,7 +37,12 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: "22"
+
+      - name: Check Markdown and YAML formatting
+        run: |
+          mapfile -d '' -t files < <(git ls-files -z '*.md' '*.yaml' '*.yml')
+          npx --yes prettier@3.8.1 --check "${files[@]}"
 
       - name: Install Linux test dependencies
         run: |

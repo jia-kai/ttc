@@ -8,15 +8,14 @@ import (
 	"testing"
 )
 
+const fixtureSystem = "System: \"Stable instructions.\\r\\n\\n\"\nCoding: \"Coding workflow.\\n\"\nMain: \"Main workflow.\\n\"\nChild: \"Child instructions.\\n\"\nBtw: Read-only answer.\n"
+
 func fixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	for path, text := range map[string]string{
-		"prompt/system.md":             "Stable instructions.\r\n\n",
-		"prompt/coding.md":             "Coding workflow.\n",
-		"prompt/main.md":               "Main workflow.\n",
-		"prompt/child-messages.yaml":   "Child: |\n  Child instructions.\nChildMessageNonempty: message must be nonempty UTF-8\n",
-		"prompt/btw.md":                "Read-only answer.",
+		"prompt/system.yaml":           fixtureSystem,
+		"prompt/child-messages.yaml":   "ChildMessageNonempty: message must be nonempty UTF-8\n",
 		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nlinks: '%s Archives: %s %s'\n",
 		"prompt/naming.yaml":           "text: Name it.\noutput_tokens: 32\ntimeout_seconds: 15\n",
 		"prompt/tools.yaml":            "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
@@ -73,7 +72,7 @@ func TestGenerationPreservesTextAndIsDeterministic(t *testing.T) {
 	if !bytes.Equal(first, second) || info.ModTime() != after.ModTime() {
 		t.Fatal("unchanged generation rewrote output")
 	}
-	put(t, root, "prompt/system.md", "Edited source.\n")
+	put(t, root, "prompt/system.yaml", strings.Replace(fixtureSystem, "Stable instructions.\\r\\n\\n", "Edited source.\\n", 1))
 	if err = generate(root, target); err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +82,39 @@ func TestGenerationPreservesTextAndIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
+	root := fixture(t)
+	put(t, root, "prompt/system.yaml", strings.Replace(fixtureSystem,
+		"Child: \"Child instructions.\\n\"\n",
+		"Child: >\n  First wrapped\n  paragraph.\n\n  Second paragraph.\n", 1))
+	put(t, root, "prompt/compaction.yaml", "instructions: Summary.\ninput: |-\n  Focus: %s\n\n  %s\nlinks: |-\n  %s\n\n  Earlier history: %s\n  Exact records: %s\n")
+	if err := generate(root, "generated.go"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`const Child = "First wrapped paragraph.\nSecond paragraph.\n"`,
+		`const CompactionInput = "Focus: %s\n\n%s"`,
+		`const CompactionLinks = "%s\n\nEarlier history: %s\nExact records: %s"`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("generated output missing %s", want)
+		}
+	}
+}
+
 func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 	for _, tc := range []struct{ name, path, text, want string }{
-		{"empty", "prompt/system.md", "\n", "nonempty"},
-		{"encoding", "prompt/system.md", "\xff", "UTF-8"},
-		{"nul", "prompt/system.md", "a\x00b", "NUL"},
+		{"empty", "prompt/system.yaml", "System: ''", "nonempty"},
+		{"encoding", "prompt/system.yaml", "System: \xff", "UTF-8"},
+		{"nul", "prompt/system.yaml", "System: \"a\\0b\"", "NUL"},
+		{"system number", "prompt/system.yaml", "System: 42", "nonempty UTF-8"},
+		{"system duplicate", "prompt/system.yaml", "System: one\nSystem: two", "already defined"},
+		{"system documents", "prompt/system.yaml", fixtureSystem + "---\nOther: other", "exactly one"},
+		{"unknown role", "prompt/system.yaml", fixtureSystem + "Typo: instructions\n", "unknown role"},
 		{"unknown asset", "prompt/extra.txt", "other", "unsupported"},
 		{"missing tool", "prompt/tools.yaml", "{}", "missing prompt"},
 		{"extra tool", "prompt/tools.yaml", "write:\n  description: Write.\nread:\n  description: Read.\n", "unregistered"},
@@ -110,8 +137,9 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"message object", "prompt/runtime.yaml", "RuntimeWarning: {text: warning}", "nonempty UTF-8"},
 		{"invalid message name", "prompt/runtime.yaml", "runtime_warning: warning", "invalid or reserved"},
 		{"reserved message name", "prompt/runtime.yaml", "Naming: warning", "invalid or reserved"},
-		{"markdown collision", "prompt/runtime.yaml", "System: warning", "duplicate prompt"},
-		{"child collision", "prompt/runtime.yaml", "Child: warning", "duplicate prompt"},
+		{"system collision", "prompt/runtime.yaml", "System: warning", "must be defined in system.yaml"},
+		{"obsolete markdown", "prompt/system.md", "Old instructions.", "must be defined in system.yaml"},
+		{"child collision", "prompt/runtime.yaml", "Child: warning", "must be defined in system.yaml"},
 		{"message collision", "prompt/tool-messages.yaml", "RuntimeWarning: warning", "duplicate prompt"},
 		{"duplicate message", "prompt/runtime.yaml", "RuntimeWarning: warning\nRuntimeWarning: other", "already defined"},
 		{"invalid extra message", "prompt/helper-messages.yaml", "ExtraMessage: false", "nonempty UTF-8"},
@@ -140,15 +168,16 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 }
 
 func TestMissingRequiredPrompt(t *testing.T) {
-	for name, path := range map[string]string{
-		"System": "prompt/system.md", "Coding": "prompt/coding.md", "Main": "prompt/main.md",
-		"Child": "prompt/child-messages.yaml", "Btw": "prompt/btw.md",
-	} {
+	for _, name := range []string{"System", "Coding", "Main", "Child", "Btw"} {
 		t.Run(name, func(t *testing.T) {
 			root := fixture(t)
-			if err := os.Remove(filepath.Join(root, path)); err != nil {
-				t.Fatal(err)
+			var remaining strings.Builder
+			for _, line := range strings.SplitAfter(fixtureSystem, "\n") {
+				if !strings.HasPrefix(line, name+":") {
+					remaining.WriteString(line)
+				}
 			}
+			put(t, root, "prompt/system.yaml", remaining.String())
 			if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing required prompt "+name) {
 				t.Fatal(err)
 			}
@@ -170,7 +199,7 @@ func TestAdditionalMessageAssetsAndSkillsSubtree(t *testing.T) {
 }
 
 func TestMissingRequiredMessageAsset(t *testing.T) {
-	for _, name := range []string{"runtime.yaml", "tool-messages.yaml"} {
+	for _, name := range []string{"system.yaml", "runtime.yaml", "tool-messages.yaml"} {
 		root := fixture(t)
 		if err := os.Remove(filepath.Join(root, "prompt", name)); err != nil {
 			t.Fatal(err)

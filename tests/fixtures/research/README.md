@@ -1,7 +1,7 @@
 # Reproducible research fixture
 
-This tiny project measures the mean of three values in `observations.csv`.
-The expected mean is **4.0**. The demo works on a private copy of this tree.
+This tiny project measures the mean of three values in `observations.csv`. The
+expected mean is **4.0**. The demo works on a private copy of this tree.
 
 Run `python3 analysis.py` to print the mean. No external Python packages needed.
 

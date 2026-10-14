@@ -1,28 +1,31 @@
 ---
 name: tmux
-description: Inspect and control tmux panes and windows, run interactive commands, and monitor long-running work on headless Linux hosts.
+description:
+  Inspect and control tmux panes and windows, run interactive commands, and
+  monitor long-running work on headless Linux hosts.
 ---
 
 # tmux
 
-This workflow requires `shell`. If it is unavailable, report that tmux inspection
-or control cannot run in this role; inspect supplied logs or propose commands
-instead. With `shell`, use the commands below within the assigned scope.
+This workflow requires `shell`. If it is unavailable, report that tmux
+inspection or control cannot run in this role; inspect supplied logs or propose
+commands instead. With `shell`, use the commands below within the assigned
+scope.
 
-TTC's shell is noninteractive and has no PTY;
-send interactive input to a tmux pane instead. Check `command -v tmux` first.
-If it is missing, report the dependency rather than installing it for inspection.
+TTC's shell is noninteractive and has no PTY; send interactive input to a tmux
+pane instead. Check `command -v tmux` first. If it is missing, report the
+dependency rather than installing it for inspection.
 
 ## Find the target
 
 Identify TTC's own pane before sending keys. Prefer stable pane IDs (`%75`) and
 window IDs (`@19`); indexes and names can change or be ambiguous. A target may
-also be `session:window.pane`. Use `$TMUX_PANE` for TTC's own pane; an untargeted
-`display-message` identifies the active pane, which may contain another program.
-If `TMUX_PANE` is absent, inspect the pane list; do not assume the active pane
-contains TTC.
-Choose the intended workload pane separately. Do not send shell command text to
-TTC's own pane: TTC would receive it as a prompt, not execute it as a shell command.
+also be `session:window.pane`. Use `$TMUX_PANE` for TTC's own pane; an
+untargeted `display-message` identifies the active pane, which may contain
+another program. If `TMUX_PANE` is absent, inspect the pane list; do not assume
+the active pane contains TTC. Choose the intended workload pane separately. Do
+not send shell command text to TTC's own pane: TTC would receive it as a prompt,
+not execute it as a shell command.
 
 ```sh
 if [ -n "${TMUX_PANE:-}" ]; then
@@ -42,21 +45,26 @@ consistently when working with a custom socket.
 scrollback; `-S -` includes all retained history. Scrollback is finite.
 
 ```json
-{"command":"tmux capture-pane -t %75 -p -S -100"}
+{ "command": "tmux capture-pane -t %75 -p -S -100" }
 ```
 
-Shell results contain bounded output; consult their selection/truncation metadata
-to see which portions were included. If more text is needed, use the returned
-`job_id` with `job_read`, or save the capture to a file in the runtime
+Shell results contain bounded output; consult their selection/truncation
+metadata to see which portions were included. If more text is needed, use the
+returned `job_id` with `job_read`, or save the capture to a file in the runtime
 `scratch_directory`. Use `limit_bytes` up to 65536 and follow `next_cursor`:
 
 ```json
-{"job_id":"job_xyz","stream":"stdout","cursor":"eof:-100:lines","limit_bytes":16384}
+{
+  "job_id": "job_xyz",
+  "stream": "stdout",
+  "cursor": "eof:-100:lines",
+  "limit_bytes": 16384
+}
 ```
 
-Replace example IDs with the actual target and returned job ID. Send command text
-literally, then Enter separately. Quote text as shell data; do not interpolate
-untrusted output into a command.
+Replace example IDs with the actual target and returned job ID. Send command
+text literally, then Enter separately. Quote text as shell data; do not
+interpolate untrusted output into a command.
 
 ```sh
 tmux send-keys -t %75 -l 'make test'
@@ -66,8 +74,9 @@ tmux select-window -t @19
 ```
 
 Send individual keys to editors or pagers. `C-c` interrupts the pane's program;
-inside TTC it exits TTC. `C-d` sends EOF to many shells, but scrolls down in TTC.
-Do not interrupt, clear or close another pane merely to make its output cleaner.
+inside TTC it exits TTC. `C-d` sends EOF to many shells, but scrolls down in
+TTC. Do not interrupt, clear or close another pane merely to make its output
+cleaner.
 
 ## Long-running work
 
@@ -89,17 +98,17 @@ tmux new-window -d -P -F '#{pane_id}' -n checks -c /path/to/project \
 The final shell keeps the pane available for inspection; `checks.exit` records
 the workload's exit code, not the shell's eventual exit status.
 
-When launching a command, capture its exit code in the pane or a status file.
-A success marker must only print after success, for example `make test &&
-printf '\nTESTS PASSED\n'`. A missing marker or vanished PID does not prove failure
-or success; inspect the logs and recorded exit status. Verify a server with a
-health check or listening socket, not only a startup message.
+When launching a command, capture its exit code in the pane or a status file. A
+success marker must only print after success, for example
+`make test && printf '\nTESTS PASSED\n'`. A missing marker or vanished PID does
+not prove failure or success; inspect the logs and recorded exit status. Verify
+a server with a health check or listening socket, not only a startup message.
 
-For requested monitoring, use `wakeup_schedule` when available with a task-specific
-message and the requested or appropriate interval. Cancel it with `wakeup_cancel`
-when monitoring ends. If timer tools are unavailable, report that recurring
-monitoring was not established. Do not use a blocking foreground sleep as a
-progress timer.
+For requested monitoring, use `wakeup_schedule` when available with a
+task-specific message and the requested or appropriate interval. Cancel it with
+`wakeup_cancel` when monitoring ends. If timer tools are unavailable, report
+that recurring monitoring was not established. Do not use a blocking foreground
+sleep as a progress timer.
 
 An optional PID watcher should run through `shell` with `background:true` and
 `wake_on_exit:true`. Verify the main process PID and its start identity, account

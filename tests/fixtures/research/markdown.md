@@ -2,7 +2,7 @@
 
 ## Results and evidence
 
-The sample mean is **4.0**. This sentence uses *emphasis*, **bold**,
+The sample mean is **4.0**. This sentence uses _emphasis_, **bold**,
 ~~strikethrough~~, and `inline code`. Visit [the local notes](README.md).
 
 | Sample | Value | Unit |
@@ -25,8 +25,8 @@ The sample mean is **4.0**. This sentence uses *emphasis*, **bold**,
 - [x] Local mock provider
 - [x] Kitty formula image rendering
 
-> Reproducibility starts with inspectable inputs and command results.
-> This is a second quotation line.
+> Reproducibility starts with inspectable inputs and command results. This is a
+> second quotation line.
 
 ### Code
 
@@ -46,16 +46,19 @@ $$
 
 Math uses headless formula images placed with Kitty Unicode placeholders.
 Unsupported TeX stays readable; large inline equations can become blocks.
-Inspection renders this Markdown; export preserves its source. Plain terminals retain the original TeX.
+Inspection renders this Markdown; export preserves its source. Plain terminals
+retain the original TeX.
 
 ---
 
 ### Other useful cases
 
-A very long identifier: `research_sample_identifier_without_whitespace_012345678901234567890123456789`.
+A very long identifier:
+`research_sample_identifier_without_whitespace_012345678901234567890123456789`.
 
 Unicode: α, β, Δ, μm, 界. Escaped punctuation: \*literal asterisks\*.
 
+<!-- prettier-ignore -->
 Term
 : A small definition list entry.
 

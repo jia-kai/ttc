@@ -364,14 +364,7 @@ func testChildParallelAdmissionAndSlotRelease(t *testing.T, asides int) {
 	}
 }
 
-func TestStaticSystemPromptLinesAreAtMost80Columns(t *testing.T) {
-	for role, system := range map[string]string{"main": systemTemplate, "child": childSystemTemplate, "aside": asideSystemTemplate} {
-		for _, line := range strings.Split(system, "\n") {
-			if len(line) > 80 {
-				t.Fatal("overlong static prompt line", role, len(line), line)
-			}
-		}
-	}
+func TestRuntimeContextPreservesProjectInstructions(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	long := strings.Repeat("instruction ", 30)
 	if err := os.WriteFile(filepath.Join(r.Workspace.Root, "AGENTS.md"), []byte(long), 0600); err != nil {

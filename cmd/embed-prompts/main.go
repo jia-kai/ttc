@@ -43,6 +43,11 @@ var assetName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 var toolName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var messageName = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
 
+// Role prompts have one canonical source, system.yaml.
+var rolePromptNames = map[string]bool{
+	"System": true, "Coding": true, "Main": true, "Child": true, "Btw": true,
+}
+
 // Reserved names belong to structured assets or the handwritten prompts API.
 var reservedNames = map[string]bool{
 	"Naming": true, "NamingSettings": true, "Compaction": true,
@@ -133,7 +138,7 @@ func generate(root, output string) error {
 		return err
 	}
 	texts := map[string]string{}
-	messageAssets := []string{"runtime.yaml", "tool-messages.yaml"}
+	messageAssets := []string{"system.yaml", "runtime.yaml", "tool-messages.yaml"}
 	for _, entry := range entries {
 		name := entry.Name()
 		// Bundled skills are embedded by their own package from this canonical
@@ -144,7 +149,7 @@ func generate(root, output string) error {
 		if name == "README.md" {
 			continue
 		}
-		if name == "tools.yaml" || name == "naming.yaml" || name == "compaction.yaml" || name == "runtime.yaml" || name == "tool-messages.yaml" {
+		if name == "tools.yaml" || name == "naming.yaml" || name == "compaction.yaml" || name == "system.yaml" || name == "runtime.yaml" || name == "tool-messages.yaml" {
 			continue
 		}
 		if !entry.IsDir() && strings.HasSuffix(name, "-messages.yaml") && assetName.MatchString(strings.TrimSuffix(name, ".yaml")) {
@@ -167,13 +172,16 @@ func generate(root, output string) error {
 			symbol.WriteString(strings.ToUpper(word[:1]) + word[1:])
 		}
 		key := symbol.String()
+		if rolePromptNames[key] {
+			return fmt.Errorf("prompt %s must be defined in system.yaml, not %s", key, name)
+		}
 		if _, found := texts[key]; found || reservedNames[key] {
 			return fmt.Errorf("duplicate or reserved prompt name %s", name)
 		}
 		texts[key] = string(data)
 	}
-	// Short runtime guidance and tool-result messages become constants too, so
-	// Go's printf vet checks still validate template arguments at their callers.
+	// Role instructions, runtime guidance and tool-result messages become
+	// constants, so Go's printf vet checks validate templates at their callers.
 	for _, name := range messageAssets {
 		var messages map[string]yaml.Node
 		if err := decodeYAML(filepath.Join(directory, name), &messages); err != nil {
@@ -183,6 +191,12 @@ func generate(root, output string) error {
 			return fmt.Errorf("%s must contain model-facing messages", name)
 		}
 		for key, node := range messages {
+			if name == "system.yaml" && !rolePromptNames[key] {
+				return fmt.Errorf("system.yaml has unknown role prompt %s", key)
+			}
+			if name != "system.yaml" && rolePromptNames[key] {
+				return fmt.Errorf("prompt %s must be defined in system.yaml, not %s", key, name)
+			}
 			if !messageName.MatchString(key) || reservedNames[key] {
 				return fmt.Errorf("%s has invalid or reserved message name %s", name, key)
 			}
@@ -194,10 +208,12 @@ func generate(root, output string) error {
 			}
 			texts[key] = node.Value
 		}
-	}
-	for _, name := range []string{"System", "Coding", "Main", "Child", "Btw"} {
-		if _, ok := texts[name]; !ok {
-			return fmt.Errorf("missing required prompt %s", name)
+		if name == "system.yaml" {
+			for key := range rolePromptNames {
+				if _, found := messages[key]; !found {
+					return fmt.Errorf("missing required prompt %s in system.yaml", key)
+				}
+			}
 		}
 	}
 	var compaction compactionPrompts
