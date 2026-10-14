@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
@@ -20,6 +21,12 @@ func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
 			var coding atomic.Int32
 			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.NoTools {
+					if req.System != prompts.Naming || req.OutputTokens != 32 {
+						t.Errorf("naming request instructions or token limit changed: system %q, output tokens %d", req.System, req.OutputTokens)
+					}
+					if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 14*time.Second || time.Until(deadline) > 15*time.Second {
+						t.Errorf("naming request must have a 15-second deadline, got %v (present: %v)", deadline, ok)
+					}
 					if !strings.Contains(req.Messages[0].Content, "Tool: glob") {
 						return errors.New("naming omitted first tool")
 					}

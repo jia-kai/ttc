@@ -47,6 +47,8 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	notifications := make(chan Snapshot, 1)
 	m := New(context.Background(), func(s Snapshot) { notifications <- s })
 	defer m.Close()
+	launches := make(chan Snapshot, 2)
+	m.OnState = func(s Snapshot) { launches <- s }
 	id, err := m.StartWatch("main/child", dir, false)
 	if err != nil {
 		t.Fatal(err)
@@ -57,9 +59,14 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	if err != nil || view.Status != "completed" || view.Kind != "watch" || view.ExitCode == nil || *view.ExitCode != 9 || view.WakeOnExit {
 		t.Fatalf("view %+v %v", view, err)
 	}
+	for _, snapshot := range []Snapshot{<-launches, view} {
+		if snapshot.RecordDir != dir || snapshot.Label != "test-workload" {
+			t.Fatalf("missing watch metadata: %+v", snapshot)
+		}
+	}
 	select {
 	case n := <-notifications:
-		if n.WakeOnExit || n.ExitCode == nil || *n.ExitCode != 9 {
+		if n.WakeOnExit || n.ExitCode == nil || *n.ExitCode != 9 || n.RecordDir != dir {
 			t.Fatalf("notification %+v", n)
 		}
 	case <-ctx.Done():
@@ -71,6 +78,21 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	}
 	if _, err = m.View("other", id); err == nil {
 		t.Fatal("watch leaked ownership")
+	}
+}
+
+func TestWatchCommand(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"python", "train.py", "--steps=10"}, "python train.py --steps=10"},
+		{[]string{"/bin/sh", "-c", "echo one; echo two"}, "/bin/sh -c 'echo one; echo two'"},
+		{[]string{"printf", "%s", "", "a'b", "$HOME", "a b"}, "printf %s '' 'a'\\''b' '$HOME' 'a b'"},
+	} {
+		if got := watchCommand(tc.argv); got != tc.want {
+			t.Fatalf("watchCommand(%q) = %q; want %q", tc.argv, got, tc.want)
+		}
 	}
 }
 func TestWatchIncompleteOutputPreservesStatusButFails(t *testing.T) {

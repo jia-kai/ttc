@@ -41,8 +41,18 @@ func TestWatchInspectorExpandsCapturedTails(t *testing.T) {
 	if got := captureJobID("job_read", result); got != "" {
 		t.Fatalf("page inspector incorrectly expanded capture: %q", got)
 	}
-	base := render.Tool("watch", []byte(`{"record_dir":"external-record"}`), result).Detail
+	base := render.InspectedTool("watch", []byte(`{"record_dir":"external-record"}`), result).Detail
 	detail := r.JobDetail(captureJobID("watch", result), base)
+	for _, inspected := range []string{detail, r.JobDetail(id, "")} {
+		for _, want := range []string{"**Record dir:**", dir, "**Command:**", "printf stdout-prefix", "**Running time:**", "0h0m"} {
+			if !strings.Contains(inspected, want) {
+				t.Fatalf("watch inspection missing %q: %s", want, inspected)
+			}
+		}
+		if strings.Contains(inspected, "**Label:**") {
+			t.Fatalf("watch inspection still shows label: %s", inspected)
+		}
+	}
 	if !strings.Contains(detail, "stdout-end") || !strings.Contains(detail, "stderr-end") || strings.Count(detail, "showing tail, up to 8 KiB") != 2 {
 		t.Fatalf("watch inspection did not expand captured tails: %s", detail)
 	}

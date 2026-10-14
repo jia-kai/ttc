@@ -16,6 +16,11 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	namingOutputTokens = 32 // Includes reasoning tokens.
+	namingTimeout      = 15 * time.Second
+)
+
 func httpClient() *http.Client { return &http.Client{Timeout: 120 * time.Second} }
 
 // startNaming claims one background request at the first settled tool batch,
@@ -55,8 +60,7 @@ func (r *Runtime) namingFailure(ctx context.Context, sessionID, turn, reason str
 
 func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Selection, turn string, user, assistant llm.Message) {
 	ownerCtx := ctx
-	settings := prompts.Naming()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, namingTimeout)
 	defer cancel()
 	text := func(s string) string {
 		if len(s) > 4096 {
@@ -68,7 +72,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		}
 		return s
 	}
-	system := settings.Text
+	system := prompts.Naming
 	request, e := r.Store.StartRequest(sessionID, turn, "main", "naming", selection)
 	if e != nil {
 		r.namingFailure(ownerCtx, sessionID, turn, "start request: "+e.Error())
@@ -110,7 +114,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		return
 	}
 	var title strings.Builder
-	e = r.Provider.Stream(ctx, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: settings.OutputTokens}, func(ev llm.StreamEvent) error {
+	e = r.Provider.Stream(ctx, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: namingOutputTokens}, func(ev llm.StreamEvent) error {
 		if ev.Kind == "completed" {
 			usage = ev.Usage
 		}

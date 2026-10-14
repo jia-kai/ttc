@@ -32,7 +32,7 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 				output += strings.Repeat("captured fixture\n", 1200)
 			}
 			output += "```\n$x^2$\nOUTPUT-LAST\n"
-			job, err := u.runtime.Jobs.StartTask("main", "shell", "inspector fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
+			job, err := u.runtime.Jobs.StartTask("main", jobs.TaskOptions{Kind: "shell", Label: "inspector fixture"}, func(_ context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 				if _, err := io.WriteString(stdout, output); err != nil {
 					return jobs.TaskResult{}, err
 				}

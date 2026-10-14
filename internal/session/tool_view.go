@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 	"ttc/internal/jobs"
-	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -22,44 +23,87 @@ func captureJobID(name string, result json.RawMessage) string {
 	return v.ID
 }
 
-const inspectionTailBytes = 8 << 10
-
-// JobDetail expands the output tail to at most 8 KiB of each retained stream.
-// An empty detail starts with current job metadata, including its command or label.
-// Final records save this text; live inspectors may refresh it without growing history.
+// JobDetail renders one typed inspection with bounded output and common runtime
+// metadata. detail preserves the original tool invocation when supplied. The same
+// renderer serves live windows and immutable completion records; history never
+// invokes the job's customization callback.
 func (r *Runtime) JobDetail(id, detail string) string {
 	if id == "" {
 		return detail
 	}
-	job, err := r.Jobs.View("main", id)
+	inspection, err := r.Jobs.Inspect(context.Background(), "main", id)
 	if err != nil {
-		return detail + prompts.SessionJobOutputUnavailable + render.Inline(err.Error())
+		return detail + "\nOutput unavailable: " + render.Inline(err.Error())
 	}
+	return jobInspectionDetail(inspection, detail, time.Now())
+}
+
+func jobInspectionDetail(inspection jobs.Inspection, detail string, now time.Time) string {
+	job := inspection.Job
 	if detail == "" {
-		key := "label"
-		if job.Kind == "shell" || job.Kind == "lsp" {
-			key = "command"
-		}
-		args, _ := json.Marshal(map[string]string{key: job.Label})
 		result, _ := json.Marshal(job)
-		// This is live job metadata, not the original shell arguments; don't
-		// infer tool defaults such as strict mode from the retained snapshot.
-		detail = render.Tool("job", args, result).Detail
+		// This is current metadata, not a fabricated original tool invocation.
+		detail = "Job:\n\n" + render.JobValues(result)
 	}
-	streams := []string{"stdout", "stderr"}
-	if job.Kind == "lsp" {
-		streams = []string{"stderr"} // Protocol stdout belongs to the LSP client.
+	var out strings.Builder
+	if inspection.Spec.Title != "" {
+		out.WriteString("## " + render.EscapeInline(inspection.Spec.Title) + "\n\n")
 	}
-	for _, stream := range streams {
-		page, err := r.Jobs.Read(context.Background(), "main", id, jobs.ReadOptions{Stream: stream, Cursor: "eof:-8192:bytes", Limit: inspectionTailBytes})
-		if err != nil {
-			detail += fmt.Sprintf(prompts.SessionJobStreamUnavailable, stream, render.Inline(err.Error()))
+	out.WriteString(detail)
+	out.WriteString("\n")
+	for _, field := range inspection.Spec.Fields {
+		out.WriteString("- **" + render.EscapeInline(field.Name) + ":** ")
+		if field.Language != "" || strings.ContainsAny(field.Value, "\n\t") {
+			out.WriteString("\n\n" + render.Fence(field.Value, field.Language) + "\n")
+		} else {
+			out.WriteString(render.EscapeInline(field.Value) + "\n")
+		}
+	}
+	if duration, ok := jobRunningTime(job, now); ok {
+		fmt.Fprintf(&out, "\n**Running time:** %s\n", duration)
+	}
+	for _, stream := range inspection.Output {
+		if stream.Error != "" {
+			fmt.Fprintf(&out, "\n%s unavailable: %s\n", render.EscapeInline(stream.Name), render.Inline(stream.Error))
 			continue
 		}
-		text, _ := page["output"].(string)
-		if text != "" {
-			detail += fmt.Sprintf(prompts.SessionJobTail, stream) + render.Fence(text, "text")
+		if stream.Text == "" && !stream.Truncated {
+			continue
+		}
+		if stream.Heading != "" {
+			fmt.Fprintf(&out, "\n**%s**\n\n", render.EscapeInline(stream.Heading))
+		} else if !stream.Markdown {
+			fmt.Fprintf(&out, "\n**%s · showing tail, up to %d KiB**\n\n", render.EscapeInline(stream.Name), stream.LimitBytes/1024)
+		}
+		if stream.Truncated {
+			fmt.Fprintf(&out, "\nRetained %s output was truncated.\n\n", render.EscapeInline(stream.Name))
+		}
+		if stream.Text == "" {
+			continue // Disclose wholly evicted captures without inventing output.
+		}
+		if stream.Markdown {
+			out.WriteString(render.Clean(stream.Text) + "\n")
+		} else {
+			out.WriteString(render.Fence(stream.Text, "text"))
 		}
 	}
-	return detail
+	return out.String()
+}
+
+// jobRunningTime measures the job (the observer for watches), not an external
+// workload. Finished jobs stay fixed; seconds are truncated and hours do not wrap.
+func jobRunningTime(job jobs.Snapshot, now time.Time) (string, bool) {
+	started, err := time.Parse(time.RFC3339Nano, job.StartedAt)
+	if err != nil {
+		return "", false
+	}
+	end := now
+	if job.Status != "running" {
+		end, err = time.Parse(time.RFC3339Nano, job.FinishedAt)
+		if err != nil {
+			return "", false
+		}
+	}
+	seconds := max(int64(0), int64(end.Sub(started)/time.Second))
+	return fmt.Sprintf("%dh%dm%ds", seconds/3600, seconds/60%60, seconds%60), true
 }

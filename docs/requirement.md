@@ -156,8 +156,9 @@
 - After the first settled main tool batch or tool-free final response, send one
   no-tools metadata request with that boundary's model: first user/current
   assistant text up to 4 KiB each and four tool names; mark truncation.
-- Request a plain descriptive title using the canonical format and request
-  limits in [prompt/naming.yaml](../prompt/naming.yaml). Trim
+- Request a plain descriptive title using the canonical format in
+  [prompt/naming.md](../prompt/naming.md), with a 32-token output allowance and
+  15-second request deadline. Trim
   quotes/Markdown/whitespace; reject controls, line breaks and titles outside
   those word/character bounds, never cutting a word. Invalid/failure leaves
   default name and an inspectable notice.

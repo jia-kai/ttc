@@ -1,6 +1,5 @@
 # Authored storage diagnostics, including errors wrapped into tool and child failures.
 # OS/library error payloads, paths, cache keys and namespace labels remain dynamic.
-BlobCacheMiss: blob cache miss
 BlobCacheRootAbsolute: blob cache root must be absolute
 BlobCacheRootDirectory: blob cache root is not a directory
 BlobCacheInvalidLock: "invalid cache lock: %w"
@@ -12,7 +11,6 @@ BlobCacheInvalidConfiguration: invalid blob cache configuration
 BlobCacheEntryTooLarge: "%s exceeds %d bytes"
 BlobCacheCorruptReference: corrupt cache reference %s
 BlobCacheChecksumMismatch: "cache content checksum mismatch: %s"
-BlobCacheExpiredMiss: "%w: expired %s"
 BlobCacheBlobTooLarge: blob exceeds %d bytes
 BlobCacheOriginalChecksum: original key does not match content SHA256
 BlobCacheLockEmpty: cache lock must be empty

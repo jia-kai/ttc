@@ -51,7 +51,7 @@ func (s *Store) transcriptEntries(name string, entries []Entry) ([]byte, error) 
 		}
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, prompts.HistoryTranscriptHeader, render.Inline(name))
+	fmt.Fprintf(&out, "# %s\n\n", render.Inline(name))
 	for _, entry := range entries {
 		if entry.Kind == "tool_call" {
 			var ref struct {
@@ -75,7 +75,7 @@ func (s *Store) transcriptEntries(name string, entries []Entry) ([]byte, error) 
 		if kind == "" {
 			kind = entry.Kind
 		}
-		fmt.Fprintf(&out, prompts.HistoryTranscriptEntry, render.Inline(entry.Actor), render.Inline(kind), entry.ID, text)
+		fmt.Fprintf(&out, "### %s · %s · #%d\n\n%s\n\n", render.Inline(entry.Actor), render.Inline(kind), entry.ID, text)
 	}
 	return []byte(out.String()), nil
 }
@@ -111,13 +111,13 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 		text := render.Clean(message.Content)
 		for _, snapshot := range message.Files {
 			path := strings.ReplaceAll(render.Clean(snapshot.Path), ">", "\\>")
-			link := fmt.Sprintf(prompts.HistoryBinarySnapshot, path)
+			link := fmt.Sprintf("Binary file: [snapshot](<%s>)", path)
 			// Dimensions are optional presentation metadata; the durable path and
 			// exact reference remain available even if image decoding is unavailable.
 			if f, err := os.OpenFile(snapshot.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
 				if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
 					if config, _, err := image.DecodeConfig(io.LimitReader(f, 1<<20)); err == nil {
-						link += fmt.Sprintf(prompts.HistoryBinaryDimensions, config.Width, config.Height)
+						link += fmt.Sprintf(" · %d×%d", config.Width, config.Height)
 					}
 				}
 				f.Close()
@@ -140,7 +140,7 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 		if err := s.DB.QueryRow("SELECT name,call_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &call); err != nil {
 			return "", err
 		}
-		return prompts.HistoryPendingCall + render.Tool(name, json.RawMessage(call), nil).Detail, nil
+		return "Pending call:\n\n" + render.Tool(name, json.RawMessage(call), nil).Detail, nil
 	}
 	if entry.Kind == "tool_result" {
 		var raw string
@@ -246,7 +246,7 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].EventSeq() < entries[j].EventSeq() })
-	text, err := s.transcriptEntries(fmt.Sprintf(prompts.HistoryTranscriptChildTitle, actor), entries)
+	text, err := s.transcriptEntries(fmt.Sprintf("Child conversation · %s", actor), entries)
 	if err != nil {
 		return "", err
 	}
@@ -268,7 +268,7 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 		if err != nil {
 			return "", err
 		}
-		text = append(text, []byte(fmt.Sprintf(prompts.HistoryTranscriptUncommitted, presentation))...)
+		text = append(text, []byte(fmt.Sprintf("### Uncommitted assistant output\n\n%s\n\n", presentation))...)
 	}
 	return s.writeArchive(session, text, exact)
 }

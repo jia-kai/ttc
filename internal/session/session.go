@@ -149,16 +149,10 @@ func (r *Runtime) resetTransient() {
 	r.Tools.Detail = func(x tool.Execution, b []byte) (string, error) { return r.Store.Artifact(x.SessionID, "details", b) }
 	r.Jobs = jobs.New(r.ctx, func(v jobs.Snapshot) {
 		result, _ := json.Marshal(v)
-		args, _ := json.Marshal(map[string]string{"command": v.Label})
-		if v.Kind != "shell" {
-			args, _ = json.Marshal(map[string]string{"label": v.Label})
-		}
+		// Summary identity is independent of inspection customization.
+		args, _ := json.Marshal(map[string]string{"label": v.Label})
 		md := render.Tool(v.Kind, args, result)
-		if v.Kind == "btw" {
-			md.Detail = r.btwDetail(v)
-		} else {
-			md.Detail = r.JobDetail(v.ID, md.Detail)
-		}
+		md.Detail = r.JobDetail(v.ID, "")
 		r.orderMu.Lock()
 		sessionID := r.Current()
 		entry, e := r.Store.Append(sessionID, "", v.Owner, "status", "", false, map[string]any{"type": "job_completion", "job": v, "markdown": md})

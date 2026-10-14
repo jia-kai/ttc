@@ -13,8 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"ttc/internal/prompts"
 )
 
 func TestServerRequestsWithStringIDsAndReadOnlyEdits(t *testing.T) {
@@ -58,7 +56,7 @@ func TestServerRequestsWithStringIDsAndReadOnlyEdits(t *testing.T) {
 			if err := json.Unmarshal(data, &response); err != nil {
 				t.Fatal(err)
 			}
-			if response.Result.Applied || response.Result.FailureReason != prompts.LSPReadOnlyEdits {
+			if response.Result.Applied || response.Result.FailureReason != "TTC LSP queries are read-only; use file-mutation tools when available for changes, otherwise report proposed changes" {
 				t.Fatalf("read-only refusal changed: %s", data)
 			}
 		}

@@ -7,19 +7,22 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"ttc/internal/prompts"
 	"unicode"
 )
 
 // toolDetail formats supplied parameters and results without exposing JSON
 // serialization syntax as the primary presentation. Exact JSON lives in records.
-func toolDetail(name string, args, result json.RawMessage) string {
-	return fmt.Sprintf(prompts.ToolDetailSections, toolValues(args, name), toolValues(result, ""))
+func toolDetail(name string, args, result json.RawMessage, inspected bool) string {
+	return fmt.Sprintf("Parameters:\n\n%s\nResult:\n\n%s", toolValues(args, name, false), toolValues(result, "", inspected))
 }
 
-func toolValues(raw json.RawMessage, name string) string {
+// JobValues renders common job metadata without invocation sections or inferred
+// defaults. Custom identity fields and output belong to the appended inspection.
+func JobValues(raw json.RawMessage) string { return toolValues(raw, "", true) }
+
+func toolValues(raw json.RawMessage, name string, inspected bool) string {
 	if len(raw) == 0 {
-		return prompts.ToolDetailPending
+		return "Pending.\n"
 	}
 	var value any
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -36,6 +39,11 @@ func toolValues(raw json.RawMessage, name string) string {
 			// Omit the model's shorter duplicate excerpts from the base detail.
 			delete(object, "stdout")
 			delete(object, "stderr")
+			if inspected {
+				// Suppress identity only at an explicitly enriched boundary.
+				delete(object, "label")
+				delete(object, "record_dir")
+			}
 		}
 		if name == "shell" {
 			if _, supplied := object["strict"]; !supplied {
@@ -45,7 +53,7 @@ func toolValues(raw json.RawMessage, name string) string {
 	}
 	writeToolValue(&out, "", value, "", path)
 	if out.Len() == 0 {
-		return prompts.ToolDetailNone
+		return "None.\n"
 	}
 	return out.String()
 }
@@ -65,7 +73,7 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 			indent += "  "
 		}
 		if len(value) == 0 && key != "" {
-			out.WriteString(indent + prompts.ToolDetailEmpty)
+			out.WriteString(indent + "Empty.\n")
 		}
 		keys := make([]string, 0, len(value))
 		for k := range value {
@@ -78,7 +86,7 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 	case []any:
 		out.WriteString("\n")
 		if len(value) == 0 {
-			out.WriteString(indent + prompts.ToolDetailEmptyList)
+			out.WriteString(indent + "  None.\n")
 		}
 		for i, item := range value {
 			writeToolValue(out, fmt.Sprint(i+1), item, indent+"  ", path)

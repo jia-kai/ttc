@@ -104,11 +104,22 @@ func (m Markdown) ExportText() string {
 // Shell commands retain language metadata for highlighting; captured output is
 // escaped and labeled. TerminalBriefing displays summaries as one clipped row.
 func Tool(name string, args, result json.RawMessage) Markdown {
+	return tool(name, args, result, false)
+}
+
+// InspectedTool preserves invocation presentation while leaving job-specific
+// identity fields to an inspection descriptor. Use only when an inspection is
+// appended; standalone tool/archive rendering must retain those fields.
+func InspectedTool(name string, args, result json.RawMessage) Markdown {
+	return tool(name, args, result, true)
+}
+
+func tool(name string, args, result json.RawMessage, inspected bool) Markdown {
 	var a, v map[string]any
 	_ = json.Unmarshal(args, &a)
 	_ = json.Unmarshal(result, &v)
 	summary := "**" + Inline(name) + "**"
-	detail := toolDetail(name, args, result)
+	detail := toolDetail(name, args, result, inspected)
 	if name == "subagent" {
 		if answer, ok := v["answer"].(string); ok {
 			label, _ := v["label"].(string)
@@ -141,7 +152,11 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 		}
 	}
 	if name == "shell" {
-		if command, ok := a["command"].(string); ok {
+		command, _ := a["command"].(string)
+		if command == "" {
+			command, _ = a["label"].(string) // Completion snapshots retain command identity as their label.
+		}
+		if command != "" {
 			summary += "\n\n" + Fence(clip(strings.Join(strings.Fields(Clean(command)), " "), 192), "sh")
 		}
 	} else {

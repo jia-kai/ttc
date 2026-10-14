@@ -27,7 +27,7 @@ func TestTaskResultPublishesMetadataWithTerminalCapture(t *testing.T) {
 		}
 	}
 	code := 7
-	id, err := m.StartTask("main", "fixture", "result", true, true, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
+	id, err := m.StartTask("main", TaskOptions{Kind: "fixture", Label: "result", Background: true, WakeOnExit: true}, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
 		close(started)
 		select {
 		case <-release:
@@ -80,7 +80,7 @@ func TestTaskResultPublishesMetadataWithTerminalCapture(t *testing.T) {
 func TestTaskResultPreservesObservedOutcomeOnWorkerFailure(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartTask("main", "fixture", "failure", false, false, func(context.Context, io.Writer, io.Writer) (TaskResult, error) {
+	id, err := m.StartTask("main", TaskOptions{Kind: "fixture", Label: "failure"}, func(context.Context, io.Writer, io.Writer) (TaskResult, error) {
 		return TaskResult{Signal: "terminated"}, errors.New("supervision failed")
 	})
 	if err != nil {

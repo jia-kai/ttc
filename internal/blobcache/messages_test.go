@@ -17,7 +17,6 @@ func TestDiagnosticAssetsExact(t *testing.T) {
 	for _, tc := range []struct {
 		name, got, want string
 	}{
-		{"miss", prompts.BlobCacheMiss, "blob cache miss"},
 		{"absolute root", prompts.BlobCacheRootAbsolute, "blob cache root must be absolute"},
 		{"directory root", prompts.BlobCacheRootDirectory, "blob cache root is not a directory"},
 		{"invalid lock", prompts.BlobCacheInvalidLock, "invalid cache lock: %w"},
@@ -29,7 +28,6 @@ func TestDiagnosticAssetsExact(t *testing.T) {
 		{"entry size", prompts.BlobCacheEntryTooLarge, "%s exceeds %d bytes"},
 		{"reference", prompts.BlobCacheCorruptReference, "corrupt cache reference %s"},
 		{"checksum", prompts.BlobCacheChecksumMismatch, "cache content checksum mismatch: %s"},
-		{"expired miss", prompts.BlobCacheExpiredMiss, "%w: expired %s"},
 		{"blob size", prompts.BlobCacheBlobTooLarge, "blob exceeds %d bytes"},
 		{"original checksum", prompts.BlobCacheOriginalChecksum, "original key does not match content SHA256"},
 		{"lock size", prompts.BlobCacheLockEmpty, "cache lock must be empty"},
@@ -48,30 +46,36 @@ func TestRuntimeDiagnosticsExact(t *testing.T) {
 	ctx := context.Background()
 	c := openCache(t)
 	k := key(1)
+	if got := ErrMiss.Error(); got != "blob cache miss" {
+		t.Fatalf("miss sentinel: %q, want %q", got, "blob cache miss")
+	}
 	_, rootErr := New("relative")
 	_, kindErr := c.Get(ctx, "other", k)
 	_, keyErr := c.Get(ctx, "original", "bad")
 	_, missErr := c.Get(ctx, "original", k)
+	_, renderMissErr := c.Get(ctx, "render", k)
 	originalErr := c.Put(ctx, "original", k, []byte("data"))
 	bad := &Cache{Root: "relative", Limit: c.Limit, TTL: c.TTL}
 	_, configErr := bad.Get(ctx, "original", k)
 	for _, tc := range []struct {
-		err  error
-		want string
+		err      error
+		want     string
+		wantMiss bool
 	}{
-		{rootErr, "blob cache root must be absolute"},
-		{kindErr, `invalid blob kind "other"`},
-		{keyErr, "invalid blob key"},
-		{missErr, "blob cache miss: original " + k},
-		{originalErr, "original key does not match content SHA256"},
-		{configErr, "invalid blob cache configuration"},
+		{rootErr, "blob cache root must be absolute", false},
+		{kindErr, `invalid blob kind "other"`, false},
+		{keyErr, "invalid blob key", false},
+		{missErr, "blob cache miss: original " + k, true},
+		{renderMissErr, "blob cache miss: render " + k, true},
+		{originalErr, "original key does not match content SHA256", false},
+		{configErr, "invalid blob cache configuration", false},
 	} {
 		if tc.err == nil || tc.err.Error() != tc.want {
 			t.Fatalf("diagnostic: %v, want %q", tc.err, tc.want)
 		}
-	}
-	if !errors.Is(missErr, ErrMiss) {
-		t.Fatal("miss lost its sentinel identity")
+		if got := errors.Is(tc.err, ErrMiss); got != tc.wantMiss {
+			t.Fatalf("diagnostic %q: matches ErrMiss = %v, want %v", tc.want, got, tc.wantMiss)
+		}
 	}
 	data := []byte("data")
 	sha := digest(data)
@@ -82,18 +86,24 @@ func TestRuntimeDiagnosticsExact(t *testing.T) {
 		t.Fatalf("expired miss: %v, want %q with ErrMiss identity", err, want)
 	}
 	put(t, c, "render", k, data)
+	age(t, filepath.Join(c.Root, refName(k)), 31*24*time.Hour)
+	_, err = c.Get(ctx, "render", k)
+	if want := "blob cache miss: render " + k; err == nil || err.Error() != want || !errors.Is(err, ErrMiss) {
+		t.Fatalf("expired reference miss: %v, want %q with ErrMiss identity", err, want)
+	}
+	put(t, c, "render", k, data)
 	if err := os.WriteFile(filepath.Join(c.Root, refName(k)), []byte("bad"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	_, err = c.Get(ctx, "render", k)
-	if want := "corrupt cache reference " + refName(k); err == nil || err.Error() != want {
+	if want := "corrupt cache reference " + refName(k); err == nil || err.Error() != want || errors.Is(err, ErrMiss) {
 		t.Fatalf("corrupt reference: %v, want %q", err, want)
 	}
 	if err := os.WriteFile(filepath.Join(c.Root, blobName(sha)), []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	_, err = c.Get(ctx, "original", sha)
-	if want := "cache content checksum mismatch: " + blobName(sha); err == nil || err.Error() != want {
+	if want := "cache content checksum mismatch: " + blobName(sha); err == nil || err.Error() != want || errors.Is(err, ErrMiss) {
 		t.Fatalf("checksum: %v, want %q", err, want)
 	}
 	// Wrapping still exposes the original cause, not just its rendered text.

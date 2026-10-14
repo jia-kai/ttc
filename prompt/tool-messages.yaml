@@ -184,12 +184,8 @@ WakeupUpdateOwnership:
   only main or the scheduling child may update this reminder
 
 # Watch-run validation and observation diagnostics.
-WatchCommandRequired: watch-run requires a command after --.
-WatchCreateDirectory: "create unique record directory: %w"
 WatchInvalidProcessStat: invalid watch-run process stat.
 WatchShortProcessStat: short watch-run process stat.
-WatchGenerateIdentity: "generate watch-run identity: %w"
-WatchPublishCompletion: "publish watch-run completion: %w"
 WatchInvalidIdentity: invalid watch-run identity.
 WatchReadLog: "read %s watch-run log: %w"
 WatchLogTruncated: watch-run log was truncated.

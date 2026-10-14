@@ -104,10 +104,10 @@ func processIdentity(pid int) (start, state string, err error) {
 // Launch this wrapper independently (for example in tmux) to outlive TTC.
 func Run(recordDir string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if len(argv) == 0 {
-		return 1, errors.New(prompts.WatchCommandRequired)
+		return 1, errors.New("watch-run requires a command after --.")
 	}
 	if err := os.Mkdir(recordDir, 0700); err != nil {
-		return 1, fmt.Errorf(prompts.WatchCreateDirectory, err)
+		return 1, fmt.Errorf("create unique record directory: %w", err)
 	}
 	start, _, err := processIdentity(os.Getpid())
 	if err != nil {
@@ -119,7 +119,7 @@ func Run(recordDir string, argv []string, stdin io.Reader, stdout, stderr io.Wri
 	}
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
-		return 1, fmt.Errorf(prompts.WatchGenerateIdentity, err)
+		return 1, fmt.Errorf("generate watch-run identity: %w", err)
 	}
 	id := Identity{Version: 1, ID: hex.EncodeToString(token[:]), PID: os.Getpid(), Start: start, Boot: strings.TrimSpace(string(boot)), Command: argv, StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if err = atomicJSON(recordDir, "identity.json", id); err != nil {
@@ -133,7 +133,7 @@ func Run(recordDir string, argv []string, stdin io.Reader, stdout, stderr io.Wri
 		c.Error = runErr.Error()
 	}
 	if err = atomicJSON(recordDir, "completion.json", c); err != nil {
-		return 1, errors.Join(runErr, fmt.Errorf(prompts.WatchPublishCompletion, err))
+		return 1, errors.Join(runErr, fmt.Errorf("publish watch-run completion: %w", err))
 	}
 	return code, runErr
 }

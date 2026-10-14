@@ -150,7 +150,7 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, err := s.ExportText(entry)
-	if err != nil || !strings.Contains(text, "2×3") || !strings.Contains(text, path) || strings.Contains(text, "data:image") {
+	if err != nil || text != "Binary file: [snapshot](<"+path+">) · 2×3" {
 		t.Fatal("image-only message lost or duplicated exact data", text, err)
 	}
 	archive, err := s.ArchiveTranscript(v.ID, 0)

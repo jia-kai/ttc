@@ -59,7 +59,7 @@ func TestLaunchTimestampRetainsPrecision(t *testing.T) {
 		return TaskResult{}, ctx.Err()
 	}
 	before := time.Now().UTC()
-	task, err := m.StartTask("main", "subagent", "task", true, false, worker)
+	task, err := m.StartTask("main", TaskOptions{Kind: "subagent", Label: "task", Background: true}, worker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +75,37 @@ func TestLaunchTimestampRetainsPrecision(t *testing.T) {
 		at, err := time.Parse(time.RFC3339Nano, j.view.StartedAt)
 		if err != nil || !at.Equal(j.startedAt) || at.Before(before) || at.After(after) {
 			t.Fatalf("launch timestamp lost precision: %q, %v", j.view.StartedAt, err)
+		}
+	}
+}
+
+func TestCompletionTimestampRetainsPrecision(t *testing.T) {
+	m := New(context.Background(), nil)
+	defer m.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for _, kind := range []string{"shell", "task"} {
+		before := time.Now().UTC()
+		var id string
+		var err error
+		if kind == "shell" {
+			id, err = m.Start("main", "true", t.TempDir(), 0, true, true, false, capture.OutputOptions{})
+		} else {
+			id, err = m.StartTask("main", TaskOptions{Kind: "subagent", Label: "task", Background: true}, func(context.Context, io.Writer, io.Writer) (TaskResult, error) {
+				return TaskResult{}, nil
+			})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, err := m.Wait(ctx, "main", id, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := time.Now().UTC()
+		finished, err := time.Parse(time.RFC3339Nano, view.FinishedAt)
+		if err != nil || finished.Before(before) || finished.After(after) {
+			t.Fatalf("%s completion timestamp lost precision: %q, %v", kind, view.FinishedAt, err)
 		}
 	}
 }

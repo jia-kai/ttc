@@ -1,9 +1,4 @@
-# Shared presentation captions delivered through child stderr or transcripts.
+# Summary captions deliberately delivered to parent models through child stderr.
 ToolSummaryExit: " · exit %d"
 ToolSummaryError: " · error"
 ToolSummaryOutputOmitted: " · output omitted"
-ToolDetailSections: "Parameters:\n\n%s\nResult:\n\n%s"
-ToolDetailPending: "Pending.\n"
-ToolDetailNone: "None.\n"
-ToolDetailEmpty: "Empty.\n"
-ToolDetailEmptyList: "  None.\n"

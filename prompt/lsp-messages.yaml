@@ -1,5 +1,6 @@
-# Authored LSP validation, recovery, and read-only guidance.
-# Includes TTC-authored framing diagnostics and protocol error captions.
+# Authored LSP validation and recovery guidance sent to model-facing tools.
+# Includes TTC-authored framing diagnostics and server-error captions.
+# Outgoing protocol reply text for language servers is inline at its use sites.
 # Raw server replies and underlying I/O error payloads remain data.
 LSPInitializationFailed:
   "language server initialization failed or was interrupted; stop and restart
@@ -96,11 +97,6 @@ LSPServerError:
 LSPReplyMissingResult:
   "LSP reply has no result or error; restart with available lifecycle tools or
   use another accessible server; otherwise report the server limitation"
-LSPReadOnlyEdits:
-  "TTC LSP queries are read-only; use file-mutation tools when available for
-  changes, otherwise report proposed changes"
-LSPConfigurationItemsLimit: "configuration requires at most 256 items"
-LSPClientCapabilityUnsupported: "TTC does not advertise this client capability"
 LSPResultSourcesTooLarge:
   "LSP result source files exceed 16 MiB; reduce limit and page with offset"
 LSPReversedSourceRange: "LSP returned a reversed source range"

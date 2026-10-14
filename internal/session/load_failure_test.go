@@ -61,7 +61,7 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 				t.Fatal(err)
 			}
 			entered := make(chan struct{})
-			if _, err := r.Jobs.StartTask("main", "review", "Keep running", true, false, func(ctx context.Context, _, _ io.Writer) (jobs.TaskResult, error) {
+			if _, err := r.Jobs.StartTask("main", jobs.TaskOptions{Kind: "review", Label: "Keep running", Background: true}, func(ctx context.Context, _, _ io.Writer) (jobs.TaskResult, error) {
 				close(entered)
 				<-ctx.Done()
 				return jobs.TaskResult{}, ctx.Err()

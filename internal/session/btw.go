@@ -87,31 +87,22 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if count >= maxChildSlots {
 		return "", fmt.Errorf("all %d child slots are occupied; close an idle child with job_stop or wait for a running aside to finish", maxChildSlots)
 	}
-	return r.Jobs.StartTask(task.actor, "btw", string(label), true, false, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
+	return r.Jobs.StartTask(task.actor, jobs.TaskOptions{
+		Kind: "btw", Label: string(label), Background: true,
+		Inspector: btwInspector,
+	}, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 		return jobs.TaskResult{}, r.runChild(ctx, task, stdout, stderr)
 	})
 }
 
-func (r *Runtime) btwDetail(v jobs.Snapshot) string {
-	text := "## /btw · " + render.EscapeInline(v.Label) + "\n\n"
-	if v.Status != "completed" {
-		text += "**" + render.EscapeInline(v.Status) + "**\n\n"
+// btwInspector keeps the answer as Markdown and diagnostics as bounded literal
+// feedback. Acquisition, common job metadata and omission notices stay shared.
+func btwInspector(v jobs.Snapshot) jobs.InspectionSpec {
+	return jobs.InspectionSpec{
+		Title: "/btw · " + v.Label,
+		Streams: []jobs.InspectionStream{
+			{Name: "stdout", LimitBytes: 65536, Markdown: true},
+			{Name: "stderr", Heading: "Tool feedback", LimitBytes: 65536},
+		},
 	}
-	for _, stream := range []string{"stdout", "stderr"} {
-		page, err := r.Jobs.Read(context.Background(), "main", v.ID, jobs.ReadOptions{Stream: stream, Cursor: "eof:-65536:bytes", Limit: 65536})
-		if err != nil {
-			text += "Output unavailable: " + render.Inline(err.Error()) + "\n"
-			continue
-		}
-		output, _ := page["output"].(string)
-		if page["truncated"] == true {
-			text += "\nRetained " + stream + " output was truncated.\n\n"
-		}
-		if stream == "stdout" {
-			text += render.Clean(output) + "\n"
-		} else if output != "" {
-			text += "\n### Tool feedback\n\n" + render.Fence(output, "text")
-		}
-	}
-	return text
 }

@@ -78,9 +78,15 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 				if err != nil {
 					return
 				}
-				md := render.Tool(call.Name, call.Arguments, result)
+				jobID := captureJobID(call.Name, result)
+				var md render.Markdown
+				if jobID != "" {
+					md = render.InspectedTool(call.Name, call.Arguments, result)
+				} else {
+					md = render.Tool(call.Name, call.Arguments, result)
+				}
 				text := md.Summary
-				r.emit(Event{Kind: "tool_update", Actor: actor, CallID: ids[i], PendingKey: pendingToolKey(requestIDs[i], call.ID), JobID: captureJobID(call.Name, result), EntryID: entryIDs[i], Text: text, Detail: md.Detail})
+				r.emit(Event{Kind: "tool_update", Actor: actor, CallID: ids[i], PendingKey: pendingToolKey(requestIDs[i], call.ID), JobID: jobID, EntryID: entryIDs[i], Text: text, Detail: md.Detail})
 			}
 			update(map[string]string{"status": "running"})
 			record = registry.Invoke(ctx, tool.Execution{SessionID: r.Current(), CallID: ids[i], Actor: actor, Update: update, BinaryFiles: binaryFiles[i]}, call.Name, call.Arguments)
@@ -88,7 +94,10 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 				r.routeMu.RUnlock()
 			}
 		}
-		record.Markdown.Detail = r.JobDetail(captureJobID(call.Name, record.Result), record.Markdown.Detail)
+		if jobID := captureJobID(call.Name, record.Result); jobID != "" {
+			base := render.InspectedTool(call.Name, call.Arguments, record.Result).Detail
+			record.Markdown.Detail = r.JobDetail(jobID, base)
+		}
 		stored := make(chan struct{})
 		done <- completion{i, record, stored}
 		<-stored // Finish persistence before admitting the next ordered call.

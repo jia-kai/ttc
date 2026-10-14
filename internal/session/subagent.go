@@ -125,7 +125,7 @@ func (r *Runtime) addSubagentTool() {
 		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
-		id, err := r.Jobs.StartTask(child.id, "subagent", child.label, a.Background, false, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
+		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
 			<-ready
 			defer func() {
 				task.cancelled = childCtx.Err() != nil

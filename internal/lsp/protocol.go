@@ -293,7 +293,7 @@ func (c *Client) answer(ctx context.Context, request rpcMessage) error {
 			Items []json.RawMessage `json:"items"`
 		}
 		if err := json.Unmarshal(request.Params, &params); err != nil || len(params.Items) > 256 {
-			return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32602, "message": prompts.LSPConfigurationItemsLimit}})
+			return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32602, "message": "configuration requires at most 256 items"}})
 		}
 		result = make([]any, len(params.Items)) // Null settings select each server's defaults.
 	case "workspace/workspaceFolders":
@@ -301,9 +301,9 @@ func (c *Client) answer(ctx context.Context, request rpcMessage) error {
 	case "window/showMessageRequest":
 		result = nil
 	case "workspace/applyEdit":
-		result = map[string]any{"applied": false, "failureReason": prompts.LSPReadOnlyEdits}
+		result = map[string]any{"applied": false, "failureReason": "TTC LSP queries are read-only; use file-mutation tools when available for changes, otherwise report proposed changes"}
 	default:
-		return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32601, "message": prompts.LSPClientCapabilityUnsupported}})
+		return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "error": map[string]any{"code": -32601, "message": "TTC does not advertise this client capability"}})
 	}
 	return c.send(ctx, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 }

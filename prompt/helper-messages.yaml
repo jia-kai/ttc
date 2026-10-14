@@ -4,9 +4,6 @@ AttachmentImage: "\nImage attachment: %s"
 AttachmentDocument: "\nDocument attachment: %s"
 AttachmentText: "\n\nAttachment (%s): %s\n%s"
 AttachmentTruncated: "\n[attachment truncated]"
-AttachmentRegularFileOrDirectory: attachment must be a regular file or directory
-AttachmentTooLarge: attachment exceeds 8 MiB
-AttachmentUnsupportedContent: unsupported attachment content
 BinaryInlineUnsupported:
   inline binary data_url is unsupported; provide an original path and SHA-256
   reference

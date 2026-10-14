@@ -105,7 +105,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 		}
 		for _, m := range steers {
 			if m.Role != "user" || m.Runtime {
-				return errors.New(prompts.HistorySteeringMessage)
+				return errors.New("steering must be a human user message")
 			}
 			m.InputSource = "steer"
 			checkpoint := NewID("steer")
@@ -284,14 +284,14 @@ func (s *Store) BeginChildTurn(session, actor string, model llm.Selection) (stri
 // deleting its inspectable history. Reloading does not clear the failure.
 func (s *Store) InvalidateContext(session, reason string) error {
 	if reason == "" {
-		return errors.New(prompts.HistoryCompactionFailureReason)
+		return errors.New("missing compaction failure reason")
 	}
 	return s.transact(func(tx *sql.Tx) error {
 		_, err := tx.Exec("UPDATE sessions SET metadata_json=json_set(metadata_json,'$.compaction_error',?) WHERE id=?", reason, session)
 		if err != nil {
 			return err
 		}
-		b, err := json.Marshal(map[string]string{"type": "compaction_failed", "error": reason, "text": fmt.Sprintf(prompts.HistoryCompactionFailureText, reason)})
+		b, err := json.Marshal(map[string]string{"type": "compaction_failed", "error": reason, "text": fmt.Sprintf("Context unusable after compaction: %s", reason)})
 		if err != nil {
 			return err
 		}

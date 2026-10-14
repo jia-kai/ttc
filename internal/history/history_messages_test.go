@@ -15,7 +15,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"unicode"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -164,6 +163,11 @@ func TestHistoryArchiveCaptions(t *testing.T) {
 	if err != nil || text != "Evidence\n\nBinary file: [snapshot](<"+strings.ReplaceAll(snapshot, ">", "\\>")+">)" {
 		t.Fatalf("binary caption = %q, %v", text, err)
 	}
+	transcript, err := s.transcriptEntries("Saved conversation", []Entry{{ID: 7, Actor: "main/child", Kind: "message", Role: "assistant", Content: message}})
+	wantTranscript := "# Saved conversation\n\n### main/child · assistant · #7\n\n" + text + "\n\n"
+	if err != nil || string(transcript) != wantTranscript {
+		t.Fatalf("transcript captions = %q, %v; want %q", transcript, err, wantTranscript)
+	}
 	call, err := s.CallIntent(v.ID, turn, "main/child", request, llm.ToolCall{ID: "provider-call", Name: "read", Arguments: json.RawMessage(`{"path":"file"}`)})
 	if err != nil {
 		t.Fatal(err)
@@ -216,9 +220,9 @@ func TestHistoryInputMessagesPreserveWrapping(t *testing.T) {
 	}
 }
 
-// Child failures and authored archive text reach the parent indirectly. Scope
-// the guard to reachable methods rather than extracting operator-only history
-// commands, loading, inspection pagination or prompt-recall UI diagnostics.
+// Child failures and mutation-tool errors reach models indirectly. Guard their
+// diagnostics, not operator-only archive captions, history commands, loading,
+// inspection pagination or prompt-recall UI text.
 func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 	functions := map[string][]string{
 		"archive.go":   {"ArchiveMessages", "writeArchive"},
@@ -231,6 +235,12 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 		"inputs.go":    {"inputMetadataWith", "enrichInput"},
 		"inspect.go":   {"RequestMessage"},
 		"mutations.go": {"CommitChange"},
+	}
+	// Keep exemptions tied to exact diagnostics and their owning methods: these
+	// errors validate main-only operator actions, not child or mutation tools.
+	operatorOnly := map[string]string{
+		"events.go.AdmitRequest":      "steering must be a human user message",
+		"events.go.InvalidateContext": "missing compaction failure reason",
 	}
 	fset := token.NewFileSet()
 	for path, names := range functions {
@@ -249,20 +259,6 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 			}
 			delete(selected, function.Name.Name)
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				// These archive renderers have protocol tokens and Markdown
-				// punctuation, but no authored prose literals. Check captions
-				// too: they may use concatenation instead of an error sink.
-				if path == "export.go" && (function.Name.Name == "transcriptEntries" || function.Name.Name == "ExportText" || function.Name.Name == "ArchiveActorTranscript") {
-					if literal, ok := node.(*ast.BasicLit); ok && literal.Kind == token.STRING {
-						text, err := strconv.Unquote(literal.Value)
-						if err != nil {
-							t.Fatal(err)
-						}
-						if !strings.HasPrefix(text, "SELECT ") && strings.ContainsAny(text, " \n\t") && strings.ContainsFunc(text, unicode.IsLetter) {
-							t.Errorf("%s: authored archive caption belongs in prompt/history-messages.yaml", fset.Position(literal.Pos()))
-						}
-					}
-				}
 				call, ok := node.(*ast.CallExpr)
 				if !ok || len(call.Args) == 0 {
 					return true
@@ -274,6 +270,15 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 				owner, ok := selector.X.(*ast.Ident)
 				if !ok || !(owner.Name == "fmt" && selector.Sel.Name == "Errorf" || owner.Name == "errors" && selector.Sel.Name == "New") {
 					return true
+				}
+				if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
+					text, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if want, ok := operatorOnly[path+"."+function.Name.Name]; ok && text == want {
+						return true
+					}
 				}
 				asset, ok := call.Args[0].(*ast.SelectorExpr)
 				if ok {

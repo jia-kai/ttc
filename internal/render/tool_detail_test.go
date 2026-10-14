@@ -26,3 +26,34 @@ func TestToolParametersReadablePreciseAndSafe(t *testing.T) {
 		t.Fatal("short diff unrecognized")
 	}
 }
+
+func TestJobPreviewLeavesIdentityToInspection(t *testing.T) {
+	result := []byte(`{"job_id":"watch-job","kind":"watch","label":"python train.py","record_dir":"/runs/train"}`)
+	for _, tool := range []string{"watch", "job"} {
+		md := InspectedTool(tool, []byte(`{"record_dir":"/runs/train"}`), result)
+		for _, want := range []string{"**Job id:**", "watch-job", "**Record dir:**", "/runs/train"} {
+			if !strings.Contains(md.Detail, want) {
+				t.Fatalf("%s inspector missing %q: %s", tool, want, md.Detail)
+			}
+		}
+		if strings.Contains(md.Detail, "**Label:**") || strings.Contains(md.Detail, "python train.py") {
+			t.Fatal(md.Detail)
+		}
+	}
+	md := InspectedTool("subagent", nil, []byte(`{"job_id":"child-job","kind":"subagent","label":"Review"}`))
+	if strings.Contains(md.Detail, "**Label:**") || strings.Contains(md.Detail, "**Command:**") {
+		t.Fatal("job identity belongs to the inspection descriptor", md.Detail)
+	}
+}
+
+func TestStandaloneJobRenderingRetainsIdentity(t *testing.T) {
+	result := []byte(`{"job_id":"watch-job","kind":"watch","label":"python train.py","record_dir":"/resolved/train"}`)
+	for _, name := range []string{"watch", "job_read", "job_stop"} {
+		detail := Tool(name, nil, result).Detail
+		for _, want := range []string{"**Label:**", "python train.py", "**Record dir:**", "/resolved/train"} {
+			if !strings.Contains(detail, want) {
+				t.Fatalf("%s lost standalone metadata %q: %s", name, want, detail)
+			}
+		}
+	}
+}

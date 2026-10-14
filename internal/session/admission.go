@@ -79,7 +79,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
 		if r.orderError != nil {
-			return fmt.Errorf(prompts.SessionRuntimeEventPersistence, r.orderError)
+			return fmt.Errorf("runtime event persistence failed: %w", r.orderError)
 		}
 		var next contextCursor
 		var e error

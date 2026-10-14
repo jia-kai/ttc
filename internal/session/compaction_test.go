@@ -191,6 +191,19 @@ func TestChildArchivePreservesModelVisibleJobOutput(t *testing.T) {
 	}
 }
 
+func TestChildArchivePreservesWatchIdentityWithoutLiveInspector(t *testing.T) {
+	messages := []llm.Message{
+		{Role: "assistant", Calls: []llm.ToolCall{{ID: "watch", Name: "watch", Arguments: json.RawMessage(`{"record_dir":"relative-run"}`)}}},
+		{Role: "tool", CallID: "watch", Content: `{"job_id":"job_watch","kind":"watch","label":"python train.py --epochs=10","record_dir":"/resolved/relative-run","status":"running"}`},
+	}
+	text := childTranscript(messages)
+	for _, want := range []string{"python train.py --epochs=10", "/resolved/relative-run", "relative-run"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("standalone archive lost %q: %s", want, text)
+		}
+	}
+}
+
 func TestCompactionFailureClassification(t *testing.T) {
 	transient := &llm.TransientError{Err: errors.New("service unavailable")}
 	for _, test := range []struct {

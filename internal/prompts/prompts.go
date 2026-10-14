@@ -4,16 +4,6 @@ package prompts
 
 import "sort"
 
-// NamingSettings configures the bounded background session-title request.
-type NamingSettings struct {
-	Text           string // Instructions sent to the naming model.
-	OutputTokens   int    // Maximum generated tokens, including reasoning.
-	TimeoutSeconds int    // Deadline for the complete naming request, in seconds.
-}
-
-// Naming returns the generated settings by value; callers cannot alter embedded assets.
-func Naming() NamingSettings { return naming }
-
 type toolPrompt struct {
 	Description string
 	Notes       map[string]string

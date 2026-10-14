@@ -58,10 +58,6 @@ SessionToolIntentMismatch: tool call/intent count mismatch
 SessionUnusableAfterCompaction:
   "session unusable after compaction: %s; inspect/export history or start/load
   another session"
-SessionPersistUnusableContext: "persist unusable context: %w"
-SessionContextUnusableAfterCompaction:
-  "context unusable after compaction: %w; inspect/export history or start/load
-  another session"
 SessionNamingTruncated: "\n[truncated]"
 SessionNamingTool: "\nTool: "
 SessionSummaryMessageHeader: "\n### %s"
@@ -83,11 +79,6 @@ SessionCompactionSummaryTooLarge: compaction summary exceeds 1 MiB
 SessionCompactionEmptySummary: empty compaction summary
 ChildCompactionIdentity:
   child compaction requires actor identity and tool registry
-ChildArchiveHeader: "# Child context · %s\n\n"
-ChildArchiveTool: "### Tool · %s\n\n%s\n\n"
-ChildArchiveStream: "#### %s\n\n%s\n"
-ChildArchiveMessage: "### %s\n\n%s\n\n"
-ChildArchiveBinaryFile: "Binary file: %s\n\n"
 SessionProviderNilCall: provider emitted nil call
 SessionInvalidPartialRecovery: provider emitted invalid partial recovery
 SessionReadRecoveryInstructions: "read recovery instructions: %w"
@@ -98,11 +89,7 @@ SessionInvalidToolAnnouncement: provider emitted invalid tool announcement
 SessionRecordToolAnnouncement: "record tool announcement: %w"
 SessionInvalidToolProgress: provider emitted invalid tool progress
 SessionReadProjectInstructions: "read project instructions %s: %w"
-SessionRuntimeEventPersistence: "runtime event persistence failed: %w"
 SessionNotificationSource:
   notification source must be an original committed event
 SessionNotificationJSON: notification must contain valid JSON
 SessionEventAlreadyPending: event already pending delivery
-SessionJobOutputUnavailable: "\nOutput unavailable: "
-SessionJobStreamUnavailable: "\n%s unavailable: %s"
-SessionJobTail: "\n**%s · showing tail, up to 8 KiB**\n\n"

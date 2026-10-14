@@ -75,6 +75,11 @@ One Go module uses direct construction and small interfaces at their consumers:
   [prompt/README.md](../prompt/README.md). Embed bundled skills through
   `prompt/skills`; no plugin framework, service locator or reflection
   persistence.
+- Jobs retain optional construction-time inspection callbacks that return typed
+  fields and bounded stream policies outside supervisor locks. One acquisition
+  and rendering path serves live windows and saved completion Markdown. Execution
+  snapshots and exact tool JSON stay separate from presentation; history never
+  restores callbacks. LSP inspection cannot read protocol stdout.
 - Read root-to-cwd AGENTS.md at request boundaries and supply changes; deeper
   instructions apply before scoped edits. Discover `*/SKILL.md` in user/ancestor
   `.agents/skill` and `.agents/skills`. Exact-name precedence: nearest project,

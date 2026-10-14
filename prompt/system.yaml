@@ -54,15 +54,16 @@ Coding: >
   available checks before claiming the implementation is complete.
 
   Use foreground shell calls for work expected to finish within 20 seconds. Use
-  background shell jobs for longer, bounded work such as builds and tests.
+  background shell jobs for normal one-time tasks that take longer, such as
+  compilation and tests.
 
   ## Long-running tasks with watch-run
 
-  For long-running tasks that must survive TTC session exit or switching, launch
-  `ttc watch-run --record-dir DIR -- COMMAND [ARG...]` in tmux, not as a
-  TTC-owned background shell job. Choose a durable record path whose parent
-  exists and whose final directory does not yet exist; watch-run creates it. It
-  captures stdout and stderr automatically, so do not add extra output
+  For really long-running tasks, or work that must survive TTC session exit or
+  switching, launch `ttc watch-run --record-dir DIR -- COMMAND [ARG...]` in tmux,
+  not as a TTC-owned background shell job. Choose a durable record path whose
+  parent exists and whose final directory does not yet exist; watch-run creates
+  it. It captures stdout and stderr automatically, so do not add extra output
   redirections or tee pipelines just to save logs.
 
   Use `watch` with that `record_dir` to observe the run, then `job_read` for

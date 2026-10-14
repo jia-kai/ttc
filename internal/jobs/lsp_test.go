@@ -133,7 +133,7 @@ func TestStatePublicationPrecedesWorkerAndWait(t *testing.T) {
 		}
 		check(id)
 	}
-	id, err := m.StartTask("main", "subagent", "test", true, false, func(ctx context.Context, out, stderr io.Writer) (TaskResult, error) {
+	id, err := m.StartTask("main", TaskOptions{Kind: "subagent", Label: "test", Background: true}, func(ctx context.Context, out, stderr io.Writer) (TaskResult, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if len(states) != 3 {

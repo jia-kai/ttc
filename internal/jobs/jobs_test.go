@@ -37,7 +37,7 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 		}
 	}
 	ready := make(chan string, 1)
-	childID, err := m.StartTask("main/child", "subagent", "test", true, false, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
+	childID, err := m.StartTask("main/child", TaskOptions{Kind: "subagent", Label: "test", Background: true}, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
 		id := <-ready
 		if _, err := m.Stop("main/child", id); err == nil {
 			t.Error("child self-stop allowed")

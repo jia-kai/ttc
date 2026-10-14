@@ -23,6 +23,8 @@ for remaining features. Linux hosts are the only supported platform. See
 - Keep all TTC-authored LLM-facing text in `prompt/`, including runtime/tool
   guidance and bundled skills. Go supplies behavior and dynamic values; use
   generated prompt constants and run `make prompts` after changing assets.
+  Inline UI-only text in its owning Go code. Export/archive visibility alone does
+  not make presentation text LLM-facing; trace deliberate model-input paths.
 - Validate changes with the checks available in the repository. For terminal
   behavior, exercise the affected workflow in a headless terminal when
   practical; for rendering changes, verify Kitty-specific behavior.

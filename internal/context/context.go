@@ -325,7 +325,7 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, types []llm
 		return a, nil
 	}
 	if !st.Mode().IsRegular() {
-		return a, errors.New(prompts.AttachmentRegularFileOrDirectory)
+		return a, errors.New("attachment must be a regular file or directory")
 	}
 	reader := bufio.NewReader(f)
 	binary, err := binaryinput.Read(ctx, reader, path, st.Size(), types)
@@ -341,20 +341,20 @@ func snapshotOpened(ctx stdcontext.Context, path string, f *os.File, types []llm
 		return a, nil
 	}
 	if st.Size() > 8<<20 {
-		return a, errors.New(prompts.AttachmentTooLarge)
+		return a, errors.New("attachment exceeds 8 MiB")
 	}
 	b, e := io.ReadAll(io.LimitReader(reader, 8<<20+1))
 	if err := ctx.Err(); err != nil {
 		return a, err
 	}
 	if len(b) > 8<<20 {
-		return a, errors.New(prompts.AttachmentTooLarge)
+		return a, errors.New("attachment exceeds 8 MiB")
 	}
 	if e != nil {
 		return a, e
 	}
 	if !utf8.Valid(b) || strings.ContainsRune(string(b), 0) {
-		return a, errors.New(prompts.AttachmentUnsupportedContent)
+		return a, errors.New("unsupported attachment content")
 	}
 	a.Kind = "text"
 	if len(b) > 32768 {

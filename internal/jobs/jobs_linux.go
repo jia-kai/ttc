@@ -36,6 +36,7 @@ type Snapshot struct {
 	Kind            string             `json:"kind"`
 	Owner           string             `json:"owner_actor_id"`
 	Label           string             `json:"label"`
+	RecordDir       string             `json:"record_dir,omitempty"` // Watch-run records observed by a watch job.
 	Status          string             `json:"status"`
 	Stdout          string             `json:"stdout"`
 	Stderr          string             `json:"stderr"`
@@ -59,6 +60,7 @@ type job struct {
 	background       bool
 	client           *lsp.Client
 	output           *capture.OutputOptions // Nil retains compact previews for non-shell tasks.
+	inspector        Inspector
 }
 
 // Manager owns jobs for one runtime. Close cancels and joins all process groups.
@@ -139,6 +141,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	cmd.WaitDelay = time.Second
 	startedAt := time.Now().UTC()
 	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j.inspector = commandInspector
 	cmd.Stdout = j.stdout
 	j.output = &options
 	cmd.Stderr = j.stderr
@@ -211,7 +214,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 				j.view.Signal = ws.Signal().String()
 			}
 		}
-		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		view := preview(j)
 		view.WakeOnExit = wake
 		notify := j.background
@@ -443,7 +446,7 @@ func preview(j *job) Snapshot {
 	if j.output == nil {
 		return compactPreview(j)
 	}
-	v := j.view
+	v := cloneSnapshot(j.view)
 	a, b := capture.SelectOutput(j.stdout, j.stderr, *j.output)
 	v.Stdout, v.Stderr = a.Output, b.Output
 	v.StdoutSelection, v.StderrSelection = &a, &b
@@ -452,7 +455,7 @@ func preview(j *job) Snapshot {
 }
 
 func compactPreview(j *job) Snapshot {
-	v := j.view
+	v := cloneSnapshot(j.view)
 	a, _ := j.stdout.Read("eof:0:bytes", 1)
 	b, _ := j.stderr.Read("eof:0:bytes", 1)
 	v.Stdout = j.stdout.Tail(10, 1024)
@@ -477,7 +480,7 @@ type TaskResult struct {
 // as shell jobs. The worker must honor ctx and finish before its callback is joined.
 // Returned exit metadata is copied and published atomically with terminal status
 // and captured output. Worker errors report supervision failure, not exit status.
-func (m *Manager) StartTask(owner, kind, label string, background, wake bool, run func(context.Context, io.Writer, io.Writer) (TaskResult, error)) (string, error) {
+func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.Context, io.Writer, io.Writer) (TaskResult, error)) (string, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -485,7 +488,12 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
-	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: kind, Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	metadata := Snapshot{ID: history.NewID("job"), Kind: options.Kind, Label: options.Label, RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: options.WakeOnExit}
+	inspector := options.Inspector
+	if inspector == nil {
+		inspector = taskInspector
+	}
+	j := &job{startedAt: startedAt, view: metadata, inspector: inspector, cancel: cancel, done: make(chan struct{}), background: options.Background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
 	launch := j.view
@@ -509,16 +517,16 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 			j.view.Status = "failed"
 			fmt.Fprintln(j.stderr, err)
 		}
-		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		view := preview(j)
-		view.WakeOnExit = wake
+		view.WakeOnExit = options.WakeOnExit
 		m.mu.Unlock()
 		if m.OnState != nil {
 			m.OnState(view)
 		}
 		close(j.done)
 		cancel()
-		if background && m.Notify != nil {
+		if options.Background && m.Notify != nil {
 			m.Notify(view)
 		}
 	}()
@@ -555,7 +563,7 @@ func (m *Manager) Live() []Snapshot {
 	var out []Snapshot
 	for _, j := range m.jobs {
 		if j.view.Status == "running" {
-			out = append(out, j.view)
+			out = append(out, cloneSnapshot(j.view))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -576,11 +584,7 @@ func (m *Manager) Metadata(owner string) []Snapshot {
 	out := make([]Snapshot, 0, len(m.jobs))
 	for _, j := range m.jobs {
 		if allowed(owner, j.view.Owner) {
-			v := j.view
-			if v.ExitCode != nil {
-				code := *v.ExitCode
-				v.ExitCode = &code
-			}
+			v := cloneSnapshot(j.view)
 			out = append(out, v)
 		}
 	}

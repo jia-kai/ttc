@@ -17,7 +17,7 @@ func fixture(t *testing.T) string {
 		"prompt/system.yaml":           fixtureSystem,
 		"prompt/child-messages.yaml":   "ChildMessageNonempty: message must be nonempty UTF-8\n",
 		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nlinks: '%s Archives: %s %s'\n",
-		"prompt/naming.yaml":           "text: Name it.\noutput_tokens: 32\ntimeout_seconds: 15\n",
+		"prompt/naming.md":             "Name it.\r\n\n",
 		"prompt/tools.yaml":            "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
 		"prompt/runtime.yaml":          "RuntimeWarning: 'Synthetic warning: %s'\n",
 		"prompt/tool-messages.yaml":    "ToolMissing: Synthetic missing input.\n",
@@ -57,6 +57,12 @@ func TestGenerationPreservesTextAndIsDeterministic(t *testing.T) {
 	}
 	if !bytes.Contains(first, []byte(`"Stable instructions.\r\n\n"`)) || !bytes.Contains(first, []byte(`"Try another path."`)) || !bytes.Contains(first, []byte(`const RuntimeWarning = "Synthetic warning: %s"`)) || !bytes.Contains(first, []byte(`const Child = "Child instructions.\n"`)) || !bytes.Contains(first, []byte(`const ChildMessageNonempty = "message must be nonempty UTF-8"`)) {
 		t.Fatal("lost original text", string(first))
+	}
+	if !bytes.Contains(first, []byte(`const Naming = "Name it.\r\n\n"`)) {
+		t.Fatal("lost generic naming asset text", string(first))
+	}
+	if bytes.Contains(first, []byte("NamingSettings")) || bytes.Contains(first, []byte("var naming")) {
+		t.Fatal("generated naming runtime settings", string(first))
 	}
 	if err = generate(root, target); err != nil {
 		t.Fatal(err)
@@ -123,10 +129,10 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"empty note", "prompt/tools.yaml", "read:\n  description: Read.\n  notes:\n    missing: ''\n", "invalid note"},
 		{"duplicate", "prompt/tools.yaml", "read:\n  description: Read.\nread:\n  description: Other.\n", "already defined"},
 		{"multiple documents", "prompt/tools.yaml", "read:\n  description: Read.\n---\n{}\n", "exactly one"},
-		{"empty yaml", "prompt/naming.yaml", "", "EOF"},
-		{"unknown config", "prompt/naming.yaml", "text: Name.\noutput_tokens: 32\ntimeout_seconds: 15\ntypo: 1", "field typo"},
-		{"obsolete attempt limit", "prompt/naming.yaml", "text: Name.\noutput_tokens: 32\ntimeout_seconds: 15\nmax_attempts: 1", "field max_attempts"},
-		{"invalid bounds", "prompt/naming.yaml", "text: Name.\noutput_tokens: 0\ntimeout_seconds: 15", "output_tokens"},
+		{"obsolete naming yaml", "prompt/naming.yaml", "text: Name.\noutput_tokens: 32\ntimeout_seconds: 15\n", "unsupported prompt asset naming.yaml"},
+		{"empty naming", "prompt/naming.md", "", "nonempty UTF-8"},
+		{"naming encoding", "prompt/naming.md", "\xff", "UTF-8"},
+		{"naming nul", "prompt/naming.md", "Name\x00it.", "NUL"},
 		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\ninput: '%s %s'\nlinks: '%s %s %s'", "nonempty"},
 		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\ninput: '%s %s'\nlinks: '%s %s %s'\ntypo: bad", "field typo"},
 		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\ninput: Focus %s\nlinks: '%s %s %s'", "format"},
@@ -136,7 +142,8 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"message number", "prompt/runtime.yaml", "RuntimeWarning: 42", "nonempty UTF-8"},
 		{"message object", "prompt/runtime.yaml", "RuntimeWarning: {text: warning}", "nonempty UTF-8"},
 		{"invalid message name", "prompt/runtime.yaml", "runtime_warning: warning", "invalid or reserved"},
-		{"reserved message name", "prompt/runtime.yaml", "Naming: warning", "invalid or reserved"},
+		{"reserved message name", "prompt/runtime.yaml", "ToolDescription: warning", "invalid or reserved"},
+		{"naming collision", "prompt/runtime.yaml", "Naming: warning", "duplicate prompt name Naming"},
 		{"system collision", "prompt/runtime.yaml", "System: warning", "must be defined in system.yaml"},
 		{"obsolete markdown", "prompt/system.md", "Old instructions.", "must be defined in system.yaml"},
 		{"child collision", "prompt/runtime.yaml", "Child: warning", "must be defined in system.yaml"},

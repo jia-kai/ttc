@@ -26,7 +26,7 @@ import (
 const MaxBytes = 32 << 20
 
 // ErrMiss identifies an absent or expired entry, not a cache-storage failure.
-var ErrMiss = errors.New(prompts.BlobCacheMiss)
+var ErrMiss = errors.New("blob cache miss")
 
 // Cache coordinates operations with short-lived cancelable filesystem locks.
 // Entries are never pinned. Configure Limit and TTL before concurrent use.
@@ -269,7 +269,7 @@ func (c *Cache) Get(ctx context.Context, kind, key string) ([]byte, error) {
 		if err := c.prune(ctx, c.Limit, "", ""); err != nil {
 			return nil, err
 		}
-		return nil, fmt.Errorf(prompts.BlobCacheExpiredMiss, ErrMiss, name)
+		return nil, fmt.Errorf("%w: expired %s", ErrMiss, name)
 	}
 	if err := c.touch(name); err != nil {
 		return nil, err

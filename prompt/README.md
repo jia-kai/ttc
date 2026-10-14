@@ -1,12 +1,16 @@
 # Embedded LLM text
 
-All TTC-authored text sent to models belongs here: instructions, tool
+All TTC-authored text deliberately sent to models belongs here: instructions, tool
 descriptions, validation/recovery guidance, runtime warnings, fallback notices
 and message framing. Go owns behavior and supplies dynamic values, not the
 authored prose. UI-only wording, protocol/schema keys, status values, external
 diagnostic payloads and user/project content are not prompt assets. TTC-authored
-diagnostic captions and validation text are assets, even when wrapped by another
-error. Synthetic test conversations stay in fixtures.
+diagnostic captions and validation text are assets when their delivery path
+includes model input, even when wrapped by another error. Inline UI-only captions,
+archive formatting, CLI-only diagnostics and server-only protocol replies in their
+owning Go code. A model's later reading of an export does not make its presentation
+text a prompt asset. Shared captions deliberately included in child feedback
+remain assets. Synthetic test conversations stay in fixtures.
 
 ## Sources
 
@@ -20,13 +24,13 @@ error. Synthetic test conversations stay in fixtures.
   prose; legacy marker decoding belongs only in `internal/history/migrate`.
 - `compaction.yaml`: summary instructions, input with two `%s` slots
   (focus/transcript), and links with three (summary/Markdown/JSONL archives).
-- `naming.yaml`: title instructions and output-token/deadline limits.
+- `naming.md`: title instructions. Token/deadline limits belong to session code.
 - `tools.yaml`: descriptions keyed by tool name, with reusable notes.
 - `tool-messages.yaml`: tool validation/recovery text, including shell output,
   wakeup updates and external-watch diagnostics.
 - `runtime.yaml`: failed-child caller guidance and fallback messages.
-- `*-messages.yaml`: tool/session guidance, diagnostic prose, and shared
-  attachment/archive/presentation framing. Each key is an exported Go constant
+- `*-messages.yaml`: tool/session guidance, model-facing diagnostics and input
+  framing. Each key is an exported Go constant
   name; values are nonempty UTF-8 strings. Preserve printf slots and whitespace;
   static constants let `go vet` check callers.
 - `skills/*/SKILL.md`: bundled skill instructions, embedded by
@@ -49,8 +53,8 @@ Embedded prompt assets need no source files at runtime. Skill YAML frontmatter
 is parsed at discovery and loading, including for external skills.
 
 Generation validates text, asset names, duplicate/reserved symbols, YAML fields,
-tool coverage and naming limits. Markdown bytes are preserved and generated Go
-source is deterministic and written atomically. Bundled skills use Go embedding.
+and tool coverage. Markdown bytes are preserved; generated Go source is
+deterministic and written atomically. Bundled skills use Go embedding.
 Regression checks reject prose literals at tool-error sinks; audits must also
 trace indirect model-input paths when adding runtime features.
 

@@ -64,9 +64,9 @@ func (r *Runtime) compactionFailure(session string, err error) error {
 	r.steers = nil
 	r.orderMu.Unlock()
 	if invalid != nil {
-		return errors.Join(err, fmt.Errorf(prompts.SessionPersistUnusableContext, invalid))
+		return errors.Join(err, fmt.Errorf("persist unusable context: %w", invalid))
 	}
-	return fmt.Errorf(prompts.SessionContextUnusableAfterCompaction, err)
+	return fmt.Errorf("context unusable after compaction: %w; inspect/export history or start/load another session", err)
 }
 
 func canonicalCompaction(messages []llm.Message) []llm.Message {
@@ -244,7 +244,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 		return nil, cursor, err
 	}
 	// Exact provider replay and attachment bytes stay in the private sidecar.
-	markdown := fmt.Sprintf(prompts.ChildArchiveHeader, render.Inline(task.actor)) + childTranscript(messages)
+	markdown := fmt.Sprintf("# Child context · %s\n\n", render.Inline(task.actor)) + childTranscript(messages)
 	r.routeMu.RLock()
 	archive, err := r.Store.ArchiveMessages(r.Current(), task.actor, markdown, messages)
 	r.routeMu.RUnlock()
@@ -322,7 +322,7 @@ func childTranscript(messages []llm.Message) string {
 	for _, message := range messages {
 		if message.Role == "tool" {
 			if call, ok := calls[message.CallID]; ok && json.Valid([]byte(message.Content)) {
-				fmt.Fprintf(&out, prompts.ChildArchiveTool, render.Inline(call.Name), render.Tool(call.Name, call.Arguments, json.RawMessage(message.Content)).ExportText())
+				fmt.Fprintf(&out, "### Tool · %s\n\n%s\n\n", render.Inline(call.Name), render.Tool(call.Name, call.Arguments, json.RawMessage(message.Content)).ExportText())
 				// Live inspectors recover captures through JobDetail. An archive
 				// has no live handle, so retain the model-visible selected output here.
 				var result map[string]json.RawMessage
@@ -330,7 +330,7 @@ func childTranscript(messages []llm.Message) string {
 					for _, stream := range []string{"stdout", "stderr"} {
 						var text string
 						if json.Unmarshal(result[stream], &text) == nil && text != "" {
-							fmt.Fprintf(&out, prompts.ChildArchiveStream, stream, render.Fence(text, "text"))
+							fmt.Fprintf(&out, "#### %s\n\n%s\n", stream, render.Fence(text, "text"))
 						}
 					}
 				}
@@ -342,7 +342,7 @@ func childTranscript(messages []llm.Message) string {
 			if json.Valid([]byte(message.Content)) {
 				body = render.Fence(message.Content, "json")
 			}
-			fmt.Fprintf(&out, prompts.ChildArchiveMessage, render.Inline(message.Role), body)
+			fmt.Fprintf(&out, "### %s\n\n%s\n\n", render.Inline(message.Role), body)
 		}
 		for _, call := range message.Calls {
 			if !finished[call.ID] {
@@ -350,7 +350,7 @@ func childTranscript(messages []llm.Message) string {
 			}
 		}
 		for _, file := range message.Files {
-			fmt.Fprintf(&out, prompts.ChildArchiveBinaryFile, render.Inline(file.Path))
+			fmt.Fprintf(&out, "Binary file: %s\n\n", render.Inline(file.Path))
 		}
 	}
 	return out.String()

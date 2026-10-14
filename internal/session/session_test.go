@@ -317,7 +317,7 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 	r.Tools = tool.NewRegistry()
 	tool.Register(r.Tools, "shell", "gated background launch", map[string]any{}, nil, func(struct{}) error { return nil }, func(ctx context.Context, x tool.Execution, _ struct{}) (any, error) {
 		release := make(chan struct{})
-		id, err := r.Jobs.StartTask("main", "shell", "printf output", true, false, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
+		id, err := r.Jobs.StartTask("main", jobs.TaskOptions{Kind: "shell", Label: "printf output", Background: true}, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 			select {
 			case <-release:
 			case <-ctx.Done():
@@ -368,7 +368,7 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if label := r.Store.Label(entry); !strings.Contains(label, "done") || strings.Contains(label, "line-01") || !strings.Contains(label, "line-20") {
+	if label := r.Store.Label(entry); !strings.Contains(label, "done") || !strings.Contains(label, "printf output") || strings.Contains(label, "line-01") || !strings.Contains(label, "line-20") {
 		t.Fatal(label)
 	}
 	detail, err := r.Store.Inspect(entry)
