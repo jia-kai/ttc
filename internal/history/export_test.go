@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,6 +43,61 @@ func TestInternalEventsRemainExactWithoutConversationDuplication(t *testing.T) {
 		entry.Content = json.RawMessage(`{"type":"` + kind + `"}`)
 		if entry.InternalEvent() {
 			t.Fatalf("user-facing event %s hidden", kind)
+		}
+	}
+}
+
+func TestChildMessageStatusExportsAndArchives(t *testing.T) {
+	s, v, turn, _ := historyFixture(t)
+	const message = "Check the results before continuing."
+	id, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{
+		"type": "child_message", "child_id": "child", "child_turn_id": "assignment",
+		"job_id": "job", "parent_call_id": "call", "message": message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := s.Entry(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := s.ExportText(entry)
+	if err != nil || !strings.Contains(text, message) {
+		t.Fatalf("export child-message status: %v\n%s", err, text)
+	}
+	path := filepath.Join(t.TempDir(), "export.md")
+	if err := s.Export(v.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := s.ArchiveTranscript(v.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{path, archive} {
+		markdown, err := os.ReadFile(path)
+		if err != nil || !bytes.Contains(markdown, []byte(message)) {
+			t.Fatalf("child message missing from %s: %v\n%s", path, err, markdown)
+		}
+		exact, err := os.ReadFile(path + ".jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, line := range bytes.Split(bytes.TrimSpace(exact), []byte{'\n'}) {
+			var row struct{ Entry Entry }
+			if err := json.Unmarshal(line, &row); err != nil {
+				t.Fatal(err)
+			}
+			if row.Entry.ID != id {
+				continue
+			}
+			if !bytes.Equal(row.Entry.Content, entry.Content) {
+				t.Fatalf("child-message payload changed in %s: %s", path, row.Entry.Content)
+			}
+			found = true
+		}
+		if !found {
+			t.Fatalf("child-message entry missing from %s.jsonl", path)
 		}
 	}
 }

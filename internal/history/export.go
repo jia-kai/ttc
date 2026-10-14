@@ -87,11 +87,9 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 	if entry.InternalEvent() {
 		return "", nil
 	}
-	var status struct {
-		Type    string
-		Message llm.Message
-	}
 	if entry.Kind == "status" {
+		// Payload fields vary by status type; only decode the discriminator here.
+		var status struct{ Type string }
 		if err := json.Unmarshal(entry.Content, &status); err != nil {
 			return "", err
 		}
