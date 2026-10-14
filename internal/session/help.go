@@ -16,7 +16,8 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 - **Ctrl+J / Shift+Enter** — Insert a newline.
 - **Paste** — Insert text without sending it.
 - **Esc, Esc in the composer** — Interrupt the current turn after closing any open view.
-- **Ctrl+C (any view), Ctrl+X Q, /quit** — Exit TTC and cancel live work.
+- **Ctrl+C (any view)** — Clear the main prompt if it contains text; otherwise exit TTC and cancel live work.
+- **Ctrl+X Q, /quit** — Exit TTC and cancel live work.
 
 ## Conversation and views
 

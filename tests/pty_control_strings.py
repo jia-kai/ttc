@@ -143,6 +143,11 @@ def main():
         expect('/help')
         # Finish startup queries/timeouts before opening a deliberately incomplete string.
         read_for(IDLE_SECONDS)
+        phase = 'Ctrl-C clears nonempty prompt'
+        send('discarded α draft'.encode())
+        read_for(FRAGMENT_SECONDS)
+        send(b'\x03')
+        read_for(FRAGMENT_SECONDS)
         phase = 'history seed'
         submit(1, b'history seed')
         for count, (name, introducer, payload) in enumerate(STRINGS, start=2):
@@ -198,7 +203,7 @@ def main():
         else:
             raise AssertionError('Ctrl-C did not exit TTC within five seconds')
         print(f'PASS: APC/OSC/PM/SOS/DCS idle recovery without ST, fragmented APC, '
-              f'split ST, exact persisted inputs/replies and graceful Ctrl-C: {root}')
+              f'split ST, exact persisted inputs/replies and Ctrl-C clear/exit: {root}')
     except BaseException:
         # Persist the complete first failure before any reproduction. Never delete
         # isolated data or overwrite artifacts from an earlier run.

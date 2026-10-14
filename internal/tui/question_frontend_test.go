@@ -315,6 +315,7 @@ func TestQuestionFrontendSubmitPreservesComposerAndRecallsPrompts(t *testing.T) 
 	u.wait(t, "> ask")
 	u.key(tcell.KeyDown)
 	u.wait(t, "> unfinished draft")
+	u.key(tcell.KeyCtrlC) // Clear the unfinished draft first.
 	u.key(tcell.KeyCtrlC)
 	select {
 	case err := <-u.done:

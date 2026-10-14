@@ -606,8 +606,9 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   `/questions` reopens the pending round with its drafts; an optional `FORM_ID`
   must match it. The next normal user message settles a dismissed call and
   redirects the main agent at its next settled request boundary. Local commands
-  leave it pending. Only explicit reopening clears dismissal. Ctrl+C exits and
-  cancels work. Plain mode accepts `/answer FORM_ID JSON_ARRAY`.
+  leave it pending. Only explicit reopening clears dismissal. Ctrl+C clears a
+  nonempty main prompt; if that prompt is empty, it exits and cancels work.
+  Plain mode accepts `/answer FORM_ID JSON_ARRAY`.
 - Result: `{answers:[{id:string, values:string[], source:"option"| "custom"}]}`
   in question order. Each values array contains exactly one value. Option
   answers contain one option ID; custom answers contain one nonblank UTF-8

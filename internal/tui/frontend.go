@@ -1024,7 +1024,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			steerCount, steers := f.Runtime.SteeringPreview(previewLimit)
 			indicator := ""
 			if busy {
-				indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C exit", activity.indicator(time.Now(), started), len(queue)+steerCount)
+				indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C clear/exit", activity.indicator(time.Now(), started), len(queue)+steerCount)
 			} else if notificationPaused {
 				indicator = "Auto-wake paused · send a prompt or /compact /load /new /model to resume"
 			}
@@ -1517,6 +1517,12 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					}
 				}
 				if isCtrl(ev, "c") {
+					if draft.text != "" {
+						draft.set("")
+						recall.index, recall.draft = len(recall.entries), ""
+						esc, viewChord = false, false
+						continue
+					}
 					submit, haveInput = "/quit", true
 					break
 				}
@@ -2051,7 +2057,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		}
 		if strings.HasPrefix(text, "/") {
 			if busy {
-				add("Command requires an idle turn; Esc twice interrupts work, Ctrl+C exits", 0)
+				add("Command requires an idle turn; Esc twice interrupts work, Ctrl+C clears input or exits if empty", 0)
 				continue
 			}
 			busy = true

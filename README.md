@@ -223,10 +223,11 @@ agents. After dismissing a question, the next message redirects the current turn
 instead.
 
 Use `/help` for the keyboard and command guide. Up/Down recall prompts across
-sessions and restarts. Ctrl-R searches the most recent 1000 prompts (at most 8
-MiB), newest matches first. Every whitespace-separated term must match a
-case-insensitive substring, in any order; matches are highlighted. Enter fills
-the input and Esc cancels.
+sessions and restarts. Ctrl-C clears a nonempty prompt; with an empty prompt, it
+exits TTC and cancels live work. Ctrl-R searches the most recent 1000 prompts
+(at most 8 MiB), newest matches first. Every whitespace-separated term must
+match a case-insensitive substring, in any order; matches are highlighted. Enter
+fills the input and Esc cancels.
 
 Multiple TTC instances can share the default data directory and the same
 workspace. Each starts an independent conversation; workspace conflicts are your
