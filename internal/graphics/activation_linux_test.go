@@ -53,8 +53,8 @@ exec sleep 30
 		t.Fatal("missed window return")
 	}
 	got, err := os.ReadFile(args)
-	if err != nil || string(got) != "-C\nattach-session\n-f\nno-output,ignore-size\n-t\n$2\n" {
-		t.Fatal("observer changed sizing or requested pane output", string(got), err)
+	if err != nil || string(got) != "-C\nattach-session\n-E\n-f\nno-output,ignore-size\n-t\n$2\n" {
+		t.Fatal("observer must preserve the session environment and sizing and suppress pane output", string(got), err)
 	}
 	start := time.Now()
 	stop()

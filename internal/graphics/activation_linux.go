@@ -13,8 +13,9 @@ import (
 
 // WatchTmuxActivation reports window-return notifications without relying on
 // terminal focus reporting or changing the user's tmux options. The control
-// client suppresses pane output and does not participate in terminal sizing,
-// but counts as attached and runs the user's client attach/detach hooks.
+// client suppresses pane output and leaves terminal sizing and the session
+// environment unchanged, but counts as attached and runs the user's client
+// attach/detach hooks.
 // stop cancels and joins the client; callers must call it before terminal exit.
 func WatchTmuxActivation(ctx context.Context) (<-chan struct{}, func(), error) {
 	pane := os.Getenv("TMUX_PANE")
@@ -35,7 +36,9 @@ func WatchTmuxActivation(ctx context.Context) (<-chan struct{}, func(), error) {
 		return nil, nil, fmt.Errorf("invalid tmux activation target: %q", metadata.String())
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(ctx, "tmux", "-C", "attach-session", "-f", "no-output,ignore-size", "-t", fields[0])
+	// -E prevents update-environment from applying TTC's stripped agent socket
+	// (or other inherited values) to the user's shared tmux session.
+	cmd := exec.CommandContext(ctx, "tmux", "-C", "attach-session", "-E", "-f", "no-output,ignore-size", "-t", fields[0])
 	cmd.WaitDelay = 250 * time.Millisecond
 	// Control mode needs a live input pipe, though this observer sends no commands.
 	stdin, err := cmd.StdinPipe()

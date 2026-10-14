@@ -34,8 +34,11 @@ func TestTmuxActivationRealClientCleanup(t *testing.T) {
 		return strings.TrimSpace(string(output))
 	}
 	t.Setenv("TMUX", "")
+	t.Setenv("SSH_AUTH_SOCK", "/fixture/agent.sock")
+	t.Setenv("DISPLAY", ":fixture")
 	pane := tmux("new-session", "-d", "-s", "activation", "-P", "-F", "#{pane_id}", "sleep 30")
 	defer func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() }()
+	tmux("set-option", "-t", "activation", "update-environment", "SSH_AUTH_SOCK DISPLAY")
 	hookLog := filepath.Join(filepath.Dir(socket), "hooks.log")
 	// These hooks belong solely to this private fixture; production recovery
 	// never changes user hooks. Observe the client's real attach/detach effects.
@@ -75,20 +78,39 @@ func TestTmuxActivationRealClientCleanup(t *testing.T) {
 	realClient := tmux("list-clients", "-F", "#{client_name}")
 	t.Setenv("TMUX", socket+",0,0")
 	t.Setenv("TMUX_PANE", pane)
+	// TTC removes agent access before starting the observer. Neither a missing
+	// variable nor a changed inherited value may overwrite the user's session.
+	if err := os.Unsetenv("SSH_AUTH_SOCK"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DISPLAY", ":observer")
+	checkEnvironment := func() {
+		t.Helper()
+		for _, want := range []string{"SSH_AUTH_SOCK=/fixture/agent.sock", "DISPLAY=:fixture"} {
+			key, _, _ := strings.Cut(want, "=")
+			if got := tmux("show-environment", "-t", "activation", key); got != want {
+				t.Fatalf("observer changed session environment: %s, want %s", got, want)
+			}
+		}
+	}
+	checkEnvironment()
 	_, stop, err := WatchTmuxActivation(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stop()
 	waitCount("2")
+	checkEnvironment()
 	stop()
 	waitCount("1")
+	checkEnvironment()
 	_, stopSecond, err := WatchTmuxActivation(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stopSecond()
 	waitCount("2")
+	checkEnvironment()
 	tmux("detach-client", "-t", realClient)
 	waitCount("1")
 	if got := tmux("list-clients", "-F", "#{client_control_mode}"); got != "1" {
@@ -96,6 +118,7 @@ func TestTmuxActivationRealClientCleanup(t *testing.T) {
 	}
 	stopSecond()
 	waitCount("0")
+	checkEnvironment()
 	deadline := time.Now().Add(time.Second)
 	for {
 		data, err := os.ReadFile(hookLog)
