@@ -25,7 +25,7 @@ ToolLSPQueryArgument: "query is only accepted by workspace_symbols; omit it"
 ToolLSPQueryRequired: "workspace_symbols requires query (an empty string is allowed)"
 ToolLSPTimeout: "LSP query exceeded %d ms; increase timeout_ms (max 120000), narrow query, or inspect server stderr"
 ToolLSPWorkspaceArguments: "for workspace_symbols, omit path, language_id, line and column"
-ToolLineTooLong: "line exceeds 40000-byte page cap; use shell to extract a bounded byte range instead"
+ToolLineTooLong: "line exceeds 40000-byte page cap; use shell if available to extract a bounded byte range, otherwise report this read limitation"
 ToolNoCodingChildren: "no coding children in this runtime"
 ToolNonnegativeOffset: "offset must be nonnegative"
 ToolNotRegularFile: "not a regular file"
@@ -64,7 +64,7 @@ ToolSearchDecodeResponse: "decode search response: %w"
 ToolSearchEndpoint: "search endpoint: %w"
 ToolSearchFailed: "Exa search tool failed"
 ToolSearchFailedDetail: "Exa search tool failed: %s"
-ToolSearchHTTPConfigHint: "ask the user to check TTC web-search configuration"
+ToolSearchHTTPConfigHint: "report a TTC web-search configuration issue"
 ToolSearchHTTPFailed: "search HTTP %d; %s"
 ToolSearchHTTPSourceHint: "retry later or use web_fetch with a known source URL"
 ToolSearchMissingResult: "missing search tool result"
@@ -88,7 +88,7 @@ ToolTrailingJSON: "trailing JSON value"
 ToolURLRequired: "require HTTP(S) URL without credentials"
 ToolURLTooLarge: "URL exceeds 4096 bytes"
 ToolUnknown: "unknown tool %s"
-ToolUnrecognizedBinary: "expected UTF-8 text without NUL; no supported binary format was recognized; provide an announced original format or use shell for explicit inspection/conversion"
+ToolUnrecognizedBinary: "expected UTF-8 text without NUL; no supported binary format was recognized; provide an announced original format or use shell if available for explicit inspection/conversion"
 ToolWebContentType: "missing or invalid content type"
 ToolWebContextPattern: "context_lines requires pattern"
 ToolWebDecodedTooLarge: "decoded page exceeds 4 MiB"
@@ -109,3 +109,29 @@ ToolWebRetainedLimit: "converted document exceeds retained-page limit"
 ToolWebSourceIdentifier: "provide exactly one of url or document_id"
 ToolWebTextResponse: "not a text response; use an HTML or text version of the source"
 ToolWebTimeout: "page fetch timed out; increase timeout_ms (max 120000) or use a smaller page URL"
+
+# Shell output validation.
+ToolShellOutputMode: output_mode must be head, tail, or head_tail.
+
+# Atomic timer update validation and ownership diagnostics.
+WakeupUpdateEmpty: provide at least one of message, at, delay_seconds or repeat_seconds to update
+WakeupUpdateTime: at and delay_seconds are mutually exclusive; omit both to keep the next firing time
+WakeupUpdateRepeat: repeat_seconds must be 0–31536000; 0 disables repetition
+WakeupUpdateOwnership: only main or the scheduling child may update this reminder
+
+# Watch-run validation and observation diagnostics.
+WatchCommandRequired: watch-run requires a command after --.
+WatchCreateDirectory: "create unique record directory: %w"
+WatchInvalidProcessStat: invalid watch-run process stat.
+WatchShortProcessStat: short watch-run process stat.
+WatchGenerateIdentity: "generate watch-run identity: %w"
+WatchPublishCompletion: "publish watch-run completion: %w"
+WatchInvalidIdentity: invalid watch-run identity.
+WatchReadLog: "read %s watch-run log: %w"
+WatchLogTruncated: watch-run log was truncated.
+WatchLogReplaced: watch-run log file was replaced during observation.
+WatchInvalidCompletion: invalid watch-run completion.
+WatchOutcomeUnknown: watch-run wrapper is gone; command outcome is unknown.
+WatchDrainIncomplete: watch-run output drain exceeded 5 seconds after command exit; captured output is incomplete.
+WatchNonregularFile: watch-run records and logs must be regular files, not special files.
+WatchMetadataTooLarge: watch-run metadata exceeds the 64 KiB limit.

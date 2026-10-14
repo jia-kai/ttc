@@ -6,11 +6,16 @@ description: Configure TTC's supported rail, web-search and launch settings from
 # Configure TTC
 
 Use this skill when the user asks to configure TTC itself, not application code.
-Consult the installed version's `ttc --help`, `ttc rail --help` and the bundled
-reference below for supported options; do not invent a general settings file or undocumented
-UI settings. Make routine, clearly requested changes without extra permission
-prompts. Ask when scope is materially ambiguous or a security boundary changes,
-particularly broad read-write mounts or global Docker/SSH-agent authorization.
+With `shell` available, consult the installed version's `ttc --help` and
+`ttc rail --help`; otherwise use the bundled reference below and report any
+installed-version checks still needed. Do not invent a general settings file or
+undocumented UI settings. In read-only roles, inspect non-secret configuration
+and propose changes and restart steps instead of editing or launching commands.
+With file-mutation tools, make routine, clearly requested changes without extra
+permission prompts. When scope is materially ambiguous or a security boundary
+changes, resolve the decision through available clarification paths or report
+it as a blocker before making dependent changes. This is especially important
+for broad read-write mounts or global Docker/SSH-agent authorization.
 
 ## Choose the supported surface
 
@@ -21,7 +26,14 @@ particularly broad read-write mounts or global Docker/SSH-agent authorization.
 - **Web search:** `${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json`, or
   the file selected by `--web-search-config PATH`. Documented fields are
   `api_key` and optional HTTP(S) `endpoint`; the public Exa endpoint works
-  without a key. Restart TTC after changes; recreate rail if an imported config
+  without a key. Users can run `ttc --setup-exo` privately from the host: it reads
+  stdin (terminal entry is hidden), confirms replacing an existing config's key,
+  verifies one test search, and atomically saves mode 0600 while preserving the
+  endpoint. `TTC_EXA_URL`, if set, overrides verification without changing the
+  saved endpoint, as at normal startup. Setup requires HTTPS except for HTTP
+  localhost/loopback tests. `--web-search-config PATH` also selects the setup target. Never run
+  setup with a real key through agent tools or include the key in a command.
+  Restart TTC after changes; recreate rail if an imported config
   was replaced on the host (see the restart rules below).
 - **Launch options:** `--model`, `--variant`, `--workdir`, `--data-dir`,
   `--plain` and other flags shown by `ttc --help`. Provide a launch command or
@@ -74,14 +86,19 @@ Preserve these configuration boundaries:
 ## Verify and report
 
 Check JSON syntax without dumping sensitive contents, validate requested paths
-and flags against the installed help/README, and inspect the final non-secret
-diff. `ttc rail --list` shows live instances; it does **not** validate new config.
-Rail validates configuration when creating an instance and fails closed; do not
-launch an interactive sandbox merely as an unattended validation command.
-Follow the restart rules below. Report
-which file or launch command changed, its scope, checks performed, and the exact
-restart/recreation step still needed. Do not claim a running instance adopted
-new settings before it has been recreated.
+and flags against installed help and the embedded reference (or an available
+README), and inspect the final non-secret diff. `ttc rail --list` shows live
+instances; it does **not** validate new config. Rail validates configuration when
+creating an instance and fails closed; do not launch an interactive sandbox
+merely as an unattended validation command.
+
+Follow the restart rules below. Report the changed or proposed file/launch
+command, its scope, checks performed or still needed, and the exact restart or
+recreation step. Do not claim a running instance adopted new settings before
+it has been recreated.
+When required mutation or shell tools are unavailable, hand off the exact
+proposed non-secret change, target path, scope and verification/restart steps
+to the main agent or user.
 
 ## Rail configuration reference
 

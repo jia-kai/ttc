@@ -3,9 +3,12 @@
 ## Prompt assets
 
 - [prompt/README.md](../prompt/README.md) owns asset authoring, responsibility
-  boundaries, generation and the source inventory. Main and children share
-  [system.md](../prompt/system.md); children append [child.md](../prompt/child.md).
-  Internal naming/compaction/aside requests use their own assets; dynamic identity
+  boundaries, generation and the source inventory. All interactive roles share
+  [system.md](../prompt/system.md). Main and children also receive
+  [coding.md](../prompt/coding.md), then their role guidance: [main.md](../prompt/main.md)
+  or `Child` from [child-messages.yaml](../prompt/child-messages.yaml).
+  Read-only asides receive no coding/main workflows; their developer scope comes
+  from [btw.md](../prompt/btw.md). Naming/compaction requests use their own assets; dynamic identity
   belongs in runtime context, not those stable instructions.
 - Preserve exact per-request instructions through the
   [inspection/artifact contract](design.md#inspectable-request-messages).
@@ -29,7 +32,7 @@
 | `date_utc`                       | Current UTC date                                           |
 | `model`                          | Frozen provider/model/variant for this request             |
 | `image_input`, `image_click`     | Model/frontend image capabilities                          |
-| `binary_files`                   | Native read formats: MIME, extensions, kind and byte limit |
+| `binary_files`                   | Native-read extension groups with `max_bytes`; see below   |
 | `live_jobs`                      | Accessible running metadata, without captured output       |
 | `live_timers`                    | Scheduled timers, without reminder bodies                  |
 | `children`                       | Accessible running or idle children                        |
@@ -41,11 +44,19 @@
   continuation creation; keep tool definitions in a stable structured provider field.
 - Sample optional Git metadata on the actor's first request with a two-second
   deadline; reuse until activation/compaction forces a fresh snapshot.
-- Empty live arrays mean no current work. Job outcomes include failed shell exits;
-  repeating timers report new firing counts. Compare transitions/project updates
-  separately so clearing one-shot fields does not create a snapshot.
+- Empty live arrays mean no current work. Job transitions preserve the job
+  manager's status: `completed` does not imply command success; inspect
+  `exit_code` or `signal`. Repeating timers report new firing counts. Compare
+  transitions/project updates separately so clearing one-shot fields does not
+  create a snapshot.
 - Omitted `project` retains its prior value; explicit empty project clears it.
   Compaction resupplies project context when the initial snapshot may be archived.
+- Announce `binary_files` on each actor's first admitted request, after successful
+  compaction, and when effective formats change; omit it on routine snapshots.
+  Omission retains the prior announcement; `[]` explicitly disables native reads.
+  Extensions are deduplicated and grouped by byte limit, without MIME identifiers.
+  Overlapping formats use the smallest limit; tools still validate against the
+  producing request's full provider catalog.
 - Reread ancestor AGENTS contents each boundary; deeper instructions stay scoped.
   Discover skill metadata at startup (restart to refresh); load bodies on demand.
 - [Runtime boundaries](design.md#boundaries) prohibit restoring live work from

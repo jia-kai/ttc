@@ -1,3 +1,14 @@
+child_message:
+  description: >-
+    Queue evidence or revised instructions for an active child
+    assignment. Supply job_id or both child_id and child_turn_id, plus message.
+    Queued is not delivered: messages enter at the next safe model-request
+    boundary after the current response and foreground tools settle. Messages
+    left at assignment completion are reported undelivered, never forwarded to
+    another assignment or used to start a new turn. At most 32 messages and
+    min(4096, the child model's next-turn input reserve) estimated envelope tokens
+    may be pending. message_queue_capacity rejects oversized sends without
+    queuing them; shorten the message or wait for delivery to free capacity.
 edit:
   description: >-
     Replace old_text with new_text in path using exact matching. Read current
@@ -38,12 +49,13 @@ job_read:
     have been discarded; truncated identifies a lost prefix.
 job_stop:
   description: >-
-    Stop a command process group with job_id, or close a retained coding child
-    and its owned jobs with child_id. Supply exactly one of these identifiers.
+    Stop an accessible command process group with job_id. With child_id, main
+    can close a retained coding child and its owned jobs. For watch jobs, stops
+    observation only, never the external workload. Supply exactly one identifier.
 lsp_query:
   description: >-
-    Query job_id of a language server started with shell(protocol=lsp,
-    background=true). operation selects definition, references, hover,
+    Query an accessible live language server by job_id; use job_list to find one.
+    operation selects definition, references, hover,
     document_symbols or workspace_symbols. File operations use path; navigation
     and hover use 1-based line and column in Unicode code points, not bytes.
     workspace_symbols requires query (empty lists symbols). language_id overrides
@@ -59,7 +71,7 @@ patch:
     header moves that file. Read affected files first.
 question:
   description: >-
-    Main agent only. Ask 1–3 single-choice questions and wait for the user's
+    Ask 1–3 single-choice questions and wait for the user's
     submitted answers.
     Give each question a unique id and prompt. Provide 2–5 options with unique
     id, label and optional description, or omit options for free-text only.
@@ -89,8 +101,11 @@ shell:
     timeout; optionally set timeout_ms=1–86400000, or 0 for no timeout.
     wake_on_exit defaults to true, delivering background completion
     notifications. Inspect exit_code: a nonzero command exit is a job result, not
-    a tool error. Output contains short stdout/stderr tails; use job_read for
-    more. protocol=lsp with background=true connects stdin/stdout to lsp_query.
+    a tool error. Output returns complete stdout/stderr when within output_bytes
+    (default 8192, range 1–8192 combined). Larger output uses output_mode:
+    head, tail or head_tail (default). Per-stream selection metadata identifies
+    omitted bytes and head/tail boundaries; use job_read for retained gaps.
+    protocol=lsp with background=true connects stdin/stdout to lsp_query.
     Use tmux for work that must survive TTC exit.
   notes:
     descendant_pipes: >
@@ -122,6 +137,24 @@ subagent:
     explicit export error.
     Inspect the transcript before continuing failed work or for a full failed
     answer. Use job_read for bounded raw output and job_stop to close an idle child.
+watch:
+  description: >-
+    Observe an externally owned run created by ttc watch-run --record-dir DIR --
+    command. record_dir is absolute or relative to cwd. Returns a background
+    job_id usable with job_read, job_list and job_stop. wake_on_exit defaults to
+    true. Stopping the watcher or exiting TTC stops observation only, never the
+    wrapper or workload. A missing completion record after wrapper death means
+    unknown outcome, not success. Runs and logs in tmux survive TTC exit;
+    watcher handles do not.
+wakeup_update:
+  description: >-
+    Atomically update an active reminder identified by exactly one of wakeup_id
+    or name. Supply at least one of message, at, delay_seconds or repeat_seconds;
+    omitted fields are unchanged. at and delay_seconds are mutually exclusive.
+    repeat_seconds=0 disables repetition. Preserves identity, owner and firing
+    count; does not retract already committed firings. Main may update any
+    reminder; children may update only their own. Inactive reminders cannot be
+    updated; use wakeup_list to choose an active reminder.
 wakeup_cancel:
   description: >-
     Cancel a scheduled reminder by exactly one of wakeup_id or name.

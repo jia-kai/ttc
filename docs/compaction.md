@@ -27,10 +27,21 @@ explicit session changes/exit cancel them.
 - Preserve up to two latest admitted normal/queued prompts combined and up to two
   committed steers independently, chronologically, with exact text/attachments.
   Child tasks/asides count as normal/queued prompts. Unadmitted input stays live.
-  Each copied input gets a separate marker: source, original commit time,
-  compaction time and age. Repeated compaction preserves identity/original time.
-  Markers survive manual loads; live runtime notices do not. Canonical instructions:
-  [prompt/retained-input.md](../prompt/retained-input.md).
+  Canonical history keeps each original input as an individual `llm.Message`,
+  with exact `input_time_ms`, `input_source`, text and attachments. `retained_at_ms`
+  records the compaction timestamp in UTC Unix milliseconds; no developer marker
+  accompanies the input. Entry/source identities and undo checkpoints survive
+  repeated compaction and loads. Model requests project each contiguous group of
+  retained inputs into one developer format instruction and one structured user
+  message, sorted by exact
+  original timestamps ascending with stable ties. Items include explicit input
+  types, original text/source, a relative timestamp formatted as
+  `%.2f seconds before compaction`, and native attachment occurrence indices
+  assigned after sorting. Epoch times remain canonical-only. Budget estimates
+  include this exact projection; summarization preserves typed provenance.
+  Live runtime notices do not survive ordinary loads. Only `RetainedInputs`
+  guidance in [retained-inputs.md](../prompt/retained-inputs.md)
+  is supplied to models; legacy marker decoding is isolated in startup migration.
 - Retain complete assistant/tool cycles after the latest human input, not whole
   user/model turns. Target:
 
@@ -90,7 +101,11 @@ explicit session changes/exit cancel them.
   summary/suffix/tail and freezes the predecessor. Preserve source/event identity;
   update the runtime session pointer before releasing the gate. Summary-first
   input is a projection, not global event order. Retained checkpoints stay undoable;
-  pre-cut edits establish the continuation floor.
+  pre-cut edits establish the continuation floor. Restoring just before a retained
+  input uses its original checkpoint. Startup migration preserves legacy cursor
+  identities and evidence by converting marker rows to nonvisible status entries;
+  current replay does not decode markers. Saved model requests and existing
+  export/compaction archives retain their historical representation.
 - Child handoff preserves ID/read-only policy, leaving main session/file tip/undo
   untouched. Commit one `child_compacted` on success with child/turn, archive links
   and estimated usage, not the summary body. Failure ends the child turn without

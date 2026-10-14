@@ -86,6 +86,10 @@ func (t *transcript) append(v line) {
 	t.extendIndex(before)
 }
 func (t *transcript) appendBlocks(owner int, v line) {
+	if v.compactResponse {
+		t.blocks = append(t.blocks, textBlock{owner: owner, text: render.ResponsePrefix(v.text), height: 1})
+		return
+	}
 	const chunkBytes = 16 << 10
 	text := v.text
 	fence := ""
@@ -189,12 +193,15 @@ func (t *transcript) replace(i int, v line) {
 		}
 	}
 	t.recent = recent
-	if end-begin == 1 && (v.brief || len(v.text) <= 16<<10) {
+	if end-begin == 1 && (v.compactResponse || v.brief || len(v.text) <= 16<<10) {
 		old := t.blocks[begin].height
 		t.blocks[begin].text = v.text
+		if v.compactResponse {
+			t.blocks[begin].text = render.ResponsePrefix(v.text)
+		}
 		t.blocks[begin].rows = nil
 		height := max(1, (len(v.text)+t.width-1)/t.width)
-		if v.brief {
+		if v.brief || v.compactResponse {
 			height = 1
 		}
 		if v.image != nil {
@@ -320,7 +327,7 @@ func (t *transcript) publish(item line, pending string, delta bool) bool {
 		if item.image == nil {
 			item.image = old.image
 		}
-		if delta && !old.markdown && !item.markdown {
+		if delta && !old.markdown && !item.markdown && !item.compactResponse {
 			t.growPlain(index, item, deltaText)
 		} else {
 			t.replace(index, item)
@@ -426,7 +433,7 @@ func (t *transcript) resize(width int) {
 		b := &t.blocks[i]
 		b.rows = nil
 		b.height = max(1, (b.height*old+width-1)/width)
-		if t.lines[b.owner].brief {
+		if t.lines[b.owner].brief || t.lines[b.owner].compactResponse {
 			b.height = 1
 		}
 	}
@@ -438,6 +445,11 @@ func (t *transcript) measure(i int) {
 		return
 	}
 	v := t.lines[b.owner]
+	if v.compactResponse {
+		b.rows = []displayRow{{text: render.SubagentResponse(v.actor, v.subagentName, v.speaker, b.text, t.width, true), styled: true}}
+		t.measured(i)
+		return // Compact blocks always have exactly one row; never typeset the full source.
+	}
 	v.text = b.text
 	if b.indent != "" {
 		v.text = b.indent + v.text
@@ -485,6 +497,12 @@ func (t *transcript) measure(i int) {
 		b.rows[0].text = ansi.Truncate(badge+" "+b.rows[0].text, max(1, t.width), "…")
 		b.rows[0].styled = true
 	}
+	t.measured(i)
+}
+
+// measured shares row-height and bounded-cache bookkeeping for every layout path.
+func (t *transcript) measured(i int) {
+	b := &t.blocks[i]
 	t.renders++
 	t.recent = append(t.recent, i)
 	if len(t.recent) > 256 {

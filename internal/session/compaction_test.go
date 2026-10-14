@@ -132,7 +132,7 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 					result, err = r.Store.Messages(r.Current())
 				}
 			} else {
-				id := "main/" + actor
+				id := "main/" + actor + "_oversized"
 				turn, e := r.Store.BeginChildTurn(r.Current(), id, r.CurrentSelection())
 				if e != nil {
 					t.Fatal(e)
@@ -325,9 +325,9 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			expected := 7
+			expected := 5
 			if aside {
-				expected = 8
+				expected = 6
 			}
 			if cursor.project != "" || cursor.snapshot != "" || len(result) != expected || !strings.HasPrefix(result[0].Content, "Useful child handoff.") {
 				t.Fatal("incorrect retained child projection", cursor, result)
@@ -421,7 +421,7 @@ func TestCanceledChildCompactionPreservesCursorAndPublishesNothing(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cursor := contextCursor{project: "unchanged"}
-	result, next, err := r.compactChild(ctx, childTask{actor: "main/child", tools: r.Tools}, nil, cursor, nil)
+	result, next, err := r.compactChild(ctx, childTask{actor: "main/child_fixture", tools: r.Tools}, nil, cursor, nil)
 	if !errors.Is(err, context.Canceled) || result != nil || next.project != cursor.project {
 		t.Fatal("canceled child changed context", result, next, err)
 	}

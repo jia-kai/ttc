@@ -5,9 +5,45 @@ import (
 	"hash/fnv"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 )
+
+// ResponsePrefix returns a bounded, control-safe single-line response preview.
+// It reads only the initial 256 code points, even for very large responses.
+func ResponsePrefix(text string) string {
+	var out strings.Builder
+	space := false
+	n := 0
+	for _, r := range text {
+		if n >= 256 {
+			break
+		}
+		n++
+		if unicode.IsSpace(r) {
+			space = out.Len() > 0
+			continue
+		}
+		if Clean(string(r)) == "" {
+			continue
+		}
+		if space {
+			out.WriteByte(' ')
+			space = false
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+// SubagentResponse presents one response row bounded by terminal cell width.
+// Full message contents belong to the caller's inspection source, not this row.
+func SubagentResponse(actor, name, speaker, text string, width int, colors bool) string {
+	badge := SubagentBadge(actor, name, max(1, width/2), colors)
+	row := badge + " " + speaker + " " + ResponsePrefix(text) + " ..."
+	return ansi.Truncate(row, max(1, width), "…")
+}
 
 // SubagentBadge formats a model-chosen name for a terminal, bounded by width in
 // cells. Names longer than 26 Unicode code points become 23 plus "...". Colors

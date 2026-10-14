@@ -13,9 +13,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/render"
 	"ttc/internal/tool"
 )
 
@@ -24,6 +26,7 @@ import (
 const maxChildSlots = 16
 
 func (r *Runtime) addSubagentTool() {
+	r.addChildMessageTool()
 	type args struct {
 		Prompt     string  `json:"prompt"`
 		ChildID    string  `json:"child_id,omitempty"`
@@ -98,7 +101,7 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
-			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "question" })}
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
 			r.children[child.id] = child
 		}
 		child.selection = selection
@@ -112,14 +115,17 @@ func (r *Runtime) addSubagentTool() {
 		}
 		child.turn = turn
 		assignment := &childAssignment{
-			turn: turn, persistent: *a.Persistent, background: a.Background,
+			accepting:       true,
+			queueTokenLimit: min(maxChildMessageQueueTokens, selection.Model.Budget.NextTurnInputReserve),
+			turn:            turn, persistent: *a.Persistent, background: a.Background,
 			answer: child.lastAnswer, truncated: child.lastTruncated, result: child.lastResult,
 			inheritedAnswer: child.lastAnswer != "",
 		}
+		child.assignment = assignment
 		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
-		id, err := r.Jobs.StartTask(child.id, "subagent", child.label, a.Background, false, func(childCtx context.Context, stdout, stderr io.Writer) (runErr error) {
+		id, err := r.Jobs.StartTask(child.id, "subagent", child.label, a.Background, false, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
 			<-ready
 			defer func() {
 				task.cancelled = childCtx.Err() != nil
@@ -127,7 +133,7 @@ func (r *Runtime) addSubagentTool() {
 					runErr = errors.Join(runErr, finishErr)
 				}
 			}()
-			return r.runChild(childCtx, task, stdout, stderr)
+			return jobs.TaskResult{}, r.runChild(childCtx, task, stdout, stderr)
 		})
 		r.childStartMu.Lock()
 		child.job = id
@@ -210,6 +216,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	defs := task.tools.Definitions()
 	cursor := task.cursor
 	priorAttempts := 0
+	compactedForAdmission := false
 	var recovery *llm.Message
 	for {
 		if err := ctx.Err(); err != nil {
@@ -217,16 +224,20 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		}
 		system := childSystemTemplate
 		if task.aside {
-			system = systemTemplate
+			system = asideSystemTemplate
 		}
 		r.routeMu.RLock()
 		admitted, nextContext, err := r.admitChild(ctx, task, messages, cursor)
 		if errors.Is(err, errNeedsCompaction) {
 			r.routeMu.RUnlock()
+			if compactedForAdmission {
+				return errors.New(prompts.ChildAdmissionAfterCompaction)
+			}
 			messages, cursor, err = r.compactChild(ctx, task, messages, cursor, recovery)
 			if err != nil {
 				return err
 			}
+			compactedForAdmission = true
 			continue
 		}
 		if err != nil {
@@ -234,6 +245,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return err
 		}
 		request := admitted.RequestID
+		compactedForAdmission = false
 		cursor = nextContext
 		messages = admitted.Messages
 		if admitted.ContextEntry != 0 {
@@ -250,8 +262,12 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		started := time.Now()
 		var usage *llm.Usage
 		var responseID, serviceTier string
+		projected, err := contextbuild.ProjectRetainedInputs(messages)
+		if err != nil {
+			return err
+		}
 		callbackFailed := false
-		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: actor, Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev llm.StreamEvent) (err error) {
+		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: actor, Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if err := ctx.Err(); err != nil {
 				return err
@@ -278,6 +294,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 					return nil
 				}
 				_, err := io.WriteString(stdout, ev.Text)
+				if err == nil {
+					r.emit(Event{Kind: "delta", Text: render.Clean(ev.Text), RequestID: request, Actor: actor})
+				}
 				return err
 			case "call":
 				if ev.Call == nil {
@@ -383,9 +402,20 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				return err
 			}
 			messages = append(messages, *notification)
-			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id})
+			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id, Runtime: notification.Runtime})
 		} else if len(reply.Calls) == 0 {
 			if task.child != nil {
+				// A final response and a parent send race on the same gate. A
+				// queued message continues this assignment, never a new turn.
+				r.orderMu.Lock()
+				pending := len(task.assignment.queued) != 0
+				if !pending {
+					task.assignment.accepting = false
+				}
+				r.orderMu.Unlock()
+				if pending {
+					continue
+				}
 				if strings.TrimSpace(reply.Content) == "" {
 					return errors.New(prompts.ChildCompletedWithoutText)
 				}

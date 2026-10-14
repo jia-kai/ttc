@@ -19,6 +19,8 @@ type Skill struct {
 	Source      string `json:"source"`
 	Content     string `json:"content,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Roles is the discovery-time audience; nil means all runtime roles.
+	Roles []Role `json:"roles,omitempty"`
 }
 
 // Catalog holds project > user > bundled selections by exact name.
@@ -44,7 +46,11 @@ func Discover(ctx context.Context, project, user string) (*Catalog, error) {
 			return nil, e
 		}
 		name := strings.Split(p, "/")[0]
-		c.items[name] = Skill{Name: name, Path: "prompt/skills/" + p, Source: "bundled", Description: description(string(b))}
+		description, roles, err := metadata(string(b))
+		if err != nil {
+			return nil, fmt.Errorf(prompts.SkillMetadataFailure, name, err)
+		}
+		c.items[name] = Skill{Name: name, Path: "prompt/skills/" + p, Source: "bundled", Description: description, Roles: roles}
 	}
 	type layer struct{ root, source string }
 	var layers []layer
@@ -87,39 +93,54 @@ func Discover(ctx context.Context, project, user string) (*Catalog, error) {
 				return nil, e
 			}
 			name := filepath.Base(filepath.Dir(p))
-			c.items[name] = Skill{Name: name, Path: p, Source: layer.source, Description: description(string(b))}
+			description, roles, err := metadata(string(b))
+			if err != nil {
+				return nil, fmt.Errorf(prompts.SkillMetadataFailure, name, err)
+			}
+			c.items[name] = Skill{Name: name, Path: p, Source: layer.source, Description: description, Roles: roles}
 		}
 	}
 	return c, nil
 }
-func description(s string) string {
-	for _, line := range strings.Split(s, "\n") {
-		if strings.HasPrefix(line, "description:") {
-			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "description:")), "\"'")
-		}
-	}
-	return ""
-}
 
-// List returns sorted metadata without full instruction bodies.
-func (c *Catalog) List() []Skill {
+// List returns sorted, defensively copied discovery metadata for actor, without
+// instruction bodies. Selection happens before role filtering; there is no fallback.
+func (c *Catalog) List(actor string) ([]Skill, error) {
+	role, err := RoleForActor(actor)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Skill, 0, len(c.items))
 	for _, s := range c.items {
+		if !allows(s.Roles, role) {
+			continue
+		}
+		s.Roles = append([]Role(nil), s.Roles...)
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+	return out, nil
 }
 
 // Load reads the selected source at tool execution time. Local sources use
-// ReadInstruction's regular-file, size and cancellation constraints.
-func (c *Catalog) Load(ctx context.Context, name string) (Skill, error) {
+// ReadInstruction's regular-file, size and cancellation constraints. Both the
+// discovery snapshot and current file must permit actor's role: file edits can
+// revoke access, but relaxing discovery restrictions requires rediscovery.
+// Failures return no metadata or content; source paths are not included in errors.
+func (c *Catalog) Load(ctx context.Context, name, actor string) (Skill, error) {
 	if err := ctx.Err(); err != nil {
+		return Skill{}, err
+	}
+	role, err := RoleForActor(actor)
+	if err != nil {
 		return Skill{}, err
 	}
 	s, ok := c.items[name]
 	if !ok {
-		return s, fmt.Errorf(prompts.SkillNotFound, name)
+		return Skill{}, fmt.Errorf(prompts.SkillNotFound, name)
+	}
+	if !allows(s.Roles, role) {
+		return Skill{}, fmt.Errorf(prompts.SkillRoleDenied, name, role)
 	}
 	var b []byte
 	var e error
@@ -128,6 +149,20 @@ func (c *Catalog) Load(ctx context.Context, name string) (Skill, error) {
 	} else {
 		b, e = ReadInstruction(ctx, s.Path)
 	}
+	if e != nil {
+		if err := ctx.Err(); err != nil {
+			return Skill{}, err
+		}
+		return Skill{}, fmt.Errorf(prompts.SkillLoadFailure, name)
+	}
+	_, roles, err := metadata(string(b))
+	if err != nil {
+		return Skill{}, fmt.Errorf(prompts.SkillMetadataFailure, name, err)
+	}
+	if !allows(roles, role) {
+		return Skill{}, fmt.Errorf(prompts.SkillRoleDenied, name, role)
+	}
+	s.Roles = append([]Role(nil), s.Roles...)
 	s.Content = string(b)
-	return s, e
+	return s, nil
 }

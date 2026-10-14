@@ -47,9 +47,10 @@ it never replaces or changes model-facing results.
 - `summary`: normally one clipped row with the primary argument and status/error.
   Glob shows only its pattern plus any failure. Commands use `sh` fences (192-byte
   preview); other arguments use escaped inline code (128 bytes). Applied mutations
-  add at most six diff lines, each at most 120 characters. Shell/child rows show
-  the final 64 UTF-8 bytes per stream, collapsed and labeled stdout/stderr; model
-  results keep the separate ten-line/1 KiB shared tail budget.
+  add at most six diff lines, each at most 120 characters. Shell rows show the
+  final 64 UTF-8 bytes per stream, collapsed and labeled stdout/stderr; model
+  shell results use a separate configurable byte budget. Child assistant and
+  final-answer rows use clipped response prefixes, with full messages in dialogs.
 - `detail`: paths and highlighted immutable snapshot diffs precede labeled supplied
   parameters/results. GNU diff has a shared 256 KiB capture and five-second deadline
   per call; disclose failures/truncation and show only applied changes, including
@@ -90,8 +91,9 @@ it never replaces or changes model-facing results.
   next_offset:integer|null, truncated:boolean}`. Entries are sorted by name.
   Enumeration is cancellable and capped at 10,000 entries; larger directories
   return `directory_too_large`. Use `glob` with a narrower pattern instead.
-- Native binary formats are announced by the selected provider in runtime
-  `binary_files`: MIME type, extensions, `image`/`document` kind and maximum bytes.
+- Native binary formats are announced in runtime `binary_files` as deduplicated
+  extension groups and `max_bytes`, at first admission, after compaction and on
+  capability changes. Omission retains the prior announcement; `[]` clears it.
   Tool execution uses the producing request's frozen catalog, not later picker
   changes. Binary reads reject supplied `offset`/`limit`; text formats retain
   ordinary line pagination. No implicit extraction, rendering or conversion.
@@ -106,7 +108,7 @@ it never replaces or changes model-facing results.
   Images require a vision-capable model.
 - Document result: `{kind:"document", path:string, sha256:string, mime_type:string,
   bytes:integer, truncated:false}`, accompanied by native file input associated
-  with the tool call. Recognized document extensions select an announced MIME
+  with the tool call. Recognized document extensions select a provider-supported MIME
   type; PDF/RTF content signatures also identify extensionless files. Basic
   header/container checks reject mislabeled or incomplete files; backend semantic
   parsing still applies. Limit original files to 32 MiB or a lower announced limit.
@@ -207,7 +209,8 @@ it never replaces or changes model-facing results.
 ### `shell`
 
 - Input: `{command:string, workdir?:string, timeout_ms?:integer,
-  background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean}`.
+  background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean,
+  output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer}`.
   `strict` defaults to true: `/bin/sh -eu -c` enables POSIX errexit and nounset,
   without pipefail. Set `strict:false` for commands requiring neither behavior;
   handle expected failures with conditionals or `||` when appropriate. The
@@ -222,18 +225,24 @@ it never replaces or changes model-facing results.
   interactive terminal input.
 - Result: `{job_id:string, status:"running"|"completed"|"failed"|"cancelled"|"interrupted",
   stdout:string, stderr:string, exit_code?:integer, signal?:string, truncated:boolean}`.
-  `exit_code` or `signal` appears only after observed exit. A normally exited
-  command is `completed` even with a nonzero exit code; `failed` indicates a
-  launch or supervision failure, `cancelled` an explicit stop/timeout, and
+  `exit_code` or `signal` appears only after observed exit. An observed command
+  exit is `completed`, including nonzero exits and signal termination, unless
+  cancellation or supervision failure determines the status. `failed` indicates
+  a launch or supervision failure, `cancelled` an explicit stop/timeout, and
   `interrupted` an unobserved exit after backend loss. `stdout` and `stderr` identify the two streams. Each call retains at most
   64 MiB (32 MiB per stream), sharing a 1 GiB runtime ring-capacity pool.
   Pressure evicts the least recently written other ring and marks its loss.
-  Previews show at most 10 lines and 1024 bytes combined: 5 lines/512 bytes
-  per stream when both have nonblank preview output, otherwise the full preview allowance
-  for the active stream. Previews omit trailing whitespace-only lines while raw
-  output and `job_read` EOF/absolute cursors preserve every byte.
-  `truncated` includes preview omission or retained loss;
-  use `job_read` for larger retained pages.
+  `output_bytes` is a combined stdout/stderr payload budget, default 8192,
+  range 1–8192. Complete retained output, including whitespace, is returned
+  whenever it fits. Otherwise `output_mode` selects `head`, `tail`, or
+  `head_tail` (default). Both streams share the budget; unused allowance goes
+  to the other stream. Selection respects UTF-8 character boundaries.
+  `stdout_selection` and `stderr_selection` report total/omitted/lost-prefix
+  source bytes and head/tail segment lengths. Head and tail are concatenated
+  without an inserted separator; the lengths identify the omitted gap.
+  `truncated` includes selection omission or retained loss. Raw output and
+  `job_read` cursors remain independent of selection. The same job settings
+  govern its completion snapshot; TUI summary rows remain short.
 - `protocol="lsp"` requires `background=true`. TTC runs without a PTY,
   reserves raw stdin/stdout for LSP framing, and keeps stderr in the job log.
   The command must replace the shell with the server and must print nothing
@@ -316,10 +325,57 @@ it never replaces or changes model-facing results.
   its current snapshot. Live child handles survive main compaction but not explicit
   session changes, restoration or exit. Reloading history cannot resume a child.
 
+### `child_message`
+
+- Input: `{message:string, job_id?:string, child_id?:string,
+  child_turn_id?:string}`. Main only. Target exactly one assignment using its
+  `job_id` or both `child_id` and `child_turn_id`; stale/inactive assignments
+  reject the message rather than sending it to a later assignment.
+- Result: `{state:"queued",delivered:false,message_event_seq:integer,
+  child_id:string,child_turn_id:string,job_id:string}`. The original message and
+  sending tool-call identity are durable. The child admits queued messages FIFO
+  at its next settled model-request boundary, after foreground tools finish.
+  Retries use the frozen admitted payload; later arrivals wait for another request.
+- Messages are main-agent task guidance in runtime user-message envelopes, not
+  higher-priority instructions. Admission acknowledges them once; later compaction
+  summarizes them rather than counting them as independently retained human inputs.
+  A message arriving during a final response can continue the same assignment.
+  Completion closes admission; undelivered messages are reported, never carried
+  into a persistent follow-up or used to start another assignment.
+- Parent notifications `child_message_delivered` and
+  `child_message_undelivered` identify `message_event_seq`, child, turn and job;
+  delivery also includes `request_id`. Queued is not proof of delivery or action.
+- Pending capacity is 32 messages and at most `min(4096, NextTurnInputReserve)`
+  estimated wire tokens per assignment, counting JSON escaping and routing
+  overhead. Zero reserved headroom rejects sends. `message_queue_capacity`
+  rejects oversized individual/cumulative submissions before recording them;
+  shorten guidance or wait for admission to free capacity. Request admission,
+  evidence acknowledgments and delivery reports commit in one transaction.
+
+### `watch`
+
+- Input: `{record_dir:string,wake_on_exit?:boolean}`. Observe only runs created
+  by `ttc watch-run --record-dir DIR -- COMMAND [ARG...]`. Relative paths use
+  the workspace. Returns a background job snapshot with kind `watch`;
+  `wake_on_exit` defaults to true.
+- `job_read` pages captured stdout/stderr; `job_list` shows the watcher and
+  `job_stop` cancels observation. Session changes and TTC exit also stop only
+  observation, never signal the external wrapper/workload. A new runtime can
+  watch the same saved run, including one already completed.
+- An observed command exit is `completed`, including nonzero exits and signal
+  termination, unless cancellation or supervision failure determines the status.
+  Stopping observation returns `cancelled`; wrapper/logging/observation failures
+  return `failed`. Wrapper disappearance without a matching completion record
+  reports an unknown outcome, never success.
+  Boot ID, PID and process start ticks identify the wrapper and avoid PID reuse.
+- Wrapper artifacts are durable externally owned files, not TTC process adoption
+  or a durable scheduler. Logs are unbounded on disk; watcher capture uses the
+  ordinary bounded job rings. See [external workloads](../README.md#external-workloads).
+
 ### `job_list`
 
 - Input: `{state?:"running"|"all"}`; default `running`.
-- Result: `{jobs:[{job_id:string, kind:"shell"|"lsp"|"subagent"|"btw",
+- Result: `{jobs:[{job_id:string, kind:"shell"|"lsp"|"subagent"|"btw"|"watch",
   status:"running"|"completed"|"failed"|"cancelled"|"interrupted",
   owner_actor_id:string, label:string, started_at:string, finished_at?:string,
   exit_code?:integer}]}`. `owner_actor_id` is `main` or a live child ID; it
@@ -366,7 +422,8 @@ it never replaces or changes model-facing results.
 
 - Input: `{job_id?:string,child_id?:string}`; exactly one is required.
 - Job result: `{job_id:string,status:"cancelled"|"completed"|"failed"|
-  "interrupted"}`. Already-finished jobs return their existing state.
+  "interrupted"}`. Already-finished jobs return their existing state. Stopping
+  a `watch` job cancels observation only, not the external wrapper/workload.
 - Child result: `{child_id:string,state:"closed"}`. Closing an idle child starts
   no model turn. Closing a running child publishes its terminal-turn event once.
   Children cannot stop their own turn or close their own context. Unknown child
@@ -557,10 +614,27 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   content:string}`. `content` is the loaded skill text and is included in
   the model's context. For a bundled skill, `path` is its logical
   `prompt/skills/<name>/SKILL.md` path inside the binary. Missing skills
-  return `not_found`.
+  and role-ineligible skills return `skill_unavailable`.
 - The available-skills list includes embedded bundled skills even when
   those files are absent from disk. Project skills override user skills,
   which override bundled skills of the same name.
+- Opening YAML frontmatter may specify `roles: [main, child, aside]`, or a
+  nonempty subset. Omit `roles` for all roles; unknown/duplicate roles, empty
+  lists and malformed frontmatter fail discovery. Frontmatter permits one YAML
+  mapping. Bounds: 64 KiB of YAML source between delimiters, excluding the final
+  newline before the closing delimiter; 256 pairs per mapping, including nested
+  metadata; 4096 syntax nodes including the root, keys and aliases, excluding the
+  document wrapper and alias targets. Local skill documents are limited to 1 MiB.
+  Plain Markdown is supported. The selected definition controls eligibility;
+  a denied role does not fall back to a lower-precedence definition. The bundled
+  `file-based-plan` is main-only.
+- Catalog metadata is captured at startup. Loading checks both those restrictions
+  and the current selected file, so edits can revoke access immediately.
+  Broadening access beyond startup restrictions or refreshing catalog metadata
+  requires restarting TTC.
+  `roles` and Markdown instructions do not grant tools or restrict ordinary file
+  reads. Tool availability comes from the runtime's actor-specific registry;
+  `allowed-tools` metadata is ignored.
 
 ## Wakeups
 
@@ -573,6 +647,25 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   Names are unique among active wakeups in the session.
 - Result: `{wakeup_id:string, name:string, next_at:string,
   repeat_seconds?:integer, status:"scheduled"}`.
+
+### `wakeup_update`
+
+- Input: `{wakeup_id?:string, name?:string, message?:string, at?:string,
+  delay_seconds?:integer, repeat_seconds?:integer}`. Identify an active reminder
+  by exactly one of ID or name, and supply at least one changed field. Names
+  identify reminders; this operation does not rename them. `at` and
+  `delay_seconds` are mutually exclusive and use the scheduling ranges.
+  `repeat_seconds` is 0–31536000; zero disables repetition.
+- Omitted fields, including the next deadline on a repeat-only update, remain
+  unchanged. Updates preserve ID, owner, firing count and original startup
+  inspection. Main may update any reminder; children may update only their own.
+  Invalid updates leave the timer untouched; inactive reminders return `not_found`.
+- Deadline changes and firings serialize atomically. Already committed firings
+  retain their original payload and are not retracted. Future firings use the
+  updated message and interval. The inspector shows current values separately
+  from original startup parameters.
+- Result: `{wakeup_id:string,name:string,message:string,next_at:string,
+  repeat_seconds:integer,fired_count:integer,status:"scheduled"}`.
 
 ### `wakeup_list`
 
@@ -592,9 +685,11 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 Job operations are scoped to the current runtime and caller/descendant jobs;
 only saved history artifacts survive its end. The UI records terminal status.
-Foreground shell exits return results without `job_exit`; background shell exits
-notify only with `wake_on_exit=true`, including calls moved to background with
-Ctrl+B. Coding children always deliver their turn event.
+Foreground shell exits return results without `job_exit`; background shell and
+watch jobs notify only with `wake_on_exit=true`, including shells moved to
+background with Ctrl+B. Completion notices include selected stdout/stderr,
+truncation/selection metadata and known exit code or signal. Coding children
+always deliver their turn event.
 
 Events arrive at the next model boundary or wake an idle session as separate
 `user` messages containing JSON strings:

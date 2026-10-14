@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"ttc/internal/render"
 )
 
 // TimerInspection separates immutable startup Markdown from live timer state.
@@ -38,6 +40,7 @@ func (r *Runtime) TimerDetail(id string) (TimerInspection, error) {
 	var focus strings.Builder
 	fmt.Fprintf(&focus, "Status: %s", snapshot.Status)
 	fmt.Fprintf(&out, "ID: %s\nStatus: %s\nFired count: %d\n", snapshot.ID, snapshot.Status, snapshot.Fired)
+	fmt.Fprintf(&out, "Repeat seconds: %d\nMessage: %s\n", snapshot.Repeat, render.Clean(snapshot.Message))
 	if snapshot.NextAt != "" {
 		fmt.Fprintf(&out, "Next at: %s\n", snapshot.NextAt)
 	}

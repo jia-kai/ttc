@@ -8,17 +8,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ttc/internal/capture"
 )
 
 func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.Start("main", "i=1; while [ $i -le 20 ]; do printf 'out-%s\\n' $i; printf 'err-%s\\n' $i >&2; i=$((i+1)); done", t.TempDir(), time.Second, true, false, false)
+	id, err := m.Start("main", "i=1; while [ $i -le 20 ]; do printf 'out-%s\\n' $i; printf 'err-%s\\n' $i >&2; i=$((i+1)); done", t.TempDir(), time.Second, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	v, err := m.Wait(context.Background(), "main", id, nil)
-	if err != nil || v.Stdout != "out-16\nout-17\nout-18\nout-19\nout-20\n" || !strings.HasPrefix(v.Stderr, "err-16\n") || len(v.Stdout)+len(v.Stderr) > 1024 {
+	if err != nil || !strings.HasPrefix(v.Stdout, "out-1\n") || !strings.HasSuffix(v.Stdout, "out-20\n") || !strings.HasPrefix(v.Stderr, "err-1\n") || v.Truncated || len(v.Stdout)+len(v.Stderr) > 8192 {
 		t.Fatal(v, err)
 	}
 	page, err := m.Read(context.Background(), "main", id, ReadOptions{Stream: "stderr", Cursor: "eof:-3:lines", Limit: 1024, Grep: "ERR-(18|20)", IgnoreCase: true})
@@ -35,14 +37,14 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 		}
 	}
 	ready := make(chan string, 1)
-	childID, err := m.StartTask("main/child", "subagent", "test", true, false, func(ctx context.Context, stdout, stderr io.Writer) error {
+	childID, err := m.StartTask("main/child", "subagent", "test", true, false, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
 		id := <-ready
 		if _, err := m.Stop("main/child", id); err == nil {
 			t.Error("child self-stop allowed")
 		}
 		stdout.Write([]byte{0xff, '\n', 'x', '\n'})
 		<-ctx.Done()
-		return ctx.Err()
+		return TaskResult{}, ctx.Err()
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +76,7 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 func TestShellSupervisionFailureExplainsRecovery(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.Start("main", "printf 'leader finished\\n'; sleep 5 &", t.TempDir(), 3*time.Second, true, false, false)
+	id, err := m.Start("main", "printf 'leader finished\\n'; sleep 5 &", t.TempDir(), 3*time.Second, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +95,7 @@ func TestForegroundExitStatusBackgroundNotificationAndStaleHandles(t *testing.T)
 	notify := make(chan Snapshot, 2)
 	m := New(context.Background(), func(v Snapshot) { notify <- v })
 	root := t.TempDir()
-	id, e := m.Start("main", "printf hello; exit 7", root, time.Second, true, false, false)
+	id, e := m.Start("main", "printf hello; exit 7", root, time.Second, true, false, false, capture.OutputOptions{})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -106,7 +108,7 @@ func TestForegroundExitStatusBackgroundNotificationAndStaleHandles(t *testing.T)
 		t.Fatal("duplicate foreground notification")
 	default:
 	}
-	id, e = m.Start("main", "printf background", root, time.Second, true, true, true)
+	id, e = m.Start("main", "printf background", root, time.Second, true, true, true, capture.OutputOptions{})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -135,7 +137,7 @@ func TestCancellationStopsProcessGroupAndBoundedLogs(t *testing.T) {
 	defer m.Close()
 	root := t.TempDir()
 	marker := filepath.Join(root, "leak")
-	id, e := m.Start("main", "(sleep 1; touch '"+marker+"') & wait", root, 0, true, false, false)
+	id, e := m.Start("main", "(sleep 1; touch '"+marker+"') & wait", root, 0, true, false, false, capture.OutputOptions{})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -147,12 +149,12 @@ func TestCancellationStopsProcessGroupAndBoundedLogs(t *testing.T) {
 	if _, e = os.Stat(marker); !os.IsNotExist(e) {
 		t.Fatal("descendant escaped")
 	}
-	id, e = m.Start("main", "head -c 400000 /dev/zero | tr '\\0' x", root, time.Second, true, false, false)
+	id, e = m.Start("main", "head -c 400000 /dev/zero | tr '\\0' x", root, time.Second, true, false, false, capture.OutputOptions{})
 	if e != nil {
 		t.Fatal(e)
 	}
 	v, e = m.Wait(context.Background(), "main", id, nil)
-	if e != nil || !v.Truncated || len(v.Stdout) > 1024 || !strings.HasPrefix(v.Stdout, "xxx") {
+	if e != nil || !v.Truncated || len(v.Stdout) > 8192 || !strings.HasPrefix(v.Stdout, "xxx") {
 		t.Fatal(len(v.Stdout), e)
 	}
 }
@@ -161,7 +163,7 @@ func TestWaitPublishesBoundedStreamingSnapshots(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
 	root := t.TempDir()
-	id, err := m.Start("main", "printf 'first\\n'; while [ ! -e release ]; do sleep 0.01; done; printf 'last\\n'", root, 5*time.Second, true, false, false)
+	id, err := m.Start("main", "printf 'first\\n'; while [ ! -e release ]; do sleep 0.01; done; printf 'last\\n'", root, 5*time.Second, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

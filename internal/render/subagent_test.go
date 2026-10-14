@@ -41,3 +41,28 @@ func TestSuccessfulToolStatusPresentation(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentResponseSingleLineAndToolFinalAnswer(t *testing.T) {
+	for _, width := range []int{1, 2, 8, 40, 80} {
+		row := SubagentResponse("child", "helper", "assistant", "hello\n界\tworld\r\x00\u2028next"+strings.Repeat("long", 1000), width, false)
+		if strings.ContainsAny(row, "\n\r\t\u2028") || !utf8.ValidString(row) || ansi.StringWidth(row) > width {
+			t.Fatal(width, row)
+		}
+	}
+	md := Tool("subagent", []byte(`{"label":"helper"}`), []byte(`{"status":"completed","answer":"first\nsecond\nFULL END","stdout":"unchanged tool output"}`))
+	if !strings.Contains(md.Summary, "final answer first second FULL END ...") || strings.Contains(md.Summary, "stdout") || !strings.Contains(md.Detail, "FULL END") || !strings.Contains(md.Detail, "unchanged tool output") {
+		t.Fatal(md)
+	}
+}
+
+func TestSubagentJobCompletionDoesNotRepeatAssistantOutputTail(t *testing.T) {
+	result := []byte(`{"status":"completed","stdout":"hidden assistant TAIL","stderr":"diagnostic"}`)
+	child := Tool("subagent", []byte(`{"label":"helper"}`), result)
+	if strings.Contains(child.Summary, "TAIL") || !strings.Contains(child.Detail, "TAIL") || !strings.Contains(child.Summary, "diagnostic") {
+		t.Fatal(child)
+	}
+	shell := Tool("shell", []byte(`{"command":"fixture"}`), result)
+	if !strings.Contains(shell.Summary, "TAIL") {
+		t.Fatal("ordinary tool output changed", shell)
+	}
+}

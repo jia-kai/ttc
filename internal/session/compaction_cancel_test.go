@@ -62,7 +62,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 				if actor == "main" {
 					_, err = r.compactContext(ctx, "", r.CurrentSelection(), nil)
 				} else {
-					id := "main/" + actor
+					id := "main/" + actor + "_cancel"
 					turn, e := r.Store.BeginChildTurn(before, id, r.CurrentSelection())
 					if e != nil {
 						t.Fatal(e)

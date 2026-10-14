@@ -3,66 +3,138 @@ package context
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
 
-// InputMarker describes the following retained human message without changing
-// it. The marker is historical context, not live runtime state, so manual loads
-// preserve it. Commit and compaction timestamps are Unix milliseconds; age is elapsed
-// milliseconds measured from the original commit, including after recompaction.
-// Missing/nonpositive times, future commit times, invalid sources and nonhuman
-// messages are errors. Native replay state remains the caller's responsibility.
-func InputMarker(message llm.Message, compactedAt time.Time) (llm.Message, error) {
+func validateRetainedInput(message llm.Message) error {
 	if message.Role != "user" || message.Runtime {
-		return llm.Message{}, fmt.Errorf(prompts.ContextRetainedInputRole)
+		return fmt.Errorf(prompts.ContextRetainedInputRole)
 	}
-	source, err := inputSource(message)
-	if err != nil {
-		return llm.Message{}, err
+	if _, err := inputSource(message); err != nil {
+		return err
 	}
-	at := compactedAt.UnixMilli()
-	if message.InputTimeMS <= 0 || at <= 0 {
-		return llm.Message{}, fmt.Errorf(prompts.ContextRetainedInputTimestamps)
+	if message.InputTimeMS <= 0 || message.RetainedAtMS <= 0 {
+		return fmt.Errorf(prompts.ContextRetainedInputTimestamps)
 	}
-	if message.InputTimeMS > at {
-		return llm.Message{}, fmt.Errorf(prompts.ContextRetainedInputFuture, message.InputTimeMS, at)
+	if message.InputTimeMS > message.RetainedAtMS {
+		return fmt.Errorf(prompts.ContextRetainedInputFuture, message.InputTimeMS, message.RetainedAtMS)
 	}
-	metadata := struct {
-		Type                  string `json:"type"`
-		Source                string `json:"source"`
-		OriginalCommittedAtMS int64  `json:"original_committed_at_ms"`
-		CompactionAtMS        int64  `json:"compaction_at_ms"`
-		AgeMS                 int64  `json:"age_ms"`
-	}{"retained_input", source, message.InputTimeMS, at, at - message.InputTimeMS}
-	encoded, err := json.Marshal(metadata)
-	if err != nil {
-		return llm.Message{}, fmt.Errorf(prompts.ContextEncodeRetainedInput, err)
-	}
-	return llm.Message{Role: "developer", Content: prompts.RetainedInput + "\n" + string(encoded)}, nil
+	return nil
 }
 
-// RetainedInputMessages interleaves metadata markers with the exact original
-// selected human messages. Indices must be strictly increasing, in bounds and
-// at most four. It never mutates messages or their text, images or replay state;
-// callers preparing canonical replay are responsible for excluding native State.
+// RetainedInputMessages copies selected human inputs with their compaction time
+// in Unix milliseconds. Indices must be increasing, in bounds and at most four.
+// Original text, source, commit time, attachments, identity and replay state are
+// unchanged; canonical replay callers are responsible for excluding native State.
 func RetainedInputMessages(messages []llm.Message, inputs []int, at time.Time) ([]llm.Message, error) {
 	if len(inputs) > 4 {
 		return nil, fmt.Errorf(prompts.ContextRetainedInputLimit)
 	}
-	retained := make([]llm.Message, 0, 2*len(inputs))
+	retained := make([]llm.Message, 0, len(inputs))
 	previous := -1
 	for _, index := range inputs {
 		if index <= previous || index < 0 || index >= len(messages) {
 			return nil, fmt.Errorf(prompts.ContextRetainedInputIndex, index)
 		}
-		marker, err := InputMarker(messages[index], at)
-		if err != nil {
+		message := messages[index]
+		message.RetainedAtMS = at.UnixMilli()
+		if err := validateRetainedInput(message); err != nil {
 			return nil, fmt.Errorf(prompts.ContextRetainedInputFailure, index, err)
 		}
-		retained = append(retained, marker, messages[index])
+		retained = append(retained, message)
 		previous = index
 	}
 	return retained, nil
+}
+
+// ValidateRetainedInputs checks typed retained metadata at persistence and
+// compaction boundaries. Zero denotes an ordinary message; negative times,
+// nonhuman inputs, invalid sources and missing or future original times fail.
+func ValidateRetainedInputs(messages []llm.Message) error {
+	for i, message := range messages {
+		if message.RetainedAtMS != 0 {
+			if err := validateRetainedInput(message); err != nil {
+				return fmt.Errorf(prompts.ContextRetainedInputFailure, i, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ProjectRetainedInputs replaces contiguous retained human messages with one
+// developer format instruction and one structured user message. Inputs sort by
+// exact original time ascending with stable ties. Original expanded text/source,
+// explicit input types and two-decimal relative times are preserved. Attachment
+// indices identify occurrences in the combined native Files without deduplication.
+// Numeric timestamps stay canonical-only; history and other messages are unchanged.
+func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
+	if err := ValidateRetainedInputs(messages); err != nil {
+		return nil, err
+	}
+	first := -1
+	for i, message := range messages {
+		if message.RetainedAtMS > 0 {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return messages, nil
+	}
+	type entry struct {
+		Type              string `json:"type"`
+		Source            string `json:"source"`
+		Timestamp         string `json:"timestamp"`
+		Content           string `json:"content"`
+		AttachmentIndices []int  `json:"attachment_indices,omitempty"`
+	}
+	out := make([]llm.Message, 0, len(messages)+1)
+	out = append(out, messages[:first]...)
+	for i := first; i < len(messages); {
+		if messages[i].RetainedAtMS == 0 {
+			out = append(out, messages[i])
+			i++
+			continue
+		}
+		start := i
+		for i < len(messages) && messages[i].RetainedAtMS > 0 {
+			i++
+		}
+		inputs := append([]llm.Message(nil), messages[start:i]...)
+		sort.SliceStable(inputs, func(i, j int) bool { return inputs[i].InputTimeMS < inputs[j].InputTimeMS })
+		group := struct {
+			Type   string  `json:"type"`
+			Inputs []entry `json:"inputs"`
+		}{Type: "retained_inputs"}
+		user := llm.Message{Role: "user"}
+		for _, input := range inputs {
+			source, _ := inputSource(input) // Validated above.
+			var kind string
+			switch source {
+			case "normal":
+				kind = "user_input"
+			case "queue":
+				kind = "queued_user_input"
+			case "steer":
+				kind = "user_steer"
+			case "task":
+				kind = "child_task"
+			case "btw":
+				kind = "aside_task"
+			}
+			item := entry{Type: kind, Source: source, Timestamp: fmt.Sprintf(prompts.ContextRetainedTimestamp, float64(input.RetainedAtMS-input.InputTimeMS)/1000), Content: input.Content}
+			for _, file := range input.Files {
+				item.AttachmentIndices = append(item.AttachmentIndices, len(user.Files))
+				user.Files = append(user.Files, file)
+			}
+			group.Inputs = append(group.Inputs, item)
+		}
+		encoded, _ := json.Marshal(group) // Strings, integers and slices cannot fail encoding.
+		user.Content = string(encoded)
+		out = append(out, llm.Message{Role: "developer", Content: prompts.RetainedInputs}, user)
+	}
+	return out, nil
 }

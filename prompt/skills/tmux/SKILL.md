@@ -1,12 +1,15 @@
 ---
 name: tmux
 description: Inspect and control tmux panes and windows, run interactive commands, and monitor long-running work on headless Linux hosts.
-allowed-tools: shell wakeup_schedule wakeup_cancel job_read job_stop
 ---
 
 # tmux
 
-Use `shell` for tmux commands. TTC's shell is noninteractive and has no PTY;
+This workflow requires `shell`. If it is unavailable, report that tmux inspection
+or control cannot run in this role; inspect supplied logs or propose commands
+instead. With `shell`, use the commands below within the assigned scope.
+
+TTC's shell is noninteractive and has no PTY;
 send interactive input to a tmux pane instead. Check `command -v tmux` first.
 If it is missing, report the dependency rather than installing it for inspection.
 
@@ -18,6 +21,8 @@ also be `session:window.pane`. Use `$TMUX_PANE` for TTC's own pane; an untargete
 `display-message` identifies the active pane, which may contain another program.
 If `TMUX_PANE` is absent, inspect the pane list; do not assume the active pane
 contains TTC.
+Choose the intended workload pane separately. Do not send shell command text to
+TTC's own pane: TTC would receive it as a prompt, not execute it as a shell command.
 
 ```sh
 if [ -n "${TMUX_PANE:-}" ]; then
@@ -40,7 +45,8 @@ scrollback; `-S -` includes all retained history. Scrollback is finite.
 {"command":"tmux capture-pane -t %75 -p -S -100"}
 ```
 
-Shell results show a bounded tail. If more text is needed, use the returned
+Shell results contain bounded output; consult their selection/truncation metadata
+to see which portions were included. If more text is needed, use the returned
 `job_id` with `job_read`, or save the capture to a file in the runtime
 `scratch_directory`. Use `limit_bytes` up to 65536 and follow `next_cursor`:
 
@@ -72,15 +78,28 @@ experiments, not the only copy of important results. Use the supplied private
 scratch path for temporary scripts/sockets; do not change `/tmp/ttc` permissions
 or invent a shared scratch directory.
 
+For example, launch a new workload window and print its pane ID. Replace the
+workdir/command and use unique log/status paths to avoid overwriting evidence:
+
+```sh
+tmux new-window -d -P -F '#{pane_id}' -n checks -c /path/to/project \
+    'make test > checks.log 2>&1; code=$?; printf "%s\n" "$code" > checks.exit; exec /bin/sh'
+```
+
+The final shell keeps the pane available for inspection; `checks.exit` records
+the workload's exit code, not the shell's eventual exit status.
+
 When launching a command, capture its exit code in the pane or a status file.
 A success marker must only print after success, for example `make test &&
 printf '\nTESTS PASSED\n'`. A missing marker or vanished PID does not prove failure
 or success; inspect the logs and recorded exit status. Verify a server with a
 health check or listening socket, not only a startup message.
 
-For requested monitoring, use `wakeup_schedule` with a task-specific message and
-the requested or appropriate interval. Cancel it with `wakeup_cancel` when
-monitoring ends. Do not use a blocking foreground sleep as a progress timer.
+For requested monitoring, use `wakeup_schedule` when available with a task-specific
+message and the requested or appropriate interval. Cancel it with `wakeup_cancel`
+when monitoring ends. If timer tools are unavailable, report that recurring
+monitoring was not established. Do not use a blocking foreground sleep as a
+progress timer.
 
 An optional PID watcher should run through `shell` with `background:true` and
 `wake_on_exit:true`. Verify the main process PID and its start identity, account

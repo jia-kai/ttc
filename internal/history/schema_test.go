@@ -27,7 +27,7 @@ func TestIncompatibleSchemaIsRejectedWithoutDeletingData(t *testing.T) {
 			if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if s, err := Open(root); err == nil || !strings.Contains(err.Error(), "incompatible history schema") {
+			if s, err := Open(root); err == nil || !strings.Contains(err.Error(), "history schema") {
 				if s != nil {
 					s.Close()
 				}

@@ -25,6 +25,8 @@ type Window struct {
 	Markdown            bool   // Render portable Markdown for messages, tool details and command results.
 	Styled              bool   // Trusted frontend SGR; source text must be sanitized before styling.
 	CallID              string // Transient tool-card identity; cleared when its final record arrives.
+	requestID           int64  // Live compact assistant inspector; final publication switches to saved entry.
+	completionEntry     int64  // Original final-result envelope; D opens its status/warning/tool metadata.
 	JobID               string // Live inspector capture; never set when replaying stored history.
 	TimerID             string // Live timer inspector; never recreated from stored history.
 	Detail              string // Base transient detail, without the expanded capture tail.

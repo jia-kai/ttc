@@ -109,6 +109,20 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 	_ = json.Unmarshal(result, &v)
 	summary := "**" + Inline(name) + "**"
 	detail := toolDetail(name, args, result)
+	if name == "subagent" {
+		if answer, ok := v["answer"].(string); ok {
+			label, _ := v["label"].(string)
+			if label == "" {
+				label, _ = a["label"].(string)
+			}
+			summary = "**subagent** · " + Inline(Status(fmt.Sprint(v["status"]))) + " · "
+			if label != "" {
+				summary += EscapeInline(SubagentBadge("", label, 64, false)) + " "
+			}
+			summary += "final answer " + EscapeInline(ResponsePrefix(answer)) + " ..."
+			return Markdown{Revision: 1, Summary: summary, Detail: detail}
+		}
+	}
 	if name != "glob" || v["status"] == "running" {
 		if status, ok := v["status"].(string); ok {
 			if status == "running" && a["background"] == true && v["job_id"] != nil {
@@ -142,6 +156,9 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 	}
 	if name == "shell" || name == "subagent" {
 		for _, stream := range []string{"stdout", "stderr"} {
+			if name == "subagent" && stream == "stdout" {
+				continue // Child assistant rows own response previews; retained stdout stays in the inspector.
+			}
 			if text, ok := v[stream].(string); ok && text != "" {
 				text = strings.Join(strings.Fields(Clean(text)), " ")
 				if len(text) > 64 {
@@ -155,7 +172,7 @@ func Tool(name string, args, result json.RawMessage) Markdown {
 			}
 		}
 		if v["truncated"] == true {
-			summary += prompts.ToolSummaryTailTruncated
+			summary += prompts.ToolSummaryOutputOmitted
 		}
 		if id, ok := v["job_id"].(string); ok {
 			summary += " · " + inlineCode(id)

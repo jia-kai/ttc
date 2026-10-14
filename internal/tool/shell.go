@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"ttc/internal/capture"
 
 	"ttc/internal/jobs"
 	"ttc/internal/prompts"
@@ -11,13 +12,15 @@ import (
 )
 
 type shellArgs struct {
-	Command    string `json:"command"`
-	Workdir    string `json:"workdir,omitempty"`
-	Timeout    *int   `json:"timeout_ms,omitempty"`
-	Background bool   `json:"background,omitempty"`
-	Wake       *bool  `json:"wake_on_exit,omitempty"`
-	Protocol   string `json:"protocol,omitempty"`
-	Strict     *bool  `json:"strict,omitempty"` // Nil enables set -eu; false disables it.
+	Command     string `json:"command"`
+	Workdir     string `json:"workdir,omitempty"`
+	Timeout     *int   `json:"timeout_ms,omitempty"`
+	Background  bool   `json:"background,omitempty"`
+	Wake        *bool  `json:"wake_on_exit,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+	Strict      *bool  `json:"strict,omitempty"` // Nil enables set -eu; false disables it.
+	OutputMode  string `json:"output_mode,omitempty"`
+	OutputBytes *int   `json:"output_bytes,omitempty"`
 }
 
 // ChildView is copied live metadata for one reusable coding context.
@@ -38,7 +41,7 @@ type ChildController interface {
 // AddShell exposes managed commands and owner-scoped live handles. A nil child
 // controller leaves standalone shell registries without reusable child contexts.
 func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
-	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
+	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": Property("integer")}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
 		}
@@ -54,7 +57,11 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		if a.Protocol == "lsp" && !a.Background {
 			return errors.New(prompts.ToolLSPBackgroundRequired)
 		}
-		return nil
+		if e := rangeInt("output_bytes", a.OutputBytes, 1, capture.MaxOutputBytes); e != nil {
+			return e
+		}
+		_, e := (capture.OutputOptions{Mode: a.OutputMode}).Normalize()
+		return e
 	}, func(ctx context.Context, x Execution, a shellArgs) (any, error) {
 		dir := w.Root
 		if a.Workdir != "" {
@@ -71,10 +78,11 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		wake := a.Wake == nil || *a.Wake
 		var id string
 		var e error
+		output := capture.OutputOptions{Mode: a.OutputMode, Bytes: intDefault(a.OutputBytes, capture.DefaultOutputBytes)}
 		if a.Protocol == "lsp" {
-			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake)
+			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake, output)
 		} else {
-			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, wake)
+			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, wake, output)
 		}
 		if e != nil {
 			return nil, jobToolError(e)

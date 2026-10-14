@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"ttc/internal/capture"
 	"ttc/internal/llm"
 )
 
@@ -60,7 +61,7 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(r.Workspace.Root, "AGENTS.md"), []byte("Use precise units."), 0600); err != nil {
 		t.Fatal(err)
 	}
-	id, err := r.Jobs.Start("main", "exit 7", r.Workspace.Root, 0, true, false, false)
+	id, err := r.Jobs.Start("main", "exit 7", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,10 +74,10 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 		t.Fatal(v, err)
 	}
 	change := v.Changes[0]
-	if change.ID != id || change.To != "failed" || change.ExitCode == nil || *change.ExitCode != 7 || !strings.Contains(contextLabel(*m), "1 failed") {
+	if change.ID != id || change.To != "completed" || change.ExitCode == nil || *change.ExitCode != 7 || !strings.Contains(contextLabel(*m), "1 completed") {
 		t.Fatal(change, contextLabel(*m))
 	}
-	child, _, err := r.runtimeContext(context.Background(), "child", r.selection, contextCursor{})
+	child, _, err := r.runtimeContext(context.Background(), "main/child_fixture", r.selection, contextCursor{})
 	if err != nil || len(decode(child).Changes) != 0 {
 		t.Fatal(child, err)
 	}

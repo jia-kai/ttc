@@ -13,10 +13,11 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 // assertRetainedProjection compares the complete canonical replacement, not
-// just human text. The persisted marker supplies the exact frozen cut time.
+// just human text. Canonical retained metadata supplies the frozen cut time.
 func assertRetainedProjection(t *testing.T, original, got []llm.Message, selection llm.Selection) {
 	t.Helper()
 	canonical := canonicalCompaction(original)
@@ -24,14 +25,11 @@ func assertRetainedProjection(t *testing.T, original, got []llm.Message, selecti
 	if err != nil || len(retention.Inputs) != 4 || len(got) < 2 {
 		t.Fatal("invalid four-input projection", retention, got, err)
 	}
-	var metadata struct {
-		At int64 `json:"compaction_at_ms"`
+	at := got[1].RetainedAtMS
+	if at <= 0 {
+		t.Fatal("invalid canonical retention time", got[1])
 	}
-	marker := got[1].Content
-	if err := json.Unmarshal([]byte(marker[strings.LastIndex(marker, "\n")+1:]), &metadata); err != nil || metadata.At <= 0 {
-		t.Fatal("invalid retained marker", marker, err)
-	}
-	inputs, err := contextbuild.RetainedInputMessages(canonical, retention.Inputs, time.UnixMilli(metadata.At))
+	inputs, err := contextbuild.RetainedInputMessages(canonical, retention.Inputs, time.UnixMilli(at))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +38,32 @@ func assertRetainedProjection(t *testing.T, original, got []llm.Message, selecti
 	if !strings.HasPrefix(got[0].Content, "Policy handoff.") || !reflect.DeepEqual(got, want) {
 		t.Fatalf("assembled and persisted projections differ:\ngot %#v\nwant %#v", got, want)
 	}
+	projected, err := contextbuild.ProjectRetainedInputs(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group struct {
+		Type   string `json:"type"`
+		Inputs []struct {
+			Content   string `json:"content"`
+			Source    string `json:"source"`
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+		} `json:"inputs"`
+	}
+	if projected[1].Role != "developer" || projected[1].Content != prompts.RetainedInputs || projected[2].Role != "user" || json.Unmarshal([]byte(projected[2].Content), &group) != nil || group.Type != "retained_inputs" || len(group.Inputs) != 4 {
+		t.Fatal("retained projection is not one structured developer/user pair", projected)
+	}
+	for i := range group.Inputs {
+		input := inputs[i]
+		entry := group.Inputs[i]
+		if entry.Content != input.Content || entry.Source != input.InputSource || entry.Timestamp != fmt.Sprintf("%.2f seconds before compaction", float64(at-input.InputTimeMS)/1000) || entry.Type != map[string]string{"normal": "user_input", "queue": "queued_user_input", "steer": "user_steer", "task": "child_task", "btw": "aside_task"}[input.InputSource] {
+			t.Fatal("grouped input lost chronological text or provenance", entry, input)
+		}
+	}
+	if contextbuild.Tokens(got) != contextbuild.Tokens(projected) {
+		t.Fatal("canonical and grouped replacement budgets differ")
+	}
 }
 
 func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
@@ -47,7 +71,11 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 		t.Run(fmt.Sprint(aside), func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			seedRuntime(t, r, "main task")
-			task := childTask{actor: "main/timestamp", prompt: "committed input", selection: r.selection, tools: r.Tools, aside: aside}
+			actor := "main/child_timestamp"
+			if aside {
+				actor = "main/btw_timestamp"
+			}
+			task := childTask{actor: actor, prompt: "committed input", selection: r.selection, tools: r.Tools, aside: aside}
 			var err error
 			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.selection)
 			if err != nil {
@@ -226,7 +254,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					if req.NoTools {
 						summaries++
 						var err error
-						tailID, err = r.Store.Append(r.Current(), "", "main/child", "status", "", false, map[string]string{"text": "committed invisible tail"})
+						tailID, err = r.Store.Append(r.Current(), "", "main/child_fixture", "status", "", false, map[string]string{"text": "committed invisible tail"})
 						if err != nil {
 							return err
 						}
@@ -236,6 +264,14 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 							r.orderMu.Unlock()
 						}
 						return emit(llm.StreamEvent{Kind: "text", Text: "Policy handoff."})
+					}
+					canonical, err := r.Store.Messages(r.Current())
+					if err != nil {
+						return err
+					}
+					want, err := contextbuild.ProjectRetainedInputs(canonical)
+					if err != nil || !reflect.DeepEqual(req.Messages, want) {
+						return fmt.Errorf("coding delivery differs from grouped canonical projection: got %#v, want %#v, error %v", req.Messages, want, err)
 					}
 					return emit(llm.StreamEvent{Kind: "text", Text: "Continued."})
 				}}
@@ -286,7 +322,11 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 		t.Run(fmt.Sprint(aside), func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			seedRuntime(t, r, "main unchanged")
-			task := childTask{actor: "main/child_policy", selection: r.selection, tools: r.Tools, aside: aside}
+			actor := "main/child_policy"
+			if aside {
+				actor = "main/btw_policy"
+			}
+			task := childTask{actor: actor, selection: r.selection, tools: r.Tools, aside: aside}
 			var err error
 			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.selection)
 			if err != nil {

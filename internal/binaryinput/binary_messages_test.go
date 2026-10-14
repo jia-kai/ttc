@@ -109,7 +109,7 @@ func TestBinaryDocumentDiagnosticExactOutput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			types := []llm.BinaryFileType{{Kind: "document", MIMEType: test.mime, MaxBytes: 1 << 20}}
 			_, err := readBinary(context.Background(), bytes.NewReader(test.data), int64(len(test.data)), "document", test.mime, "", types)
-			want := "unsupported_content: invalid " + test.mime + " document: " + test.inner + "; provide an original file matching its extension and announced MIME type"
+			want := "unsupported_content: invalid " + test.mime + " document: " + test.inner + "; provide an original file matching its extension and supported native format"
 			if err == nil || err.Error() != want {
 				t.Fatalf("document diagnostic = %v, want %q", err, want)
 			}

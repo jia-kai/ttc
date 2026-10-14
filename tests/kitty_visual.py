@@ -2,7 +2,8 @@
 """Capture the real Kitty TUI under Xvfb against TTC's local mock server.
 
 Requires kitty (with remote-control screenshot), Xvfb, and a software OpenGL
-implementation. Saves screenshots, terminal text, and complete failure logs.
+implementation. Tmux return comparisons also require Pillow. Saves screenshots,
+terminal text, and complete failure logs.
 """
 from pathlib import Path
 import argparse
@@ -19,6 +20,7 @@ import traceback
 
 
 from scratch import private_scratch
+from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
 
 def get_version() -> str:
     """an ad-hoc parser of go source to get the version string"""
@@ -154,6 +156,41 @@ def main():
             remote('screenshot', str(root / (name + '.png')))
             (root / (name + '.txt')).write_text(remote('get-text', '--extent', 'screen'))
 
+        def window_return(name, reset=False):
+            if not args.tmux:
+                return
+            from PIL import Image, ImageChops
+            def tmux(*arguments):
+                result = subprocess.run(['tmux', '-S', str(tmux_sock), *arguments],
+                                        capture_output=True, text=True, timeout=10)
+                with (root / 'tmux-return.log').open('a') as log:
+                    log.write(repr(arguments) + '\n' + result.stdout + result.stderr)
+                result.check_returncode()
+                return result.stdout.strip()
+            original = tmux('display-message', '-p', '#{window_id}')
+            # No terminal focus event is injected: tmux activation must work
+            # even with the user's default focus-events=off.
+            assert tmux('show-options', '-gv', 'focus-events') == 'off'
+            capture(name + '-before')
+            other = tmux('new-window', '-P', '-F', '#{window_id}', 'sleep 60')
+            time.sleep(1)
+            capture(name + '-away')
+            if reset:
+                # Reset only this private test terminal, modeling lost terminal
+                # image data. A placeholder repaint alone cannot restore pixels.
+                remote('action', 'clear_terminal reset active')
+            tmux('select-window', '-t', original)
+            time.sleep(1)
+            capture(name + '-return')
+            before = Image.open(root / (name + '-before.png')).convert('RGB')
+            after = Image.open(root / (name + '-return.png')).convert('RGB')
+            # Ignore status/footer and the blinking composer cursor.
+            box = (60, 60, before.width - 60, before.height - 130)
+            difference = ImageChops.difference(before.crop(box), after.crop(box))
+            difference.save(root / (name + '-difference.png'))
+            tmux('kill-window', '-t', other)
+            assert difference.getbbox() is None, 'image changed after tmux window return: ' + name
+
         wait('/help')
         version = get_version()
         header = wait(f'TTC {version}').splitlines()[0]
@@ -204,9 +241,19 @@ def main():
             mouse(10,image_row)
             wait('h/j/k/l pan')
             capture('image-preview')
-            key('esc')
+            window_return('image-preview')
+            window_return('image-preview-cache-loss', reset=True)
+            # A terminal reset clears Kitty/tmux's negotiated keyboard mode.
+            # Inject into the test pane so this check isolates image recovery.
+            if args.tmux:
+                subprocess.run(['tmux', '-S', str(tmux_sock), 'send-keys', 'Escape'], check=True)
+            else:
+                key('esc')
             wait('h/j/k/l pan', present=False)
-            key('ctrl+c')
+            if args.tmux:
+                subprocess.run(['tmux', '-S', str(tmux_sock), 'send-keys', 'C-c'], check=True)
+            else:
+                key('ctrl+c')
             terminal.wait(timeout=10)
             assert terminal.returncode == 0
             print(f'PASS: offline Kitty palette/image/math and highlighted multi-term search; tmux={args.tmux}: {root}')
@@ -221,7 +268,7 @@ def main():
         demo_root = Path(json.loads((root / 'demo.json').read_text())['root'])
         (demo_root / 'project/stream.ready').touch()
         wait('● agent')
-        wait('Independent fixture check')
+        wait('Fixture check')
         capture('running-agent')
         (demo_root / 'project/child.ready').touch()
         wait('● shell')
@@ -230,6 +277,77 @@ def main():
         wait('WORKSPACE')
         wait('demo')
         capture('live-sidebar')
+        # While visual.ready holds main at the next tool boundary, both child
+        # turns have settled. Inspect their compact response and returned answer
+        # using actual rendered row coordinates, not database-only inspection.
+        for _ in range(20):
+            last_text = remote('get-text', '--extent', 'screen')
+            if CHILD_PREFIX in last_text and '[Sub Fixture check] assistant ' in last_text:
+                try:
+                    child_rows = compact_rows(last_text)
+                    break
+                except AssertionError:
+                    if 'CHILD-HIDDEN-BODY' in last_text or CHILD_TAIL in last_text:
+                        raise
+            key('ctrl+u')
+        else:
+            raise AssertionError('compact child response/completion not visible: ' + last_text)
+        capture('child-compact')
+        remote('resize-os-window', '--width', '80', '--height', '38', '--unit', 'cells')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            narrow_child = remote('get-text', '--extent', 'screen')
+            try:
+                assert max(map(len, narrow_child.splitlines())) <= 80, 'old wide frame'
+                compact_rows(narrow_child, narrow=True)
+                break
+            except AssertionError:
+                time.sleep(0.05)  # Wait for TTC's resize/reflow, not Kitty's cropped old frame.
+        else:
+            raise AssertionError('narrow response AND completion rows missing: ' + narrow_child)
+        capture('child-compact-narrow')
+        remote('resize-os-window', '--width', '120', '--height', '38', '--unit', 'cells')
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            last_text = remote('get-text', '--extent', 'screen')
+            try:
+                assert 'WORKSPACE' in last_text, 'old narrow frame'
+                child_rows = compact_rows(last_text)
+                break
+            except AssertionError:
+                time.sleep(0.05)
+        else:
+            raise AssertionError('wide compact rows not restored: ' + last_text)
+        for kind, row in zip(('response', 'completion'), child_rows):
+            mouse(8, row)
+            wait('┌')
+            wait(CHILD_PREFIX)
+            capture('child-' + kind + '-inspector-start')
+            key('end')
+            wait(CHILD_TAIL)
+            capture('child-' + kind + '-inspector-tail')
+            if kind == 'completion':
+                send('d')
+                wait('Parameters:')
+                capture('child-completion-details')
+            key('esc')
+            wait('┌', present=False)
+            compact_rows(remote('get-text', '--extent', 'screen'))
+        with sqlite3.connect(demo_root / 'data/history.sqlite') as db:
+            child_entry = db.execute("SELECT id FROM entries WHERE actor_id != 'main' AND role='assistant' AND kind='message' AND json_extract(content_json,'$.content') = ? ORDER BY id LIMIT 1", (CHILD_ANSWER,)).fetchone()[0]
+            answers = [json.loads(row[0])['result'] for row in db.execute(
+                "SELECT record_json FROM tool_records WHERE json_extract(record_json,'$.name')='subagent'")]
+            verify_child_answers(db, answers)
+        send(f'/inspect {child_entry}\r')
+        wait('┌')
+        key('end')
+        wait(CHILD_TAIL)
+        capture('child-keyboard-inspector-tail')
+        key('esc')
+        wait('┌', present=False)
+        # Return to the tail before continuing sidebar/focus regressions.
+        for _ in range(20):
+            key('ctrl+d')
         send('/help\r')
         wait('TTC help')
         capture('busy-help')
@@ -294,6 +412,11 @@ def main():
         assert review_text.index('Submit answers') < review_text.index('Enter submits')
         capture('submit')
         key('enter')
+        deadline = time.monotonic() + 15
+        markdown = (demo_root / 'project/markdown.md').read_text()
+        while not demo_completed(demo_root / 'data/history.sqlite', markdown):
+            assert time.monotonic() < deadline, 'main turn did not durably complete'
+            time.sleep(0.05)
         wait('Turn complete')
         wait('\U0010eeee', timeout=20)  # Actual formula placeholders, after async rendering.
         deadline = time.monotonic() + 20

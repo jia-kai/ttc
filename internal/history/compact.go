@@ -20,7 +20,7 @@ import (
 // Callers pause main model work and serialize this handoff against child/file commits.
 // inputIDs selects sorted, unique visible main human entries strictly before
 // retainFrom: at most two normal/queued inputs combined and two steers. Each copy
-// follows a source/age marker frozen at compactedAt, with its file tip and undo
+// carries its retention time frozen at compactedAt, with its file tip and undo
 // checkpoint rebased to the tip immediately before retainFrom. retainFrom must
 // identify an active-branch entry, or the final entry ID plus one for an empty suffix.
 // pending preserves an already-persisted runtime recovery warning, with its
@@ -85,7 +85,6 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			return e
 		}
 		inputs := make(map[int64]llm.Message, len(inputIDs))
-		markers := make(map[int64]llm.Message, len(inputIDs))
 		boundaryFound := retainFrom == entries[len(entries)-1].ID+1
 		normal, steers := 0, 0
 		for _, entry := range entries {
@@ -109,11 +108,11 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			} else {
 				normal++
 			}
-			marker, e := ctxmgr.InputMarker(message, compactedAt)
+			retained, e := ctxmgr.RetainedInputMessages([]llm.Message{message}, []int{0}, compactedAt)
 			if e != nil {
 				return e
 			}
-			inputs[entry.ID], markers[entry.ID] = message, marker
+			inputs[entry.ID] = retained[0]
 		}
 		if !boundaryFound || len(inputs) != len(inputIDs) || normal > 2 || steers > 2 {
 			return errors.New(prompts.HistoryContinuationSelection)
@@ -167,15 +166,6 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 				source = entry.ID
 			}
 			content := entry.Content
-			if marker, ok := markers[entry.ID]; ok {
-				data, e := json.Marshal(marker)
-				if e != nil {
-					return e
-				}
-				if _, e = appendTx(tx, id, "", "main", "message", "developer", true, data, 0); e != nil {
-					return e
-				}
-			}
 			if entry.Visible && (entry.Kind == "message" || entry.Kind == "summary") {
 				var m llm.Message
 				if input, ok := inputs[entry.ID]; ok {

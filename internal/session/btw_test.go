@@ -48,8 +48,8 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 			}
 			return finish()
 		}
-		if req.System != parent.System || req.Selection.Model.ID != parent.Selection.Model.ID {
-			return errors.New("aside changed shared instructions or model")
+		if req.System != asideSystemTemplate || req.Selection.Model.ID != parent.Selection.Model.ID {
+			return errors.New("aside changed shared-only instructions or model")
 		}
 		for _, d := range req.Tools {
 			if !readOnlyTool(d.Name) {
@@ -60,11 +60,15 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 			if len(req.Messages) < len(parent.Messages)+3 {
 				return errors.New("missing shared prefix")
 			}
-			for i := range parent.Messages {
-				a, _ := json.Marshal(parent.Messages[i])
+			inherited, err := r.projectInheritedSkillCatalogs(parent.Messages, req.ConversationID)
+			if err != nil {
+				return err
+			}
+			for i := range inherited {
+				a, _ := json.Marshal(inherited[i])
 				b, _ := json.Marshal(req.Messages[i])
 				if string(a) != string(b) {
-					return errors.New("main prefix changed")
+					return errors.New("main evidence prefix changed beyond receiving skill catalogs")
 				}
 			}
 			if req.Messages[len(parent.Messages)].Content != btwInstruction {

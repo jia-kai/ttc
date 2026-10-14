@@ -56,6 +56,7 @@ type line struct {
 	styled              bool // Generated ANSI row (such as a streaming speaker label), independent of Markdown source.
 	markdown            bool
 	brief               bool // One clipped row; the complete saved result remains inspectable.
+	compactResponse     bool // Child assistant/final response; text retains the complete source.
 	callID              string
 	questionID          string // Tagged question-status identity, retained when closed for inspection.
 	jobID               string
@@ -119,6 +120,19 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		screen.EnableMouse(tcell.MouseButtonEvents)
 		screen.EnablePaste()
 		screen.SetCursorStyle(tcell.CursorStyleBlinkingBar)
+	}
+	var graphicsActivation <-chan struct{}
+	if tty != nil && g != nil && g.Tmux {
+		var stopActivation func()
+		graphicsActivation, stopActivation, e = graphics.WatchTmuxActivation(ctx)
+		if e != nil {
+			graphicsWarning = "Tmux image recovery unavailable: " + e.Error()
+		} else {
+			defer stopActivation()
+		}
+	}
+	if screen != nil && g != nil && !g.Tmux {
+		screen.EnableFocus()
 	}
 	inputs := make(chan input, 32)
 	modelUpdates := f.ModelUpdates
@@ -363,6 +377,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 	}
 	attribute := func(item line, actor string) line {
 		item.actor, item.subagentName = actor, nameForActor(actor)
+		item.compactResponse = item.speaker != "" && (strings.HasPrefix(actor, "main/child_") || item.subagentName != "")
 		return item
 	}
 	attributeWindow := func(window *Window, actor string) {
@@ -389,6 +404,20 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		if f.Plain {
 			fmt.Fprintln(f.Output, plainActor(actor, item.text))
 		}
+	}
+	childCompletion := func(item line, text string) line {
+		var notice struct {
+			Type    string `json:"type"`
+			ChildID string `json:"child_id"`
+			Answer  string `json:"answer"`
+		}
+		// Only runtime child-completion envelopes take this presentation path.
+		if json.Unmarshal([]byte(text), &notice) == nil && notice.Type == "child_turn_finished" && strings.HasPrefix(notice.ChildID, "main/child_") {
+			item = attribute(item, notice.ChildID)
+			item.text, item.speaker, item.compactResponse = notice.Answer, "final answer", true
+			item.markdown, item.system = false, false
+		}
+		return item
 	}
 	startEditor := func() {
 		text := draft.text
@@ -456,12 +485,20 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 		modal.clear()
 		view.invalidate()
 	}
-	inspect := func(id int64) {
+	inspectSaved := func(id int64) {
 		esc, viewChord = false, false
 		historyView := modal.history
 		modal.clear()
 		modal.history = historyView
 		modal.generation = f.Runtime.Generation()
+		if id < 0 {
+			if index, found := view.requests[-id]; found {
+				item := view.lines[index]
+				modal.window = &Window{Title: "assistant", Text: item.text, Markdown: true, requestID: -id}
+				attributeWindow(modal.window, item.actor)
+			}
+			return
+		}
 		if !f.Plain {
 			page, err := f.Runtime.Store.InspectPage(ctx, id, 0, history.InspectionPageChars)
 			if err != nil {
@@ -545,6 +582,26 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			}
 		}
 	}
+	inspect := func(id int64) {
+		if id <= 0 {
+			inspectSaved(id)
+			return
+		}
+		response, err := f.Runtime.Store.ChildResponse(id)
+		if err != nil {
+			add("Child response inspection failed: "+err.Error(), 0)
+			return
+		}
+		if response == 0 {
+			inspectSaved(id)
+			return
+		}
+		inspectSaved(response)
+		if modal.window != nil {
+			modal.window.completionEntry = id
+			modal.window.Hint = "D completion details · Esc closes"
+		}
+	}
 	replay := func() {
 		view.reset()
 		loaded, err := f.Runtime.Store.SubagentNames(ctx, f.Runtime.Current())
@@ -592,6 +649,13 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				if err := json.Unmarshal(v.Content, &message); err == nil {
 					title := "assistant"
 					item.text, item.speaker, item.markdown, item.complete, item.requestID = message.Content, title, true, true, message.RequestID
+					item = attribute(item, v.Actor)
+				}
+			}
+			if v.Kind == "message" && v.Role == "user" {
+				var message llm.Message
+				if json.Unmarshal(v.Content, &message) == nil && message.Runtime {
+					item = childCompletion(item, message.Content)
 				}
 			}
 			if v.Kind == "tool_result" && renderer != nil {
@@ -986,6 +1050,17 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				busy = false
 			}
 			return ctx.Err()
+		case _, ok := <-graphicsActivation:
+			if !ok {
+				graphicsActivation = nil
+				add("Warning: tmux image recovery observer stopped.", 0)
+				continue
+			}
+			g.Refresh()
+			if !editorSuspended {
+				screen.Sync()
+				dirty = true
+			}
 		case update, ok := <-modelUpdates:
 			if !ok {
 				modelUpdates = nil
@@ -1202,19 +1277,27 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					fmt.Fprintln(f.Output, plainActor(event.Actor, brief))
 				}
 			case "delta":
-				_, existing := view.requests[event.RequestID]
-				if view.publish(attribute(line{text: event.Text, speaker: "assistant", requestID: event.RequestID}, event.Actor), "", true) && f.Plain {
-					if !existing && nameForActor(event.Actor) != "" {
-						fmt.Fprintln(f.Output, plainActor(event.Actor, "assistant"))
+				item := attribute(line{text: event.Text, speaker: "assistant", requestID: event.RequestID}, event.Actor)
+				if item.compactResponse {
+					item.id = -event.RequestID // Negative UI-only identity until the saved response arrives.
+				}
+				if view.publish(item, "", true) && f.Plain {
+					if !item.compactResponse {
+						fmt.Fprint(f.Output, event.Text)
 					}
-					fmt.Fprint(f.Output, event.Text)
+				}
+				if modal.window != nil && modal.window.requestID == event.RequestID {
+					modal.window.Text = view.lines[view.requests[event.RequestID]].text
 				}
 			case "assistant":
 				speaker := "assistant"
+				item := attribute(line{text: event.Text, speaker: speaker, requestID: event.RequestID, id: event.EntryID, complete: true, markdown: true}, event.Actor)
 				index, streamed := view.requests[event.RequestID]
 				streamed = streamed && !view.lines[index].complete
-				if view.publish(attribute(line{text: event.Text, speaker: speaker, requestID: event.RequestID, id: event.EntryID, complete: true, markdown: true}, event.Actor), "", false) && f.Plain {
-					if streamed {
+				if view.publish(item, "", false) && f.Plain {
+					if item.compactResponse {
+						fmt.Fprintln(f.Output, render.SubagentResponse(event.Actor, nameForActor(event.Actor), speaker, event.Text, 500, false))
+					} else if streamed {
 						fmt.Fprintln(f.Output)
 					} else {
 						fmt.Fprintln(f.Output, plainActor(event.Actor, speaker+" · "+event.Text))
@@ -1227,6 +1310,9 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 						view.append(line{text: "Warning: " + graphicsWarning, system: true})
 						graphicsWarning = ""
 					}
+				}
+				if modal.window != nil && modal.window.requestID == event.RequestID {
+					inspect(event.EntryID)
 				}
 			case "question":
 				if event.Question == nil {
@@ -1258,7 +1344,18 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			case "runtime_context", "status", "wake":
 				addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 			default:
-				addActor(line{text: event.Text, id: event.EntryID, human: event.Human}, event.Actor)
+				item := attribute(line{text: event.Text, id: event.EntryID, human: event.Human}, event.Actor)
+				if event.Kind == "message" && event.Runtime {
+					item = childCompletion(item, event.Text)
+				}
+				view.append(item)
+				if f.Plain {
+					if item.compactResponse {
+						fmt.Fprintln(f.Output, render.SubagentResponse(item.actor, item.subagentName, item.speaker, item.text, 500, false))
+					} else {
+						fmt.Fprintln(f.Output, plainActor(event.Actor, event.Text))
+					}
+				}
 			}
 			focused = len(view.lines) - 1
 		case v := <-inputs:
@@ -1298,6 +1395,11 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				}
 				if !ev.Start() {
 					pasteQuestion, pasteIntoComposer = nil, false
+				}
+			case *tcell.EventFocus:
+				if ev.Focused && g != nil && !g.Tmux {
+					g.Refresh()
+					screen.Sync()
 				}
 			case *tcell.EventResize:
 				screen.Sync()
@@ -1386,12 +1488,16 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				width, _ := screen.Size()
 				width = sidebar.bounds(width, sidebar.height, fullscreen)
 				if ev.Buttons()&tcell.Button1 != 0 && x >= 0 && x < width-1 {
-					if id := view.entryAt(y); id > 0 {
+					if id := view.entryAt(y); id != 0 {
 						inspect(id)
 					}
 				}
 			case *tcell.EventKey:
 				if !ev.Pressed() {
+					continue
+				}
+				if modal.window != nil && modal.window.completionEntry != 0 && ev.Key() == tcell.KeyRune && (ev.Str() == "d" || ev.Str() == "D") && ev.Modifiers() == 0 {
+					inspectSaved(modal.window.completionEntry)
 					continue
 				}
 				// Legacy tty Alt+Enter is ESC CR; tcell decodes it as Alt+Ctrl+M.
@@ -1725,7 +1831,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					if fullscreen {
 						target = copyFocused
 					}
-					if target >= 0 && target < len(displayView().lines) && displayView().lines[target].id > 0 {
+					if target >= 0 && target < len(displayView().lines) && displayView().lines[target].id != 0 {
 						inspect(displayView().lines[target].id)
 					}
 				case ev.Key() == tcell.KeyEnter:
@@ -1737,7 +1843,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					if fullscreen {
 						target = copyFocused
 					}
-					if draft.text == "" && target >= 0 && target < len(displayView().lines) && displayView().lines[target].id > 0 {
+					if draft.text == "" && target >= 0 && target < len(displayView().lines) && displayView().lines[target].id != 0 {
 						inspect(displayView().lines[target].id)
 					} else {
 						submit = draft.text
@@ -1865,7 +1971,7 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			if e != nil {
 				add("Error: invalid entry ID", 0)
 			} else {
-				inspect(id)
+				inspectSaved(id) // Explicit entry inspection retains raw completion/tool metadata.
 			}
 			continue
 		}

@@ -160,7 +160,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 
 func TestChildResultUsesCommittedCompletionBeforeJobSnapshot(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	child := &codingChild{id: "main/child"}
+	child := &codingChild{id: "main/child_fixture"}
 	for _, answer := range []string{"Final answer", ""} {
 		assignment := &childAssignment{turn: "ct", finish: 1, completion: history.ChildFinish{Status: "completed", ResultEntry: 2, Answer: answer}}
 		result := r.childResult(child, assignment, jobs.Snapshot{Status: "running", Stdout: "Intermediate commentary"})

@@ -83,7 +83,10 @@ def main():
                     warnings = [item for item in body['input'] if item.get('role') == 'developer'
                                 and 'TTC is retrying' in item['content'][0]['text']]
                     assert len(warnings) == 1, 'missing or duplicate recovery warning'
-                    assert 'Reissued tool calls may fail' in warnings[0]['content'][0]['text']
+                    warning = warnings[0]['content'][0]['text']
+                    assert 'Do not restart the task' in warning
+                    assert 'TTC did not execute tool calls from that interrupted reply.' in warning
+                    assert 'Consult recorded outcomes before retrying actions' in warning
                     assert any(item.get('role') == 'assistant' and
                                'Edits saved' in item['content'][0]['text'] for item in body['input'])
                     outputs = [item for item in body['input'] if item['type'] == 'function_call_output']

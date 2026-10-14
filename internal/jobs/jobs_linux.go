@@ -31,19 +31,21 @@ const ForegroundTimeout = 20 * time.Second
 
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
-	WakeOnExit bool   `json:"-"` // Whether the background completion should notify the model.
-	ID         string `json:"job_id"`
-	Kind       string `json:"kind"`
-	Owner      string `json:"owner_actor_id"`
-	Label      string `json:"label"`
-	Status     string `json:"status"`
-	Stdout     string `json:"stdout"`
-	Stderr     string `json:"stderr"`
-	StartedAt  string `json:"started_at"` // UTC RFC3339Nano launch time.
-	FinishedAt string `json:"finished_at,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
-	Signal     string `json:"signal,omitempty"`
-	Truncated  bool   `json:"truncated"`
+	WakeOnExit      bool               `json:"-"` // Whether the background completion should notify the model.
+	ID              string             `json:"job_id"`
+	Kind            string             `json:"kind"`
+	Owner           string             `json:"owner_actor_id"`
+	Label           string             `json:"label"`
+	Status          string             `json:"status"`
+	Stdout          string             `json:"stdout"`
+	Stderr          string             `json:"stderr"`
+	StartedAt       string             `json:"started_at"` // UTC RFC3339Nano launch time.
+	FinishedAt      string             `json:"finished_at,omitempty"`
+	ExitCode        *int               `json:"exit_code,omitempty"`
+	Signal          string             `json:"signal,omitempty"`
+	Truncated       bool               `json:"truncated"`
+	StdoutSelection *capture.Selection `json:"stdout_selection,omitempty"`
+	StderrSelection *capture.Selection `json:"stderr_selection,omitempty"`
 }
 type job struct {
 	view             Snapshot
@@ -56,6 +58,7 @@ type job struct {
 	stdout, stderr   *capture.Buffer
 	background       bool
 	client           *lsp.Client
+	output           *capture.OutputOptions // Nil retains compact previews for non-shell tasks.
 }
 
 // Manager owns jobs for one runtime. Close cancels and joins all process groups.
@@ -83,17 +86,23 @@ func New(ctx context.Context, notify func(Snapshot)) *Manager {
 // strict enables POSIX errexit and nounset; it does not enable pipefail.
 // Zero timeout selects ForegroundTimeout for foreground work and no deadline
 // for background work. A positive timeout is an explicit deadline in either mode.
-func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, background, wake, false)
+// output selects the model-facing payload independently of retained job_read data.
+func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool, output capture.OutputOptions) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, background, wake, false, output)
 }
 
 // StartLSP launches a background stdio server. Protocol stdout is owned by the
 // LSP client; only stderr is available through Read. Stop cancels the process group.
-func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict, wake bool) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, true, wake, true)
+// output selects bounded stderr diagnostics; protocol stdout is never presented.
+func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict, wake bool, output capture.OutputOptions) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, true, wake, true, output)
 }
 
-func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool) (string, error) {
+func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool, options capture.OutputOptions) (string, error) {
+	options, err := options.Normalize()
+	if err != nil {
+		return "", err
+	}
 	if timeout < 0 {
 		return "", errors.New(prompts.JobTimeoutNonnegative)
 	}
@@ -131,6 +140,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	startedAt := time.Now().UTC()
 	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	cmd.Stdout = j.stdout
+	j.output = &options
 	cmd.Stderr = j.stderr
 	var input io.WriteCloser
 	var output, writer *os.File
@@ -273,10 +283,9 @@ func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapsh
 	defer ticker.Stop()
 	for {
 		if update != nil {
-			view, err := m.View(owner, id)
-			if err != nil {
-				return Snapshot{}, err
-			}
+			m.mu.Lock()
+			view := compactPreview(j)
+			m.mu.Unlock()
 			if view.Status == "running" {
 				update(view)
 			}
@@ -431,6 +440,18 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 }
 
 func preview(j *job) Snapshot {
+	if j.output == nil {
+		return compactPreview(j)
+	}
+	v := j.view
+	a, b := capture.SelectOutput(j.stdout, j.stderr, *j.output)
+	v.Stdout, v.Stderr = a.Output, b.Output
+	v.StdoutSelection, v.StderrSelection = &a, &b
+	v.Truncated = a.OmittedBytes > 0 || b.OmittedBytes > 0
+	return v
+}
+
+func compactPreview(j *job) Snapshot {
 	v := j.view
 	a, _ := j.stdout.Read("eof:0:bytes", 1)
 	b, _ := j.stderr.Read("eof:0:bytes", 1)
@@ -444,9 +465,19 @@ func preview(j *job) Snapshot {
 	return v
 }
 
+// TaskResult carries optional observed workload exit metadata. A nil ExitCode
+// means no numeric exit was observed; Signal is empty unless signaled termination
+// was observed. A nonzero exit does not itself indicate worker supervision failure.
+type TaskResult struct {
+	ExitCode *int
+	Signal   string
+}
+
 // StartTask runs an owned background worker with the same capture pool and lifecycle
 // as shell jobs. The worker must honor ctx and finish before its callback is joined.
-func (m *Manager) StartTask(owner, kind, label string, background, wake bool, run func(context.Context, io.Writer, io.Writer) error) (string, error) {
+// Returned exit metadata is copied and published atomically with terminal status
+// and captured output. Worker errors report supervision failure, not exit status.
+func (m *Manager) StartTask(owner, kind, label string, background, wake bool, run func(context.Context, io.Writer, io.Writer) (TaskResult, error)) (string, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -454,7 +485,7 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
-	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: kind, Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano)}, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: kind, Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cancel: cancel, done: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
 	launch := j.view
@@ -464,8 +495,13 @@ func (m *Manager) StartTask(owner, kind, label string, background, wake bool, ru
 	}
 	go func() {
 		defer m.wg.Done()
-		err := run(ctx, j.stdout, j.stderr)
+		result, err := run(ctx, j.stdout, j.stderr)
 		m.mu.Lock()
+		if result.ExitCode != nil {
+			code := *result.ExitCode
+			j.view.ExitCode = &code
+		}
+		j.view.Signal = result.Signal
 		j.view.Status = "completed"
 		if ctx.Err() != nil {
 			j.view.Status = "cancelled"

@@ -45,7 +45,7 @@ func TestChildImageEventRoutesToCurrentContinuation(t *testing.T) {
 	r.EnableImageClicks(true)
 	showTestImage(t, r, "fixture", "main", false)
 	old := r.Current()
-	_, ids := batchIntents(t, r, "main/child", []llm.ToolCall{{ID: "old_child_call", Name: "image_show", Arguments: json.RawMessage(`{"path":"field.png","request_click":true}`)}})
+	_, ids := batchIntents(t, r, "main/child_fixture", []llm.ToolCall{{ID: "old_child_call", Name: "image_show", Arguments: json.RawMessage(`{"path":"field.png","request_click":true}`)}})
 	for _, text := range []string{strings.Repeat("old research ", 3000), "Continue the child task."} {
 		if _, err := r.Store.Append(old, "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
 			t.Fatal(err)
@@ -55,7 +55,7 @@ func TestChildImageEventRoutesToCurrentContinuation(t *testing.T) {
 	if _, err := r.Command("/compact"); err != nil {
 		t.Fatal(err)
 	}
-	record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: old, Actor: "main/child", CallID: ids[0]}, "image_show", json.RawMessage(`{"path":"field.png","request_click":true}`))
+	record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: old, Actor: "main/child_fixture", CallID: ids[0]}, "image_show", json.RawMessage(`{"path":"field.png","request_click":true}`))
 	if strings.Contains(string(record.Result), `"error"`) {
 		t.Fatal(string(record.Result))
 	}
@@ -85,28 +85,28 @@ func TestChildImageEventRoutesToCurrentContinuation(t *testing.T) {
 func TestChildImageReplySlotAndExitCleanup(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.EnableImageClicks(true)
-	v := showTestImage(t, r, "one", "main/child", true)
+	v := showTestImage(t, r, "one", "main/child_fixture", true)
 	if err := r.ConfirmImage(v.ID, &[2]int{1, 2}); err != nil {
 		t.Fatal(err)
 	}
-	record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main/child", CallID: "two"}, "image_show", json.RawMessage(`{"path":"field.png","request_click":true}`))
+	record := r.Tools.Invoke(context.Background(), tool.Execution{SessionID: r.Current(), Actor: "main/child_fixture", CallID: "two"}, "image_show", json.RawMessage(`{"path":"field.png","request_click":true}`))
 	if !strings.Contains(string(record.Result), "click_already_pending") {
 		t.Fatal("unconsumed reply overwritten", string(record.Result))
 	}
-	m, err := r.childImageReply(context.Background(), "main/child", false)
+	m, err := r.childImageReply(context.Background(), "main/child_fixture", false)
 	if err != nil || m == nil || !strings.Contains(m.Content, `"image_id":"one"`) {
 		t.Fatal(m, err)
 	}
-	v = showTestImage(t, r, "three", "main/child", true)
+	v = showTestImage(t, r, "three", "main/child_fixture", true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child", prompt: "task", selection: r.CurrentSelection(), tools: r.Tools}, io.Discard, io.Discard); err == nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_fixture", prompt: "task", selection: r.CurrentSelection(), tools: r.Tools}, io.Discard, io.Discard); err == nil {
 		t.Fatal("canceled child continued")
 	}
 	if r.ImageClickPending(v.ID) {
 		t.Fatal("exited child left interaction armed")
 	}
-	m, err = r.childImageReply(context.Background(), "main/child", false)
+	m, err = r.childImageReply(context.Background(), "main/child_fixture", false)
 	if err != nil || m != nil {
 		t.Fatal("exited child left reply", m, err)
 	}
@@ -180,11 +180,11 @@ func TestImageChildRoutingAndUnsupportedPlain(t *testing.T) {
 		t.Fatal(string(record.Result))
 	}
 	r.EnableImageClicks(true)
-	v := showTestImage(t, r, "child-image", "main/child", true)
+	v := showTestImage(t, r, "child-image", "main/child_fixture", true)
 	if err := r.ConfirmImage(v.ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	m, err := r.childImageReply(context.Background(), "main/child", true)
+	m, err := r.childImageReply(context.Background(), "main/child_fixture", true)
 	if err != nil || m == nil || !strings.Contains(m.Content, "image_click_cancelled") {
 		t.Fatal(m, err)
 	}

@@ -52,15 +52,6 @@ func (c WebSearchConfig) Validate() error {
 // addWebSearch calls Exa's headless MCP endpoint with operator-owned settings.
 // No general MCP connection/session layer or implicit backend fallback is needed.
 func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebSearchConfig) {
-	endpoint := config.Endpoint
-	if endpoint == "" {
-		endpoint = "https://mcp.exa.ai/mcp"
-	}
-	key := config.APIKey
-	searchClient := *client
-	searchClient.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return errors.New(prompts.ToolSearchRedirectUnsupported)
-	}
 	Register(r, "web_search", prompts.ToolDescription("web_search"), map[string]any{"query": Property("string"), "num_results": Property("integer"), "max_chars": Property("integer")}, []string{"query"}, func(a webSearchArgs) error {
 		if strings.TrimSpace(a.Query) == "" || len(a.Query) > 4096 {
 			return errors.New(prompts.ToolSearchQueryRange)
@@ -69,67 +60,10 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebS
 			return err
 		}
 		return rangeInt("max_chars", a.Max, 1, 64000)
-	}, func(ctx context.Context, x Execution, a webSearchArgs) (out any, callErr error) {
-		errorEndpoint := endpoint
-		defer func() {
-			if callErr == nil {
-				return
-			}
-			redact := func(text string) string {
-				text = strings.ReplaceAll(text, errorEndpoint, "[search endpoint]")
-				if key != "" {
-					text = strings.ReplaceAll(text, key, "[redacted]")
-				}
-				return text
-			}
-			if redact(callErr.Error()) == callErr.Error() {
-				return
-			}
-			if structured, ok := callErr.(*Error); ok {
-				copy := *structured
-				copy.Message = redact(copy.Message)
-				callErr = &copy
-			} else {
-				callErr = errors.New(redact(callErr.Error()))
-			}
-		}()
-
-		if _, err := webURL(endpoint); err != nil {
-			return nil, fmt.Errorf(prompts.ToolSearchEndpoint, err)
-		}
+	}, func(ctx context.Context, x Execution, a webSearchArgs) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		payload := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "web_search_exa", "arguments": map[string]any{"query": a.Query, "numResults": intDefault(a.NumResults, 5)}}}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(b))
-		if err != nil {
-			return nil, err
-		}
-		errorEndpoint = req.URL.String()
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		if key != "" {
-			req.Header.Set("x-api-key", key)
-		}
-		resp, err := searchClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == 429 {
-			return nil, Fail("rate_limited", prompts.ToolSearchRateLimited)
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			hint := prompts.ToolSearchHTTPConfigHint
-			if resp.StatusCode >= 500 {
-				hint = prompts.ToolSearchHTTPSourceHint
-			}
-			return nil, fmt.Errorf(prompts.ToolSearchHTTPFailed, resp.StatusCode, hint)
-		}
-		result, err := searchResult(resp.Body, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"), key)
+		result, err := callWebSearch(ctx, client, config, a.Query, intDefault(a.NumResults, 5))
 		if err != nil {
 			return nil, err
 		}
@@ -144,6 +78,96 @@ func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebS
 		page["backend"], page["query"] = "exa", a.Query
 		return page, nil
 	})
+}
+
+// CheckWebSearch verifies the configured Exa backend with one real search for
+// "Exa", requesting one result. It accepts JSON or SSE MCP responses, uses a
+// 30-second timeout (or the caller's earlier deadline), and blocks redirects.
+// A nil client uses http.DefaultClient. Returned errors redact credentials and
+// the configured endpoint; successful search content is discarded.
+func CheckWebSearch(ctx context.Context, client *http.Client, config WebSearchConfig) error {
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	_, err := callWebSearch(ctx, client, config, "Exa", 1)
+	return err
+}
+
+// callWebSearch is the shared, bounded MCP transport for checks and tool calls.
+func callWebSearch(ctx context.Context, client *http.Client, config WebSearchConfig, query string, numResults int) (result string, callErr error) {
+	endpoint := config.Endpoint
+	if endpoint == "" {
+		endpoint = "https://mcp.exa.ai/mcp"
+	}
+	key := config.APIKey
+	errorEndpoint := endpoint
+	defer func() {
+		if callErr == nil {
+			return
+		}
+		redact := func(text string) string {
+			text = strings.ReplaceAll(text, errorEndpoint, "[search endpoint]")
+			if key != "" {
+				// Response decoding may already have redacted a key in the URL.
+				text = strings.ReplaceAll(text, strings.ReplaceAll(errorEndpoint, key, "[redacted]"), "[search endpoint]")
+				text = strings.ReplaceAll(text, key, "[redacted]")
+			}
+			return text
+		}
+		if redact(callErr.Error()) == callErr.Error() {
+			return
+		}
+		if structured, ok := callErr.(*Error); ok {
+			copy := *structured
+			copy.Message = redact(copy.Message)
+			callErr = &copy
+		} else {
+			callErr = errors.New(redact(callErr.Error()))
+		}
+	}()
+	if _, err := webURL(endpoint); err != nil {
+		return "", fmt.Errorf(prompts.ToolSearchEndpoint, err)
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	searchClient := *client
+	searchClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New(prompts.ToolSearchRedirectUnsupported)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	payload := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "web_search_exa", "arguments": map[string]any{"query": query, "numResults": numResults}}}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	errorEndpoint = req.URL.String()
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if key != "" {
+		req.Header.Set("x-api-key", key)
+	}
+	resp, err := searchClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 429 {
+		return "", Fail("rate_limited", prompts.ToolSearchRateLimited)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		hint := prompts.ToolSearchHTTPConfigHint
+		if resp.StatusCode >= 500 {
+			hint = prompts.ToolSearchHTTPSourceHint
+		}
+		return "", fmt.Errorf(prompts.ToolSearchHTTPFailed, resp.StatusCode, hint)
+	}
+	return searchResult(resp.Body, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"), key)
 }
 
 func searchResult(reader io.Reader, sse bool, key string) (string, error) {

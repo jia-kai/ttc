@@ -32,10 +32,11 @@ type wakeup struct {
 	Fired          int    `json:"fired_count"`
 	Last           string `json:"last_result,omitempty"`
 	cancel         context.CancelFunc
-	actor          string    // Immutable scheduler actor ID; names are resolved by the frontend.
-	startupText    string    // Immutable startup Markdown, preserving original option omission.
-	nextAt         time.Time // Exact next deadline, without the display timestamp's second rounding.
-	deliveredCount int       // Last admitted firing; later firings remain pending.
+	changed        chan struct{} // Buffered reschedule signal; mutable state is protected by wakeups.mu.
+	actor          string        // Immutable scheduler actor ID; names are resolved by the frontend.
+	startupText    string        // Immutable startup Markdown, preserving original option omission.
+	nextAt         time.Time     // Exact next deadline, without the display timestamp's second rounding.
+	deliveredCount int           // Last admitted firing; later firings remain pending.
 }
 type wakeups struct {
 	ctx    context.Context
@@ -73,7 +74,7 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 		}
 	}
 	ctx, cancel := context.WithCancel(w.ctx)
-	v := &wakeup{ID: history.NewID("wake"), Name: a.Name, Message: a.Message, Status: "scheduled", NextAt: at.UTC().Format(time.RFC3339), Repeat: repeat, cancel: cancel, actor: actor, startupText: startupText, nextAt: at}
+	v := &wakeup{ID: history.NewID("wake"), Name: a.Name, Message: a.Message, Status: "scheduled", NextAt: at.UTC().Format(time.RFC3339), Repeat: repeat, cancel: cancel, changed: make(chan struct{}, 1), actor: actor, startupText: startupText, nextAt: at}
 	w.items[v.ID] = v
 	w.wg.Add(1)
 	initial := *v
@@ -81,21 +82,33 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 	w.mu.Unlock()
 	go func() {
 		defer w.wg.Done()
-		next := at
 		for {
+			w.mu.Lock()
+			next := v.nextAt
+			w.mu.Unlock()
 			timer := time.NewTimer(time.Until(next))
 			select {
 			case <-ctx.Done():
 				timer.Stop()
 				return
+			case <-v.changed:
+				timer.Stop()
+				continue
 			case <-timer.C:
 			}
 			w.mu.Lock()
-			if w.closed || v.Status == "cancelled" {
+			if w.closed || v.Status != "scheduled" {
 				w.mu.Unlock()
 				return
 			}
+			// An old timer may become ready concurrently with an update. The
+			// current deadline, checked under the mutation lock, decides firing.
+			if time.Now().Before(v.nextAt) {
+				w.mu.Unlock()
+				continue
+			}
 			v.Fired++
+			repeat := v.Repeat
 			if repeat == 0 {
 				v.Status = "fired"
 				v.NextAt = ""
@@ -170,6 +183,7 @@ func (w *wakeups) close() {
 	w.mu.Unlock()
 }
 func (r *Runtime) addWakeupTools() {
+	r.addWakeupUpdateTool()
 	tool.Register(r.Tools, "wakeup_schedule", prompts.ToolDescription("wakeup_schedule"), map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer")}, []string{"name", "message"}, func(a wakeupSchedule) error {
 		if e := tool.Required("name", a.Name); e != nil {
 			return e

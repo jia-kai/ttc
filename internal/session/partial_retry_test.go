@@ -245,9 +245,7 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 						t.Error("child inherited main transcript")
 					}
 				}
-				if req.System != childSystemTemplate {
-					t.Error("child missing child-specific system prompt")
-				}
+				assertReceivingRolePrompt(t, r, "child", req)
 				switch step {
 				case 1:
 					actor = req.ConversationID
@@ -319,9 +317,7 @@ func TestPartialRetryAsideRecoversWithoutLeakingOrPublishingPartialAnswer(t *tes
 		step++
 		partialRetryMessage(t, req, "user", "Private main context")
 		partialRetryMessage(t, req, "developer", btwInstruction)
-		if req.System != systemTemplate {
-			t.Error("aside changed shared system instructions")
-		}
+		assertReceivingRolePrompt(t, r, "aside", req)
 		if step == 1 {
 			actor = req.ConversationID
 			if req.PriorAttempts != 0 {

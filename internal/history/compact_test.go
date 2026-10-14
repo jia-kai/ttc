@@ -2,6 +2,7 @@ package history
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 		t.Fatal(err)
 	}
 	if got, err := s.Messages(loaded.ID); err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatal("load lost historical input markers or snapshots", got, want, err)
+		t.Fatal("load lost historical input metadata or snapshots", got, want, err)
 	}
 	originalInputs := map[int64]llm.Message{}
 	entries, err := s.Branch(source.ID, 0)
@@ -101,17 +102,17 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
-		markers := 0
-		for i, message := range messages {
-			if message.Role == "developer" && strings.Contains(message.Content, `"type":"retained_input"`) {
-				markers++
-				if message.Runtime || i+1 >= len(messages) || messages[i+1].Role != "user" {
-					t.Fatal("unpaired or live input marker", message)
+		retained := 0
+		for _, message := range messages {
+			if message.RetainedAtMS > 0 {
+				retained++
+				if message.Runtime || message.Role != "user" {
+					t.Fatal("nonhuman retained input", message)
 				}
 			}
 		}
-		if markers != 4 {
-			t.Fatal("lost or duplicated input markers", markers)
+		if retained != 4 {
+			t.Fatal("lost or duplicated retained inputs", retained)
 		}
 		entries, err = s.Branch(loaded.ID, 0)
 		if err != nil {
@@ -123,7 +124,9 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					t.Fatal(err)
 				}
-				if !reflect.DeepEqual(message, originalInputs[entry.EventSeq()]) {
+				original := originalInputs[entry.EventSeq()]
+				original.RetainedAtMS = message.RetainedAtMS
+				if !reflect.DeepEqual(message, original) {
 					t.Fatal("lost original input identity, timestamp or snapshot", message)
 				}
 				if entry.ID < loaded.UndoFloor {
@@ -315,14 +318,21 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 			t.Fatal(err)
 		}
 		got, err := s.Messages(session.ID)
-		if err != nil || len(got) != 10 {
-			t.Fatal("missing or duplicated input/marker", got, err)
+		if err != nil || len(got) != 6 {
+			t.Fatal("missing or duplicated canonical retained input", got, err)
 		}
 		for i, input := range inputs {
-			marker, err := ctxmgr.InputMarker(input, at)
-			if err != nil || !reflect.DeepEqual(got[1+2*i], marker) || !reflect.DeepEqual(got[2+2*i], input) {
-				t.Fatal("retained input pair changed", iteration, i, got[1+2*i:3+2*i], marker, input, err)
+			input.RetainedAtMS = at.UnixMilli()
+			if !reflect.DeepEqual(got[1+i], input) {
+				t.Fatal("retained input changed", iteration, i, got[1+i], input)
 			}
+		}
+		projected, err := ctxmgr.ProjectRetainedInputs(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(projected) != 4 || projected[1].Role != "developer" || projected[2].Role != "user" {
+			t.Fatal("retained inputs did not form one model-facing group", projected)
 		}
 		entries, err := s.Branch(session.ID, 0)
 		if err != nil {
@@ -396,8 +406,23 @@ func TestContinuationAllowsEmptyModelSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages, err := s.Messages(continued.ID)
-	if err != nil || len(messages) != 3 || messages[1].Role != "developer" || messages[2].Content != "hello" {
+	if err != nil || len(messages) != 2 || messages[1].RetainedAtMS <= 0 || messages[1].Content != "hello" {
 		t.Fatal("empty suffix lost retained human input", messages, err)
+	}
+}
+
+func TestMessagesRejectMalformedRetentionMetadata(t *testing.T) {
+	for i, at := range []int64{-1, 1, 2} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			s, session, turn, _ := historyFixture(t)
+			_, err := s.Append(session.ID, turn, "main", "message", "developer", true, llm.Message{Role: "developer", RetainedAtMS: at})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Messages(session.ID); err == nil {
+				t.Fatal("accepted malformed retained input metadata")
+			}
+		})
 	}
 }
 

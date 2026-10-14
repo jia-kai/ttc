@@ -18,8 +18,9 @@ import (
 	"ttc/internal/tool"
 )
 
-// codingChild retains one isolated context. childStartMu protects all fields;
-// only its running worker owns messages/cursor until publishing an idle state.
+// codingChild retains one isolated context. childStartMu protects its fields;
+// assignment's admission queue has its own orderMu discipline. Only the running
+// worker owns messages/cursor until publishing an idle state.
 type codingChild struct {
 	id, label, state, turn, job string
 	selection                   llm.Selection
@@ -27,12 +28,18 @@ type codingChild struct {
 	messages                    []llm.Message
 	cursor                      contextCursor
 	closing                     bool
+	assignment                  *childAssignment
 	lastAnswer                  string // Last nonempty assistant text across persistent assignments, bounded like parent delivery.
 	lastResult                  int64
 	lastTruncated               bool
 }
 
 type childAssignment struct {
+	// orderMu protects the admission queue and terminal admission gate.
+	accepting       bool
+	queued          []llm.Message
+	queuedTokens    int // Conservative wire-token estimate, including event envelopes.
+	queueTokenLimit int // Bounded by the model's reserved next-turn input headroom.
 	turn, job       string
 	finish, result  int64 // childStartMu guards updates; each assignment retains distinct output refs.
 	answer          string
@@ -161,6 +168,17 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 }
 
 func (r *Runtime) finishChild(child *codingChild, task childTask, err error) error {
+	r.orderMu.Lock()
+	task.assignment.accepting = false
+	for _, message := range task.assignment.queued {
+		body, _ := json.Marshal(map[string]any{"type": "child_message_undelivered", "child_id": child.id, "child_turn_id": task.turn, "job_id": task.assignment.job, "message_event_seq": message.EventSeq})
+		if e := r.queueNotificationLocked(string(body)); e != nil {
+			err = errors.Join(err, e)
+		}
+	}
+	task.assignment.queued = nil
+	task.assignment.queuedTokens = 0
+	r.orderMu.Unlock()
 	status := "completed"
 	if err != nil {
 		status = "failed"
@@ -281,18 +299,27 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		}
 		system := childSystemTemplate
 		if task.aside {
-			system = systemTemplate
+			system = asideSystemTemplate
 		}
-		input := r.contextMessages(task.selection, messages)
+		var notices []llm.Message
+		if task.assignment != nil {
+			notices = task.assignment.queued
+		}
+		input := r.contextMessages(task.selection, append(append([]llm.Message(nil), messages...), notices...))
 		if cm != nil {
 			input = append(input, *cm)
 		}
 		if !contextbuild.Fits(task.selection, system, task.tools.Definitions(), input, false) {
 			return errNeedsCompaction
 		}
-		admitted, e = r.Store.AdmitRequest(r.Current(), task.turn, task.actor, task.selection, cm, nil, messages)
+		admitted, e = r.Store.AdmitRequest(r.Current(), task.turn, task.actor, task.selection, cm, notices, messages)
 		if e == nil {
+			if task.assignment != nil {
+				task.assignment.queued = nil
+				task.assignment.queuedTokens = 0
+			}
 			next = candidate
+			r.notifications = append(r.notifications, admitted.Notifications...)
 		}
 		return e
 	})

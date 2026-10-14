@@ -21,7 +21,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	ctxmgr "ttc/internal/context"
 	"ttc/internal/filelock"
+	"ttc/internal/history/migrate"
 	"ttc/internal/llm"
 	"ttc/internal/privatefile"
 	"ttc/internal/prompts"
@@ -34,13 +36,14 @@ import (
 //go:embed schema.sql
 var schema string
 
-const schemaVersion = 5
+const schemaVersion = migrate.CurrentVersion
 
 // Store serializes commits; callers must close it after stopping runtime workers.
 type Store struct {
-	DB   *sql.DB
-	Root string
-	mu   sync.Mutex
+	DB      *sql.DB
+	Root    string
+	mu      sync.Mutex
+	useLock *os.File // Shared until Close; startup migration holds it exclusively.
 }
 
 // Session identifies the selected history/file tips. Zero tips mean an empty tree.
@@ -88,8 +91,9 @@ func DataRoot() (string, error) {
 	return filepath.Join(h, ".local/share/ttc"), e
 }
 
-// Open opens shared history without recovering work or changing existing records.
-// Empty databases initialize atomically; incompatible schemas are rejected.
+// Open initializes empty history or transactionally upgrades supported schemas.
+// Current-version stores share a lifetime lock; upgrades require all stores closed.
+// Older binaries without lifetime locking must be stopped before upgrading.
 func Open(root string) (*Store, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -112,6 +116,32 @@ func Open(root string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{DB: db, Root: root}
+	var version int
+	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if version != 0 && (version < migrate.MinimumVersion || version > schemaVersion) {
+		db.Close()
+		return nil, fmt.Errorf("incompatible history schema %d (support %d–%d)", version, migrate.MinimumVersion, schemaVersion)
+	}
+	usePath := filepath.Join(root, "history-use.lock")
+	if version == schemaVersion {
+		s.useLock, err = filelock.AcquireShared(ctx, usePath)
+	} else {
+		s.useLock, err = filelock.Acquire(ctx, usePath)
+	}
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("upgrade history: stop all TTC instances sharing this data directory: %w", err)
+	}
+	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if version == schemaVersion {
+		return s, nil
+	}
 	err = s.transact(func(tx *sql.Tx) error {
 		var version int
 		if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -120,11 +150,14 @@ func Open(root string) (*Store, error) {
 		if version == schemaVersion {
 			return nil
 		}
+		if version != 0 {
+			return migrate.Apply(tx)
+		}
 		var nonempty bool
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%')").Scan(&nonempty); err != nil {
 			return err
 		}
-		if version != 0 || nonempty {
+		if nonempty {
 			return fmt.Errorf("incompatible history schema %d (require %d); select a new --data-dir", version, schemaVersion)
 		}
 		_, err := tx.Exec(schema)
@@ -132,7 +165,14 @@ func Open(root string) (*Store, error) {
 	})
 	if err != nil {
 		db.Close()
+		s.useLock.Close()
 		return nil, err
+	}
+	// Keep the initialization lock held while downgrading, so no cooperating
+	// opener can race the schema decision or slip in a different upgrade.
+	if err := unix.Flock(int(s.useLock.Fd()), unix.LOCK_SH); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("hold history lifetime lock: %w", err)
 	}
 	return s, nil
 }
@@ -166,7 +206,7 @@ func openDatabase(root string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	for _, q := range []string{"PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL"} {
+	for _, q := range []string{"PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA synchronous=FULL"} {
 		if _, err = db.Exec(q); err != nil {
 			db.Close()
 			return nil, err
@@ -176,7 +216,14 @@ func openDatabase(root string) (*sql.DB, error) {
 }
 
 // Close closes history after the runtime workers have stopped.
-func (s *Store) Close() error { return s.DB.Close() }
+func (s *Store) Close() error {
+	err := s.DB.Close()
+	if s.useLock != nil {
+		err = errors.Join(err, s.useLock.Close())
+		s.useLock = nil
+	}
+	return err
+}
 func n(v int64) any {
 	if v == 0 {
 		return nil
@@ -383,7 +430,7 @@ func appendTx(tx *sql.Tx, session, turn, actor, kind, role string, visible bool,
 	}
 	var parent, tip sql.NullInt64
 	var ro bool
-	if e := tx.QueryRow("SELECT active_entry_id,file_tip_id,read_only FROM sessions WHERE id=?", session).Scan(&parent, &tip, &ro); e != nil {
+	if e := tx.QueryRow(`SELECT active_entry_id,file_tip_id,read_only FROM sessions WHERE id=?`, session).Scan(&parent, &tip, &ro); e != nil {
 		return 0, e
 	}
 	if ro {
@@ -450,7 +497,13 @@ func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 		v.Content = json.RawMessage(content)
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Messages projects only model-visible canonical messages, resolving tool references.
@@ -498,7 +551,11 @@ func messagesWith(q historyReader, session string) ([]llm.Message, error) {
 			out = append(out, m)
 		}
 	}
-	return orderedToolResults(out), nil
+	out = orderedToolResults(out)
+	if err := ctxmgr.ValidateRetainedInputs(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // orderedToolResults keeps canonical call order while entry rows retain actual

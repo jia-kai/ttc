@@ -21,13 +21,13 @@ func TestSessionToolMessageAssets(t *testing.T) {
 		{"variant", "subagent", "main", `{"prompt":"audit","label":"audit","persistent":false,"variant":""}`, "invalid_input", "invalid_arguments: " + prompts.ChildNonemptyVariant},
 		{"follow-up label", "subagent", "main", `{"prompt":"audit","child_id":"child","label":"audit","persistent":false}`, "invalid_input", "invalid_arguments: " + prompts.ChildFollowupLabel},
 		{"label", "subagent", "main", `{"prompt":"audit","label":"one two three four five","persistent":false}`, "invalid_input", "invalid_arguments: " + prompts.ChildValidLabel},
-		{"child assignment", "subagent", "main/child", `{"prompt":"audit","label":"audit","persistent":false}`, "ownership", prompts.ChildCannotAssign},
+		{"child assignment", "subagent", "main/child_fixture", `{"prompt":"audit","label":"audit","persistent":false}`, "ownership", prompts.ChildCannotAssign},
 		{"question count", "question", "main", `{"questions":[]}`, "invalid_input", prompts.QuestionCount},
 		{"question identity", "question", "main", `{"questions":[{"id":"q","prompt":""}]}`, "invalid_input", prompts.QuestionIdentityAndPrompt},
 		{"choice count", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","options":[]}]}`, "invalid_input", prompts.QuestionChoiceCount},
 		{"option identity", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","options":[{"id":"a","label":"A"},{"id":"a","label":"B"}]}]}`, "invalid_input", prompts.QuestionOptionIdentityAndLabel},
 		{"recommendation", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","recommended_option_id":"a"}]}`, "invalid_input", prompts.QuestionRecommendation},
-		{"child question", "question", "main/child", `{"questions":[{"id":"q","prompt":"Q?"}]}`, "execution_failed", prompts.QuestionMainOnly},
+		{"child question", "question", "main/child_fixture", `{"questions":[{"id":"q","prompt":"Q?"}]}`, "execution_failed", prompts.QuestionMainOnly},
 		{"wakeup time", "wakeup_schedule", "main", `{"name":"audit","message":"check"}`, "invalid_input", prompts.WakeupTimeRequired},
 		{"wakeup delay", "wakeup_schedule", "main", `{"name":"audit","message":"check","delay_seconds":-1}`, "invalid_input", prompts.WakeupDelayRange},
 		{"wakeup repeat", "wakeup_schedule", "main", `{"name":"audit","message":"check","delay_seconds":1,"repeat_seconds":0}`, "invalid_input", prompts.WakeupRepeatRange},
@@ -116,7 +116,7 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 				return emit(test.event)
 			}}
-			_, err := r.summarize(context.Background(), "main/child", "", r.CurrentSelection(), "raw input", "")
+			_, err := r.summarize(context.Background(), "main/child_fixture", "", r.CurrentSelection(), "raw input", "")
 			if err == nil || err.Error() != test.message {
 				t.Fatalf("got %v, want %q", err, test.message)
 			}

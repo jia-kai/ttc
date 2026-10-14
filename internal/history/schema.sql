@@ -1,4 +1,4 @@
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,

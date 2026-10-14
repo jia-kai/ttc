@@ -157,7 +157,7 @@ func TestReadDocumentsCapabilitiesPaginationAndText(t *testing.T) {
 		for _, types := range [][]llm.BinaryFileType{nil, (llm.ModelSpec{Images: true}).BinaryFileTypes(), {documentCapability(".docx")}} {
 			x.BinaryFiles = types
 			record := invoke(t, r, w, x, req, "read", string(args))
-			if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"unsupported_binary_input"`) || !strings.Contains(string(record.Result), "select a model") {
+			if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"unsupported_binary_input"`) || !strings.Contains(string(record.Result), "a model supporting this format is required") {
 				t.Fatalf("ASCII PDF incorrectly read as text or without capability: %s", record.Result)
 			}
 		}

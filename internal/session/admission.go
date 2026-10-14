@@ -98,11 +98,15 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if cm != nil {
 			messages = append(messages, *cm)
 		}
+		projected, e := contextbuild.ProjectRetainedInputs(messages)
+		if e != nil {
+			return e
+		}
 		defs := r.Tools.Definitions()
 		r.mu.Lock()
-		r.usage = estimateUsage(selection, systemTemplate, defs, messages)
+		r.usage = estimateUsage(selection, systemTemplate, defs, projected)
 		r.mu.Unlock()
-		if !contextbuild.Fits(selection, systemTemplate, defs, messages, false) {
+		if !contextbuild.Fits(selection, systemTemplate, defs, projected, false) {
 			return errNeedsCompaction
 		}
 		admitted, e = r.Store.AdmitRequest(r.Current(), turn, "main", selection, cm, r.notifications, nil, steers...)

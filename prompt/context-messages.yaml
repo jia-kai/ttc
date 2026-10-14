@@ -12,7 +12,7 @@ ContextInvalidInputSource: invalid human input source %q
 ContextRetainedInputRole: retained input must be a non-runtime user message
 ContextRetainedInputTimestamps: retained input requires positive commit and compaction timestamps
 ContextRetainedInputFuture: retained input commit timestamp %d is after compaction timestamp %d
-ContextEncodeRetainedInput: 'encode retained input metadata: %w'
 ContextRetainedInputLimit: retained input selection exceeds four messages
 ContextRetainedInputIndex: 'invalid retained input index %d: indices must be ordered and in bounds'
 ContextRetainedInputFailure: 'retained input %d: %w'
+ContextRetainedTimestamp: '%.2f seconds before compaction'

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/capture"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -172,11 +173,11 @@ func TestTimerCancellationCannotBeOverwrittenByEarlierFire(t *testing.T) {
 func TestCommittedNoticeRejectsCopiedSourceAndDuplicatePending(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Observe committed child finish")
-	id, err := r.Store.Append(r.Current(), "", "main/child", "status", "", false, map[string]any{"type": "child_finished"})
+	id, err := r.Store.Append(r.Current(), "", "main/child_fixture", "status", "", false, map[string]any{"type": "child_finished"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := `{"type":"child_turn_finished","child_id":"main/child"}`
+	content := `{"type":"child_turn_finished","child_id":"main/child_fixture"}`
 	if err := r.queueCommittedNotification(content, id); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestAdmissionUsesPublishedJobStateAtItsCutoff(t *testing.T) {
 		}
 		r.publishJob(v)
 	}
-	id, err := r.Jobs.Start("main", "true", r.Workspace.Root, time.Second, true, false, false)
+	id, err := r.Jobs.Start("main", "true", r.Workspace.Root, time.Second, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v3"
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/tool"
@@ -31,12 +32,12 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 				output += strings.Repeat("captured fixture\n", 1200)
 			}
 			output += "```\n$x^2$\nOUTPUT-LAST\n"
-			job, err := u.runtime.Jobs.StartTask("main", "shell", "inspector fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) error {
+			job, err := u.runtime.Jobs.StartTask("main", "shell", "inspector fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 				if _, err := io.WriteString(stdout, output); err != nil {
-					return err
+					return jobs.TaskResult{}, err
 				}
 				_, err := io.WriteString(stderr, "UNREQUESTED-STDERR\n")
-				return err
+				return jobs.TaskResult{}, err
 			})
 			if err != nil {
 				t.Fatal(err)

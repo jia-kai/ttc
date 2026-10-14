@@ -43,9 +43,11 @@ requirements documents to catalog completed features unless requested.
 
 ## Coding guidelines
 
-- **Simplicity over compatibility.** When changing interfaces or data formats,
-  update callers and reject incompatible inputs explicitly. Do not add aliases,
-  fallback paths, migration behavior, or compatibility shims unless requested.
+- **Simplicity over compatibility.** Preserve supported external contracts through
+  explicit boundary migrations when formats change. Keep internal interfaces
+  clean: update callers, isolate legacy decoding at the migration boundary, and
+  remove obsolete paths rather than scattering aliases, fallbacks or shims.
+  Reject unsupported inputs explicitly; expand compatibility only when requested.
 - **Clean up as you go.** Remove obsolete branches, redundant wrappers, and
   stale documentation in code you change. Keep related callers and docs aligned.
 - Use idiomatic Go types and small interfaces defined where they are consumed.

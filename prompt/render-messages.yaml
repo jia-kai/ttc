@@ -1,7 +1,7 @@
 # Shared presentation captions delivered through child stderr or transcripts.
 ToolSummaryExit: " · exit %d"
 ToolSummaryError: " · error"
-ToolSummaryTailTruncated: " · tail truncated"
+ToolSummaryOutputOmitted: " · output omitted"
 ToolDetailSections: "Parameters:\n\n%s\nResult:\n\n%s"
 ToolDetailPending: "Pending.\n"
 ToolDetailNone: "None.\n"

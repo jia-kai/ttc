@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ttc/internal/capture"
 )
 
 func TestPromotedWaitJoinsTerminalPublication(t *testing.T) {
@@ -23,7 +25,7 @@ func TestPromotedWaitJoinsTerminalPublication(t *testing.T) {
 	defer m.Close()
 	defer unblock()
 	root := t.TempDir()
-	id, err := m.Start("main", "while [ ! -e release ]; do sleep 0.01; done", root, 0, true, false, false)
+	id, err := m.Start("main", "while [ ! -e release ]; do sleep 0.01; done", root, 0, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

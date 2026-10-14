@@ -14,7 +14,7 @@ import (
 
 func TestQuestionRejectsNonMainExecution(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main/child"}, "question", json.RawMessage(`{"questions":[{"id":"q","prompt":"Missing information?"}]}`))
+	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main/child_fixture"}, "question", json.RawMessage(`{"questions":[{"id":"q","prompt":"Missing information?"}]}`))
 	if !strings.Contains(string(record.Result), "available only to the main agent") || r.PendingQuestion() != nil {
 		t.Fatal("non-main execution created a question", string(record.Result), r.PendingQuestion())
 	}

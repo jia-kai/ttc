@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ttc/internal/history"
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
 )
 
@@ -60,10 +61,10 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 				t.Fatal(err)
 			}
 			entered := make(chan struct{})
-			if _, err := r.Jobs.StartTask("main", "review", "Keep running", true, false, func(ctx context.Context, _, _ io.Writer) error {
+			if _, err := r.Jobs.StartTask("main", "review", "Keep running", true, false, func(ctx context.Context, _, _ io.Writer) (jobs.TaskResult, error) {
 				close(entered)
 				<-ctx.Done()
-				return ctx.Err()
+				return jobs.TaskResult{}, ctx.Err()
 			}); err != nil {
 				t.Fatal(err)
 			}

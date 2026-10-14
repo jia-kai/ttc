@@ -12,7 +12,7 @@ import (
 // captureJobID identifies tools returning short job previews. Reads and controls
 // already carry their exact result; expanding them would change the inspected page.
 func captureJobID(name string, result json.RawMessage) string {
-	if name != "shell" && name != "subagent" {
+	if name != "shell" && name != "subagent" && name != "watch" {
 		return ""
 	}
 	var v struct {

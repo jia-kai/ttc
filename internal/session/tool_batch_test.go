@@ -365,9 +365,11 @@ func testChildParallelAdmissionAndSlotRelease(t *testing.T, asides int) {
 }
 
 func TestStaticSystemPromptLinesAreAtMost80Columns(t *testing.T) {
-	for _, line := range strings.Split(systemTemplate, "\n") {
-		if len(line) > 80 {
-			t.Fatal("overlong static prompt line", len(line), line)
+	for role, system := range map[string]string{"main": systemTemplate, "child": childSystemTemplate, "aside": asideSystemTemplate} {
+		for _, line := range strings.Split(system, "\n") {
+			if len(line) > 80 {
+				t.Fatal("overlong static prompt line", role, len(line), line)
+			}
 		}
 	}
 	r, _ := runtimeFixture(t, nil)
@@ -449,7 +451,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child-test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools}, io.Discard, io.Discard); err != nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if contextUpdates != 1 {

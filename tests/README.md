@@ -25,13 +25,19 @@ sends answers. Esc leaves text entry, then dismisses; `/questions` reopens the
 pending dialog. A normal message instead settles dismissed calls with
 `dismissed:true` and redirects the agent; local commands leave them pending.
 
-The fixture exercises all 20
-implemented tool types: file read/search,
+The fixture exercises 20 selected
+tool types: file read/search,
 three edit types, shell, a reusable child with an idle follow-up and explicit close, a managed stdio LSP
 query, background job list/read/stop, local web
 fetch/search, skill loading, a saved image and its dimensions, questions, and three timer tools.
 The final notebook demonstrates headings, tables, emphasis, quotes, nested and
 ordered lists, checkboxes, code, links, Unicode, and inline/block TeX math.
+The reusable child returns deterministic multiline evidence exceeding 8 KiB, beginning
+`CHILD-PREVIEW 4.0` and ending `CHILD-FULL-TAIL`. Its assistant responses and
+final answers returned to main occupy single clipped rows, not expanded bodies
+or answer JSON. Click either row to inspect the complete answer; End reveals
+the distinctive tail, and Esc closes the dialog.
+On a returned-answer row, D switches from the full response to completion tool details.
 Kitty displays images and formula images with Unicode placeholders; unsupported
 TeX stays readable. Click the field thumbnail for pan/zoom and coordinate selection.
 In a graphics-capable interactive demo, OK sends the requested point to the mock
@@ -66,6 +72,13 @@ interactive runs retain requests, project, and history. Restart `make demo`
 to reset the predefined conversation.
 The shared `/tmp/ttc` root is sticky 1777; each numeric UID directory is owned
 by that user and private (0700). Test drivers reject unsafe existing paths.
+
+`pty_compaction.py` accepts `--binary /path/to/ttc` for scratch-built binaries.
+It checks reconstructed cursor-addressed screen text and exact durable completed
+turn counts, rather than assuming each displayed phrase appears contiguously in
+the PTY byte stream. Its artifacts include raw `terminal.log`, rendered
+`screen.txt`, process/request/turn diagnostics in `state.json`, and `failure.txt`
+on failure. Failed requests and early process exits are reported immediately.
 
 For reproducible headless validation:
 
@@ -112,13 +125,20 @@ drop-in snapshot ownership, preserved symlinks, read-only files, deny masks and
 refresh on recreation rather than reattachment. It uses private scratch fixtures
 and no credentials or external network access.
 
-The automated demo checks server-side request shapes, all tool types and their
+The automated demo checks server-side request shapes, its selected tools and their
 effects, isolated child context, edits, and exact Markdown source. The TUI
 receives interleaved argument deltas with both Responses completion snapshots;
 the Kitty driver pauses one stream to capture its awaiting state and inspector.
 The TUI also answers three question tabs using single choices, custom text,
-automatic advancement and the Submit button, and verifies Ctrl+D/C exit behavior. Rendering
-tests verify fixture content, narrow widths, SGR continuity, controls, and CJK
+automatic advancement and the Submit button, and verifies Ctrl+D/C exit behavior.
+The TUI demo reconstructs cursor-addressed frames and verifies mouse/keyboard
+inspection of both compact rows through the full answer tail. It checks exact
+saved child messages and the 8 KiB parent prefix, truncation flag and full-message
+reference.
+Plain output also checks compact rows without hidden body or answer JSON;
+Kitty requires both row types after narrow-pane reflow. Final notebook checks
+wait for the durable main-turn completion and exact saved answer before testing
+screen readiness. Rendering tests verify fixture content, narrow widths, SGR continuity, controls, and CJK
 cells in a simulated terminal. The original PTY workflow also proves two
 foreground shells overlap and file writes retain their order with undo/redo.
 It also switches from Standard to a catalog-advertised Fast choice while that
@@ -131,7 +151,7 @@ literal fenced output and inspection after reload; Kitty captures the returned p
 For actual Kitty screenshots on headless Arch Linux:
 
 ```sh
-sudo pacman -S --needed kitty xorg-server-xvfb xorg-xauth mesa noto-fonts noto-fonts-cjk nodejs npm librsvg
+sudo pacman -S --needed kitty xorg-server-xvfb xorg-xauth mesa noto-fonts noto-fonts-cjk nodejs npm librsvg python-pillow
 ./ttc --install-math               # optional math setup; pinned npm dependencies
 make kitty-test                    # builds and captures real Kitty under Xvfb
 python3 tests/kitty_visual.py      # reuse the current ./ttc binary
@@ -141,14 +161,17 @@ python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
 python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
 
-Kitty 0.49.1 was verified; the driver requires `kitten @ screenshot`. PNGs are
-diagnostic artifacts, not automated pixel comparisons. Xvfb runs
+Kitty 0.49.2 was verified; the driver requires `kitten @ screenshot`. Most PNGs
+are diagnostic artifacts; tmux-window-return regressions use Pillow to compare
+image pixels, including recovery after terminal image-cache loss. Xvfb runs
 on an automatically selected private display and Mesa supplies software OpenGL.
 Fonts cover the math/Unicode/CJK fixture. No desktop, real auth, or inference is
 needed. The driver clears inherited NO_COLOR and TMUX in its new Kitty environment,
 uses a private control socket, drives the three question tabs and Submit,
-and saves PNG/text captures for expanded/collapsed live sidebar lists, narrow-pane
-mouse scrolling, full workspace metadata, running states, fullscreen, actual formula images, image pan/zoom and confirmed
+and saves PNG/text captures for compact child response/returned-answer rows and
+both inspectors at their full tails, expanded/collapsed live sidebar lists,
+narrow-pane mouse scrolling, full workspace metadata, running states,
+fullscreen, actual formula images, image pan/zoom and confirmed
 click delivery, questions, table headers, shell
 commands/output with highlighted inspector details, and
 the bordered colored system prompt viewer at both ends. It prints its artifact
@@ -207,7 +230,7 @@ tool cards, diff inspectors and Markdown; in a live session run `/btw QUESTION`
 while a turn is working and dismiss its result with Esc.
 
 When local socket creation is restricted, the socket-free integration still uses
-an actual mock HTTP server and OpenAI adapter, covering all twenty tools:
+an actual mock HTTP server and OpenAI adapter, covering the twenty demo-selected tools:
 
 ```sh
 go test -race ./internal/session -run TestHTTPMockOpenAIIntegrationTwentyToolTypes -v

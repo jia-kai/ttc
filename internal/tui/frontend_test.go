@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/capture"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
@@ -141,7 +142,7 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 			close(release)
 		}
 	}()
-	if _, err := r.Jobs.Start("main", "sleep 30", w.Root, 0, true, true, false); err != nil {
+	if _, err := r.Jobs.Start("main", "sleep 30", w.Root, 0, true, true, false, capture.OutputOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	input, writer := io.Pipe()

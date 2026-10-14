@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/capture"
 	"ttc/internal/history"
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/skills"
@@ -155,7 +157,7 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 	if len(listed) != 1 || listed[0].ID != wake.ID || listed[0].Last != "delivered" {
 		t.Fatal(listed)
 	}
-	id, e := r.Jobs.Start("main", "sleep 20", r.Workspace.Root, 0, true, true, false)
+	id, e := r.Jobs.Start("main", "sleep 20", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -274,7 +276,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 func TestBackgroundWithoutWakeStillPersistsOutput(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Start a background research command")
-	id, e := r.Jobs.Start("main", "printf retained-output", r.Workspace.Root, 0, true, true, false)
+	id, e := r.Jobs.Start("main", "printf retained-output", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -315,18 +317,18 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 	r.Tools = tool.NewRegistry()
 	tool.Register(r.Tools, "shell", "gated background launch", map[string]any{}, nil, func(struct{}) error { return nil }, func(ctx context.Context, x tool.Execution, _ struct{}) (any, error) {
 		release := make(chan struct{})
-		id, err := r.Jobs.StartTask("main", "shell", "printf output", true, false, func(ctx context.Context, stdout, stderr io.Writer) error {
+		id, err := r.Jobs.StartTask("main", "shell", "printf output", true, false, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 			select {
 			case <-release:
 			case <-ctx.Done():
-				return ctx.Err()
+				return jobs.TaskResult{}, ctx.Err()
 			}
 			for i := 1; i <= 20; i++ {
 				if _, err := fmt.Fprintf(stdout, "line-%02d\n", i); err != nil {
-					return err
+					return jobs.TaskResult{}, err
 				}
 			}
-			return nil
+			return jobs.TaskResult{}, nil
 		})
 		if err != nil {
 			return nil, err

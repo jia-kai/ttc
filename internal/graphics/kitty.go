@@ -25,6 +25,7 @@ type Kitty struct {
 	next                  uint32
 	images                map[string]uint32
 	used                  map[string]bool
+	stale                 map[string]bool // Owned placements needing an activation-time upload.
 }
 
 // New creates an image sender with randomized IDs to avoid other TUI collisions.
@@ -45,7 +46,7 @@ func (k *Kitty) format(s string) string {
 	return s
 }
 
-// Place sends PNG bytes once for an asset/geometry, then returns self-contained
+// Place sends PNG bytes once for an asset/geometry (or after Refresh), then returns self-contained
 // placeholder rows. Each cell carries explicit row, column and all image ID bits.
 // Grid axes are terminal columns/rows, limited to the diacritic table (297).
 // Images fit uniformly within the placement, with transparent padding and area
@@ -60,7 +61,7 @@ func (k *Kitty) Place(key string, m image.Image, columns, rows, rasterScale int)
 	}
 	placement := k.placement(key, columns, rows)
 	id, ok := k.images[placement]
-	if !ok {
+	if !ok || k.stale[placement] {
 		pixels, err := fitPlacement(m, columns*k.CellWidth, rows*k.CellHeight, rasterScale)
 		if err != nil {
 			return nil, err
@@ -75,6 +76,7 @@ func (k *Kitty) Place(key string, m image.Image, columns, rows, rasterScale int)
 			return nil, err
 		}
 		k.images[placement] = id
+		delete(k.stale, placement)
 	}
 	k.used[placement] = true
 	return k.Rows(key, columns, rows)
@@ -120,9 +122,21 @@ func (k *Kitty) End() error {
 				return err
 			}
 			delete(k.images, key)
+			delete(k.stale, key)
 		}
 	}
 	return nil
+}
+
+// Refresh marks owned placements for one upload on their next visible frame.
+// A tmux return can restore placeholder text without restoring terminal pixels.
+// IDs stay stable, and ownership is retained so End/Close still free stale assets.
+// Ordinary frames do not re-upload; this does not delete any terminal images.
+func (k *Kitty) Refresh() {
+	k.stale = make(map[string]bool, len(k.images))
+	for key := range k.images {
+		k.stale[key] = true
+	}
 }
 
 // Close frees only this frontend's images, leaving other terminal clients alone.

@@ -23,8 +23,17 @@ func Estimate(text string) int { return (len(text) + 2) / 3 }
 
 // Tokens includes messages, calls and adapter-estimated native replay occupancy.
 // Unannotated replay uses a conservative transport estimate; binary files use
-// format-dependent reserves, not their base64 transport size.
+// format-dependent reserves, not their base64 transport size. Canonical retained
+// inputs are estimated in grouped form; malformed retained metadata returns -1.
 func Tokens(messages []llm.Message) int {
+	projected, err := ProjectRetainedInputs(messages)
+	if err != nil {
+		return -1
+	}
+	return rawTokens(projected)
+}
+
+func rawTokens(messages []llm.Message) int {
 	n := 0
 	for _, m := range messages {
 		if m.State != nil {
@@ -44,7 +53,11 @@ func Tokens(messages []llm.Message) int {
 
 // Fits reserves next-turn headroom when requested.
 func Fits(selection llm.Selection, system string, tools []llm.ToolDefinition, messages []llm.Message, headroom bool) bool {
-	n := Estimate(system) + Tokens(messages)
+	tokens := Tokens(messages)
+	if tokens < 0 {
+		return false
+	}
+	n := Estimate(system) + tokens
 	for _, t := range tools {
 		n += Estimate(t.Description) + Estimate(string(t.Parameters)) + 16
 	}
@@ -82,9 +95,12 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	if len(messages) == 0 {
 		return fail(prompts.ContextNothingToCompact)
 	}
+	if err := ValidateRetainedInputs(messages); err != nil {
+		return Retention{}, err
+	}
 	suffix := make([]int, len(messages)+1)
 	for i := len(messages) - 1; i >= 0; i-- {
-		suffix[i] = suffix[i+1] + Tokens(messages[i:i+1])
+		suffix[i] = suffix[i+1] + rawTokens(messages[i:i+1])
 	}
 	pending := map[string]bool{}
 	safe := make([]bool, len(messages)+1)

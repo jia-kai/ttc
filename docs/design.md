@@ -19,7 +19,9 @@ describes setup and current behavior. Related contracts:
 - History records execution, never restarts it. No agent daemon, IPC service,
   process adoption or durable scheduler. Long-lived work belongs in tmux;
   detaching keeps TTC running. `rail` has a separate ephemeral sandbox supervisor/
-  tmux socket registry, not agent-job or conversation restoration.
+  tmux socket registry, not agent-job or conversation restoration. `watch-run`
+  records externally owned work in durable files; runtime watchers only observe
+  those files and never adopt or signal the external workload.
 - Exit, `/new`, `/clear` and main-session loads cancel/join model work, children,
   shell/LSP groups and timers. Child inspection stays in the current runtime.
 - Compaction preserves live state. Completion handlers resolve the current session
@@ -50,9 +52,11 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/tool`              | Registry, codecs, dispatch and tool implementations |
 | `internal/workspace`         | Runtime-local serialized edits and restore          |
 | `internal/history`           | SQLite branches, artifacts and exports              |
+| `internal/history/migrate`   | Isolated legacy decoding and startup migrations     |
 | `internal/context`           | Request projection and budgets                      |
 | `internal/tui`               | Composer, windows, sidebar and login rendering      |
-| `internal/jobs`              | Linux process groups and managed child tasks        |
+| `internal/jobs`              | Process groups, managed tasks and external observers |
+| `internal/watchrun`          | External wrapper records, byte logs and observation  |
 | `internal/capture`           | Shared bounded stream rings and cursors             |
 | `internal/scratch`           | Sticky root and verified private UID directory      |
 | `internal/rail`              | Workdir-scoped Bubblewrap mounts and tmux lifecycle |
@@ -71,7 +75,10 @@ One Go module uses direct construction and small interfaces at their consumers:
   instructions apply before scoped edits. Discover `*/SKILL.md` in user/ancestor
   `.agents/skill` and `.agents/skills`. Exact-name precedence: nearest project,
   parent, user, bundled; plural paths win at the same level. Discovery reads
-  metadata; `skill` loads the selected body on demand.
+  metadata; the actor's main/child/aside role filters advertisements and explicit
+  loads, without falling back to another source. `skill` loads the selected body
+  on demand and checks current restrictions as well as discovery restrictions.
+  See the [skill contract](tools.md#skill) for metadata and refresh semantics.
 - One session loop owns live state; bounded channels/contexts own worker lifetimes.
   Turn interruption leaves independent jobs alive. Questions suspend only main;
   children finish useful work, report gaps and stop without dialogs. Requests
@@ -192,8 +199,9 @@ This defines committed ordering, not repeatable worker completion order.
 - The workspace queue serializes full read/validate/write/record and undo/redo
   across runtime actors. SQLite immediate transactions serialize short commits
   across instances; never hold SQL while waiting on models, users, filesystem
-  work or joins. No lifetime data/workspace locks; cross-instance workspace
-  conflicts are the user's responsibility.
+  work or joins. The shared process-lifetime data lock excludes schema upgrades,
+  not concurrent session work; there is no lifetime workspace lock. Cross-instance
+  workspace conflicts are the user's responsibility.
 
 ## Provider and model abstraction
 
@@ -401,8 +409,8 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   from expected snapshots. Other runtimes, shells and editors are independent writers.
 - Loading writable history snapshots its selected ancestry through the last
   balanced main tool exchange into an independent session, sharing immutable
-  lineage assets. It preserves source records and historical retained-input
-  markers, hides old live runtime messages from model input, and establishes an
+  lineage assets. It preserves source records and retained-input provenance,
+  hides old live runtime messages from model input, and establishes an
   undo boundary at the imported tip. Archived
   predecessors remain read-only. No files, tools or live handles are restored.
 - File writes use same-directory temporary files and atomic per-file renames.
@@ -417,11 +425,19 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   busy timeout. The canonical [schema](../internal/history/schema.sql) owns table
   definitions. Entry/change/request IDs are monotonic; other IDs are opaque text.
   Times are UTC Unix milliseconds; typed codecs validate versioned JSON.
-- A short startup lock serializes connection/WAL setup; it is released before
-  session work. Empty databases initialize in one immediate transaction.
-  Incompatible or nonempty unversioned schemas fail explicitly; no migrations,
-  automatic resets or credential deletion. Select a new data directory for
-  incompatible history.
+- Empty databases initialize in one immediate transaction. Current schema is 6;
+  startup migrates schema 5 transactionally, validating before commit. Schemas
+  below 5, nonempty unversioned databases and unknown newer versions fail
+  explicitly; no automatic resets or credential deletion.
+- Cooperating runtimes hold a shared data-directory lock for their process
+  lifetime; initialization/upgrades require exclusive access. Stop all TTC
+  instances sharing that directory before upgrading: pre-lock binaries cannot be
+  fenced retroactively. Same-version runtimes may otherwise run concurrently.
+- Legacy decoding lives only in `internal/history/migrate`. Migration converts
+  retained inputs to current typed messages and legacy marker rows to nonvisible
+  status entries, preserving entry/source identities, cursor evidence and original
+  input provenance. Saved model requests and existing export/compaction archives
+  remain unchanged; migration does not repair or replay execution.
 - Model preferences live outside SQLite; [catalog/startup](models.md#catalog-and-startup)
   defines file locking, limits and selection failure semantics.
 - Blank identity/name/selection stays in memory. Startup/new/clear insert nothing;
@@ -493,8 +509,10 @@ The concrete boundaries above are TTC decisions, informed by:
   Label estimated totals. Ctrl+D at bottom, Esc or submission resumes follow-tail.
 - Assistant/tool snapshots use one identity-indexed replacement path. Completion
   replaces streamed text with Markdown; finalized objects reject late updates.
-  Frontend alone owns transcript, screen and Kitty state. Assistant labels align
-  left, bodies indent two cells; items own no refresh goroutines.
+  Frontend alone owns transcript, screen and Kitty state. Main assistant labels
+  align left and bodies indent two cells. Subagent assistant responses and final
+  handoffs use one clipped row with agent name and response prefix; full sources
+  remain available in clickable inspection dialogs. Items own no refresh goroutines.
 - Sidebar sections independently scroll/collapse copied request/job/timer
   metadata; job/timer rows open live inspectors with source-agent names. Timer
   details retain original scheduling parameters and refresh state/countdown on
@@ -554,7 +572,11 @@ The concrete boundaries above are TTC decisions, informed by:
   Input uses tcell's built-in one-second inactivity timeout for incomplete
   escape/control sequences; TTC adds no APC filter or timeout.
   Virtual placements follow cell redraws; retain only viewport assets and delete
-  only TTC-owned IDs on exit. tmux transfers use DCS passthrough.
+  only TTC-owned IDs on exit. tmux transfers use DCS passthrough. Window-return
+  notifications from a no-output control client trigger full placeholder repaint
+  and visible-asset re-upload, independent of terminal focus reporting. The client
+  is canceled/joined at exit but counts as attached while live, affecting tmux
+  attachment counts, hooks and `destroy-unattached` policies.
 - Direct detection queries the terminal. In tmux, bounded metadata reads client
   identity, effective pane passthrough and RGB; Kitty with on/all passthrough and
   RGB needs no reply. Missing identity, passthrough, RGB or failed commands get
@@ -611,8 +633,8 @@ The concrete boundaries above are TTC decisions, informed by:
 ## Read-only side questions
 
 - `/btw QUESTION` freezes the latest balanced main request while busy, or selected
-  canonical history while idle. Model/context freeze at admission; stable coding
-  instructions plus [prompt/btw.md](../prompt/btw.md) constrain the quick answer.
+  canonical history while idle. Model/context freeze at admission; shared system
+  guidance plus [prompt/btw.md](../prompt/btw.md) constrain the quick answer.
 - The shared child loop advertises and dispatches only a filtered read-only
   registry: no shell, mutations, interactions, timers or child creation. Timer
   listing is runtime-wide; job visibility still follows child ownership.

@@ -172,11 +172,6 @@ func generate(root, output string) error {
 		}
 		texts[key] = string(data)
 	}
-	for _, name := range []string{"System", "Child", "Btw"} {
-		if _, ok := texts[name]; !ok {
-			return fmt.Errorf("missing Markdown prompt %s", name)
-		}
-	}
 	// Short runtime guidance and tool-result messages become constants too, so
 	// Go's printf vet checks still validate template arguments at their callers.
 	for _, name := range messageAssets {
@@ -198,6 +193,11 @@ func generate(root, output string) error {
 				return fmt.Errorf("%s message %s must contain nonempty UTF-8 text without NUL", name, key)
 			}
 			texts[key] = node.Value
+		}
+	}
+	for _, name := range []string{"System", "Coding", "Main", "Child", "Btw"} {
+		if _, ok := texts[name]; !ok {
+			return fmt.Errorf("missing required prompt %s", name)
 		}
 	}
 	var compaction compactionPrompts

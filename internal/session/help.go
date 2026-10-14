@@ -77,7 +77,7 @@ These commands require an idle turn.
 
 - **/compact [FOCUS]** — Summarize earlier context while idle, optionally focusing on a topic.
 - **Automatic compaction** — Summarize older context before a request exceeds its budget.
-- **Compaction retention** — Preserve the last two admitted normal/queued prompts and last two committed steers, with original text/attachments and source/age markers. Recent complete model/tool cycles have a separate token cap; oversized cycles enter the summary.
+- **Compaction retention** — Preserve the last two admitted normal/queued prompts and last two committed steers, with original text/attachments and source/age metadata. Recent complete model/tool cycles have a separate token cap; oversized cycles enter the summary.
 
 ## Jobs and questions
 

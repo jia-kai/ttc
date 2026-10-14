@@ -9,16 +9,16 @@ AttachmentTooLarge: attachment exceeds 8 MiB
 AttachmentUnsupportedContent: unsupported attachment content
 BinaryInlineUnsupported: inline binary data_url is unsupported; provide an original path and SHA-256 reference
 BinaryUnavailable: 'binary file unavailable: original bytes omitted for %q (expected SHA-256 %s); cache miss and source could not be verified: %v'
-BinaryUnsupportedInput: selected model does not announce %s input; select a model supporting this format, or use shell for explicit inspection/conversion
+BinaryUnsupportedInput: selected model does not announce %s input; report that a model supporting this format is required, or use shell if available for explicit inspection/conversion
 BinaryInvalidCapability: model binary-format configuration is invalid (requires a canonical MIME type without parameters and a positive byte limit); report this configuration error
 BinaryTooLarge: binary file exceeds %s; provide a smaller file
 BinaryEmpty: binary file is empty; provide a nonempty original file
-BinaryInvalidDocument: 'invalid %s document: %v; provide an original file matching its extension and announced MIME type'
+BinaryInvalidDocument: 'invalid %s document: %v; provide an original file matching its extension and supported native format'
 JobNotFound: unknown or inaccessible job_id; use job_list(state=all) to choose an accessible job
 JobTimeoutNonnegative: shell timeout must be nonnegative
-JobLSPNotFound: unknown or inaccessible live LSP job; use job_list or start shell(protocol=lsp, background=true)
-JobNotLSPServer: job is not an LSP server; start shell(protocol=lsp, background=true)
-JobLSPExited: language server exited; inspect job_read(stream=stderr) and start a new server
+JobLSPNotFound: unknown or inaccessible live LSP job; use job_list to find an accessible server, or start shell(protocol=lsp, background=true) if available; otherwise report the missing server
+JobNotLSPServer: job is not an LSP server; use job_list to find an accessible server, or start shell(protocol=lsp, background=true) if available; otherwise report the missing server
+JobLSPExited: language server exited; inspect job_read(stream=stderr), then use job_list to find an accessible server or start a new server with shell if available; otherwise report the missing server
 JobCannotStopOwnTask: a child cannot stop its own task
 JobLSPProtocolStdout: LSP stdout belongs to the protocol client; set stream=stderr for server diagnostics
 JobInvalidStream: stream must be stdout or stderr

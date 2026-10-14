@@ -66,11 +66,16 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 		prefix = llm.ContextFor(selection, prefix)
 		turn = "" // Idle asides belong to the session, not a completed turn.
 	}
+	actor := "main/" + history.NewID("btw")
+	prefix, err = r.projectInheritedSkillCatalogs(prefix, actor)
+	if err != nil {
+		return "", err
+	}
 	label := []rune(strings.Join(strings.Fields(render.Clean(question)), " "))
 	if len(label) > 64 {
 		label = append(label[:63], '…')
 	}
-	task := childTask{actor: "main/" + history.NewID("btw"), turn: turn, prompt: question, selection: selection, prefix: prefix, tools: r.Tools.Filter(readOnlyTool), aside: true}
+	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: r.Tools.Filter(readOnlyTool), aside: true}
 	r.childStartMu.Lock()
 	defer r.childStartMu.Unlock()
 	count := len(r.children)
@@ -82,8 +87,8 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if count >= maxChildSlots {
 		return "", fmt.Errorf("all %d child slots are occupied; close an idle child with job_stop or wait for a running aside to finish", maxChildSlots)
 	}
-	return r.Jobs.StartTask(task.actor, "btw", string(label), true, false, func(ctx context.Context, stdout, stderr io.Writer) error {
-		return r.runChild(ctx, task, stdout, stderr)
+	return r.Jobs.StartTask(task.actor, "btw", string(label), true, false, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
+		return jobs.TaskResult{}, r.runChild(ctx, task, stdout, stderr)
 	})
 }
 

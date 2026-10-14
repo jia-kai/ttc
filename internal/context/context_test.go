@@ -230,40 +230,26 @@ func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
 	}
 }
 
-func TestInputMarkerSourceAndOriginalAge(t *testing.T) {
+func TestRetainInputSourceAndOriginalAge(t *testing.T) {
 	at := time.UnixMilli(123456789)
 	for _, source := range []string{"", "normal", "queue", "steer", "task", "btw"} {
 		message := llm.Message{Role: "user", Content: "unchanged", InputSource: source, InputTimeMS: at.UnixMilli() - 98765}
-		marker, err := InputMarker(message, at)
-		if err != nil || marker.Role != "developer" || marker.Runtime || !strings.HasPrefix(marker.Content, prompts.RetainedInput+"\n") {
-			t.Fatal(marker, err)
+		retained, err := RetainedInputMessages([]llm.Message{message}, []int{0}, at)
+		if err != nil || len(retained) != 1 || retained[0].RetainedAtMS != at.UnixMilli() {
+			t.Fatal(retained, err)
 		}
-		var metadata struct {
-			Type                  string `json:"type"`
-			Source                string `json:"source"`
-			OriginalCommittedAtMS int64  `json:"original_committed_at_ms"`
-			CompactionAtMS        int64  `json:"compaction_at_ms"`
-			AgeMS                 int64  `json:"age_ms"`
+		projected, err := ProjectRetainedInputs(retained)
+		if err != nil || len(projected) != 2 || projected[0].Role != "developer" || projected[0].Content != prompts.RetainedInputs || projected[1].Role != "user" || !strings.Contains(projected[1].Content, `"timestamp":"98.77 seconds before compaction"`) {
+			t.Fatal(projected, err)
 		}
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(marker.Content, prompts.RetainedInput+"\n")), &metadata); err != nil {
-			t.Fatal(err)
-		}
-		wantSource := source
-		if wantSource == "" {
-			wantSource = "normal"
-		}
-		if metadata.Type != "retained_input" || metadata.Source != wantSource || metadata.OriginalCommittedAtMS != message.InputTimeMS || metadata.CompactionAtMS != at.UnixMilli() || metadata.AgeMS != 98765 {
-			t.Fatal(metadata)
-		}
-		// Recompaction must measure from the original commit, not the last marker.
-		later, err := InputMarker(message, at.Add(time.Second))
-		if err != nil || !strings.Contains(later.Content, `"age_ms":99765`) {
+		later, err := RetainedInputMessages(retained, []int{0}, at.Add(time.Second))
+		if err != nil || later[0].RetainedAtMS-later[0].InputTimeMS != 99765 {
 			t.Fatal(later, err)
 		}
 	}
 }
 
-func TestInputMarkerRejectsInvalidMetadata(t *testing.T) {
+func TestRetainInputRejectsInvalidMetadata(t *testing.T) {
 	at := time.UnixMilli(1000)
 	valid := llm.Message{Role: "user", InputTimeMS: 500}
 	for _, test := range []struct {
@@ -281,14 +267,14 @@ func TestInputMarkerRejectsInvalidMetadata(t *testing.T) {
 		{"epoch compaction time", valid, time.UnixMilli(0)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := InputMarker(test.message, test.at); err == nil {
+			if _, err := RetainedInputMessages([]llm.Message{test.message}, []int{0}, test.at); err == nil {
 				t.Fatal("accepted invalid retained input metadata")
 			}
 		})
 	}
 	valid.InputTimeMS = at.UnixMilli()
-	if marker, err := InputMarker(valid, at); err != nil || !strings.Contains(marker.Content, `"age_ms":0`) {
-		t.Fatal("equal commit/compaction timestamp rejected", marker, err)
+	if retained, err := RetainedInputMessages([]llm.Message{valid}, []int{0}, at); err != nil || retained[0].RetainedAtMS != valid.InputTimeMS {
+		t.Fatal("equal commit/compaction timestamp rejected", retained, err)
 	}
 }
 
@@ -306,11 +292,30 @@ func TestRetainedInputMessagesPreserveExactOriginals(t *testing.T) {
 		t.Fatal(err)
 	}
 	retained, err := RetainedInputMessages(messages, []int{1, 2}, time.UnixMilli(1000))
-	if err != nil || len(retained) != 4 {
+	if err != nil || len(retained) != 2 {
 		t.Fatal(retained, err)
 	}
-	if !reflect.DeepEqual(retained[1], original) || !reflect.DeepEqual(retained[3], messages[2]) || retained[0].Role != "developer" || retained[2].Role != "developer" {
+	wantOriginal, wantSteer := original, messages[2]
+	wantOriginal.RetainedAtMS, wantSteer.RetainedAtMS = 1000, 1000
+	if !reflect.DeepEqual(retained, []llm.Message{wantOriginal, wantSteer}) {
 		t.Fatal("retained input changed or reordered", retained)
+	}
+	projected, err := ProjectRetainedInputs(retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group struct {
+		Type   string `json:"type"`
+		Inputs []struct {
+			Content           string `json:"content"`
+			AttachmentIndices []int  `json:"attachment_indices"`
+		} `json:"inputs"`
+	}
+	if len(projected) != 2 || projected[0].Content != prompts.RetainedInputs || json.Unmarshal([]byte(projected[1].Content), &group) != nil || group.Type != "retained_inputs" || len(group.Inputs) != 2 || group.Inputs[0].Content != original.Content || group.Inputs[1].Content != "steer" || !reflect.DeepEqual(group.Inputs[0].AttachmentIndices, []int{0}) || !reflect.DeepEqual(projected[1].Files, original.Files) || projected[1].State != nil {
+		t.Fatal("grouped projection lost text or attachment provenance", projected, group)
+	}
+	if Tokens(retained) != Tokens(projected) {
+		t.Fatal("canonical and model projection budgets differ")
 	}
 	after, err := json.Marshal(messages)
 	if err != nil || string(before) != string(after) {

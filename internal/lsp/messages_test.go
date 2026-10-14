@@ -22,9 +22,9 @@ func TestGuidanceTemplatesPreserveFormatting(t *testing.T) {
 		{"operation", fmt.Sprintf(prompts.LSPUnsupportedOperation, "hover"), "language server does not advertise hover; choose another operation or server"},
 		{"line", fmt.Sprintf(prompts.LSPLineBeyondFile, 7), "line 7 is beyond the file; read it and choose an existing line"},
 		{"column", fmt.Sprintf(prompts.LSPColumnBeyondLine, 8, 2, 5), "column 8 exceeds line 2's end column 5; use Unicode code-point columns, not bytes"},
-		{"framing", fmt.Sprintf(prompts.LSPInvalidFraming, "bad %s header"), "invalid LSP framing; start with exec SERVER, emit no ordinary stdout, and restart the job: bad %s header"},
+		{"framing", fmt.Sprintf(prompts.LSPInvalidFraming, "bad %s header"), "invalid LSP framing; with available lifecycle tools, restart using exec SERVER and emit no ordinary stdout; otherwise use another accessible server or report the configuration issue: bad %s header"},
 		{"server error", fmt.Sprintf(prompts.LSPServerError, "textDocument/hover", -32602, "bad %s position"), "LSP textDocument/hover error -32602: bad %s position; check path/position and server configuration, then retry"},
-		{"read-only", prompts.LSPReadOnlyEdits, "TTC LSP queries are read-only; use edit or patch for file changes"},
+		{"read-only", prompts.LSPReadOnlyEdits, "TTC LSP queries are read-only; use file-mutation tools when available for changes, otherwise report proposed changes"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if test.got != test.want {

@@ -90,7 +90,7 @@ func TestFramingDiagnosticsPreserveExactMessages(t *testing.T) {
 			c.wg.Wait()
 			var failure *Error
 			err := c.failure()
-			want := "invalid LSP framing; start with exec SERVER, emit no ordinary stdout, and restart the job: " + test.want
+			want := "invalid LSP framing; with available lifecycle tools, restart using exec SERVER and emit no ordinary stdout; otherwise use another accessible server or report the configuration issue: " + test.want
 			if !errors.As(err, &failure) || failure.Code != "protocol_error" || failure.Message != want || err.Error() != "protocol_error: "+want {
 				t.Fatalf("model-facing framing error changed: %v", err)
 			}

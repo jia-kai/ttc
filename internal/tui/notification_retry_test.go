@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v3"
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/session"
 )
@@ -87,7 +88,7 @@ func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionT
 
 func queueTestNotification(t *testing.T, u *questionTestUI, label string) string {
 	t.Helper()
-	id, err := u.runtime.Jobs.StartTask("main", "shell", label, true, true, func(context.Context, io.Writer, io.Writer) error { return nil })
+	id, err := u.runtime.Jobs.StartTask("main", "shell", label, true, true, func(context.Context, io.Writer, io.Writer) (jobs.TaskResult, error) { return jobs.TaskResult{}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,6 +33,9 @@ type Admission struct {
 	NoticeEntries                   []int64
 	SteerEntries                    []int64
 	Messages                        []llm.Message
+	// Notifications are committed parent delivery reports, ready for in-memory
+	// publication after admission succeeds. Failure returns no committed reports.
+	Notifications []llm.Message
 }
 
 // requestInputMetadata describes an admitted input without duplicating its
@@ -44,8 +47,10 @@ type requestInputMetadata struct {
 
 // AdmitRequest atomically snapshots main input, records an optional new runtime
 // context and notification acknowledgments, and admits a request before network I/O.
-// Messages contains the admitted main projection or the caller's isolated child
-// input, with any new runtime context appended.
+// Notices are persisted for the receiving actor; isolated child deliveries do not
+// enter the main projection or change human undo ownership. Messages contains the
+// admitted main projection or the caller's isolated child input plus notices, with
+// any new runtime context appended.
 func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, contextMessage *llm.Message, notices, childInput []llm.Message, steers ...llm.Message) (v Admission, err error) {
 	if contextMessage != nil && (contextMessage.Role != "developer" || !contextMessage.Runtime || contextMessage.Content == "") {
 		return v, errors.New(prompts.HistoryRuntimeContext)
@@ -89,7 +94,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 			if err != nil {
 				return err
 			}
-			id, err := appendTx(tx, session, turn, "main", "message", "user", true, b, 0)
+			id, err := appendTx(tx, session, turn, actor, "message", "user", actor == "main", b, 0)
 			if err != nil {
 				return err
 			}
@@ -154,6 +159,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 			v.Messages, err = messagesWith(tx, session)
 		} else {
 			v.Messages = append([]llm.Message(nil), childInput...)
+			v.Messages = append(v.Messages, notices...)
 			if contextMessage != nil {
 				message := *contextMessage
 				message.RequestID = v.RequestID
@@ -213,9 +219,49 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("UPDATE model_requests SET input_json=? WHERE id=?", string(input), v.RequestID)
-		return err
+		if _, err = tx.Exec("UPDATE model_requests SET input_json=? WHERE id=?", string(input), v.RequestID); err != nil {
+			return err
+		}
+		if actor != "main" {
+			for _, notice := range notices {
+				var source struct {
+					Type    string `json:"type"`
+					ChildID string `json:"child_id"`
+					TurnID  string `json:"child_turn_id"`
+					JobID   string `json:"job_id"`
+				}
+				if json.Unmarshal([]byte(notice.Content), &source) != nil || source.Type != "child_message" {
+					continue
+				}
+				if source.ChildID != actor || source.TurnID != turn || source.JobID == "" {
+					return errors.New(prompts.ChildMessageEvidenceTarget)
+				}
+				body := map[string]any{"type": "child_message_delivered", "child_id": actor, "child_turn_id": turn, "job_id": source.JobID, "message_event_seq": notice.EventSeq, "request_id": v.RequestID}
+				content, err := json.Marshal(body)
+				if err != nil {
+					return err
+				}
+				record, err := json.Marshal(map[string]any{"type": "runtime_event", "body": json.RawMessage(content)})
+				if err != nil {
+					return err
+				}
+				id, err := appendTx(tx, session, "", "main", "status", "", false, record, 0)
+				if err != nil {
+					return err
+				}
+				body["event_seq"] = id
+				content, err = json.Marshal(body)
+				if err != nil {
+					return err
+				}
+				v.Notifications = append(v.Notifications, llm.Message{Role: "user", Runtime: true, EventSeq: id, Content: string(content)})
+			}
+		}
+		return nil
 	})
+	if err != nil {
+		v = Admission{} // Rolled-back identities must never escape for publication.
+	}
 	return v, err
 }
 

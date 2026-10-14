@@ -34,6 +34,7 @@ type Event struct {
 	JobID      string         // Optional live job for bounded inspector polling; never revived from history.
 	Detail     string         // Bounded detail for a transient tool update; final detail is loaded from history.
 	Human      bool           // True only for a submitted human instruction.
+	Runtime    bool           // Message content is a runtime-authored envelope, not a human/task prompt.
 	Image      *ImageSnapshot // Immutable image_show snapshot, not a live interaction handle.
 	Question   *QuestionForm  // Snapshot for question lifecycle events; never persisted as a live handle.
 	Retry      *llm.Retry     // Foreground retry backoff metadata; nil for background session naming.
@@ -162,7 +163,7 @@ func (r *Runtime) resetTransient() {
 		sessionID := r.Current()
 		entry, e := r.Store.Append(sessionID, "", v.Owner, "status", "", false, map[string]any{"type": "job_completion", "job": v, "markdown": md})
 		if e == nil && v.WakeOnExit && r.ctx.Err() == nil {
-			e = r.queueNotificationLocked(fmt.Sprintf(`{"type":"job_exit","job_id":%q,"status":%q}`, v.ID, v.Status))
+			e = r.queueNotificationLocked(jobExitContent(v))
 		}
 		r.orderMu.Unlock()
 		if e != nil {
@@ -177,6 +178,7 @@ func (r *Runtime) resetTransient() {
 	r.Jobs.OnState = r.publishJob
 	tool.AddFiles(r.Tools, r.Workspace)
 	tool.AddShell(r.Tools, r.Jobs, r.Workspace, r)
+	tool.AddWatch(r.Tools, r.Jobs, r.Workspace)
 	tool.AddWeb(r.Tools, httpClient(), r.searchConfig)
 	tool.AddSkills(r.Tools, r.Skills)
 	w := newWakeups(r.ctx, r.publishTimer)
@@ -439,7 +441,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			if json.Unmarshal([]byte(m.Content), &wake) == nil && wake.ID != "" {
 				r.timers.deliveredThrough(wake.ID, wake.Fired)
 			}
-			r.emit(Event{Kind: "message", Text: m.Content, EntryID: entry})
+			r.emit(Event{Kind: "message", Text: m.Content, EntryID: entry, Runtime: m.Runtime})
 		}
 		promptEntry, e := r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
 		if e != nil {
@@ -456,8 +458,12 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		r.mainPrefix = append([]llm.Message(nil), messages...)
 		r.prefixSelection, r.prefixTurn = selection, turn
 		r.mu.Unlock()
+		projected, e := contextbuild.ProjectRetainedInputs(messages)
+		if e != nil {
+			return e
+		}
 		callbackFailed := false
-		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: messages, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event llm.StreamEvent) (err error) {
+		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if e := ctx.Err(); e != nil {
 				return e

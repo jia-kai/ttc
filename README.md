@@ -34,6 +34,13 @@ TTC also supports the following:
 TTC reads `AGENTS.md` and `.agents/skills`. TTC deliberately omits things like
 MCP, plugins, and modes such as plan mode.
 
+Skills may restrict their audience with opening YAML frontmatter, for example
+`roles: [main]`; supported roles are `main`, `child` and `aside`. Omitting
+`roles` makes a skill available to all roles. The bundled `file-based-plan`
+skill is main-only. Role restrictions control catalog visibility and skill
+loading without filesystem access checks. See the
+[skill contract](docs/tools.md#skill).
+
 The [requirements](docs/requirement.md), [implementation design](docs/design.md),
 [tool contracts](docs/tools.md), [compaction design](docs/compaction.md), and
 [system prompt](docs/system_prompt.md) describe the intended behavior and
@@ -91,18 +98,17 @@ credentials into TTC's private store:
 ```
 
 Web search uses Exa's public, rate-limited endpoint by default. To use your own
-key, create a private tool config (never included in LLM prompts):
+key, run the standalone setup command (the flag is spelled `exo`):
 
 ```sh
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/ttc"
-install -m 600 /dev/null "${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json"
+./ttc --setup-exo
 ```
 
-Edit that file to contain `{"api_key":"YOUR_EXA_KEY"}`. Optional `endpoint`
-selects an HTTP(S) backend URL. `--web-search-config PATH` selects another file;
-restart TTC after changes. Inside rail, also recreate it if the host replaced an
-imported config file; see [restart rules](prompt/skills/ttc-config/SKILL.md#restart-rules).
-Keep credential files private (mode 0600). No key is supplied through tool arguments.
+Setup reads stdin (hidden in a terminal), confirms replacing an existing key,
+and runs one test search before saving mode 0600. Restart TTC after changes.
+Inside rail, run setup from the host and recreate rail because setup atomically
+replaces the config file; see
+[restart rules](prompt/skills/ttc-config/SKILL.md#restart-rules).
 
 The TUI uses tcell v3's built-in parser timeout: unfinished terminal control
 strings expire after one second without input, allowing typing to recover from
@@ -226,8 +232,8 @@ responsibility. `/load ID` or `--session ID` copies writable history into a new
 session at its last complete tool exchange, with only new work undoable.
 Archived predecessors open read-only. Loading never restores files or live jobs.
 TTC does not repair interrupted work; files can be ahead of saved history after
-a crash. Incompatible history schemas and obsolete inline-binary attachment
-records are rejected; no automatic migration is performed.
+a crash.
+
 
 At a compaction boundary, loading also recovers saved, undelivered notifications
 (including completed subagent answers) and automatically resumes their delivery.
@@ -270,7 +276,7 @@ make rail-integration         # real Bubblewrap/tmux PTY regression; needs user 
 make demo                     # interactive TUI, local mock server; needs Python 3
 ```
 
-The demo exercises all 20 tool types on a copied research fixture and renders
+The demo exercises core tools on a copied research fixture and renders
 its Markdown notebook. It requires no subscription credentials and makes no
 live inference requests; the mock also handles web search locally. Type
 `Run demo`, answer the question, and inspect rows with a click or Tab.

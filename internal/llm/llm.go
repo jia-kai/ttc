@@ -189,19 +189,20 @@ func ReplayTokens(state *ReplayState) int {
 // Message is canonical history. State preserves provider-native replay data;
 // Content and Calls remain usable when a different provider/model is selected.
 type Message struct {
-	EventSeq    int64        `json:"event_seq,omitempty"`     // Source identity of an injected runtime event, never a provider wire field.
-	RequestID   int64        `json:"request_id,omitempty"`    // Durable producing request for audit/inspection.
-	Runtime     bool         `json:"runtime,omitempty"`       // Injected job/timer notices, rather than human instructions.
-	InputSource string       `json:"input_source,omitempty"`  // Human input source: normal (empty defaults to normal), queue, steer, task or btw.
-	InputTimeMS int64        `json:"input_time_ms,omitempty"` // Original human-input commit time, in Unix milliseconds; never refreshed by compaction.
-	Role        string       `json:"role"`
-	Phase       string       `json:"phase,omitempty"` // Adapter-supplied assistant phase, retained if native state is compacted.
-	Content     string       `json:"content,omitempty"`
-	UserText    *string      `json:"user_text,omitempty"` // Authored human text before attachment expansion; nil uses Content for display.
-	Calls       []ToolCall   `json:"calls,omitempty"`
-	CallID      string       `json:"call_id,omitempty"`
-	Files       []BinaryFile `json:"files,omitempty"`
-	State       *ReplayState `json:"state,omitempty"`
+	EventSeq     int64        `json:"event_seq,omitempty"`      // Source identity of an injected runtime event, never a provider wire field.
+	RequestID    int64        `json:"request_id,omitempty"`     // Durable producing request for audit/inspection.
+	Runtime      bool         `json:"runtime,omitempty"`        // Injected job/timer notices, rather than human instructions.
+	InputSource  string       `json:"input_source,omitempty"`   // Human input source: normal (empty defaults to normal), queue, steer, task or btw.
+	InputTimeMS  int64        `json:"input_time_ms,omitempty"`  // Original human-input commit time, in Unix milliseconds; never refreshed by compaction.
+	RetainedAtMS int64        `json:"retained_at_ms,omitempty"` // Compaction time in Unix milliseconds; zero means this is not a retained input.
+	Role         string       `json:"role"`
+	Phase        string       `json:"phase,omitempty"` // Adapter-supplied assistant phase, retained if native state is compacted.
+	Content      string       `json:"content,omitempty"`
+	UserText     *string      `json:"user_text,omitempty"` // Authored human text before attachment expansion; nil uses Content for display.
+	Calls        []ToolCall   `json:"calls,omitempty"`
+	CallID       string       `json:"call_id,omitempty"`
+	Files        []BinaryFile `json:"files,omitempty"`
+	State        *ReplayState `json:"state,omitempty"`
 }
 
 // DisplayText returns authored human text when attachment expansion is present.

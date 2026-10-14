@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"ttc/internal/capture"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/render"
@@ -22,12 +23,12 @@ func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			r.Emit = nil
 			seedRuntime(t, r, "Captured job history")
-			id, err := r.Jobs.StartTask("main", "shell", "captured fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) error {
+			id, err := r.Jobs.StartTask("main", "shell", "captured fixture", false, false, func(_ context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 				if _, err := io.WriteString(stdout, "first-output\nunselected-current-tail\n"); err != nil {
-					return err
+					return jobs.TaskResult{}, err
 				}
 				_, err := io.WriteString(stderr, "selected diagnostic\nother diagnostic\n")
-				return err
+				return jobs.TaskResult{}, err
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -80,7 +81,7 @@ func TestQuietChildShellInspectionIncludesLiveMetadata(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	const actor = "main/child_quiet"
 	const command = "sleep 30"
-	id, err := r.Jobs.Start(actor, command, r.Workspace.Root, 0, false, true, false)
+	id, err := r.Jobs.Start(actor, command, r.Workspace.Root, 0, false, true, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +105,13 @@ func TestQuietChildShellInspectionIncludesLiveMetadata(t *testing.T) {
 func TestInspectionTailDoesNotReduceCapture(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	for _, kind := range []string{"shell", "subagent"} {
-		id, err := r.Jobs.StartTask("main", kind, "large output", false, false, func(ctx context.Context, stdout, stderr io.Writer) error {
+		id, err := r.Jobs.StartTask("main", kind, "large output", false, false, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 			_, err := io.WriteString(stdout, "stdout-prefix\n"+strings.Repeat("o", 12<<10)+"stdout-end")
 			if err != nil {
-				return err
+				return jobs.TaskResult{}, err
 			}
 			_, err = io.WriteString(stderr, "stderr-prefix\n"+strings.Repeat("e", 12<<10)+"stderr-end")
-			return err
+			return jobs.TaskResult{}, err
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -140,7 +141,7 @@ func TestInspectionTailDoesNotReduceCapture(t *testing.T) {
 func TestLSPInspectorShowsStderrWithoutReadingProtocol(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	id, err := r.Jobs.StartLSP("main", "printf 'server diagnostic' >&2", r.Workspace.Root, 0, true, false)
+	id, err := r.Jobs.StartLSP("main", "printf 'server diagnostic' >&2", r.Workspace.Root, 0, true, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

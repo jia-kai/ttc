@@ -16,6 +16,16 @@ import (
 // Acquire waits cancelably for an exclusive advisory lock on a private regular
 // file. Closing the returned file releases the lock; never replace its inode.
 func Acquire(ctx context.Context, path string) (*os.File, error) {
+	return acquire(ctx, path, unix.LOCK_EX)
+}
+
+// AcquireShared waits cancelably for a shared advisory lock. Multiple readers
+// may hold it until Close; exclusive Acquire waits until every reader closes.
+func AcquireShared(ctx context.Context, path string) (*os.File, error) {
+	return acquire(ctx, path, unix.LOCK_SH)
+}
+
+func acquire(ctx context.Context, path string, mode int) (*os.File, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -33,7 +43,7 @@ func Acquire(ctx context.Context, path string) (*os.File, error) {
 			f.Close()
 			return nil, err
 		}
-		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		err = unix.Flock(int(f.Fd()), mode|unix.LOCK_NB)
 		if err == nil {
 			return f, nil
 		}

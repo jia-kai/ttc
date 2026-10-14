@@ -13,7 +13,7 @@ func TestEmbeddedAndPrecedence(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s, e := c.Load(context.Background(), "tmux")
+	s, e := c.Load(context.Background(), "tmux", "main")
 	if e != nil || s.Source != "bundled" || s.Content == "" || s.Path != "prompt/skills/tmux/SKILL.md" {
 		t.Fatalf("%+v %v", s, e)
 	}
@@ -25,11 +25,11 @@ func TestEmbeddedAndPrecedence(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s, e = c.Load(context.Background(), "tmux")
+	s, e = c.Load(context.Background(), "tmux", "main")
 	if e != nil || s.Source != "project" {
 		t.Fatal(s, e)
 	}
-	if _, e = c.Load(context.Background(), "../missing"); e == nil {
+	if _, e = c.Load(context.Background(), "../missing", "main"); e == nil {
 		t.Fatal("accepted unknown skill")
 	}
 }
@@ -39,7 +39,7 @@ func TestBundledTTCConfigSkill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill, err := catalog.Load(context.Background(), "ttc-config")
+	skill, err := catalog.Load(context.Background(), "ttc-config", "main")
 	if err != nil || skill.Source != "bundled" || skill.Description == "" || skill.Content == "" {
 		t.Fatalf("bundled configuration skill: %+v %v", skill, err)
 	}
@@ -74,7 +74,7 @@ func TestAncestorAndSingularSkills(t *testing.T) {
 		"lsp": "plural cwd", "inherited": "ancestor skill",
 		"singular-only": "singular project", "user-only": "singular user",
 	} {
-		skill, err := catalog.Load(context.Background(), name)
+		skill, err := catalog.Load(context.Background(), name, "main")
 		if err != nil || skill.Content != "---\ndescription: chosen layer\n---\n"+expected || skill.Description != "chosen layer" {
 			t.Fatalf("%s: %+v, %v", name, skill, err)
 		}
@@ -89,7 +89,7 @@ func TestAncestorAndSingularSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill, err := catalog.Load(context.Background(), "lsp")
+	skill, err := catalog.Load(context.Background(), "lsp", "main")
 	if err != nil || skill.Path != filepath.Join(project, ".agents", "skill", "lsp", "SKILL.md") {
 		t.Fatal("singular cwd did not override parent/user", skill, err)
 	}

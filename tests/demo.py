@@ -21,6 +21,7 @@ import struct
 import subprocess
 import termios
 import tempfile
+import textwrap
 import threading
 import time
 import traceback
@@ -28,6 +29,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 from scratch import private_scratch
+from pty_screen import Screen
+from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -154,7 +157,7 @@ def main():
                              call('edit', {'path': 'report.txt', 'old_text': 'draft', 'new_text': 'verified'}),
                              call('patch', {'patch_text': '*** Begin Patch\n*** Add File: note.txt\n+Mean is 4.0.\n*** End Patch'}),
                              call('shell', {'command': "python3 analysis.py && printf ''"}),
-                             call('subagent', {'persistent': True, 'prompt': 'Check fixture observations independently.', 'label': 'Independent fixture check'}),
+                             call('subagent', {'persistent': True, 'prompt': 'Check fixture observations independently.', 'label': 'Fixture check'}),
                              call('web_fetch', {'url': endpoint + '/notes'}),
                              call('web_search', {'query': 'local fixture observations'}),
                              call('wakeup_schedule', {'name': 'demo', 'message': 'Check observations', 'delay_seconds': 600})]
@@ -220,7 +223,9 @@ def main():
                         {'type': 'response.output_item.done', 'output_index': index,
                          'item': dict(item, status='completed')}])
                 if child and stage in (1, 2):
-                    events.append({'type': 'response.output_text.delta', 'delta': 'Three samples; the mean is 4.0.'})
+                    # Split at line boundaries to exercise growing multiline child previews.
+                    for chunk in CHILD_ANSWER.splitlines(keepends=True):
+                        events.append({'type': 'response.output_text.delta', 'delta': chunk})
                 elif not child and stage == 5:
                     events.append({'type': 'response.output_text.delta', 'delta': markdown})
                 elif not child and stage == 6:
@@ -260,6 +265,7 @@ def main():
         print('Type "Run demo". The question dialog has three tabs and a final Submit tab.\n'
               'Enter selects Yes and advances. Write "Looks good." under Other on Notes, select Data, then Submit.\n'
               'Use Ctrl+U/D to scroll, Ctrl+X F for fullscreen, Ctrl+X S for sidebar, and Tab/click for inspection.\n'
+              'The child emits long evidence: its assistant and returned-answer rows stay compact; click either for the full tail.\n'
               'In Kitty, click the field thumbnail, pick a point and press OK. Keep Demo Sol / low; /quit exits. Kitty renders images and math; Ctrl+X F toggles fullscreen.', flush=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -297,9 +303,17 @@ path.write_text('Looks good.')
     thread.start()
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 110, 0, 0))
     output, cursor, waited = bytearray(), 0, False
+    screen = Screen(42, 110)
+
+    def receive():
+        data = os.read(master, 65536)
+        output.extend(data)
+        screen.feed(data)
+        return data
 
     def save():
         (root / 'transcript.log').write_bytes(output)
+        (root / 'screen.txt').write_text(screen.text)
 
     def expect(needle, timeout=10):
         nonlocal cursor
@@ -314,10 +328,71 @@ path.write_text('Looks good.')
                 save()
                 raise AssertionError(f'timed out waiting for {needle!r}')
             if select.select([master], [], [], 0.1)[0]:
-                data = os.read(master, 65536)
+                data = receive()
                 if not data:
                     raise AssertionError('demo process exited early')
-                output.extend(data)
+
+    def screen_expect(needle, present=True, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if (needle in screen.text) == present:
+                save()
+                return screen.text
+            if select.select([master], [], [], 0.05)[0]:
+                receive()
+        save()
+        raise AssertionError(f'screen expected {needle!r}, present={present}')
+
+    def settled_screen():
+        # Drain redraws before asserting absence; raw byte searches cannot
+        # reconstruct tcell's cursor-addressed one-line previews.
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], 0.02)[0]:
+                receive()
+        return screen.text
+
+    def verify_child_inspectors():
+        # The final notebook is long. Scroll up until both compact rows are in
+        # the viewport, then test their actual mouse hit targets.
+        for _ in range(35):
+            text = settled_screen()
+            if CHILD_PREFIX in text and '[Sub Fixture check] assistant ' in text:
+                try:
+                    rows = compact_rows(text)
+                    break
+                except AssertionError:
+                    # A page boundary can expose only one of the two row types.
+                    if 'CHILD-HIDDEN-BODY' in text or CHILD_TAIL in text:
+                        raise
+            os.write(master, b'\x15')
+        else:
+            raise AssertionError('compact child and returned-answer rows not visible: ' + screen.text)
+        (root / 'child-compact.txt').write_text(text)
+        for kind, row in zip(('response', 'completion'), rows):
+            os.write(master, f'\x1b[<0;8;{row}M\x1b[<0;8;{row}m'.encode())
+            screen_expect('┌')
+            screen_expect(CHILD_PREFIX)
+            os.write(master, b'\x1b[F')  # End reveals the retained full answer tail.
+            screen_expect(CHILD_TAIL)
+            (root / f'child-{kind}-inspector.txt').write_text(screen.text)
+            if kind == 'completion':
+                os.write(master, b'd')
+                screen_expect('Parameters:')
+                (root / 'child-completion-details.txt').write_text(screen.text)
+            os.write(master, b'\x1b')
+            screen_expect('┌', present=False)
+            compact_rows(settled_screen())
+        # Keyboard inspection of the same persisted child message is independent
+        # of mouse routing and must retain the full content too.
+        with sqlite3.connect(root / 'data/history.sqlite') as db:
+            entry = db.execute("SELECT id FROM entries WHERE actor_id != 'main' AND role='assistant' AND kind='message' AND json_extract(content_json,'$.content') = ? ORDER BY id LIMIT 1", (CHILD_ANSWER,)).fetchone()[0]
+        send(f'/inspect {entry}')
+        screen_expect('┌')
+        os.write(master, b'\x1b[F')
+        screen_expect(CHILD_TAIL)
+        os.write(master, b'\x1b')
+        screen_expect('┌', present=False)
 
     def send(text):
         os.write(master, text.encode() + (b'\r' if args.tui else b'\n'))
@@ -359,13 +434,23 @@ path.write_text('Looks good.')
                        {'id': 'notes', 'values': ['Looks good.'], 'source': 'custom'},
                        {'id': 'checks', 'values': ['data'], 'source': 'option'}]
             send('/answer ' + form[0].decode() + ' ' + json.dumps(answers))
-        expect('Turn complete')
+        deadline = time.monotonic() + 15
+        while not demo_completed(root / 'data/history.sqlite', markdown):
+            assert time.monotonic() < deadline, 'main turn did not durably complete'
+            if select.select([master], [], [], 0.05)[0]:
+                receive()
         if args.tui:
+            screen_expect('20 tool types')
+            screen_expect('Turn complete')
+            verify_child_inspectors()
             os.write(master, b'\x04')  # Empty-composer Ctrl+D must not exit.
             send('/model')
             expect('Model family')
             os.write(master, b'\x03')  # Ctrl+C exits even while the menu is open.
         else:
+            expect('20 tool types')
+            expect('Turn complete')
+            compact_rows(output.decode('utf-8', 'replace'))
             send('/quit')
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -377,7 +462,7 @@ path.write_text('Looks good.')
             # Drain redraws so PTY output cannot block the frontend before exit.
             if select.select([master], [], [], 0.05)[0]:
                 try:
-                    output.extend(os.read(master, 65536))
+                    receive()
                 except OSError as exc:
                     if exc.errno != errno.EIO:  # A closed Linux PTY reports EIO.
                         raise
@@ -412,13 +497,21 @@ path.write_text('Looks good.')
         assert all(match['path'] == 'analysis.py' for match in results['grep'][0]['matches'])
         assert 'mean 4.0' in results['web_fetch'][0]['content']
         assert 'Highlights:' in results['web_search'][0]['content']
-        assert '4.0' in results['subagent'][0]['answer']
-        assert not results['subagent'][0].get('answer_truncated', False)
+        verify_child_answers(db, results['subagent'])
+        main_answers = [json.loads(item['output'])
+                        for request in main_requests for item in request['input']
+                        if item.get('type') == 'function_call_output'
+                        and item['call_id'].endswith('_subagent')]
+        verify_child_answers(db, main_answers)
         assert results['question'][0]['answers'][0]['values'] == ['yes']
         assert results['question'][0]['answers'][1]['values'] == ['Looks good.']
         assert results['question'][0]['answers'][1]['source'] == 'custom'
         assert results['question'][0]['answers'][2]['values'] == ['data']
-        child_instructions = (Path(__file__).resolve().parent.parent / 'prompt/child.md').read_text()
+        child_asset = (Path(__file__).resolve().parent.parent / 'prompt/child-messages.yaml').read_text()
+        # The canonical suffix is a two-space-indented YAML literal block.
+        child_block = re.search(r'^Child: \|\n((?:  [^\n]*\n|\n)+)', child_asset, re.MULTILINE)
+        assert child_block is not None, 'missing Child literal block'
+        child_instructions = textwrap.dedent(child_block.group(1)).rstrip('\n') + '\n'
         assert child_requests[0]['instructions'].endswith(child_instructions)
         assert len(child_requests[0]['input']) == 2
         assert child_requests[0]['input'][0]['content'][0]['text'] == 'Check fixture observations independently.'
@@ -431,7 +524,7 @@ path.write_text('Looks good.')
         db.close()
         (root / 'tool-coverage.json').write_text(json.dumps(sorted(names), indent=2))
         save()
-        print(f'PASS: all {len(names)} tool types, reproducible project, exact Markdown report, ' +
+        print(f'PASS: {len(names)} selected tool types, reproducible project, exact Markdown report, ' +
               ('TUI model menu' if args.tui else 'plain PTY') + f'; artifacts: {root}')
     except BaseException:
         save()

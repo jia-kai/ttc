@@ -79,10 +79,11 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				baseline := []llm.Message{{Role: "assistant", Content: compactionLinks(summary, archive, archive+".jsonl")}}
 				baseline = append(baseline, retained...)
 				system := childSystemTemplate
-				if actor == "main" || aside {
+				if actor == "main" {
 					system = systemTemplate
 				}
 				if aside {
+					system = asideSystemTemplate
 					baseline = append(baseline, llm.Message{Role: "developer", Runtime: true, Content: btwInstruction})
 				}
 				runtime, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
@@ -183,6 +184,9 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 			seedCompactionHistory(t, r, strings.Repeat("Older main evidence. ", 400))
 			before := r.Current()
 			actor := "main/child_archived_warning"
+			if aside {
+				actor = "main/btw_archived_warning"
+			}
 			turn, err := r.Store.BeginChildTurn(before, actor, r.selection)
 			if err != nil {
 				t.Fatal(err)
@@ -252,6 +256,17 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 					return emit(llm.StreamEvent{Kind: "text", Text: "Partial evidence summarized; continue research."})
 				}
 				coding++
+				wantSystem := systemTemplate
+				if actor != "main" {
+					wantSystem = childSystemTemplate
+					if strings.Contains(actor, "/btw_") {
+						wantSystem = asideSystemTemplate
+					}
+				}
+				if req.System != wantSystem {
+					t.Error("recovery/compaction changed role-specific system")
+				}
+				assertPersistedReceivedSystem(t, r, req)
 				if coding == 1 {
 					if err := r.Store.DB.QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
 						return err

@@ -78,8 +78,9 @@ func canonicalCompaction(messages []llm.Message) []llm.Message {
 }
 
 // summaryTranscript preserves model text and raw tool payloads without display
-// expansion, replay state or attachment bytes. Durable archives keep the exact
-// records; summarization uses only the compacting actor's admitted messages.
+// expansion, replay state or attachment bytes. Retained human inputs include
+// typed original-source/commit and compaction metadata. Durable archives keep
+// exact records; summarization uses only the compacting actor's admitted messages.
 func summaryTranscript(messages []llm.Message) string {
 	var out strings.Builder
 	for _, message := range messages {
@@ -88,6 +89,19 @@ func summaryTranscript(messages []llm.Message) string {
 			fmt.Fprintf(&out, prompts.SessionSummaryCallID, message.CallID)
 		}
 		out.WriteString("\n")
+		if message.RetainedAtMS > 0 {
+			source := message.InputSource
+			if source == "" {
+				source = "normal"
+			}
+			metadata, _ := json.Marshal(struct {
+				Source       string `json:"input_source"`
+				OriginalAtMS int64  `json:"input_time_ms"`
+				RetainedAtMS int64  `json:"retained_at_ms,omitempty"`
+			}{source, message.InputTimeMS, message.RetainedAtMS})
+			out.Write(metadata)
+			out.WriteByte('\n')
+		}
 		out.WriteString(message.Content)
 		out.WriteByte('\n')
 		for _, call := range message.Calls {
@@ -265,7 +279,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	next.snapshot = ""
 	system := childSystemTemplate
 	if task.aside {
-		system = systemTemplate
+		system = asideSystemTemplate
 	}
 	runtime, _, err := r.runtimeContext(ctx, task.actor, task.selection, next)
 	if err != nil {
@@ -310,7 +324,7 @@ func childTranscript(messages []llm.Message) string {
 			if call, ok := calls[message.CallID]; ok && json.Valid([]byte(message.Content)) {
 				fmt.Fprintf(&out, prompts.ChildArchiveTool, render.Inline(call.Name), render.Tool(call.Name, call.Arguments, json.RawMessage(message.Content)).ExportText())
 				// Live inspectors recover captures through JobDetail. An archive
-				// has no live handle, so retain the model-visible stream tails here.
+				// has no live handle, so retain the model-visible selected output here.
 				var result map[string]json.RawMessage
 				if json.Unmarshal([]byte(message.Content), &result) == nil && result["job_id"] != nil {
 					for _, stream := range []string{"stdout", "stderr"} {

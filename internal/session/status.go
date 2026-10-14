@@ -104,7 +104,11 @@ func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefini
 	for _, d := range defs {
 		counts[1] += 16 + contextbuild.Estimate(d.Description) + contextbuild.Estimate(string(d.Parameters))
 	}
-	for _, m := range messages {
+	projected, err := contextbuild.ProjectRetainedInputs(messages)
+	if err != nil {
+		return ContextUsage{Input: -1, Limit: selection.Model.Budget.ContextLimit}
+	}
+	for _, m := range projected {
 		if m.State != nil {
 			counts[4] += llm.ReplayTokens(m.State)
 			continue

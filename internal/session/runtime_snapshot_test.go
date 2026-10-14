@@ -181,8 +181,11 @@ func TestRuntimeJobAndTimerTransitionsAreSuppliedOnce(t *testing.T) {
 		if err := json.Unmarshal([]byte(m.Content), &view); err != nil || len(view.Changes) != 1 {
 			t.Fatal(view, err)
 		}
-		if job.Status == "completed" && (view.Changes[0].To != "failed" || len(view.Jobs) != 0) {
-			t.Fatal("failed job lost", view)
+		if view.Changes[0].To != job.Status || (job.Status == "completed" && len(view.Jobs) != 0) {
+			t.Fatal("job status changed or finished job retained", view)
+		}
+		if view.BinaryFiles != nil {
+			t.Fatal("job transition repeated native-read capabilities", view)
 		}
 		cursor = next
 		if m, _, err := r.runtimeContext(context.Background(), "main", r.selection, cursor); err != nil || m != nil {
@@ -198,6 +201,9 @@ func TestRuntimeJobAndTimerTransitionsAreSuppliedOnce(t *testing.T) {
 		var view runtimeContext
 		if err := json.Unmarshal([]byte(m.Content), &view); err != nil || len(view.Changes) != 1 || view.Changes[0].FiredCount != fired {
 			t.Fatal(view, err)
+		}
+		if view.BinaryFiles != nil {
+			t.Fatal("timer transition repeated native-read capabilities", view)
 		}
 		cursor = next
 		if m, _, err := r.runtimeContext(context.Background(), "main", r.selection, cursor); err != nil || m != nil {
@@ -253,4 +259,17 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='developer' AND source_id IS NULL").Scan(&snapshots); err != nil || snapshots != 2 {
 		t.Fatal("reload did not force fresh context", snapshots, err)
 	}
+	messages, err := r.Store.Messages(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "developer" && messages[i].Runtime {
+			if nativeAnnouncement(t, &messages[i]) == nil {
+				t.Fatal("reload omitted native-read capabilities")
+			}
+			return
+		}
+	}
+	t.Fatal("reload omitted runtime context")
 }

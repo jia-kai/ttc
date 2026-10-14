@@ -78,7 +78,7 @@ func TestSkillDiscoveryAndReloadRejectSpecialFiles(t *testing.T) {
 	if err := syscall.Mkfifo(path, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := catalog.Load(context.Background(), "unsafe"); err == nil || !strings.Contains(err.Error(), "regular file") {
+	if _, err := catalog.Load(context.Background(), "unsafe", "main"); err == nil || strings.Contains(err.Error(), path) {
 		t.Fatal("unsafe replacement accepted", err)
 	}
 }

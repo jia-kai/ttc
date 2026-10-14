@@ -1,12 +1,78 @@
 package history
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
+
+// ChildResponse resolves a foreground subagent result or runtime completion
+// message to its full committed assistant response. Zero means no reference is
+// available (including failed/interrupted responses without a committed entry).
+// References must remain within the envelope's lineage and producing child.
+// Loaded sessions retain references to immutable entries in their source session.
+// The original entry remains independently inspectable for completion metadata.
+func (s *Store) ChildResponse(id int64) (int64, error) {
+	entry, err := s.Entry(id)
+	if err != nil {
+		return 0, err
+	}
+	var raw []byte
+	if entry.Kind == "tool_result" {
+		var result string
+		err := s.DB.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, id).Scan(&result)
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		raw = []byte(result)
+	} else if entry.Kind == "message" && entry.Role == "user" {
+		var message llm.Message
+		if err := json.Unmarshal(entry.Content, &message); err != nil {
+			return 0, err
+		}
+		if !message.Runtime {
+			return 0, nil
+		}
+		var notice struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(message.Content), &notice) != nil || notice.Type != "child_turn_finished" {
+			return 0, nil
+		}
+		raw = []byte(message.Content)
+	} else {
+		return 0, nil
+	}
+	var reference struct {
+		ChildID     string `json:"child_id"`
+		ResultEntry int64  `json:"result_entry_id"`
+	}
+	if err := json.Unmarshal(raw, &reference); err != nil {
+		return 0, err
+	}
+	if reference.ResultEntry == 0 {
+		return 0, nil
+	}
+	target, err := s.Entry(reference.ResultEntry)
+	if err != nil {
+		return 0, fmt.Errorf("child response reference: %w", err)
+	}
+	var sameLineage bool
+	if err := s.DB.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, target.SessionID, entry.SessionID).Scan(&sameLineage); err != nil {
+		return 0, err
+	}
+	if !strings.HasPrefix(reference.ChildID, "main/child_") || !sameLineage || target.Actor != reference.ChildID || target.Kind != "message" || target.Role != "assistant" {
+		return 0, fmt.Errorf("invalid child response reference %d from entry %d", target.ID, id)
+	}
+	return target.ID, nil
+}
 
 // InternalEvent identifies durable ordering and delivery records whose effects
 // are already presented by messages or tool results. They remain inspectable in

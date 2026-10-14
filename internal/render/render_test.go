@@ -48,7 +48,7 @@ func TestToolCardsBoundPreviewAndKeepExactDetails(t *testing.T) {
 
 func TestSharedToolSummaryPreservesDiagnosticBytes(t *testing.T) {
 	md := Tool("shell", []byte(`{}`), []byte(`{"exit_code":7,"error":{"message":"fixture failure"},"truncated":true}`))
-	if want := "**shell** · exit 7 · error: fixture failure · tail truncated"; md.Summary != want {
+	if want := "**shell** · exit 7 · error: fixture failure · output omitted"; md.Summary != want {
 		t.Fatalf("summary = %q; want %q", md.Summary, want)
 	}
 }

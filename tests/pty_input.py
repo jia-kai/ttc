@@ -29,6 +29,9 @@ def main():
     project.mkdir(mode=0o700)
     attachment = project / 'fixture file.txt'
     attachment.write_text('attachment snapshot evidence')
+    capture_budget = 8192
+    capture_padding = 12000
+    capture_prefix, capture_tail = 'ready\ndone\n', 'capture-tail\n'
     script = root / 'script.json'
     script.write_text(json.dumps([
         {'prefix': 'user: Edited in external editor.\nsecond line', 'text': 'Editor round completed.'},
@@ -36,7 +39,7 @@ def main():
         {'prefix': 'user: first line\nsecond line', 'text': 'Ctrl+J round completed.'},
         {'prefix': 'user: exercise tools', 'text': 'Waiting for the fixture gate.', 'calls': [
             {'id': 'write', 'name': 'write', 'arguments': {'path': 'result.py', 'content': 'print("evidence")\n'}},
-            {'id': 'gate', 'name': 'shell', 'arguments': {'command': "printf 'ready\\n'; while [ ! -e release-main ]; do sleep 0.02; done; printf 'done\\n'; i=0; while [ $i -lt 1200 ]; do printf '\\n'; i=$((i+1)); done"}},
+            {'id': 'gate', 'name': 'shell', 'arguments': {'command': f"printf 'ready\\n'; while [ ! -e release-main ]; do sleep 0.02; done; printf 'done\\n'; i=0; while [ $i -lt {capture_padding} ]; do printf '\\n'; i=$((i+1)); done; printf 'capture-tail\\n'"}},
             {'id': 'strict', 'name': 'shell', 'arguments': {'command': 'false; printf should-not-run'}},
         ]},
         {'prefix': 'user: explain result.py', 'text': '', 'calls': [
@@ -186,7 +189,22 @@ path.write_text('Edited in external editor.\\nsecond line')
         expect('Turn complete')
         with sqlite3.connect(data / 'history.sqlite') as db:
             results = [json.loads(row[0]) for row in db.execute("SELECT result_json FROM tool_calls WHERE name='shell'")]
-            assert any(r.get('stdout') == 'ready\ndone\n' and r['truncated'] for r in results), results
+            gate = json.loads(db.execute("SELECT result_json FROM tool_calls WHERE provider_call_id='gate'").fetchone()[0])
+            # Default head_tail selection preserves both sentinels without a
+            # separator, bounded by source bytes rather than line count.
+            expected_stdout = capture_prefix + '\n' * (capture_budget - len(capture_prefix) - len(capture_tail)) + capture_tail
+            total_bytes = len(capture_prefix) + capture_padding + len(capture_tail)
+            assert gate['stdout'] == expected_stdout and gate['truncated'], gate
+            assert len(gate['stdout'].encode()) == capture_budget, gate
+            assert gate['stdout_selection'] == {
+                'head_bytes': capture_budget // 2, 'tail_bytes': capture_budget // 2,
+                'total_bytes': total_bytes, 'omitted_bytes': total_bytes - capture_budget,
+                'lost_prefix_bytes': 0,
+            }, gate
+            assert gate['stderr'] == '' and gate['stderr_selection'] == {
+                'head_bytes': 0, 'tail_bytes': 0, 'total_bytes': 0,
+                'omitted_bytes': 0, 'lost_prefix_bytes': 0,
+            }, gate
             assert any(r.get('exit_code') == 1 and not r.get('stdout') for r in results), results
         export = root / 'conversation.md'
         send(('/export ' + str(export) + '\r').encode())

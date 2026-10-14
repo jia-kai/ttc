@@ -13,7 +13,9 @@ func fixture(t *testing.T) string {
 	root := t.TempDir()
 	for path, text := range map[string]string{
 		"prompt/system.md":             "Stable instructions.\r\n\n",
-		"prompt/child.md":              "\nChild instructions.\n",
+		"prompt/coding.md":             "Coding workflow.\n",
+		"prompt/main.md":               "Main workflow.\n",
+		"prompt/child-messages.yaml":   "Child: |\n  Child instructions.\nChildMessageNonempty: message must be nonempty UTF-8\n",
 		"prompt/btw.md":                "Read-only answer.",
 		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nlinks: '%s Archives: %s %s'\n",
 		"prompt/naming.yaml":           "text: Name it.\noutput_tokens: 32\ntimeout_seconds: 15\n",
@@ -54,7 +56,7 @@ func TestGenerationPreservesTextAndIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(first, []byte(`"Stable instructions.\r\n\n"`)) || !bytes.Contains(first, []byte(`"Try another path."`)) || !bytes.Contains(first, []byte(`const RuntimeWarning = "Synthetic warning: %s"`)) {
+	if !bytes.Contains(first, []byte(`"Stable instructions.\r\n\n"`)) || !bytes.Contains(first, []byte(`"Try another path."`)) || !bytes.Contains(first, []byte(`const RuntimeWarning = "Synthetic warning: %s"`)) || !bytes.Contains(first, []byte(`const Child = "Child instructions.\n"`)) || !bytes.Contains(first, []byte(`const ChildMessageNonempty = "message must be nonempty UTF-8"`)) {
 		t.Fatal("lost original text", string(first))
 	}
 	if err = generate(root, target); err != nil {
@@ -108,7 +110,8 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"message object", "prompt/runtime.yaml", "RuntimeWarning: {text: warning}", "nonempty UTF-8"},
 		{"invalid message name", "prompt/runtime.yaml", "runtime_warning: warning", "invalid or reserved"},
 		{"reserved message name", "prompt/runtime.yaml", "Naming: warning", "invalid or reserved"},
-		{"markdown collision", "prompt/runtime.yaml", "Child: warning", "duplicate prompt"},
+		{"markdown collision", "prompt/runtime.yaml", "System: warning", "duplicate prompt"},
+		{"child collision", "prompt/runtime.yaml", "Child: warning", "duplicate prompt"},
 		{"message collision", "prompt/tool-messages.yaml", "RuntimeWarning: warning", "duplicate prompt"},
 		{"duplicate message", "prompt/runtime.yaml", "RuntimeWarning: warning\nRuntimeWarning: other", "already defined"},
 		{"invalid extra message", "prompt/helper-messages.yaml", "ExtraMessage: false", "nonempty UTF-8"},
@@ -137,12 +140,19 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 }
 
 func TestMissingRequiredPrompt(t *testing.T) {
-	root := fixture(t)
-	if err := os.Remove(filepath.Join(root, "prompt/child.md")); err != nil {
-		t.Fatal(err)
-	}
-	if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing Markdown") {
-		t.Fatal(err)
+	for name, path := range map[string]string{
+		"System": "prompt/system.md", "Coding": "prompt/coding.md", "Main": "prompt/main.md",
+		"Child": "prompt/child-messages.yaml", "Btw": "prompt/btw.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := fixture(t)
+			if err := os.Remove(filepath.Join(root, path)); err != nil {
+				t.Fatal(err)
+			}
+			if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing required prompt "+name) {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

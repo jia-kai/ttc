@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 )
 
 func assertChildCapabilities(t *testing.T, r *Runtime, request llm.Request) {
@@ -19,7 +20,7 @@ func assertChildCapabilities(t *testing.T, r *Runtime, request llm.Request) {
 	mainQuestion := false
 	for _, definition := range r.Tools.Definitions() {
 		mainQuestion = mainQuestion || definition.Name == "question"
-		if definition.Name != "question" && definition.Name != "subagent" {
+		if definition.Name != "question" && definition.Name != "subagent" && definition.Name != "child_message" {
 			want = append(want, definition)
 		}
 	}
@@ -27,16 +28,24 @@ func assertChildCapabilities(t *testing.T, r *Runtime, request llm.Request) {
 		t.Error("main lost the question tool")
 	}
 	if !reflect.DeepEqual(request.Tools, want) {
-		t.Errorf("child capabilities differ from main minus question/subagent: %v", request.Tools)
+		t.Errorf("child capabilities differ from main minus question/subagent/child_message: %v", request.Tools)
+	}
+	if request.System != prompts.System+"\n"+prompts.Coding+"\n"+prompts.Child {
+		t.Error("child system does not contain only shared, coding and child guidance")
 	}
 	for _, rule := range []string{
-		"clarification rules override the generic",
-		"tool or start a user dialog",
-		"report material gaps or conflicting assumptions",
-		"main agent in your final answer, and stop",
+		"missing decision or conflicting assumption blocks part of the task",
+		"finish useful independent work",
+		"report the blocker and the decision",
+		"needed to the main agent in your final answer",
 	} {
 		if !strings.Contains(request.System, rule) {
-			t.Errorf("child system lacks clarification rule %q", rule)
+			t.Errorf("child system lacks positive missing-information guidance %q", rule)
+		}
+	}
+	for _, distractor := range []string{"question", "subagent", "rules override", "override the generic", "cannot use", "unavailable"} {
+		if strings.Contains(request.System, distractor) {
+			t.Errorf("child system contains irrelevant capability/override prose %q", distractor)
 		}
 	}
 }

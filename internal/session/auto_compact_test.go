@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"ttc/internal/capture"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 )
@@ -44,7 +45,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
 	before, generation := r.Current(), r.Generation()
-	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false)
+	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 				t.Fatal("summary omitted prefix")
 			}
 			r.routeMu.RLock()
-			childTail, err = r.Store.Append(r.Current(), "", "main/child", "status", "", false, map[string]string{"type": "child_progress", "text": "Background evidence committed during summarization."})
+			childTail, err = r.Store.Append(r.Current(), "", "main/child_fixture", "status", "", false, map[string]string{"type": "child_progress", "text": "Background evidence committed during summarization."})
 			r.routeMu.RUnlock()
 			if err != nil {
 				return err
@@ -142,6 +143,19 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 					t.Fatal("opaque replay survived compaction")
 				}
 				found[message.Content] = true
+				if message.Role == "user" {
+					var group struct {
+						Type   string `json:"type"`
+						Inputs []struct {
+							Content string `json:"content"`
+						} `json:"inputs"`
+					}
+					if json.Unmarshal([]byte(message.Content), &group) == nil && group.Type == "retained_inputs" {
+						for _, input := range group.Inputs {
+							found[input.Content] = true
+						}
+					}
+				}
 				if message.Role == "assistant" && strings.HasPrefix(message.Content, "Model reasoning 1") {
 					t.Fatal("older model message was not compacted")
 				}
@@ -308,7 +322,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				}
 				copied := append([]llm.Message(nil), messages[start:start+len(retained)]...)
 				for i := range copied {
-					copied[i].InputSource, copied[i].InputTimeMS = "", 0
+					copied[i].InputSource, copied[i].InputTimeMS, copied[i].RetainedAtMS = "", 0, 0
 				}
 				got, _ := json.Marshal(copied)
 				want, _ := json.Marshal(retained)

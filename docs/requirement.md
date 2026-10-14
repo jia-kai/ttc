@@ -21,7 +21,7 @@
 - Keep stable instructions/tool definitions. Temporarily forbid tools through a
   provider's hard no-tools mode or by omitting definitions, never artificial tool
   errors. Canonical LLM assets and runtime use are in [system_prompt.md](system_prompt.md).
-- Retry transient pre-output failures until interrupted by default, without
+- Retry transient pre-output failures with a bounded retry policy, without
   duplicating uncertain work. Preserve/fail partial streams; never execute incomplete
   calls, resume streams or restart unfinished requests. Require inspectable status
   and interruptible waits under [request retries](design.md#request-retries).

@@ -54,16 +54,16 @@ func TestLiveStableStartOrderAndOtherListsKeepIDOrder(t *testing.T) {
 func TestLaunchTimestampRetainsPrecision(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	worker := func(ctx context.Context, _, _ io.Writer) error {
+	worker := func(ctx context.Context, _, _ io.Writer) (TaskResult, error) {
 		<-ctx.Done()
-		return ctx.Err()
+		return TaskResult{}, ctx.Err()
 	}
 	before := time.Now().UTC()
 	task, err := m.StartTask("main", "subagent", "task", true, false, worker)
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell, err := m.Start("main", "sleep 10", t.TempDir(), 0, true, true, false)
+	shell, err := m.Start("main", "sleep 10", t.TempDir(), 0, true, true, false, capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
