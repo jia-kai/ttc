@@ -88,13 +88,15 @@ func TestSSHAuthSockToolEnvironment(t *testing.T) {
 			}
 			cmd := exec.Command(executable, "-test.run=^TestSSHAuthSockToolEnvironment$")
 			cmd.Env = append(os.Environ(), "TTC_TEST_SSH_ENV_ROOT="+root, "HOME="+root, "XDG_CONFIG_HOME="+config, "SSH_AUTH_SOCK=/host/agent.sock")
-			cmd.Stdin = strings.NewReader("probe\n/quit\n")
-			if output, err := cmd.CombinedOutput(); err != nil {
+			// EOF lets the active turn finish; /quit would interrupt the probe.
+			cmd.Stdin = strings.NewReader("probe\n")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
 				t.Fatalf("CLI: %v\n%s", err, output)
 			}
 			got, err := os.ReadFile(filepath.Join(root, "ssh-env-result"))
 			if err != nil || string(got) != want {
-				t.Fatalf("tool env = %q, error %v, want %q", got, err, want)
+				t.Fatalf("tool env = %q, error %v, want %q\nCLI output:\n%s", got, err, want, output)
 			}
 		})
 	}
