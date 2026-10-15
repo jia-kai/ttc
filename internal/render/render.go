@@ -118,6 +118,10 @@ func tool(name string, args, result json.RawMessage, inspected bool) Markdown {
 	var a, v map[string]any
 	_ = json.Unmarshal(args, &a)
 	_ = json.Unmarshal(result, &v)
+	status, _ := v["status"].(string)
+	if name == "subagent" {
+		status, _ = v["assignment_status"].(string)
+	}
 	summary := "**" + Inline(name) + "**"
 	detail := toolDetail(name, args, result, inspected)
 	if name == "subagent" {
@@ -126,7 +130,11 @@ func tool(name string, args, result json.RawMessage, inspected bool) Markdown {
 			if label == "" {
 				label, _ = a["label"].(string)
 			}
-			summary = "**subagent** · " + Inline(Status(fmt.Sprint(v["status"]))) + " · "
+			summary = "**subagent**"
+			if status != "" {
+				summary += " · " + Inline(Status(status))
+			}
+			summary += " · "
 			if label != "" {
 				summary += EscapeInline(SubagentBadge("", label, 64, false)) + " "
 			}
@@ -134,8 +142,8 @@ func tool(name string, args, result json.RawMessage, inspected bool) Markdown {
 			return Markdown{Revision: 1, Summary: summary, Detail: detail}
 		}
 	}
-	if name != "glob" || v["status"] == "running" {
-		if status, ok := v["status"].(string); ok {
+	if name != "glob" || status == "running" {
+		if status != "" {
 			if status == "running" && a["background"] == true && v["job_id"] != nil {
 				status = "started"
 			}

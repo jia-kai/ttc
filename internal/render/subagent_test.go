@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -49,7 +50,7 @@ func TestSubagentResponseSingleLineAndToolFinalAnswer(t *testing.T) {
 			t.Fatal(width, row)
 		}
 	}
-	md := Tool("subagent", []byte(`{"label":"helper"}`), []byte(`{"status":"completed","answer":"first\nsecond\nFULL END","stdout":"unchanged tool output"}`))
+	md := Tool("subagent", []byte(`{"label":"helper"}`), []byte(`{"assignment_status":"completed","answer":"first\nsecond\nFULL END","stdout":"unchanged tool output"}`))
 	if !strings.Contains(md.Summary, "final answer first second FULL END ...") || strings.Contains(md.Summary, "stdout") || !strings.Contains(md.Detail, "FULL END") || !strings.Contains(md.Detail, "unchanged tool output") {
 		t.Fatal(md)
 	}
@@ -57,12 +58,47 @@ func TestSubagentResponseSingleLineAndToolFinalAnswer(t *testing.T) {
 
 func TestSubagentJobCompletionDoesNotRepeatAssistantOutputTail(t *testing.T) {
 	result := []byte(`{"status":"completed","stdout":"hidden assistant TAIL","stderr":"diagnostic"}`)
-	child := Tool("subagent", []byte(`{"label":"helper"}`), result)
+	child := Tool("subagent", []byte(`{"label":"helper"}`), []byte(`{"assignment_status":"completed","stdout":"hidden assistant TAIL","stderr":"diagnostic"}`))
 	if strings.Contains(child.Summary, "TAIL") || !strings.Contains(child.Detail, "TAIL") || !strings.Contains(child.Summary, "diagnostic") {
 		t.Fatal(child)
 	}
 	shell := Tool("shell", []byte(`{"command":"fixture"}`), result)
 	if !strings.Contains(shell.Summary, "TAIL") {
 		t.Fatal("ordinary tool output changed", shell)
+	}
+}
+
+func TestSubagentAssignmentStatusPresentation(t *testing.T) {
+	for _, status := range []string{"running", "completed", "failed", "cancelled"} {
+		for _, answer := range []string{"", `,"answer":"first\nsecond"`} {
+			for name, renderer := range map[string]func(string, json.RawMessage, json.RawMessage) Markdown{
+				"tool":      Tool,
+				"inspected": InspectedTool,
+			} {
+				t.Run(status+answer+name, func(t *testing.T) {
+					md := renderer("subagent", []byte(`{"label":"helper"}`), []byte(`{"assignment_status":"`+status+`"`+answer+`}`))
+					if !strings.Contains(md.Summary, " · "+Status(status)) || strings.Contains(md.Summary, "nil") || !strings.Contains(md.Detail, "**Assignment status:** "+inlineCode(Status(status))) {
+						t.Fatal(md)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSubagentSummaryUsesOnlyAssignmentStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name, result, want string
+	}{
+		{"completed", `{"assignment_status":"completed","status":"running","answer":"answer"}`, "**subagent** · done · final answer answer ..."},
+		{"background", `{"assignment_status":"running","job_id":"job"}`, "**subagent** · started · ` job `"},
+		{"missing", `{"answer":"answer"}`, "**subagent** · final answer answer ..."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			md := Tool("subagent", []byte(`{"background":true}`), []byte(tc.result))
+			if md.Summary != tc.want {
+				t.Fatalf("summary = %q, want %q", md.Summary, tc.want)
+			}
+		})
 	}
 }

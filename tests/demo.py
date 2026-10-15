@@ -486,7 +486,10 @@ path.write_text('Looks good.')
         assert results['job_read'][0]['output'] == 'background evidence\n'
         assert results['job_read'][0]['matches'][0]['line'] == 1
         assert any(result.get('status') == 'cancelled' for result in results['job_stop'])
-        assert any(result.get('state') == 'closed' for result in results['job_stop'])
+        assert any(result.get('child_state') == 'closed'
+                   and result.get('assignment_status') == 'completed'
+                   and 'state' not in result and 'status' not in result
+                   for result in results['job_stop'])
         assert results['lsp_query'][0]['kind'] == 'hover'
         assert '**fixture**' in results['lsp_query'][0]['markdown']
         assert results['subagent'][0]['child_id'] == results['subagent'][1]['child_id']

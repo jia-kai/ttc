@@ -92,7 +92,7 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 			writeToolValue(out, fmt.Sprint(i+1), item, indent+"  ", path)
 		}
 	case string:
-		if key == "status" {
+		if key == "status" || key == "assignment_status" {
 			value = Status(value)
 		}
 		lang := ""
