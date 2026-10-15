@@ -19,18 +19,18 @@ func TestChildFinishValidationMatchesRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child", TurnID: turn, JobID: "job", Status: "completed"}
+			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child", TurnID: turn, JobID: "job", Outcome: "completed", ContextState: "closed"}
 			switch invalid {
 			case "negative result":
 				finish.ResultEntry = -1
 			case "missing job":
 				finish.JobID = ""
 			case "bad status":
-				finish.Status = "running"
+				finish.Outcome = "running"
 			case "oversized answer":
 				finish.Answer = strings.Repeat("x", MaxChildAnswerBytes+1)
 			case "failed answer":
-				finish.Status, finish.Answer = "failed", "unexpected answer"
+				finish.Outcome, finish.Answer = "failed", "unexpected answer"
 			}
 			if _, err := s.FinishChildTurn(source.ID, finish); err == nil {
 				t.Fatal("accepted invalid durable finish")
@@ -43,6 +43,23 @@ func TestChildFinishValidationMatchesRecovery(t *testing.T) {
 				t.Fatal("accepted invalid recovered finish")
 			}
 		})
+	}
+}
+
+func TestRecoveryPreservesNonChildCanonicalBody(t *testing.T) {
+	s, source, turn, _ := historyFixture(t)
+	body := `{"type":"job_exit","job_id":"job","event_seq":123,"recovered_from_event_seq":{"source":9007199254740993},"extra":{"exact":9007199254740993}}`
+	original := appendRecoveryRuntime(t, s, source.ID, body)
+	if _, err := s.StartRequest(source.ID, turn, "main", "compaction", source.Model); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Load(source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := recoveryNotices(t, s, loaded.ID)
+	if len(notices) != 1 || notices[0].EventSeq == original || notices[0].RecoveredFrom != original || string(notices[0].Body) != body {
+		t.Fatal("recovery changed canonical body or envelope", notices)
 	}
 }
 

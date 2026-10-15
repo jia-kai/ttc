@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-
-	"ttc/internal/llm"
 )
 
 // recoveryEvent is a new semantic event owned by a manual snapshot. Source
@@ -107,11 +105,8 @@ func recoveryBody(body json.RawMessage) (map[string]json.RawMessage, error) {
 		}
 	}
 	if kind == "child_turn_finished" {
-		var finish ChildFinish
-		if err := json.Unmarshal(body, &finish); err != nil {
-			return nil, fmt.Errorf("invalid recovered child finish: %w", err)
-		}
-		if err := validateChildFinish(finish); err != nil {
+		_, err := readChildFinish(body)
+		if err != nil {
 			return nil, fmt.Errorf("invalid recovered child finish: %w", err)
 		}
 	}
@@ -213,14 +208,9 @@ func recoveryCandidatesWith(q historyReader, entries, visible []Entry) ([]recove
 		if err != nil {
 			return nil, fmt.Errorf("recover event %d: %w", id, err)
 		}
-		delete(object, "event_seq")
-		body, err = json.Marshal(object)
-		if err != nil {
-			return nil, err
-		}
-		item := recoveryEvent{Type: "runtime_event", Body: body, RecoveredFrom: id}
 		var kind, timer string
 		_ = json.Unmarshal(object["type"], &kind)
+		item := recoveryEvent{Type: "runtime_event", Body: body, RecoveredFrom: id}
 		if kind == "wakeup" {
 			_ = json.Unmarshal(object["wakeup_id"], &timer)
 		}
@@ -241,11 +231,18 @@ func recoveryCandidatesWith(q historyReader, entries, visible []Entry) ([]recove
 	return filtered, nil
 }
 
+// PendingNotification is an undelivered canonical recovery record. EventSeq owns
+// delivery acknowledgement; Body is storage data, not a model API notification.
+type PendingNotification struct {
+	EventSeq      int64
+	RecoveredFrom int64 // Source semantic event; provenance belongs to the envelope.
+	Body          json.RawMessage
+}
+
 // PendingRecoveryNotifications returns undelivered notifications created by a
-// boundary-recovery load. It never writes or acknowledges events. Returned user
-// runtime messages own fresh event IDs, including the event_seq in their bodies.
+// boundary-recovery load. It never writes, projects, or acknowledges events.
 // Ordinary sessions, read-only predecessors and fatal contexts return no notices.
-func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string) ([]llm.Message, error) {
+func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string) ([]PendingNotification, error) {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -261,7 +258,7 @@ func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string
 		return nil, nil
 	}
 	seen := map[string]bool{}
-	var out []llm.Message
+	var out []PendingNotification
 	for {
 		if seen[session] {
 			return nil, errors.New("cyclic compaction ancestry")
@@ -298,18 +295,11 @@ func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string
 				rows.Close()
 				return nil, errors.New("invalid recovery provenance")
 			}
-			object, err := recoveryBody(event.Body)
-			if err != nil {
+			if _, err := recoveryBody(event.Body); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			object["event_seq"] = json.RawMessage(fmt.Sprint(id))
-			body, err := json.Marshal(object)
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out = append(out, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: id, Content: string(body)})
+			out = append(out, PendingNotification{EventSeq: id, RecoveredFrom: event.RecoveredFrom, Body: event.Body})
 		}
 		if err = rows.Err(); err != nil {
 			rows.Close()

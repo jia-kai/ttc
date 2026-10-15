@@ -49,7 +49,7 @@ func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 		{"missing reference", true, "main/child_test", source + 10000, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := json.Marshal(ChildFinish{Type: "child_turn_finished", ChildID: tc.child, ResultEntry: tc.target, Status: "failed", Warning: "preserved warning"})
+			raw, err := json.Marshal(ChildFinish{Type: "child_turn_finished", ChildID: tc.child, ResultEntry: tc.target, Outcome: "failed", ContextState: "closed", Warning: "preserved warning"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -86,7 +86,7 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_test", Status: "completed", ResultEntry: source, Answer: full[:MaxChildAnswerBytes], Truncated: true}
+			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_test", Outcome: "completed", ContextState: "closed", ResultEntry: source, Answer: full[:MaxChildAnswerBytes], Truncated: true}
 			raw, err := json.Marshal(finish)
 			if err != nil {
 				t.Fatal(err)

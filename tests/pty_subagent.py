@@ -113,6 +113,9 @@ def main():
                     assert step < 3, 'unexpected parent request'
                     launch = results['audit-child']
                     assert launch['ok'] is True and launch['persistent'] is False
+                    assert launch['assignment_status'] in ('running', 'completed', 'failed')
+                    assert launch['child_state'] in ('running', 'closed')
+                    assert 'status' not in launch and 'state' not in launch
                     assert not {'stdout', 'answer', 'result_entry_id', 'finish_event_seq'} & launch.keys()
                     notices = []
                     for message in texts(body, 'user'):
@@ -123,9 +126,11 @@ def main():
                     if notices:
                         assert len(notices) == 1 and notices[0]['answer'] == answer
                         assert notices[0]['message_type'] == 'runtime_notification'
+                        assert notices[0]['child_state'] == 'closed'
+                        assert 'status' not in notices[0]
                         if args.failure:
                             notice = notices[0]
-                            assert notice['status'] == 'failed'
+                            assert notice['assignment_status'] == 'failed'
                             assert 'Partial work may have side effects' in notice['warning']
                             assert 'unknown_backend_fault' in notice['error']
                             transcript = Path(notice['transcript_path'])
@@ -253,7 +258,9 @@ def main():
             assert len(finishes) == 1
             event_id, finish_json = finishes[0]
             finish = json.loads(finish_json)
-            assert finish['status'] == ('failed' if args.failure else 'completed')
+            assert finish['outcome'] == ('failed' if args.failure else 'completed')
+            assert finish['context_state'] == 'closed'
+            assert not {'status', 'assignment_status', 'child_state'} & finish.keys()
             assert finish['persistent'] is False
             if args.offline:
                 assert finish['answer_truncated'] is True
@@ -267,7 +274,7 @@ def main():
             assert exact['type'] == 'assistant' and exact['content'] == answer
             assert 'role' not in exact and 'runtime' not in exact
             states = db.execute("SELECT content_json FROM entries WHERE json_extract(content_json,'$.type')='child_state' ORDER BY id").fetchall()
-            assert json.loads(states[-1][0])['child']['state'] == 'closed'
+            assert json.loads(states[-1][0])['child']['context_state'] == 'closed'
             assert db.execute("SELECT count(*) FROM tool_calls WHERE name IN ('job_read','job_stop')").fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM model_requests,json_each(delivered_events_json) WHERE value=?", (event_id,)).fetchone()[0] == 1
             meters = db.execute('SELECT status,attempts_json FROM model_requests').fetchall()

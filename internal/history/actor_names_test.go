@@ -12,7 +12,7 @@ func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
 	s, session, turn, _ := historyFixture(t)
 	actor, name := "main/child_opaque", "four word research helper"
 	for _, state := range []string{"running", "idle", "closed"} {
-		if _, err := s.Append(session.ID, turn, actor, "status", "", false, map[string]any{"type": "child_state", "child": map[string]string{"label": name, "state": state}}); err != nil {
+		if _, err := s.RecordChildState(session.ID, ChildSnapshot{ChildID: actor, TurnID: turn, Label: name, ContextState: state, Outcome: "completed"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -34,7 +34,7 @@ func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
 			t.Fatal(names, err)
 		}
 	}
-	if _, err := s.Append(continued.ID, "", actor, "status", "", false, map[string]any{"type": "child_state", "child": map[string]string{"label": "different"}}); err != nil {
+	if _, err := s.RecordChildState(continued.ID, ChildSnapshot{ChildID: actor, Label: "different", ContextState: "closed", Outcome: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SubagentNames(context.Background(), continued.ID); err == nil {

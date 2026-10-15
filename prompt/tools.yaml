@@ -39,8 +39,10 @@ job_list:
   description: >-
     List accessible jobs and coding children. state defaults to running;
     state=all also includes finished jobs and idle retained children. Default
-    results are compact metadata with labels, never captured output.
-    details=true adds exact commands; use job_read for output.
+    results are compact metadata with labels, never captured output. jobs keep
+    scheduler status even for subagents; children expose child_state and
+    current/latest assignment_status. details=true adds exact commands; use
+    job_read for output.
 job_read:
   description: >-
     Read captured job_id output. stream defaults to stdout, or stderr for LSP
@@ -49,13 +51,16 @@ job_read:
     16384. Optional grep is a case-sensitive RE2 expression; literal=true
     matches text and case_sensitive=false ignores case. Filtering applies only
     to the source page; continue with next_cursor even if no lines match. Older
-    output may have been discarded; truncated identifies a lost prefix.
+    output may have been discarded; truncated identifies a lost prefix. status
+    is scheduler job status, even for subagents, not assignment_status.
 job_stop:
   description: >-
     Stop an accessible command process group with job_id. With child_id, main
-    can close a retained coding child and its owned jobs. For watch jobs, stops
-    observation only, never the external workload. Supply exactly one
-    identifier.
+    can close a retained coding child and its owned jobs, returning label,
+    child_id, child_turn_id, job_id, child_state closed and latest
+    assignment_status. job_id results keep scheduler status even for subagents,
+    not semantic assignment status. For watch jobs, stops observation only,
+    never the external workload. Supply exactly one identifier.
 lsp_query:
   description: >-
     Query an accessible live language server by job_id; use job_list to find
@@ -131,19 +136,18 @@ subagent:
     children (including idle retained children) and running /btw asides share a
     limit of %d slots. Close unused retained children with
     job_stop(child_id=...) to free slots; follow-ups reuse the existing slot.
-    Set persistent on every assignment: false closes context and owned jobs
-    afterward; true retains successful context for follow-ups. Supply child_id
-    to follow up on an idle retained child. Calls wait for the answer by
-    default; background=true returns a job_id immediately and delivers the
-    answer on completion. variant selects a supported reasoning variant; omit it
-    to inherit the parent setting at creation or retain the child's setting.
-    Check status, not ok, for the assignment outcome: completed means the child
-    finished without a runtime error, not that its claims are verified. Failed
-    or cancelled assignments return the last assistant text with a
-    partial-work/side-effect warning and durable full-transcript paths, or an
-    explicit export error. Inspect the transcript before continuing failed work
-    or for a full failed answer. Use job_read for bounded raw output and
-    job_stop to close an idle child.
+    Set persistent on every assignment. Supply child_id to follow up on an idle
+    retained child. Calls wait for the answer by default; background=true
+    returns a job_id immediately and delivers the answer on completion. variant
+    selects a supported reasoning variant; omit it to inherit the parent setting
+    at creation or retain the child's setting. Child-specific results and
+    completion notifications expose assignment_status and child_state; check
+    assignment_status, not ok, for the outcome. Background launch results may
+    observe fast completion, but the answer arrives only in the completion
+    notification. Failed or cancelled assignments return the last assistant text
+    with a partial-work/side-effect warning and durable full-transcript paths,
+    or an explicit export error. Use job_read for bounded raw output. Generic
+    job surfaces retain scheduler status even for subagents.
 tmux_watch_run:
   description: >-
     Launch command (a shell string) in a new detached tmux session and

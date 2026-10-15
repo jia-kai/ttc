@@ -62,6 +62,20 @@ instructions.
   captured output with `job_read`, or full reminders with
   `wakeup_list(details=true)`. Child assignments reuse `job_id` as the preferred
   messaging handle; no separate assignment ID is needed.
+- Child entries use `child_state` (`running` or `idle`) for the context and
+  `assignment_status` (`running`, `completed`, `failed`, `cancelled`) for its
+  current/latest assignment. Child results and `child_turn_finished` notices use
+  the same fields, with `closed` also possible for `child_state`, and no generic
+  `status`. Values describe observation/completion, not a guarantee of current
+  state; consult the latest snapshot for live children. Successful persistent
+  children normally remain idle unless explicitly closed, so `completed` with
+  `closed` is valid. Recovered historical completions may omit `child_state`,
+  meaning unknown historical state, not closed or restorable. Generic
+  `job_list.jobs`, runtime `live_jobs`, `job_read` and `job_stop(job_id)` retain
+  scheduler `status` even for `kind:"subagent"`; this is not semantic assignment
+  status. The main-only lifespan guidance in `system.yaml` keeps these meanings
+  together with persistence and runtime boundaries; tool definitions own
+  parameter details.
 - Actor cursors advance only after successful admission. Initial, reloaded and
   compacted contexts get fresh snapshots. Budget context before requests and
   continuation creation; keep tool definitions in a stable structured provider

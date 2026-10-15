@@ -489,13 +489,13 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 7;
-  startup runs ordered, adjacent upgrades (5 → 6 → 7) in one transaction,
-  validating before commit. Each step reports its own progress; completion of a
-  step is not a committed upgrade. Rebuilding entries temporarily indexes all
-  incoming foreign-key lookups to avoid per-entry table scans. Schemas below 5,
-  nonempty unversioned databases and unknown newer versions fail explicitly; no
-  automatic resets or credential deletion.
+- Empty databases initialize in one immediate transaction. Current schema is 8;
+  startup supports schemas 5–8 and runs ordered, adjacent upgrades (5 → 6 → 7
+  → 8) in one transaction, validating before commit. Each step reports its own
+  progress; completion of a step is not a committed upgrade. Rebuilding entries
+  temporarily indexes all incoming foreign-key lookups to avoid per-entry table
+  scans. Schemas below 5, nonempty unversioned databases and unknown newer
+  versions fail explicitly; no automatic resets or credential deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
   instances sharing that directory before upgrading: pre-lock binaries cannot be
@@ -503,8 +503,24 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
 - Legacy decoding lives only in `internal/history/migrate`. Migration converts
   retained inputs to current typed messages and legacy marker rows to nonvisible
   status entries, preserving entry/source identities, cursor evidence and
-  original input provenance. Saved model requests and existing export/compaction
-  archives remain unchanged; migration does not repair or replay execution.
+  original input provenance. The 7 → 8 step converts canonical direct and nested
+  child completion status records to `outcome` (`completed`, `failed`,
+  `cancelled`) and `context_state` (`idle`, `closed`, `unknown`), preserving
+  event identities, copied-entry relations and unknown fields. It also converts
+  `child_state.child` snapshots to storage-owned `outcome` and `context_state`
+  fields. Snapshots additionally permit `running`; missing historical snapshot
+  state or outcome becomes `unknown`. Missing completion state becomes
+  `unknown`; new completions require observed `idle` or `closed`. Runtime reads
+  accept only the canonical format, without old-key fallbacks. Saved original
+  provider requests, tool results, model messages and archive files remain
+  original evidence; migration does not repair or replay execution.
+- History recovery returns typed pending-event data, not model-facing child
+  messages. Explicit session DTO projections map `outcome` to
+  `assignment_status` and known `context_state` to `child_state`, omitting
+  migrated `unknown` state. Live and recovered completion notifications use the
+  same projection; recovery never restores live child handles. Child results use
+  a typed constructor with explicit fields, not generic job `Snapshot` JSON
+  inheritance. Generic job APIs keep their scheduler contract.
 - Model preferences live outside SQLite;
   [catalog/startup](models.md#catalog-and-startup) defines file locking, limits
   and selection failure semantics.

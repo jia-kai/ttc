@@ -28,19 +28,19 @@ func requireHistoryMessage(t *testing.T, err error, want string) {
 }
 
 func TestHistoryChildCompletionMessages(t *testing.T) {
-	valid := ChildFinish{ChildID: "main/child", TurnID: "child-turn", JobID: "job", Status: "completed"}
+	valid := ChildFinish{ChildID: "main/child", TurnID: "child-turn", JobID: "job", Outcome: "completed", ContextState: "closed"}
 	cases := []struct {
 		name string
 		edit func(*ChildFinish)
 		want string
 	}{
 		{"IDs", func(f *ChildFinish) { f.JobID = "" }, "child completion requires child and turn IDs; successful assignments require a job ID"},
-		{"status", func(f *ChildFinish) { f.Status = "unknown" }, "invalid child completion status"},
+		{"outcome", func(f *ChildFinish) { f.Outcome = "unknown" }, "invalid child completion outcome"},
 		{"result", func(f *ChildFinish) { f.ResultEntry = -1 }, "child completion result entry must be nonnegative"},
 		{"UTF-8", func(f *ChildFinish) { f.Answer = "\xff" }, "child answer must be valid UTF-8 and at most 8 KiB"},
 		{"size", func(f *ChildFinish) { f.Answer = strings.Repeat("x", MaxChildAnswerBytes+1) }, "child answer must be valid UTF-8 and at most 8 KiB"},
 		{"paths", func(f *ChildFinish) { f.TranscriptPath = "archive.md" }, "child transcript requires both artifact paths or an export error, never both"},
-		{"partial", func(f *ChildFinish) { f.Status, f.Answer = "failed", "partial" }, "partial child answers require a warning and transcript paths or an explicit export error"},
+		{"partial", func(f *ChildFinish) { f.Outcome, f.Answer = "failed", "partial" }, "partial child answers require a warning and transcript paths or an explicit export error"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 	functions := map[string][]string{
 		"archive.go":   {"ArchiveMessages", "writeArchive"},
 		"artifact.go":  {"readArtifact", "openArtifact"},
-		"children.go":  {"FinishChildTurn", "validateChildFinish"},
+		"children.go":  {"FinishChildTurn", "validateChildFinish", "validateChildFinishFields", "validateChildFinishState", "readChildFinish"},
 		"compact.go":   {"Continue", "filepathHash"},
 		"events.go":    {"AdmitRequest", "BeginChildTurn", "InvalidateContext"},
 		"export.go":    {"transcriptEntries", "ExportText", "ArchiveActorTranscript", "actorTranscriptEntriesWith", "ArchiveTranscript", "transcriptJSONLEntries"},

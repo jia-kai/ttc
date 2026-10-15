@@ -124,25 +124,7 @@ func (s *Store) Load(id string) (Session, error) {
 			if err != nil {
 				return err
 			}
-			eventID, err := appendTx(tx, loaded, "", "main", "status", "", false, data, 0)
-			if err != nil {
-				return err
-			}
-			body, err := recoveryBody(event.Body)
-			if err != nil {
-				return err
-			}
-			body["event_seq"] = json.RawMessage(fmt.Sprint(eventID))
-			body["recovered_from_event_seq"] = json.RawMessage(fmt.Sprint(event.RecoveredFrom))
-			event.Body, err = json.Marshal(body)
-			if err != nil {
-				return err
-			}
-			data, err = json.Marshal(event)
-			if err != nil {
-				return err
-			}
-			if _, err = tx.Exec("UPDATE entries SET content_json=? WHERE id=?", string(data), eventID); err != nil {
+			if _, err = appendTx(tx, loaded, "", "main", "status", "", false, data, 0); err != nil {
 				return err
 			}
 		}

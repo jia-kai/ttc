@@ -135,7 +135,7 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 		})
 	}
 	for _, state := range []string{"running", "idle", "closed"} {
-		if err := r.publishChild(tool.ChildView{ID: "main/child_fixture", Label: "Fixture", State: state}); err != nil {
+		if err := r.publishChild(tool.ChildView{ID: "main/child_fixture", Label: "Fixture", ChildState: state, AssignmentStatus: "running"}); err != nil {
 			t.Fatal(err)
 		}
 		m, next, err := r.runtimeContext(context.Background(), "main", selection, cursor)
@@ -150,7 +150,7 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 			if len(view.Children) != 0 {
 				t.Fatal("closed child retained", view.Children)
 			}
-		} else if len(view.Children) != 1 || view.Children[0].State != state {
+		} else if len(view.Children) != 1 || view.Children[0].ChildState != state {
 			t.Fatal("wrong child state", view.Children)
 		}
 		cursor = next

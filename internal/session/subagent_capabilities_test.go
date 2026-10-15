@@ -80,7 +80,7 @@ func TestSubagentCapabilitiesAcrossAssignmentsAndParentModelChange(t *testing.T)
 		}
 		turn, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "assign", Name: "subagent", Arguments: encoded}})
 		result := childInvocation(t, r, ids[0], string(encoded))
-		if result["ok"] != true || result["status"] != "completed" {
+		if result["ok"] != true || result["assignment_status"] != "completed" {
 			t.Fatal(result)
 		}
 		childID = result["child_id"].(string)

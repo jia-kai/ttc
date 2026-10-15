@@ -108,8 +108,10 @@ func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Infe
 	persisted := session != ""
 	var notices []llm.Message
 	if persisted {
-		var err error
-		notices, err = store.PendingRecoveryNotifications(ctx, session)
+		pending, err := store.PendingRecoveryNotifications(ctx, session)
+		if err == nil {
+			notices, err = recoveredNotificationMessages(pending)
+		}
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("read recovered notifications: %w", err)
@@ -657,7 +659,11 @@ func (r *Runtime) Command(text string) (string, error) {
 		if e != nil {
 			return "", e
 		}
-		notices, e := r.Store.PendingRecoveryNotifications(r.ctx, v.ID)
+		pending, e := r.Store.PendingRecoveryNotifications(r.ctx, v.ID)
+		if e != nil {
+			return "", fmt.Errorf("read recovered notifications: %w", e)
+		}
+		notices, e := recoveredNotificationMessages(pending)
 		if e != nil {
 			return "", fmt.Errorf("read recovered notifications: %w", e)
 		}

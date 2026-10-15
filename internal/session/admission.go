@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	contextbuild "ttc/internal/context"
@@ -31,7 +32,7 @@ func (r *Runtime) queueNotificationLocked(content string) error {
 		r.orderError = errors.Join(r.orderError, err)
 		return err
 	}
-	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, id), EventSeq: id}
+	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, id, 0), EventSeq: id}
 	var incoming struct {
 		ID string `json:"wakeup_id"`
 	}
@@ -191,7 +192,7 @@ func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64
 			return errors.New(prompts.SessionEventAlreadyPending)
 		}
 	}
-	r.notifications = append(r.notifications, llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, eventID), EventSeq: eventID})
+	r.notifications = append(r.notifications, llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, eventID, 0), EventSeq: eventID})
 	sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].EventSeq < r.notifications[j].EventSeq })
 	return nil
 }
@@ -202,12 +203,15 @@ func (r *Runtime) publishChild(v tool.ChildView) error {
 	return r.publishChildLocked(v)
 }
 func (r *Runtime) publishChildLocked(v tool.ChildView) error {
-	_, err := r.Store.Append(r.Current(), v.TurnID, v.ID, "status", "", false, map[string]any{"type": "child_state", "child": v})
+	_, err := r.Store.RecordChildState(r.Current(), history.ChildSnapshot{
+		ChildID: v.ID, Label: v.Label, ContextState: v.ChildState,
+		Outcome: v.AssignmentStatus, TurnID: v.TurnID, JobID: v.JobID,
+	})
 	if err != nil {
 		r.orderError = errors.Join(r.orderError, err)
 		return err
 	}
-	if v.State == "closed" {
+	if v.ChildState == "closed" {
 		delete(r.publishedChildren, v.ID)
 	} else {
 		r.publishedChildren[v.ID] = v
@@ -225,12 +229,17 @@ func (r *Runtime) committedChildren(actor string) []tool.ChildView {
 	return out
 }
 
-func eventContent(content string, id int64) string {
-	var value map[string]any
+// eventContent applies trusted delivery identity without changing payload number
+// precision. A positive recoveredFrom replaces any historical body provenance.
+func eventContent(content string, id, recoveredFrom int64) string {
+	var value map[string]json.RawMessage
 	if json.Unmarshal([]byte(content), &value) != nil || value == nil {
 		return content
 	}
-	value["event_seq"] = id
+	value["event_seq"] = json.RawMessage(strconv.FormatInt(id, 10))
+	if recoveredFrom > 0 {
+		value["recovered_from_event_seq"] = json.RawMessage(strconv.FormatInt(recoveredFrom, 10))
+	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return content

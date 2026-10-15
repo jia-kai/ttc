@@ -296,48 +296,64 @@ presentation; it never replaces or changes model-facing results.
   successful handoff emits the
   [child_compacted event](#async-messages-sent-to-the-model).
 - A final response with settled foreground tools/interactions publishes
-  `child_turn_finished`. With `persistent:true`, success leaves the child idle;
-  with `false`, it closes the context and cancels and joins its owned background
+  `child_turn_finished`. With `persistent:true`, success normally leaves the
+  child idle unless explicitly closed; a close racing with completion can
+  produce `assignment_status:"completed"` with `child_state:"closed"`. With
+  `false`, it closes the context and cancels and joins its owned background
   work. Failed or canceled assignments always close and stop owned work.
   Foreground results carry that event for acknowledgment at request admission;
   background turns always notify the main agent, whether busy or idle. Do not
   emit an additional `job_exit`.
-- Result: the named-stream job snapshot from `shell`, with `kind:"subagent"`,
+- Result: a child-specific named-stream snapshot with `kind:"subagent"`,
   `child_id`, `child_turn_id`, `persistent`, and a terminal `finish_event_seq`
-  when available. Successful completion includes `answer` capped at 8 KiB of
-  UTF-8 and `answer_truncated:true` only when the answer exceeds that limit.
-  `result_entry_id` identifies the exact final assistant message; the result
-  never contains the full child transcript. Background finish notifications
-  carry the same answer and reference. Ordinary answers need no `job_read`, and
-  disposable children need no `job_stop`. If automatic recovery cannot continue,
-  status remains `failed` (or `cancelled` for a stop). `error` reports the
-  terminal cause as text; `answer` contains the last nonempty assistant message
-  from the child conversation, including partial stream text, not concatenated
-  stdout. If a persistent follow-up produced none, its warning identifies text
-  retained from the previous assignment rather than presenting it as new work.
+  when available. Unlike shell results, it uses `assignment_status` (`running`,
+  `completed`, `failed`, `cancelled`), never generic `status`. `child_state`
+  (`running`, `idle`, `closed`) records the context state at observation or
+  completion. Both fields are historical snapshots, not guarantees of current
+  state. This child-specific contract does not rename generic scheduler job
+  metadata: `job_list.jobs`, runtime `live_jobs`, `job_read` and
+  `job_stop(job_id)` retain scheduler `status` even for `kind:"subagent"`, not
+  semantic assignment status. Recovered historical completions may omit
+  `child_state` (unknown historical state, not closed or restorable); see
+  [async messages](#async-messages-sent-to-the-model). `completed` means no
+  runtime error, not verified claims. Successful completion includes `answer`
+  capped at 8 KiB of UTF-8 and `answer_truncated:true` only when the answer
+  exceeds that limit. `result_entry_id` identifies the exact final assistant
+  message; the result never contains the full child transcript. Background
+  finish notifications carry the same answer and reference. Ordinary answers
+  need no `job_read`, and disposable children need no `job_stop`.
+- Failure: if automatic recovery cannot continue, `assignment_status` remains
+  `failed` (or `cancelled` for a stop). `error` reports the terminal cause as
+  text; `answer` contains the last nonempty assistant message from the child
+  conversation, including partial stream text, not concatenated stdout. If a
+  persistent follow-up produced none, its warning identifies text retained from
+  the previous assignment rather than presenting it as new work.
   `result_entry_id` may then refer to the previous assignment; it is absent or
   zero when no assistant entry was committed. Uncommitted partial text is
   preserved explicitly in the transcript rather than given an invented entry ID.
   No-text failures use an explicit fallback; an empty final stream is a failure.
   A separate `warning` identifies partial work and possible side effects.
-  `transcript_path` (Markdown) and `transcript_jsonl_path` (exact records) point
-  to private, durable lineage artifacts containing the child's whole selected
-  conversation, including original pre-compaction entries and earlier persistent
-  assignments. Export failure instead reports `transcript_export_error` and an
-  explicit warning, without inventing a path. Warning and paths are not clipped
-  with the 8 KiB answer. Foreground results and background finish notifications
-  carry the same failure metadata. Transcript artifacts share lineage retention.
-  If completion storage/publication itself fails, the runtime aborts explicitly;
-  its fatal error includes the warning and transcript paths (or export error),
-  without claiming delivery of a background notification. A failed completion
-  commit creates no finish-event reference. Terminal answers replace the stdout
-  preview to avoid repetition. Background launch results omit stdout and
-  final-answer references; their completion notification delivers the answer
-  once, including when the child finishes fast. Raw captured stdout remains
-  available in inspection and `job_read`. Each assignment owns fresh bounded
-  stdout/stderr captures: replies go to stdout, tool summaries/errors to stderr.
-  Final results reference immutable retained output, never a later assignment's
-  buffers. Foreground waits; background returns its current snapshot. Live child
+- Failure artifacts: `transcript_path` (Markdown) and `transcript_jsonl_path`
+  (exact records) point to private, durable lineage artifacts containing the
+  child's whole selected conversation, including original pre-compaction entries
+  and earlier persistent assignments. Export failure instead reports
+  `transcript_export_error` and an explicit warning, without inventing a path.
+  Warning and paths are not clipped with the 8 KiB answer. Foreground results
+  and background finish notifications carry the same failure metadata.
+  Transcript artifacts share lineage retention. If completion
+  storage/publication itself fails, the runtime aborts explicitly; its fatal
+  error includes the warning and transcript paths (or export error), without
+  claiming delivery of a background notification. A failed completion commit
+  creates no finish-event reference.
+- Background: foreground waits; background returns its current snapshot.
+  Background launch results omit stdout and final-answer references; their
+  completion notification delivers the answer once, including when the launch
+  snapshot already reports terminal `assignment_status` and `child_state`.
+- Output and lifetime: terminal answers replace the stdout preview to avoid
+  repetition. Raw captured stdout remains available in inspection and
+  `job_read`. Each assignment owns fresh bounded stdout/stderr captures: replies
+  go to stdout, tool summaries/errors to stderr. Final results reference
+  immutable retained output, never a later assignment's buffers. Live child
   handles survive main compaction but not explicit session changes, restoration
   or exit. Reloading history cannot resume a child.
 
@@ -350,8 +366,9 @@ presentation; it never replaces or changes model-facing results.
   message rather than sending it to a later assignment.
 - Result:
   `{state:"queued",delivered:false,message_event_seq:integer, child_id:string,child_turn_id:string,job_id:string}`.
-  The original message and sending tool-call identity are durable. The child
-  admits queued messages FIFO at its next settled model-request boundary, after
+  `state` here is message delivery state, not child or assignment lifecycle. The
+  original message and sending tool-call identity are durable. The child admits
+  queued messages FIFO at its next settled model-request boundary, after
   foreground tools finish. Retries use the frozen admitted payload; later
   arrivals wait for another request.
 - Messages are main-agent task guidance in runtime user-message envelopes, not
@@ -425,15 +442,21 @@ presentation; it never replaces or changes model-facing results.
   `{jobs:[{job_id:string, kind:"shell"|"lsp"|"subagent"|"btw"|"watch", status:"running"|"completed"|"failed"|"cancelled"|"interrupted", owner_actor_id:string, label:string, started_at:string, finished_at?:string, exit_code?:integer}]}`.
   `owner_actor_id` is `main` or a live child ID; it stays unchanged through
   compaction. Times are ISO 8601 UTC.
+- Generic job boundary: `jobs` here and runtime `live_jobs` retain scheduler
+  `status` even for `kind:"subagent"`, as do `job_read` and `job_stop(job_id)`.
+  Scheduler status is not semantic child assignment status; `assignment_status`
+  and `child_state` belong to child-specific results, completion notices and the
+  separate `children` listing.
 - Routine lists contain metadata only, never stdout/stderr. Labels are bounded
   short names, not commands. `details=true` adds exact `command` values; use
   `job_read` for captured output. Watch metadata also includes `record_dir`;
   terminal metadata may include `signal`.
 - Include
-  `children:[{child_id:string,label:string, state:"running"|"idle",job_id:string,child_turn_id:string}]`
+  `children:[{child_id:string,label:string,child_state:"running"|"idle",assignment_status:"running"|"completed"|"failed"|"cancelled",job_id:string,child_turn_id:string}]`
   for retained coding children. The `running` filter excludes idle children;
-  `all` includes them. Child state is live metadata, separate from each
-  immutable job's last-turn outcome.
+  `all` includes them. `child_state` describes the context at observation;
+  `assignment_status` describes its current/latest assignment. These snapshots
+  do not guarantee later state; generic job metadata retains `status`.
 
 ### `job_read`
 
@@ -456,28 +479,34 @@ presentation; it never replaces or changes model-facing results.
   are no matches. Empty `grep` disables filtering.
 - Result:
   `{job_id:string, kind:string, status:string, stream:string, output:string, start_byte:integer, next_cursor:string|null, truncated:boolean, exit_code?:integer, matches?:[{line:integer,byte_offset:integer,text:string}]}`.
-  Match line numbers are one-based physical source lines; byte offsets are
-  absolute source bytes, independent of JSON's replacement of invalid UTF-8.
-  `truncated` describes retained loss, rather than whether another page exists.
-  A running job always returns a next cursor; a finished stream at EOF returns
-  null. Captured bytes disappear when the runtime ends and are never revived
-  from history. Saved `job_read` results remain inspectable after reload; their
-  output is fenced literal text, with large inspector records paged
-  independently of the capture cursor. Paging preserves split code delimiters;
-  fence-row metadata over 64 KiB switches to explicitly labeled plain-text
-  display rather than accumulating unbounded hints.
+  `status` is scheduler job status, including for `kind:"subagent"`, not the
+  semantic child assignment outcome. Match line numbers are one-based physical
+  source lines; byte offsets are absolute source bytes, independent of JSON's
+  replacement of invalid UTF-8. `truncated` describes retained loss, rather than
+  whether another page exists. A running job always returns a next cursor; a
+  finished stream at EOF returns null. Captured bytes disappear when the runtime
+  ends and are never revived from history. Saved `job_read` results remain
+  inspectable after reload; their output is fenced literal text, with large
+  inspector records paged independently of the capture cursor. Paging preserves
+  split code delimiters; fence-row metadata over 64 KiB switches to explicitly
+  labeled plain-text display rather than accumulating unbounded hints.
 
 ### `job_stop`
 
 - Input: `{job_id?:string,child_id?:string}`; exactly one is required.
 - Job result:
-  `{job_id:string,status:"cancelled"|"completed"|"failed"| "interrupted"}`.
-  Already-finished jobs return their existing state. Stopping a `watch` job
-  cancels observation only, not the external wrapper/workload.
-- Child result: `{child_id:string,state:"closed"}`. Closing an idle child starts
-  no model turn. Closing a running child publishes its terminal-turn event once.
-  Children cannot stop their own turn or close their own context. Unknown child
-  handles return `not_found`; closing does not delete recorded history.
+  `{job_id:string,status:"cancelled"|"completed"|"failed"| "interrupted"}`. This
+  is scheduler job status even for subagent jobs, not semantic assignment
+  status. Already-finished jobs return their existing state. Stopping a `watch`
+  job cancels observation only, not the external wrapper/workload.
+- Child result:
+  `{label:string,child_id:string,child_turn_id:string,job_id:string,child_state:"closed",assignment_status:"completed"|"failed"|"cancelled"}`
+  (the full child view). `assignment_status` describes the latest assignment,
+  unchanged when closing an idle child; stopping a running assignment cancels
+  it. Closing an idle child starts no model turn. Closing a running child
+  publishes its terminal-turn event once. Children cannot stop their own turn or
+  close their own context. Unknown child handles return `not_found`; closing
+  does not delete recorded history.
 
 ## LSP
 
@@ -780,7 +809,8 @@ Coding child events use the same generic ordering/delivery contract:
   "child_id": "c7",
   "child_turn_id": "t3",
   "job_id": "j9",
-  "status": "completed",
+  "assignment_status": "completed",
+  "child_state": "closed",
   "persistent": false,
   "result_entry_id": 123,
   "answer": "Verified the fixture."
@@ -807,3 +837,10 @@ field remains data. Assignment `job_id` is the preferred routing handle.
   not replay copied notices. Session switch/exit discards the live queue;
   explicit [compaction-boundary loads](compaction.md#reload-recovery) recover
   undelivered durable events with fresh ownership, never live work.
+- Schema-8 history stores child completions as `outcome` and `context_state`.
+  Session projects live and recovered completions identically to the API fields
+  above; migrated `context_state:"unknown"` omits `child_state`, never inferring
+  liveness. Legacy conversion occurs only in startup migration 7 → 8, not
+  runtime reads. Original provider requests, tool results, model messages and
+  archive files retain their saved spelling. See the
+  [storage contract](design.md#minimal-sqlite-schema).

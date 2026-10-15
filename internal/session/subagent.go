@@ -104,15 +104,18 @@ func (r *Runtime) addSubagentTool() {
 			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
 			r.children[child.id] = child
 		}
-		child.selection = selection
-		child.state = "running"
-		child.job = ""
-		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, child.selection)
+		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, selection)
 		if err != nil {
-			delete(r.children, child.id)
+			if a.ChildID == "" {
+				delete(r.children, child.id)
+			}
 			r.childStartMu.Unlock()
 			return nil, err
 		}
+		// Preserve the idle context and selection if durable admission fails.
+		child.selection = selection
+		child.state = "running"
+		child.job = ""
 		child.turn = turn
 		assignment := &childAssignment{
 			accepting:       true,
@@ -139,7 +142,7 @@ func (r *Runtime) addSubagentTool() {
 		child.job = id
 		assignment.job = id
 		if err == nil {
-			err = r.publishChild(tool.ChildView{ID: child.id, Label: child.label, State: child.state, TurnID: turn, JobID: id})
+			err = r.publishChild(child.view())
 		}
 		r.childStartMu.Unlock()
 		close(ready)
@@ -150,7 +153,7 @@ func (r *Runtime) addSubagentTool() {
 				err = errors.Join(err, r.finishChild(child, task, err))
 				result := r.childResult(child, assignment, jobs.Snapshot{Kind: "subagent", Owner: child.id, Label: child.label, Status: "failed"})
 				if !a.Background {
-					result["error"] = err.Error()
+					result.Error = err.Error()
 				}
 				return result, nil // Failed completion/launch metadata is the tool result; storage failures also abort the runtime.
 			}

@@ -69,10 +69,12 @@ interactions stay live; explicit session changes/exit cancel them.
   Include raw arguments/results, not UI activity or expanded tool views. Binary
   attachments enter summary inference as metadata only, not original bytes;
   summaries can preserve prior observations, not inspect unseen contents.
-- No chunking, regeneration or mandatory headings. Reject empty/tool-calling
-  summaries, oversized summary requests and summaries over 1 MiB. Output
-  reserves follow [model metadata](models.md#budget-metadata); input/link
-  templates live in [prompt/compaction.yaml](../prompt/compaction.yaml).
+- The prompt requests optional handoff sections; their structure is guidance,
+  not a validated schema.
+- No chunking or regeneration. Reject empty/tool-calling summaries, oversized
+  summary requests and summaries over 1 MiB. Output reserves follow
+  [model metadata](models.md#budget-metadata); input/link templates live in
+  [prompt/compaction.yaml](../prompt/compaction.yaml).
 - Main, child and aside compaction use a cooperative 10-minute deadline for the
   whole operation, including naming, archives, summary inference/retries and
   handoff. Earlier owning-operation deadlines and cancellation still apply.
@@ -150,10 +152,12 @@ interactions stay live; explicit session changes/exit cancel them.
   successful summaries.
 - Recovery creates fresh notification events in the loaded session in commit
   order, with `recovered_from_event_seq` identifying historical notifications.
-  It does not acknowledge or modify the source session, include sibling
-  branches, replay delivered events, or duplicate child answers carried by
-  retained main tool results. Repeated undelivered timer firings coalesce to the
-  latest firing. Recovered messages survive another load before delivery.
+  History returns pending-event data; session applies the same model-facing
+  projection as live notifications, without restoring live child handles. It
+  does not acknowledge or modify the source session, include sibling branches,
+  replay delivered events, or duplicate child answers carried by retained main
+  tool results. Repeated undelivered timer firings coalesce to the latest
+  firing. Recovered messages survive another load before delivery.
 - Delivered means admitted to a coding request, even if that request later fails
   or is interrupted; recovery does not replay those messages.
 - Loading does not restore files, jobs, children, timers or pending

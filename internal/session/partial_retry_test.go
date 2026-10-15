@@ -283,14 +283,14 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 			args := fmt.Sprintf(`{"persistent":%t,"prompt":"Isolated task","label":"recovery child"}`, persistent)
 			turn, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(args)}})
 			result := childInvocation(t, r, ids[0], args)
-			if result["status"] != "completed" || result["answer"] != "Recovered child answer" || step != 2 {
+			if result["assignment_status"] != "completed" || result["answer"] != "Recovered child answer" || step != 2 {
 				t.Fatal(result, step)
 			}
 			partialRetryNoMainLeak(t, r)
 			followup, _ := json.Marshal(map[string]any{"persistent": persistent, "child_id": result["child_id"], "prompt": "Follow up"})
 			second := childInvocation(t, r, ids[0], string(followup))
 			if persistent {
-				if second["status"] != "completed" || step != 3 || len(r.ChildViews("main")) != 1 {
+				if second["assignment_status"] != "completed" || step != 3 || len(r.ChildViews("main")) != 1 {
 					t.Fatal(second, step, r.ChildViews("main"))
 				}
 			} else if second["ok"] == true || step != 2 || len(r.ChildViews("main")) != 0 {

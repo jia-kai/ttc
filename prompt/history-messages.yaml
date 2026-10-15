@@ -15,7 +15,11 @@ HistoryChildAnswer: "child answer must be valid UTF-8 and at most 8 KiB"
 HistoryChildCompletionIDs:
   "child completion requires child and turn IDs; successful assignments require
   a job ID"
-HistoryChildCompletionStatus: "invalid child completion status"
+HistoryChildCompletionOutcome: "invalid child completion outcome"
+HistoryChildCompletionState:
+  "invalid child state at completion: require closed, or idle for a completed
+  persistent assignment"
+HistoryChildCompletionType: "not a child completion"
 HistoryChildFinishCutoff: "child finish exceeds request cutoff"
 HistoryChildPartialAnswer:
   "partial child answers require a warning and transcript paths or an explicit

@@ -135,7 +135,7 @@ def seed_boundary(db, status):
                     kind='message', role='assistant', turn=child_turn)
     finish = append({'type': 'child_turn_finished', 'child_id': child,
                      'child_turn_id': child_turn, 'job_id': 'job_child_fixture',
-                     'status': 'completed', 'persistent': True,
+                     'outcome': 'completed', 'context_state': 'unknown', 'persistent': True,
                      'answer': answer, 'result_entry_id': result}, actor=child, turn=child_turn)
     pending = append({'type': 'runtime_event', 'body': {
         'type': 'job_exit', 'job_id': 'job_pending_fixture', 'exit_code': 0,
@@ -192,14 +192,26 @@ def verify_recovery(db, source, before, wanted, delivered, result, answer):
         body = event['body']
         original = event['recovered_from_event_seq']
         assert owner != source and source_id is None and seq != original and ack == request
-        assert body['type'] == wanted[original] and body['event_seq'] == seq, body
+        assert body['type'] == wanted[original] and 'event_seq' not in body, body
         assert db.execute('SELECT delivered_request_id FROM entries WHERE id=?', (original,)).fetchone() == (None,)
         if body['type'] == 'child_turn_finished':
             assert body['answer'] == answer and body['result_entry_id'] == result, body
+            assert body['outcome'] == 'completed' and 'status' not in body, body
+            assert body['context_state'] == 'unknown', 'Unknown stored completion state must not be guessed'
         admitted = db.execute(
             "SELECT content_json FROM entries WHERE session_id=? AND role='user' AND source_id IS NULL "
             "AND json_extract(content_json,'$.event_seq')=?", (session, seq)).fetchall()
-        assert len(admitted) == 1 and json.loads(json.loads(admitted[0][0])['content']) == body, admitted
+        assert len(admitted) == 1, admitted
+        projected = json.loads(json.loads(admitted[0][0])['content'])
+        assert projected['event_seq'] == seq, projected
+        assert projected['recovered_from_event_seq'] == original, projected
+        if body['type'] == 'child_turn_finished':
+            assert projected['assignment_status'] == body['outcome'], projected
+            assert projected['answer'] == answer and projected['result_entry_id'] == result, projected
+            assert 'child_state' not in projected and 'context_state' not in projected, projected
+            assert 'outcome' not in projected, projected
+        else:
+            assert projected == {**body, 'event_seq': seq, 'recovered_from_event_seq': original}, projected
     contexts = db.execute(
         "SELECT content_json FROM entries WHERE session_id=? AND role='developer' AND source_id IS NULL "
         "AND json_valid(json_extract(content_json,'$.content'))",

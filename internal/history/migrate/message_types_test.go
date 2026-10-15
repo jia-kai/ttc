@@ -60,7 +60,7 @@ func TestSchema6MessageTypesPreserveEvidenceAndNestedStatus(t *testing.T) {
 	exec(t, db, `CREATE TRIGGER semantic_test_trigger BEFORE DELETE ON entries WHEN OLD.id=1 BEGIN SELECT RAISE(ABORT,'preserved'); END`)
 	exec(t, db, `UPDATE sqlite_sequence SET seq=900 WHERE name='entries'`)
 	applyCurrent(t, db)
-	if got := scalar(t, db, "PRAGMA user_version"); got != "7" {
+	if got := scalar(t, db, "PRAGMA user_version"); got != "8" {
 		t.Fatal(got)
 	}
 	for i, tc := range cases {

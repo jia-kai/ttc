@@ -114,13 +114,15 @@ func (s *Store) Label(v Entry) string {
 	}
 
 	if v.Kind == "status" {
-		var finish ChildFinish
-		if json.Unmarshal(v.Content, &finish) == nil && finish.Type == "child_turn_finished" {
-			label := "Assignment " + finish.TurnID + " · " + render.Status(finish.Status)
-			if finish.Error != "" {
-				label += " · " + render.Clean(finish.Error)
+		var marker struct{ Type string }
+		if json.Unmarshal(v.Content, &marker) == nil && marker.Type == "child_turn_finished" {
+			if finish, err := readChildFinish(v.Content); err == nil {
+				label := "Assignment " + finish.TurnID + " · " + render.Status(finish.Outcome)
+				if finish.Error != "" {
+					label += " · " + render.Clean(finish.Error)
+				}
+				return label
 			}
-			return label
 		}
 		var job struct {
 			Type     string

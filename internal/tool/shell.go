@@ -26,11 +26,12 @@ type shellArgs struct {
 
 // ChildView is copied live metadata for one reusable coding context.
 type ChildView struct {
-	ID     string `json:"child_id"`
-	Label  string `json:"label"`
-	State  string `json:"state"`
-	TurnID string `json:"child_turn_id"`
-	JobID  string `json:"job_id"`
+	ID               string `json:"child_id"`
+	Label            string `json:"label"`
+	ChildState       string `json:"child_state"`       // Context lifecycle: running, idle or closed at observation.
+	AssignmentStatus string `json:"assignment_status"` // Current or latest assignment: running, completed, failed or cancelled.
+	TurnID           string `json:"child_turn_id"`
+	JobID            string `json:"job_id"`
 }
 
 // ChildController supplies optional coding-child ownership to job tools.
@@ -113,7 +114,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		if children != nil {
 			views := []ChildView{}
 			for _, child := range children.ChildViews(x.Actor) {
-				if a.State == "all" || child.State == "running" {
+				if a.State == "all" || child.ChildState == "running" {
 					views = append(views, child)
 				}
 			}

@@ -29,39 +29,33 @@ func appendRecoveryChild(t *testing.T, s *Store, session string) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := s.FinishChildTurn(session, ChildFinish{ChildID: "main/child", TurnID: turn, JobID: "job_child", Status: "completed", Answer: "durable child answer"})
+	id, err := s.FinishChildTurn(session, ChildFinish{ChildID: "main/child", TurnID: turn, JobID: "job_child", Outcome: "completed", ContextState: "closed", Answer: "durable child answer"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func recoveryNotices(t *testing.T, s *Store, session string) []llm.Message {
+func recoveryNotices(t *testing.T, s *Store, session string) []PendingNotification {
 	t.Helper()
 	m, err := s.PendingRecoveryNotifications(context.Background(), session)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, message := range m {
-		if message.Role() != "user" || !message.Type.IsRuntime() || message.EventSeq <= 0 {
+		if message.EventSeq <= 0 {
 			t.Fatal(message)
-		}
-		var body struct {
-			Seq int64 `json:"event_seq"`
-		}
-		if err := json.Unmarshal([]byte(message.Content), &body); err != nil || body.Seq != message.EventSeq {
-			t.Fatal(message, err)
 		}
 		entry, err := s.Entry(message.EventSeq)
 		if err != nil || entry.Source != 0 || entry.Visible {
 			t.Fatal(entry, err)
 		}
 		var event recoveryEvent
-		if err := json.Unmarshal(entry.Content, &event); err != nil || event.RecoveredFrom <= 0 {
+		if err := json.Unmarshal(entry.Content, &event); err != nil || event.RecoveredFrom <= 0 || message.RecoveredFrom != event.RecoveredFrom {
 			t.Fatal(event, err)
 		}
-		if string(event.Body) != message.Content {
-			t.Fatal("stored body differs", string(event.Body), message.Content)
+		if string(event.Body) != string(message.Body) {
+			t.Fatal("stored body differs", string(event.Body), string(message.Body))
 		}
 	}
 	return m
@@ -145,7 +139,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 					t.Fatal(event, m)
 				}
 			}
-			if !strings.Contains(notices[0].Content, "durable child answer") || !strings.Contains(notices[2].Content, "latest") {
+			if !strings.Contains(string(notices[0].Body), "durable child answer") || !strings.Contains(string(notices[2].Body), "latest") {
 				t.Fatal(notices)
 			}
 			entries, err := s.Branch(loaded.ID, 0)
@@ -188,7 +182,11 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			fresh, err := s.AdmitRequest(reloaded.ID, loadedTurn, "main", reloaded.Model, nil, recoveredAgain, nil)
+			var messages []llm.Message
+			for _, notice := range recoveredAgain {
+				messages = append(messages, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: notice.EventSeq, Content: string(notice.Body)})
+			}
+			fresh, err := s.AdmitRequest(reloaded.ID, loadedTurn, "main", reloaded.Model, nil, messages, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,7 +343,7 @@ func TestLoadRecoveryFindsSummarizedContinuationAncestors(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := recoveryNotices(t, s, loaded.ID)
-	if len(got) != 2 || !strings.Contains(got[0].Content, "durable child answer") {
+	if len(got) != 2 || !strings.Contains(string(got[0].Body), "durable child answer") {
 		t.Fatal(got)
 	}
 	var event recoveryEvent

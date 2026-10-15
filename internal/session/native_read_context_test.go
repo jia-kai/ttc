@@ -62,7 +62,7 @@ func TestNativeReadAnnouncementLifecycle(t *testing.T) {
 		t.Fatal(message, err)
 	}
 	for _, state := range []string{"running", "idle"} {
-		if err := r.publishChild(tool.ChildView{ID: "main/child_fixture", State: state}); err != nil {
+		if err := r.publishChild(tool.ChildView{ID: "main/child_fixture", ChildState: state, AssignmentStatus: "running"}); err != nil {
 			t.Fatal(err)
 		}
 		message, cursor, err = r.runtimeContext(context.Background(), "main", selection, cursor)

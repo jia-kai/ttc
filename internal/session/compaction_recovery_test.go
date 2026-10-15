@@ -37,7 +37,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					finish, err = r.Store.FinishChildTurn(source, history.ChildFinish{ChildID: actor, TurnID: turn, JobID: "job_completed", Status: "completed", ResultEntry: result, Answer: "Storage verified; 35 tests passed."})
+					finish, err = r.Store.FinishChildTurn(source, history.ChildFinish{ChildID: actor, TurnID: turn, JobID: "job_completed", Outcome: "completed", ContextState: "closed", ResultEntry: result, Answer: "Storage verified; 35 tests passed."})
 					cancel()
 					if err != nil {
 						return err
@@ -79,10 +79,10 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 						if !message.Type.IsRuntime() || message.Role() != "user" {
 							continue
 						}
-						var notice history.ChildFinish
+						var notice childNotification
 						if json.Unmarshal([]byte(message.Content), &notice) == nil && notice.Type == "child_turn_finished" {
 							found++
-							if notice.ResultEntry != result || notice.Answer != "Storage verified; 35 tests passed." || message.EventSeq == finish {
+							if notice.ResultEntry == nil || *notice.ResultEntry != result || notice.Answer == nil || *notice.Answer != "Storage verified; 35 tests passed." || message.EventSeq == finish {
 								t.Fatal("lost answer or reused source ownership", message)
 							}
 							delivered = message.EventSeq

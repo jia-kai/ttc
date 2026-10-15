@@ -109,9 +109,9 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 				if m.Role() != "user" || !m.Type.IsRuntime() {
 					continue
 				}
-				var finish history.ChildFinish
+				var finish childNotification
 				if json.Unmarshal([]byte(m.Content), &finish) == nil && finish.Type == "child_turn_finished" {
-					if finish.Answer != answer || finish.Persistent || finish.Truncated || m.EventSeq == 0 {
+					if finish.Answer == nil || *finish.Answer != answer || finish.Persistent || finish.Truncated || m.EventSeq == 0 {
 						t.Error("invalid child completion", finish, m.EventSeq)
 					}
 					delivered++
@@ -160,17 +160,19 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 
 func TestChildResultUsesCommittedCompletionBeforeJobSnapshot(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	child := &codingChild{id: "main/child_fixture"}
+	child := &codingChild{id: "main/child_fixture", state: "running"} // A later assignment may already be running.
 	for _, answer := range []string{"Final answer", ""} {
-		assignment := &childAssignment{turn: "ct", finish: 1, completion: history.ChildFinish{Status: "completed", ResultEntry: 2, Answer: answer}}
+		assignment := &childAssignment{turn: "ct", finish: 1, completion: history.ChildFinish{Outcome: "completed", ContextState: "idle", Persistent: true, ResultEntry: 2, Answer: answer}}
 		result := r.childResult(child, assignment, jobs.Snapshot{Status: "running", Stdout: "Intermediate commentary"})
-		if result["status"] != "completed" || result["answer"] != answer || result["stdout"] != nil {
+		requireChildLifecycle(t, result, "completed", "idle")
+		if result.AssignmentStatus != "completed" || result.Answer == nil || *result.Answer != answer || result.Stdout != nil {
 			t.Fatal("fast completion lost its answer or exposed commentary", result)
 		}
 		assignment.background = true
 		for _, status := range []string{"running", "completed"} {
 			result = r.childResult(child, assignment, jobs.Snapshot{Status: status, Stdout: "Intermediate commentary or final answer"})
-			if result["answer"] != nil || result["stdout"] != nil || result["finish_event_seq"] != nil {
+			requireChildLifecycle(t, result, "completed", "idle")
+			if result.Answer != nil || result.Stdout != nil || result.FinishEventSeq != 0 {
 				t.Fatal("background launch duplicates completion", result)
 			}
 		}

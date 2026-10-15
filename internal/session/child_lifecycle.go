@@ -11,7 +11,6 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
-	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
@@ -69,6 +68,15 @@ func (r *Runtime) resetChildren() {
 	r.childStartMu.Unlock()
 }
 
+// view snapshots the context and its latest assignment under childStartMu.
+func (child *codingChild) view() tool.ChildView {
+	status := "running"
+	if child.assignment != nil && child.assignment.completion.Outcome != "" {
+		status = child.assignment.completion.Outcome
+	}
+	return tool.ChildView{ID: child.id, Label: child.label, ChildState: child.state, AssignmentStatus: status, TurnID: child.turn, JobID: child.job}
+}
+
 // ChildViews returns current coding contexts, including idle contexts. Children
 // cannot inspect sibling contexts; the main actor sees all of them.
 func (r *Runtime) ChildViews(actor string) []tool.ChildView {
@@ -77,7 +85,7 @@ func (r *Runtime) ChildViews(actor string) []tool.ChildView {
 	out := []tool.ChildView{}
 	for _, child := range r.children {
 		if actor == "main" || actor == child.id {
-			out = append(out, tool.ChildView{ID: child.id, Label: child.label, State: child.state, TurnID: child.turn, JobID: child.job})
+			out = append(out, child.view())
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -106,13 +114,15 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 		r.childStartMu.Unlock()
 		r.Jobs.StopOwned(id, "")
 		r.childStartMu.Lock()
-		if err := r.publishChild(tool.ChildView{ID: child.id, Label: child.label, State: "closed", TurnID: child.turn, JobID: child.job}); err != nil {
+		child.state = "closed"
+		view := child.view()
+		if err := r.publishChild(view); err != nil {
 			r.childStartMu.Unlock()
 			return nil, err
 		}
 		delete(r.children, id)
 		r.childStartMu.Unlock()
-		return map[string]string{"child_id": id, "state": "closed"}, nil
+		return view, nil
 	}
 	if job == "" {
 		r.childStartMu.Unlock()
@@ -123,48 +133,14 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 	if _, err := r.Jobs.Stop("main", job); err != nil {
 		return nil, err
 	}
+	// Completion may have passed its cleanup decision before closing was set.
+	// Join the assignment first so it cannot launch more owned jobs, then sweep.
+	r.Jobs.StopOwned(id, job)
 	r.childStartMu.Lock()
 	delete(r.children, id)
+	view := child.view()
 	r.childStartMu.Unlock()
-	return map[string]string{"child_id": id, "state": "closed"}, nil
-}
-
-func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, view jobs.Snapshot) map[string]any {
-	r.childStartMu.Lock()
-	defer r.childStartMu.Unlock()
-	data, _ := json.Marshal(view)
-	var result map[string]any
-	_ = json.Unmarshal(data, &result)
-	result["child_id"], result["child_turn_id"] = child.id, assignment.turn
-	result["persistent"] = assignment.persistent
-	if assignment.background {
-		delete(result, "stdout") // Completion notification owns the answer, even for a fast launch.
-		return result
-	}
-	if finish := assignment.completion; finish.Status != "" {
-		if assignment.finish != 0 {
-			result["finish_event_seq"] = assignment.finish
-		}
-		result["result_entry_id"] = finish.ResultEntry
-		result["status"] = finish.Status
-		result["answer"] = finish.Answer
-		if finish.Truncated {
-			result["answer_truncated"] = true
-		}
-		for key, value := range map[string]string{
-			"warning":                 assignment.completion.Warning,
-			"transcript_path":         assignment.completion.TranscriptPath,
-			"transcript_jsonl_path":   assignment.completion.TranscriptJSONLPath,
-			"transcript_export_error": assignment.completion.TranscriptExportError,
-			"error":                   assignment.completion.Error,
-		} {
-			if value != "" {
-				result[key] = value
-			}
-		}
-		delete(result, "stdout") // Return one assistant message, never concatenated commentary.
-	}
-	return result
+	return view, nil
 }
 
 func (r *Runtime) finishChild(child *codingChild, task childTask, err error) error {
@@ -202,7 +178,11 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	r.childStartMu.Lock()
 	r.routeMu.RLock()
 	r.orderMu.Lock()
-	finish := history.ChildFinish{Type: "child_turn_finished", ChildID: child.id, TurnID: task.assignment.turn, JobID: task.assignment.job, Status: status, Persistent: task.assignment.persistent, ResultEntry: task.assignment.result}
+	state := "closed"
+	if status == "completed" && !child.closing && task.assignment.persistent {
+		state = "idle"
+	}
+	finish := history.ChildFinish{Type: "child_turn_finished", ChildID: child.id, TurnID: task.assignment.turn, JobID: task.assignment.job, Outcome: status, ContextState: state, Persistent: task.assignment.persistent, ResultEntry: task.assignment.result}
 	finish.Answer, finish.Truncated = task.assignment.answer, task.assignment.truncated
 	if status != "completed" {
 		childFailureMetadata(&finish, task.assignment.inheritedAnswer, transcript, exportErr)
@@ -215,16 +195,15 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		task.assignment.finish = id
 		task.assignment.completion = finish
 		task.assignment.pending = nil
-		if status == "completed" && !child.closing && task.assignment.persistent {
-			child.state = "idle"
+		child.state = finish.ContextState
+		if child.state == "idle" {
 			child.lastAnswer, child.lastTruncated, child.lastResult = finish.Answer, finish.Truncated, finish.ResultEntry
 		} else {
-			child.state = "closed"
 			delete(r.children, child.id)
 		}
-		commitErr = r.publishChildLocked(tool.ChildView{ID: child.id, Label: child.label, State: child.state, TurnID: child.turn, JobID: child.job})
+		commitErr = r.publishChildLocked(child.view())
 		if commitErr == nil && task.assignment.background {
-			body, _ := json.Marshal(finish)
+			body, _ := json.Marshal(childCompletionNotification(finish))
 			commitErr = r.queueCommittedNotificationLocked(string(body), id)
 		}
 	}
@@ -240,8 +219,9 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		r.Jobs.StopOwned(child.id, task.assignment.job)
 		completionErr := fmt.Errorf(prompts.ChildCompletionCommitFailure, commitErr)
 		finish.Error = errors.Join(err, completionErr).Error()
-		if finish.Status == "completed" {
-			finish.Status = "failed"
+		finish.ContextState = "closed"
+		if finish.Outcome == "completed" {
+			finish.Outcome = "failed"
 			r.routeMu.RLock()
 			transcript, exportErr = r.Store.ArchiveActorTranscript(r.Current(), child.id, task.assignment.pending)
 			r.routeMu.RUnlock()
@@ -271,7 +251,7 @@ func childFailureMetadata(finish *history.ChildFinish, inherited bool, transcrip
 	if finish.Answer == "" {
 		finish.Answer = prompts.ChildNoAssistantText
 	}
-	finish.Warning = fmt.Sprintf(prompts.ChildFailureWarning, finish.Status)
+	finish.Warning = fmt.Sprintf(prompts.ChildFailureWarning, finish.Outcome)
 	if inherited {
 		finish.Warning += prompts.ChildInheritedAnswerWarning
 	}

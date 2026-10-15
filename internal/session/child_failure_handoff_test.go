@@ -18,7 +18,7 @@ import (
 
 func assertChildFailureHandoff(t *testing.T, r *Runtime, result map[string]any, status, answer string) {
 	t.Helper()
-	if result["status"] != status || result["answer"] != answer || result["stdout"] != nil {
+	if result["assignment_status"] != status || result["answer"] != answer || result["stdout"] != nil {
 		t.Fatalf("wrong terminal handoff: %#v", result)
 	}
 	warning, _ := result["warning"].(string)
@@ -223,7 +223,7 @@ func TestChildFailureHandoffExportFailureIsExplicit(t *testing.T) {
 	_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(args)}})
 	result := childInvocation(t, r, ids[0], args)
 	warning, _ := result["warning"].(string)
-	if result["status"] != "failed" || result["answer"] != "Useful partial evidence" || result["transcript_export_error"] == nil || result["transcript_path"] != nil || result["transcript_jsonl_path"] != nil || !strings.Contains(warning, "transcript export failed") || !strings.Contains(warning, "may have side effects") {
+	if result["assignment_status"] != "failed" || result["answer"] != "Useful partial evidence" || result["transcript_export_error"] == nil || result["transcript_path"] != nil || result["transcript_jsonl_path"] != nil || !strings.Contains(warning, "transcript export failed") || !strings.Contains(warning, "may have side effects") {
 		t.Fatal("export failure was swallowed or invented a path", result)
 	}
 }
@@ -272,7 +272,7 @@ func TestChildFailureHandoffPersistentFollowupKeepsLastTextWithExplicitAttributi
 	args := `{"persistent":true,"prompt":"first assignment","label":"audit"}`
 	_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(args)}})
 	first := childInvocation(t, r, ids[0], args)
-	if first["status"] != "completed" {
+	if first["assignment_status"] != "completed" {
 		t.Fatal(first)
 	}
 	followup, _ := json.Marshal(map[string]any{"persistent": true, "child_id": first["child_id"], "prompt": "second assignment"})
@@ -334,7 +334,7 @@ func TestChildFailureHandoffLocalLaunchFailureForegroundAndBackground(t *testing
 			args, _ := json.Marshal(map[string]any{"persistent": false, "prompt": "investigate", "label": "audit", "background": background})
 			_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: args}})
 			result := childInvocation(t, r, ids[0], string(args))
-			if result["status"] != "failed" {
+			if result["assignment_status"] != "failed" {
 				t.Fatal("local launch failure fabricated a running child", result)
 			}
 			if background {
@@ -375,7 +375,7 @@ BEGIN SELECT RAISE(ABORT,'injected child completion failure'); END`); err != nil
 	result := childInvocation(t, r, ids[0], args)
 	warning, _ := result["warning"].(string)
 	path, _ := result["transcript_path"].(string)
-	if result["status"] != "failed" || result["answer"] != "Last assistant evidence before local completion failure" || result["stdout"] != nil || result["finish_event_seq"] != nil || path == "" || !strings.Contains(warning, "may have side effects") || !strings.Contains(warning, "runtime cannot continue") {
+	if result["assignment_status"] != "failed" || result["answer"] != "Last assistant evidence before local completion failure" || result["stdout"] != nil || result["finish_event_seq"] != nil || path == "" || !strings.Contains(warning, "may have side effects") || !strings.Contains(warning, "runtime cannot continue") {
 		t.Fatal("storage failure lost the handoff or fabricated committed completion", result)
 	}
 	if _, err := os.Stat(path); err != nil {

@@ -6,8 +6,8 @@ package migrate
 // stays positive and fixed, and Completed never decreases within that pair.
 // ToVersion is always FromVersion+1. Current schemas produce the phases
 // read_entries, validate_retention, rewrite_retention, update_cursors,
-// convert_messages, rebuild_entries, and complete; phases can be skipped when
-// there is no corresponding work.
+// convert_messages, rebuild_entries, convert_child_completions, and complete;
+// phases can be skipped when there is no corresponding work.
 type Progress struct {
 	FromVersion int
 	ToVersion   int
