@@ -38,7 +38,7 @@ func partialRetryWarning(t *testing.T, req llm.Request) llm.Message {
 	var found llm.Message
 	for _, m := range req.Messages {
 		if m.Content == prompts.Recovery {
-			if m.Role != "developer" || !m.Runtime || m.RequestID == 0 || m.InputSource != "" || m.InputTimeMS != 0 {
+			if m.Role() != "developer" || !m.Type.IsRuntime() || m.RequestID == 0 || m.InputSource != "" || m.InputTimeMS != 0 {
 				t.Errorf("recovery warning has incorrect provenance: %#v", m)
 			}
 			found = m
@@ -53,7 +53,7 @@ func partialRetryWarning(t *testing.T, req llm.Request) llm.Message {
 func partialRetryMessage(t *testing.T, req llm.Request, role, content string) llm.Message {
 	t.Helper()
 	for _, m := range req.Messages {
-		if m.Role == role && m.Content == content {
+		if m.Role() == role && m.Content == content {
 			return m
 		}
 	}
@@ -64,7 +64,7 @@ func partialRetryMessage(t *testing.T, req llm.Request, role, content string) ll
 func partialRetryResult(t *testing.T, req llm.Request, callID string, ok bool, code string) {
 	t.Helper()
 	for _, m := range req.Messages {
-		if m.Role != "tool" || m.CallID != callID {
+		if m.Type != llm.TypeToolResult || m.CallID != callID {
 			continue
 		}
 		var result struct {
@@ -86,7 +86,7 @@ func partialRetryResult(t *testing.T, req llm.Request, callID string, ok bool, c
 func partialRetryRunActor(t *testing.T, r *Runtime, actor string, stdout io.Writer) error {
 	t.Helper()
 	if actor == "main" {
-		return r.Run(&llm.Message{Role: "user", Content: "Recover this task"})
+		return r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Recover this task"})
 	}
 	seedRuntime(t, r, "Private main context")
 	turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.CurrentSelection())
@@ -166,7 +166,7 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 			return errors.New("unexpected extra request")
 		}
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Execute once, then recover"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Execute once, then recover"}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 3 || executions.Load() != 1 {
@@ -374,7 +374,7 @@ func TestPartialRetryCallStartDoesNotInventToolOutcome(t *testing.T) {
 				}
 				partialRetryWarning(t, req)
 				for _, m := range req.Messages {
-					if m.Role == "tool" || len(m.Calls) != 0 {
+					if m.Type == llm.TypeToolResult || len(m.Calls) != 0 {
 						t.Error("announcement invented executable call or outcome", m)
 					}
 				}
@@ -416,7 +416,7 @@ func TestPartialRetryCancellationDuringWaitStopsNewRequest(t *testing.T) {
 		return failure
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Role: "user", Content: "Cancel recovery wait"}) }()
+	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Cancel recovery wait"}) }()
 	receive(t, waiting)
 	r.Interrupt()
 	if err := receive(t, done); !errors.Is(err, context.Canceled) {
@@ -528,7 +528,7 @@ func TestPartialRetryMalformedMetadataIsFinal(t *testing.T) {
 				failure.Retry = retry
 				return failure
 			}}
-			if err := r.Run(&llm.Message{Role: "user", Content: "Reject malformed retry"}); err == nil {
+			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Reject malformed retry"}); err == nil {
 				t.Fatal("malformed retry succeeded")
 			}
 			if requests != 1 {

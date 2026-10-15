@@ -97,7 +97,7 @@ func TestLoadRecoveryDoesNotReviveCoalescedDeliveredTimer(t *testing.T) {
 	s, source, turn, _ := historyFixture(t)
 	appendRecoveryRuntime(t, s, source.ID, `{"type":"wakeup","wakeup_id":"timer","message":"old","fired_count":1}`)
 	latest := appendRecoveryRuntime(t, s, source.ID, `{"type":"wakeup","wakeup_id":"timer","message":"latest","fired_count":2}`)
-	if _, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Role: "user", Runtime: true, Content: `{"type":"wakeup","wakeup_id":"timer"}`, EventSeq: latest}}, nil); err != nil {
+	if _, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"wakeup","wakeup_id":"timer"}`, EventSeq: latest}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.StartRequest(source.ID, turn, "main", "compaction", source.Model); err != nil {
@@ -115,7 +115,7 @@ func TestLoadRecoveryDoesNotReviveCoalescedDeliveredTimer(t *testing.T) {
 func TestLoadRecoveryRetainedCopiesUseOriginalDelivery(t *testing.T) {
 	s, source, turn, _ := historyFixture(t)
 	delivered := appendRecoveryRuntime(t, s, source.ID, `{"type":"job_exit","job_id":"delivered"}`)
-	if _, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Role: "user", Runtime: true, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil); err != nil {
+	if _, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	appendRecoveryChild(t, s, source.ID)
@@ -141,7 +141,7 @@ func TestLoadRecoveryRetainedCopiesUseOriginalDelivery(t *testing.T) {
 
 func TestLoadRecoveryIncludesEventsInExcludedUnbalancedSuffix(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
-	if _, _, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "unfinished", Name: "shell", Arguments: []byte(`{}`)}}}); err != nil {
+	if _, _, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "unfinished", Name: "shell", Arguments: []byte(`{}`)}}}); err != nil {
 		t.Fatal(err)
 	}
 	appendRecoveryChild(t, s, source.ID)

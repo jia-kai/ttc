@@ -131,7 +131,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 					}
 					var last llm.Message
 					for _, message := range request.Messages {
-						if message.Role == "tool" && message.CallID == "forbidden-question" {
+						if message.Type == llm.TypeToolResult && message.CallID == "forbidden-question" {
 							last = message
 						}
 					}
@@ -142,7 +142,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 							Message string `json:"message"`
 						} `json:"error"`
 					}
-					if last.Role != "tool" || last.CallID != "forbidden-question" {
+					if last.Type != llm.TypeToolResult || last.CallID != "forbidden-question" {
 						return fmt.Errorf("missing ordinary tool failure: %+v", last)
 					}
 					if err := json.Unmarshal([]byte(last.Content), &failure); err != nil {
@@ -169,7 +169,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 					return emit(llm.StreamEvent{Kind: "call", Call: &call})
 				}
 				for _, message := range request.Messages {
-					if (message.Role == "tool" || message.Runtime) && strings.Contains(message.Content, answer) {
+					if (message.Type == llm.TypeToolResult || message.Type.IsRuntime()) && strings.Contains(message.Content, answer) {
 						surfaced.Store(true)
 					}
 				}
@@ -177,7 +177,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 			}}
 			done := make(chan error, 1)
 			go func() {
-				message := llm.Message{Role: "user", Content: "Audit the inputs"}
+				message := llm.Message{Type: llm.TypeUserInput, Content: "Audit the inputs"}
 				done <- r.Run(&message)
 			}()
 			if err := receive(t, done); err != nil {
@@ -196,7 +196,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 			if background {
 				// Admit the completion notification whether it arrived during
 				// the first main turn or after that turn finished.
-				message := llm.Message{Role: "user", Content: "Review the child findings"}
+				message := llm.Message{Type: llm.TypeUserInput, Content: "Review the child findings"}
 				if err := r.Run(&message); err != nil {
 					t.Fatal(err)
 				}

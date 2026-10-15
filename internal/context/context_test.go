@@ -14,7 +14,7 @@ import (
 )
 
 func TestRecentCycleRetentionAndBudgets(t *testing.T) {
-	m := []llm.Message{{Role: "user", Content: strings.Repeat("a", 600)}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "new"}, {Role: "assistant", Calls: []llm.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{"path":"x"}`)}}}, {Role: "tool", CallID: "c", Content: `{"ok":true}`}}
+	m := []llm.Message{{Type: llm.TypeUserInput, Content: strings.Repeat("a", 600)}, {Type: llm.TypeAssistant, Content: "old"}, {Type: llm.TypeUserInput, Content: "new"}, {Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{"path":"x"}`)}}}, {Type: llm.TypeToolResult, CallID: "c", Content: `{"ok":true}`}}
 	cut, e := Retain(m, 0, 200)
 	if e != nil || cut.Start != 3 || !reflect.DeepEqual(cut.Inputs, []int{0, 2}) {
 		t.Fatalf("cut=%+v err=%v", cut, e)
@@ -30,15 +30,15 @@ func TestRecentCycleRetentionAndBudgets(t *testing.T) {
 
 func TestRetentionKeepsFittingRecentCyclesAndBalancedParallelTools(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "user", Content: "Keep researching."},
-		{Role: "assistant", Content: strings.Repeat("old ", 1000), Calls: []llm.ToolCall{{ID: "a"}, {ID: "b"}}},
-		{Role: "tool", CallID: "b", Content: "second result"},
-		{Role: "tool", CallID: "a", Content: "first result"},
-		{Role: "assistant", Content: "Recent reasoning", Calls: []llm.ToolCall{{ID: "c"}}},
-		{Role: "tool", CallID: "c", Content: "recent result"},
-		{Role: "user", Runtime: true, Content: "A background job completed."},
-		{Role: "assistant", Content: "Latest reasoning", Calls: []llm.ToolCall{{ID: "d"}}},
-		{Role: "tool", CallID: "d", Content: "latest result"},
+		{Type: llm.TypeUserInput, Content: "Keep researching."},
+		{Type: llm.TypeAssistant, Content: strings.Repeat("old ", 1000), Calls: []llm.ToolCall{{ID: "a"}, {ID: "b"}}},
+		{Type: llm.TypeToolResult, CallID: "b", Content: "second result"},
+		{Type: llm.TypeToolResult, CallID: "a", Content: "first result"},
+		{Type: llm.TypeAssistant, Content: "Recent reasoning", Calls: []llm.ToolCall{{ID: "c"}}},
+		{Type: llm.TypeToolResult, CallID: "c", Content: "recent result"},
+		{Type: llm.TypeRuntimeNotification, Content: "A background job completed."},
+		{Type: llm.TypeAssistant, Content: "Latest reasoning", Calls: []llm.ToolCall{{ID: "d"}}},
+		{Type: llm.TypeToolResult, CallID: "d", Content: "latest result"},
 	}
 	for _, minimum := range []int{0, 200} {
 		retention, err := Retain(messages, minimum, 700)
@@ -49,24 +49,24 @@ func TestRetentionKeepsFittingRecentCyclesAndBalancedParallelTools(t *testing.T)
 	if _, err := Retain(messages[:len(messages)-1], 0, 200); err == nil {
 		t.Fatal("unresolved call was discarded")
 	}
-	if _, err := Retain([]llm.Message{{Role: "user", Content: "Only a prompt."}}, 0, 200); err == nil {
+	if _, err := Retain([]llm.Message{{Type: llm.TypeUserInput, Content: "Only a prompt."}}, 0, 200); err == nil {
 		t.Fatal("compaction without model work reported progress")
 	}
 }
 func TestRetentionCompactsEarlierHistoryWhenNewestTurnHasNoOlderCycle(t *testing.T) {
 	for _, cycles := range []int{0, 1, 2} {
 		for _, summary := range []bool{false, true} {
-			prefix := []llm.Message{{Role: "assistant", Content: "Continuation summary"}}
+			prefix := []llm.Message{{Type: llm.TypeAssistant, Content: "Continuation summary"}}
 			if !summary {
-				prefix = []llm.Message{{Role: "user", Content: "Earlier task"}, {Role: "assistant", Content: "Earlier result"}}
+				prefix = []llm.Message{{Type: llm.TypeUserInput, Content: "Earlier task"}, {Type: llm.TypeAssistant, Content: "Earlier result"}}
 			}
-			messages := append(prefix, llm.Message{Role: "user", Content: strings.Repeat("new prompt ", 50)})
+			messages := append(prefix, llm.Message{Type: llm.TypeUserInput, Content: strings.Repeat("new prompt ", 50)})
 			for i := range cycles {
 				id := string(rune('a' + i))
 				messages = append(messages,
-					llm.Message{Role: "developer", Runtime: true, Content: "Live metadata"},
-					llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: id}}},
-					llm.Message{Role: "tool", CallID: id, Content: strings.Repeat("recent result ", 50)})
+					llm.Message{Type: llm.TypeRuntimeContext, Content: "Live metadata"},
+					llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: id}}},
+					llm.Message{Type: llm.TypeToolResult, CallID: id, Content: strings.Repeat("recent result ", 50)})
 			}
 			wantStart := len(messages)
 			if cycles > 0 {
@@ -93,14 +93,14 @@ func TestRetentionCompactsEarlierHistoryWhenNewestTurnHasNoOlderCycle(t *testing
 }
 
 func TestRetentionClampsTokenTargetAtCompleteCycleBoundaries(t *testing.T) {
-	messages := []llm.Message{{Role: "user", Content: "Keep researching."}}
+	messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Keep researching."}}
 	starts := []int{}
 	for i := range 5 {
 		id := string(rune('a' + i))
 		starts = append(starts, len(messages))
 		messages = append(messages,
-			llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: id}}},
-			llm.Message{Role: "tool", CallID: id, Content: strings.Repeat("result ", 40)})
+			llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: id}}},
+			llm.Message{Type: llm.TypeToolResult, CallID: id, Content: strings.Repeat("result ", 40)})
 	}
 	last := Tokens(messages[starts[4]:])
 	for _, test := range []struct {
@@ -133,13 +133,13 @@ func TestRetentionClampsTokenTargetAtCompleteCycleBoundaries(t *testing.T) {
 
 func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "user", Content: "Earlier task"},
-		{Role: "assistant", Content: "Earlier observations"},
-		{Role: "user", Content: "Read a document"},
-		{Role: "assistant", Calls: []llm.ToolCall{{ID: "document"}}},
-		{Role: "tool", CallID: "document", Files: []llm.BinaryFile{{Path: "/document.pdf", MIMEType: "application/pdf", Bytes: 20 << 10}}},
+		{Type: llm.TypeUserInput, Content: "Earlier task"},
+		{Type: llm.TypeAssistant, Content: "Earlier observations"},
+		{Type: llm.TypeUserInput, Content: "Read a document"},
+		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "document"}}},
+		{Type: llm.TypeToolResult, CallID: "document", Files: []llm.BinaryFile{{Path: "/document.pdf", MIMEType: "application/pdf", Bytes: 20 << 10}}},
 	}
-	for _, trailing := range [][]llm.Message{nil, {{Role: "user", Content: "Continue"}}, {{Role: "developer", Runtime: true, Content: "Live state"}}} {
+	for _, trailing := range [][]llm.Message{nil, {{Type: llm.TypeUserInput, Content: "Continue"}}, {{Type: llm.TypeRuntimeContext, Content: "Live state"}}} {
 		input := append(append([]llm.Message(nil), messages...), trailing...)
 		retained, err := Retain(input, 0, 100)
 		if err != nil || retained.Start != 3 {
@@ -151,7 +151,7 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 			}
 		}
 	}
-	consumed := append(messages, llm.Message{Role: "assistant", Content: "Document inspected"})
+	consumed := append(messages, llm.Message{Type: llm.TypeAssistant, Content: "Document inspected"})
 	retained, err := Retain(consumed, 0, 100)
 	if err != nil || retained.Start <= 3 {
 		t.Fatal("consumed attachment remained pinned", retained, err)
@@ -163,9 +163,9 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 	// Overlapping calls require retaining the earlier safe boundary, not just
 	// the latest assistant message inside that still-open cycle.
 	overlapping := append(append([]llm.Message(nil), messages[:4]...),
-		llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "extra"}}},
+		llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "extra"}}},
 		messages[4],
-		llm.Message{Role: "tool", CallID: "extra", Content: "Extra result"})
+		llm.Message{Type: llm.TypeToolResult, CallID: "extra", Content: "Extra result"})
 	retained, err = Retain(overlapping, 0, 100)
 	if err != nil || retained.Start != 3 {
 		t.Fatal("overlapping tool calls lost the unread original or its complete cycle", retained, err)
@@ -174,17 +174,17 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 
 func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "user", Content: "old normal"},
-		{Role: "assistant", Content: "old work"},
-		{Role: "user", InputSource: "steer", Content: "old steer"},
-		{Role: "user", InputSource: "normal", Content: "normal"},
-		{Role: "user", InputSource: "steer", Content: "first retained steer"},
-		{Role: "user", InputSource: "queue", Content: "first retained ordinary"},
-		{Role: "user", Runtime: true, InputSource: "steer", Content: "not a steer"},
-		{Role: "user", InputSource: "steer", Content: "second retained steer"},
-		{Role: "user", Content: "second retained ordinary"},
-		{Role: "developer", Runtime: true, Content: "live state"},
-		{Role: "assistant", Content: "recent work"},
+		{Type: llm.TypeUserInput, Content: "old normal"},
+		{Type: llm.TypeAssistant, Content: "old work"},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "old steer"},
+		{Type: llm.TypeUserInput, InputSource: "normal", Content: "normal"},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "first retained steer"},
+		{Type: llm.TypeUserInput, InputSource: "queue", Content: "first retained ordinary"},
+		{Type: llm.TypeRuntimeNotification, InputSource: "steer", Content: "not a steer"},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "second retained steer"},
+		{Type: llm.TypeUserInput, Content: "second retained ordinary"},
+		{Type: llm.TypeRuntimeContext, Content: "live state"},
+		{Type: llm.TypeAssistant, Content: "recent work"},
 	}
 	retention, err := Retain(messages, 0, 1000)
 	if err != nil || retention.Start != 10 || !reflect.DeepEqual(retention.Inputs, []int{4, 5, 7, 8}) {
@@ -210,20 +210,20 @@ func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
 
 func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "developer", Runtime: true, Content: "retained input metadata"},
-		{Role: "user", Content: "first ordinary"},
-		{Role: "user", InputSource: "steer", Content: "first steer"},
-		{Role: "user", InputSource: "queue", Content: "second ordinary"},
-		{Role: "user", Runtime: true, Content: "job completed"},
-		{Role: "user", InputSource: "steer", Content: "second steer"},
-		{Role: "assistant", Content: "recent model work"},
+		{Type: llm.TypeRuntimeContext, Content: "retained input metadata"},
+		{Type: llm.TypeUserInput, Content: "first ordinary"},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "first steer"},
+		{Type: llm.TypeUserInput, InputSource: "queue", Content: "second ordinary"},
+		{Type: llm.TypeRuntimeNotification, Content: "job completed"},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "second steer"},
+		{Type: llm.TypeAssistant, Content: "recent model work"},
 	}
 	for _, end := range []int{len(messages) - 1, len(messages)} {
 		if _, err := Retain(messages[:end], 0, 1000); err == nil {
 			t.Fatal("selected inputs/runtime alone were treated as summary progress")
 		}
 	}
-	messages = append([]llm.Message{{Role: "user", Content: "unselected old ordinary"}}, messages...)
+	messages = append([]llm.Message{{Type: llm.TypeUserInput, Content: "unselected old ordinary"}}, messages...)
 	retention, err := Retain(messages, 0, 1000)
 	if err != nil || retention.Start != 7 || !reflect.DeepEqual(retention.Inputs, []int{2, 3, 4, 6}) {
 		t.Fatal("unselected human input was not valid summary progress", retention, err)
@@ -233,13 +233,13 @@ func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
 func TestRetainInputSourceAndOriginalAge(t *testing.T) {
 	at := time.UnixMilli(123456789)
 	for _, source := range []string{"", "normal", "queue", "steer", "task", "btw"} {
-		message := llm.Message{Role: "user", Content: "unchanged", InputSource: source, InputTimeMS: at.UnixMilli() - 98765}
+		message := llm.Message{Type: llm.TypeUserInput, Content: "unchanged", InputSource: source, InputTimeMS: at.UnixMilli() - 98765}
 		retained, err := RetainedInputMessages([]llm.Message{message}, []int{0}, at)
 		if err != nil || len(retained) != 1 || retained[0].RetainedAtMS != at.UnixMilli() {
 			t.Fatal(retained, err)
 		}
 		projected, err := ProjectRetainedInputs(retained)
-		if err != nil || len(projected) != 2 || projected[0].Role != "developer" || projected[0].Content != prompts.RetainedInputs || projected[1].Role != "user" || !strings.Contains(projected[1].Content, `"timestamp":"98.77 seconds before compaction"`) {
+		if err != nil || len(projected) != 2 || projected[0].Role() != "developer" || projected[0].Content != prompts.RetainedInputs || projected[1].Role() != "user" || !strings.Contains(projected[1].Content, `"timestamp":"98.77 seconds before compaction"`) {
 			t.Fatal(projected, err)
 		}
 		later, err := RetainedInputMessages(retained, []int{0}, at.Add(time.Second))
@@ -251,18 +251,18 @@ func TestRetainInputSourceAndOriginalAge(t *testing.T) {
 
 func TestRetainInputRejectsInvalidMetadata(t *testing.T) {
 	at := time.UnixMilli(1000)
-	valid := llm.Message{Role: "user", InputTimeMS: 500}
+	valid := llm.Message{Type: llm.TypeUserInput, InputTimeMS: 500}
 	for _, test := range []struct {
 		name    string
 		message llm.Message
 		at      time.Time
 	}{
-		{"missing commit", llm.Message{Role: "user"}, at},
-		{"negative commit", llm.Message{Role: "user", InputTimeMS: -1}, at},
-		{"future commit", llm.Message{Role: "user", InputTimeMS: 1001}, at},
-		{"invalid source", llm.Message{Role: "user", InputSource: "invalid", InputTimeMS: 500}, at},
-		{"runtime notice", llm.Message{Role: "user", Runtime: true, InputTimeMS: 500}, at},
-		{"assistant", llm.Message{Role: "assistant", InputTimeMS: 500}, at},
+		{"missing commit", llm.Message{Type: llm.TypeUserInput}, at},
+		{"negative commit", llm.Message{Type: llm.TypeUserInput, InputTimeMS: -1}, at},
+		{"future commit", llm.Message{Type: llm.TypeUserInput, InputTimeMS: 1001}, at},
+		{"invalid source", llm.Message{Type: llm.TypeUserInput, InputSource: "invalid", InputTimeMS: 500}, at},
+		{"runtime notice", llm.Message{Type: llm.TypeRuntimeNotification, InputTimeMS: 500}, at},
+		{"assistant", llm.Message{Type: llm.TypeAssistant, InputTimeMS: 500}, at},
 		{"zero compaction time", valid, time.Time{}},
 		{"epoch compaction time", valid, time.UnixMilli(0)},
 	} {
@@ -285,8 +285,7 @@ func TestRetainedInputMessagesPreserveExactOriginals(t *testing.T) {
 	}}
 	original := input.Message()
 	original.InputTimeMS = 500
-	original.State = &llm.ReplayState{Provider: "test", Model: "model", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"original":true}`)}}
-	messages := []llm.Message{{Role: "assistant", Content: "not retained"}, original, {Role: "user", Content: "steer", InputSource: "steer", InputTimeMS: 700}}
+	messages := []llm.Message{{Type: llm.TypeAssistant, Content: "not retained"}, original, {Type: llm.TypeUserInput, Content: "steer", InputSource: "steer", InputTimeMS: 700}}
 	before, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
@@ -384,9 +383,23 @@ func TestAttachmentsSnapshotAndDirectoryNoSymlinkTraversal(t *testing.T) {
 
 func TestNativeReplayIsCountedOnce(t *testing.T) {
 	native := []byte(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"result"}]}`)
-	m := llm.Message{Role: "assistant", Content: "result", Calls: []llm.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{}`)}}, State: &llm.ReplayState{Provider: "openai", Model: "test", Version: 1, Items: []json.RawMessage{native}}}
+	m := llm.Message{Type: llm.TypeAssistant, Content: "result", Calls: []llm.ToolCall{{ID: "c", Name: "read", Arguments: []byte(`{}`)}}, State: &llm.ReplayState{Provider: "openai", Model: "test", Version: 1, Items: []json.RawMessage{native}}}
 	if got := Tokens([]llm.Message{m}); got != Estimate(string(native)) {
 		t.Fatalf("native payload counted twice: %d", got)
+	}
+}
+
+func TestNotificationTokensIncludeSemanticDeliveryMarker(t *testing.T) {
+	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit","job_id":"j"}`}
+	content, err := m.ModelContent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := Tokens([]llm.Message{m}), 16+Estimate(content); got != want || got <= 16+Estimate(m.Content) {
+		t.Fatal("notification marker omitted from token occupancy", got, want)
+	}
+	if got := Tokens([]llm.Message{{Type: "unknown"}}); got != -1 {
+		t.Fatal("invalid semantic type acquired valid occupancy", got)
 	}
 }
 
@@ -404,7 +417,7 @@ func TestAttachmentDisplayKeepsAuthoredTextAndExactModelInput(t *testing.T) {
 		if err := json.Unmarshal(encoded, &reloaded); err != nil || reloaded.DisplayText() != text || reloaded.Content != m.Content {
 			t.Fatal("round trip changed attachment input", reloaded, err)
 		}
-		m.Runtime = true
+		m.Type = llm.TypeRuntimeNotification
 		if m.DisplayText() != m.Content {
 			t.Fatal("runtime notice was hidden as user input")
 		}

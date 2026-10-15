@@ -60,6 +60,7 @@ type TaskOptions struct {
 	Inspector              Inspector
 	// StartWatch retains record_dir in Snapshot for the tool JSON contract.
 	recordDir string
+	command   string // Exact command retained by watch tasks for explicit detail lists.
 }
 
 const inspectionMaxBytes = 65536
@@ -77,7 +78,7 @@ func taskInspector(view Snapshot) InspectionSpec {
 }
 
 func commandInspector(view Snapshot) InspectionSpec {
-	return InspectionSpec{Fields: []InspectionField{{Name: "Command", Value: view.Label, Language: "sh"}}, Streams: defaultInspectionStreams(view.Kind == "lsp")}
+	return InspectionSpec{Fields: []InspectionField{{Name: "Command", Value: view.command, Language: "sh"}}, Streams: defaultInspectionStreams(view.Kind == "lsp")}
 }
 
 // Inspect enforces live-handle ownership and checks cancellation before invoking

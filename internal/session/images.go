@@ -174,7 +174,7 @@ func (r *Runtime) ConfirmImage(id string, point *[2]int) error {
 		r.images.mu.Unlock()
 		return err
 	}
-	m := llm.Message{Role: "user", Content: string(b), Runtime: true}
+	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: string(b)}
 	delete(r.images.pending, id)
 	if v.Actor != "main" {
 		p.reply <- m

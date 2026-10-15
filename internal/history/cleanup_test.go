@@ -42,7 +42,7 @@ func retainedContinuation(t *testing.T, s *Store, v Session) Session {
 func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	s, v, turn, req := historyFixture(t)
 	call := llm.ToolCall{ID: "write", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"result"}`)}
-	_, calls, err := s.Assistant(v.ID, turn, "main", req, llm.Message{Role: "assistant", Calls: []llm.ToolCall{call}})
+	_, calls, err := s.Assistant(v.ID, turn, "main", req, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{call}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if _, err := s.RecordSystemPrompt(v.ID, turn, "main", req, "Exact instructions."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RequestMessage(v.ID, turn, "main/child", "assistant", req, llm.Message{Role: "assistant", Content: "Child output"}); err != nil {
+	if _, err := s.RequestMessage(v.ID, turn, "main/child", "assistant", req, llm.Message{Type: llm.TypeAssistant, Content: "Child output"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, category := range []string{"snapshots", "images", "attachments", "details"} {

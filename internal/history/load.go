@@ -103,7 +103,7 @@ func (s *Store) Load(id string) (Session, error) {
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					return err
 				}
-				visible = !message.Runtime // Live environment/notifications belong to the new runtime.
+				visible = !message.Type.IsRuntime() // Live environment/notifications belong to the new runtime.
 			}
 			copyID, err := appendTx(tx, loaded, entry.TurnID, entry.Actor, entry.Kind, entry.Role, visible, entry.Content, source)
 			if err != nil {

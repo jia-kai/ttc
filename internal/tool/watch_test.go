@@ -26,7 +26,7 @@ func TestWatchTool(t *testing.T) {
 	if _, err := watchrun.Run(dir, []string{"/bin/sh", "-c", "printf watched; exit 4"}, nil, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	rec := r.Invoke(context.Background(), x, "watch", []byte(`{"record_dir":"run","wake_on_exit":false}`))
+	rec := r.Invoke(context.Background(), x, "watch", []byte(`{"record_dir":"run","label":"recheck","wake_on_exit":false}`))
 	var launch jobs.Snapshot
 	if err := json.Unmarshal(rec.Result, &launch); err != nil || launch.ID == "" {
 		t.Fatalf("launch %s %v", rec.Result, err)
@@ -34,7 +34,7 @@ func TestWatchTool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	view, err := m.Wait(ctx, x.Actor, launch.ID, nil)
-	if err != nil || view.Kind != "watch" || view.Status != "completed" || view.Stdout != "watched" || view.ExitCode == nil || *view.ExitCode != 4 || view.WakeOnExit {
+	if err != nil || view.Kind != "watch" || view.Status != "completed" || view.Stdout != "watched" || view.ExitCode == nil || *view.ExitCode != 4 || view.WakeOnExit || view.Label != "recheck" {
 		t.Fatalf("view %+v %v", view, err)
 	}
 	rec = r.Invoke(ctx, x, "watch", []byte(`{"record_dir":"missing"}`))

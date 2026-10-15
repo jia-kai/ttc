@@ -49,7 +49,7 @@ func TestModelSwitchAtToolBoundaryPreservesPerRequestState(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "call", Call: &call})
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Role: "user", Content: "switch at tools"}) }()
+	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "switch at tools"}) }()
 	waitEntered := func() {
 		t.Helper()
 		select {
@@ -233,7 +233,7 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 		if err := r.RequestModel(choice); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Run(&llm.Message{Role: "user", Content: "same base"}); err != nil {
+		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "same base"}); err != nil {
 			t.Fatal(err)
 		}
 		req := <-requests
@@ -250,7 +250,7 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 	other := normal
 	other.Model.ID = "saved-other"
 	savedID := history.NewID("session")
-	turn, _, err := r.Store.StartSession(savedID, r.Workspace.Root, other, llm.Message{Role: "user", Content: "Saved earlier work"})
+	turn, _, err := r.Store.StartSession(savedID, r.Workspace.Root, other, llm.Message{Type: llm.TypeUserInput, Content: "Saved earlier work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
 	other := r.CurrentSelection()
 	other.Model.ID = "different"
 	target := history.NewID("session")
-	turn, _, err := r.Store.StartSession(target, r.Workspace.Root, other, llm.Message{Role: "user", Content: "Saved target work"})
+	turn, _, err := r.Store.StartSession(target, r.Workspace.Root, other, llm.Message{Type: llm.TypeUserInput, Content: "Saved target work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
 	if r.Current() != old {
 		t.Fatal("failed load changed session")
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "continue after failed load"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "continue after failed load"}); err != nil {
 		t.Fatal(err)
 	}
 	var result string

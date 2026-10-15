@@ -50,7 +50,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 		u := lifetimeUsage()
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &u})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Run an audit"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Run an audit"}); err != nil {
 		t.Fatal(err)
 	}
 	assertLifetimeTotals(t, r, 3) // Parent tool request, child answer, parent answer.
@@ -71,7 +71,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 		t.Fatal("invalid session loaded")
 	}
 	assertLifetimeTotals(t, r, 3)
-	if err := r.Run(&llm.Message{Role: "user", Content: "Continue after loading"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue after loading"}); err != nil {
 		t.Fatal(err)
 	}
 	assertLifetimeTotals(t, r, 4)
@@ -87,7 +87,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 	if got := r.UsageSnapshot().Totals; !reflect.DeepEqual(got, UsageTotals{}) {
 		t.Fatal("loading history rebuilt totals after /new", got)
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Start counting again"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start counting again"}); err != nil {
 		t.Fatal(err)
 	}
 	assertLifetimeTotals(t, r, 1)
@@ -96,7 +96,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 func TestUsageLifetimeRestartDoesNotRestoreHistory(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Durable answer"}})
 	r.Emit = nil
-	if err := r.Run(&llm.Message{Role: "user", Content: "Save a response"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save a response"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.UsageSnapshot().Totals.ReportedRequests != 1 {
@@ -135,7 +135,7 @@ func TestUsageLifetimeCompactionPreservesEveryCounter(t *testing.T) {
 			compactionBudget(t, r)
 			seedCompactionHistory(t, r, strings.Repeat("Earlier research notes. ", 700))
 			if !automatic {
-				if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue"}); err != nil {
+				if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -152,7 +152,7 @@ func TestUsageLifetimeCompactionPreservesEveryCounter(t *testing.T) {
 			requests := 2
 			if automatic {
 				requests++ // Summary plus the coding response after handoff.
-				if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
+				if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 					t.Fatal(err)
 				}
 			} else if _, err := r.Command("/compact"); err != nil {
@@ -181,7 +181,7 @@ func TestCompactionUsageCountsOnlyAttemptedInferenceDespitePersistenceFailure(t 
 			r.Emit = nil
 			compactionBudget(t, r)
 			seedCompactionHistory(t, r, "Earlier research")
-			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue"}); err != nil {
+			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 				t.Fatal(err)
 			}
 			before := r.Current()

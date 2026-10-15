@@ -153,7 +153,7 @@ func TestLocalRequestFailuresNeverRetry(t *testing.T) {
 			case "conversation":
 				req.ConversationID = ""
 			case "history":
-				req.Messages = []llm.Message{{Role: "assistant", Calls: []llm.ToolCall{{ID: "call", Name: "read", Arguments: []byte(`invalid`)}}}}
+				req.Messages = []llm.Message{{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "call", Name: "read", Arguments: []byte(`invalid`)}}}}
 			case "credentials missing":
 				a.tokenSource = nil
 			case "credentials invalid":

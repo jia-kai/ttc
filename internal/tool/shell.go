@@ -12,6 +12,7 @@ import (
 )
 
 type shellArgs struct {
+	Label       string `json:"label,omitempty"`
 	Command     string `json:"command"`
 	Workdir     string `json:"workdir,omitempty"`
 	Timeout     *int   `json:"timeout_ms,omitempty"`
@@ -41,7 +42,7 @@ type ChildController interface {
 // AddShell exposes managed commands and owner-scoped live handles. A nil child
 // controller leaves standalone shell registries without reusable child contexts.
 func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
-	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": Property("integer")}, []string{"command"}, func(a shellArgs) error {
+	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": Property("integer")}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
 		}
@@ -80,9 +81,9 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		var e error
 		output := capture.OutputOptions{Mode: a.OutputMode, Bytes: intDefault(a.OutputBytes, capture.DefaultOutputBytes)}
 		if a.Protocol == "lsp" {
-			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake, output)
+			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake, output, a.Label)
 		} else {
-			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, wake, output)
+			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, wake, output, a.Label)
 		}
 		if e != nil {
 			return nil, jobToolError(e)
@@ -99,15 +100,16 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		return v, jobToolError(err)
 	})
 	type list struct {
-		State string `json:"state,omitempty"`
+		State   string `json:"state,omitempty"`
+		Details bool   `json:"details,omitempty"`
 	}
-	Register(r, "job_list", prompts.ToolDescription("job_list"), map[string]any{"state": Property("string", "running", "all")}, nil, func(a list) error {
+	Register(r, "job_list", prompts.ToolDescription("job_list"), map[string]any{"state": Property("string", "running", "all"), "details": Property("boolean")}, nil, func(a list) error {
 		if a.State != "" && a.State != "running" && a.State != "all" {
 			return errors.New(prompts.ToolJobListState)
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a list) (any, error) {
-		result := map[string]any{"jobs": m.List(x.Actor, a.State == "all")}
+		result := map[string]any{"jobs": m.ListMetadata(x.Actor, a.State == "all", a.Details)}
 		if children != nil {
 			views := []ChildView{}
 			for _, child := range children.ChildViews(x.Actor) {

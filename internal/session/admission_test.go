@@ -215,7 +215,7 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_human BEFORE INSERT ON entries WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'forced user append failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Rejected instruction"}); err == nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Rejected instruction"}); err == nil {
 		t.Fatal("forced append failure succeeded")
 	}
 	var after string
@@ -232,7 +232,7 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	if _, err := r.Store.DB.Exec("DROP TRIGGER fail_human"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Retry instruction"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Retry instruction"}); err != nil {
 		t.Fatal("main admission did not recover", err)
 	}
 }
@@ -252,7 +252,7 @@ func TestAdmissionUsesPublishedJobStateAtItsCutoff(t *testing.T) {
 		}
 		r.publishJob(v)
 	}
-	id, err := r.Jobs.Start("main", "true", r.Workspace.Root, time.Second, true, false, false, capture.OutputOptions{})
+	id, err := r.Jobs.Start("main", "true", r.Workspace.Root, time.Second, true, false, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

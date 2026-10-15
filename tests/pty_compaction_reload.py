@@ -4,6 +4,7 @@
 Only a stopped CLI's private fixture database is seeded; no live history is
 modified. Every phase retains its terminal transcript, including on failure.
 """
+import argparse
 import fcntl
 import json
 import os
@@ -130,7 +131,7 @@ def seed_boundary(db, status):
             (source, tip, turn, actor, kind, role, json.dumps(body), delivered, now)).lastrowid
         return tip
 
-    result = append({'role': 'assistant', 'content': answer}, actor=child,
+    result = append({'type': 'assistant', 'content': answer}, actor=child,
                     kind='message', role='assistant', turn=child_turn)
     finish = append({'type': 'child_turn_finished', 'child_id': child,
                      'child_turn_id': child_turn, 'job_id': 'job_child_fixture',
@@ -213,7 +214,7 @@ def verify_recovery(db, source, before, wanted, delivered, result, answer):
     return session
 
 
-def run_case(root, mode, status):
+def run_case(root, mode, status, binary):
     root.mkdir(mode=0o700)
     project = root / 'project'
     project.mkdir(mode=0o700)
@@ -223,7 +224,6 @@ def run_case(root, mode, status):
     # prompt are included. Its oversized completed cycle must be summarized.
     script.write_text(json.dumps([{'prefix': 'user: Seed completed history',
                                   'text': 'Earlier evidence. ' * 4400 + '\nSeed complete.'}]))
-    binary = str(Path('./ttc').resolve())
     base = [binary, '--data-dir', str(data), '--workdir', str(project), '--auto-name=false']
     terminal = None
     try:
@@ -281,11 +281,15 @@ def run_case(root, mode, status):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', default='./ttc')
+    args = parser.parse_args()
+    binary = str(Path(args.binary).resolve())
     root = Path(tempfile.mkdtemp(prefix='pty-compaction-reload-', dir=private_scratch()))
     print(f'Artifacts: {root}', flush=True)
     try:
-        run_case(root / 'startup-running', 'session', 'running')
-        run_case(root / 'load-failed', 'load', 'failed')
+        run_case(root / 'startup-running', 'session', 'running', binary)
+        run_case(root / 'load-failed', 'load', 'failed', binary)
     except BaseException:
         (root / 'failure.txt').write_text(traceback.format_exc())
         print(f'FAIL; complete artifacts: {root}', flush=True)

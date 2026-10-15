@@ -106,7 +106,7 @@ func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
 	s, v, turn, request := historyFixture(t)
 	content := "## Handoff\n\n- Keep the current experiment.\n"
 	for _, purpose := range []string{"compaction", "naming"} {
-		id, err := s.RequestMessage(v.ID, turn, purpose, "assistant", request, llm.Message{Role: "assistant", Content: content})
+		id, err := s.RequestMessage(v.ID, turn, purpose, "assistant", request, llm.Message{Type: llm.TypeAssistant, Content: content})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +122,7 @@ func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
 			if got != content {
 				t.Fatalf("compaction reply escaped as metadata: %q", got)
 			}
-		} else if !strings.Contains(got, "```json") || !strings.Contains(got, `"role": "assistant"`) {
+		} else if !strings.Contains(got, "```json") || !strings.Contains(got, `"type": "assistant"`) {
 			t.Fatalf("naming inspector lost message metadata: %s", got)
 		}
 	}
@@ -140,7 +140,7 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 	}
 	sum := sha256.Sum256(encoded.Bytes())
 	file := llm.BinaryFile{Path: path, SHA256: hex.EncodeToString(sum[:]), MIMEType: "image/png", Bytes: encoded.Len()}
-	message := llm.Message{Role: "user", Files: []llm.BinaryFile{file}}
+	message := llm.Message{Type: llm.TypeUserInput, Files: []llm.BinaryFile{file}}
 	id, err := s.Append(v.ID, turn, "main", "message", "user", true, message)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 	native := json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque<private>"}`)
 	call := llm.ToolCall{ID: "provider_call", Name: "read", Arguments: json.RawMessage(`{"path":"original<input>"}`)}
 	_, calls, err := s.Assistant(v.ID, turn, "main", request, llm.Message{
-		Role: "assistant", Content: "Inspect the file", Calls: []llm.ToolCall{call},
+		Type: llm.TypeAssistant, Content: "Inspect the file", Calls: []llm.ToolCall{call},
 		State: &llm.ReplayState{Provider: "script", Model: v.Model.Model.ID, Version: 1, Items: []json.RawMessage{native}},
 	})
 	if err != nil {

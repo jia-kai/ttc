@@ -35,7 +35,7 @@ func TestLiveSmoke(t *testing.T) {
 	}
 	var text strings.Builder
 	var usage *llm.Usage
-	e = a.Stream(ctx, llm.Request{ConversationID: "test-conversation", Selection: selection, System: "Reply with exactly TTC_OK. Use no reasoning or tools. This is an authentication smoke test.", Messages: []llm.Message{{Role: "user", Content: "Return TTC_OK"}}, NoTools: true, OutputTokens: 16}, func(event llm.StreamEvent) error {
+	e = a.Stream(ctx, llm.Request{ConversationID: "test-conversation", Selection: selection, System: "Reply with exactly TTC_OK. Use no reasoning or tools. This is an authentication smoke test.", Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "Return TTC_OK"}}, NoTools: true, OutputTokens: 16}, func(event llm.StreamEvent) error {
 		if event.Kind == "text" {
 			text.WriteString(event.Text)
 		}

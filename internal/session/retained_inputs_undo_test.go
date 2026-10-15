@@ -46,7 +46,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 		arguments, _ := json.Marshal(map[string]string{"path": "result.txt", "content": fmt.Sprintf("version %d\n", step)})
 		return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: fmt.Sprintf("write-%d", step), Name: "write", Arguments: arguments}})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Second ordinary prompt", InputSource: "queue"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Second ordinary prompt", InputSource: "queue"}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 4 {
@@ -68,7 +68,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 			if err := json.Unmarshal(entry.Content, &message); err != nil {
 				t.Fatal(err)
 			}
-			if !message.Runtime {
+			if !message.Type.IsRuntime() {
 				originals[message.Content] = entry.EventSeq()
 			}
 		}
@@ -88,7 +88,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					t.Fatal(err)
 				}
-				if !message.Runtime {
+				if !message.Type.IsRuntime() {
 					count++
 					if entry.FileTip != baseline || entry.EventSeq() != originals[message.Content] {
 						t.Fatal("human checkpoint crossed the cut baseline or lost identity", entry)

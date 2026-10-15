@@ -255,7 +255,7 @@ def main():
         expect('Background completion observed.')
         expect('Turn complete')
         send('/jobs')
-        expect('background-complete')  # Label includes the exact command; durable output checked below.
+        expect('Shell command')  # Default metadata labels omit commands; check durable output below.
         job_records = db.execute("SELECT content_json FROM entries WHERE json_extract(content_json,'$.type')='job_completion'").fetchall()
         assert any('background-complete' in json.loads(row[0])['job']['stdout'] for row in job_records)
         assert all(json.loads(row[0])['markdown']['revision'] == 1 for row in job_records)

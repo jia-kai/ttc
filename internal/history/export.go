@@ -227,7 +227,7 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 	if strings.TrimSpace(actor) == "" {
 		return "", fmt.Errorf(prompts.HistoryTranscriptActor)
 	}
-	if pending != nil && pending.Role != "assistant" {
+	if pending != nil && pending.Type != llm.TypeAssistant {
 		return "", fmt.Errorf(prompts.HistoryTranscriptPendingRole)
 	}
 	entries, err := actorTranscriptEntriesWith(s.DB, session, actor)

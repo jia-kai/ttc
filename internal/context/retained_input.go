@@ -10,7 +10,7 @@ import (
 )
 
 func validateRetainedInput(message llm.Message) error {
-	if message.Role != "user" || message.Runtime {
+	if message.Type != llm.TypeUserInput {
 		return fmt.Errorf(prompts.ContextRetainedInputRole)
 	}
 	if _, err := inputSource(message); err != nil {
@@ -109,7 +109,7 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 			Type   string  `json:"type"`
 			Inputs []entry `json:"inputs"`
 		}{Type: "retained_inputs"}
-		user := llm.Message{Role: "user"}
+		user := llm.Message{Type: llm.TypeUserInput}
 		for _, input := range inputs {
 			source, _ := inputSource(input) // Validated above.
 			var kind string
@@ -134,7 +134,7 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 		}
 		encoded, _ := json.Marshal(group) // Strings, integers and slices cannot fail encoding.
 		user.Content = string(encoded)
-		out = append(out, llm.Message{Role: "developer", Content: prompts.RetainedInputs}, user)
+		out = append(out, llm.Message{Type: llm.TypeDeveloperInstruction, Content: prompts.RetainedInputs}, user)
 	}
 	return out, nil
 }

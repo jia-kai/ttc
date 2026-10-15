@@ -52,7 +52,7 @@ type requestInputMetadata struct {
 // admitted main projection or the caller's isolated child input plus notices, with
 // any new runtime context appended.
 func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, contextMessage *llm.Message, notices, childInput []llm.Message, steers ...llm.Message) (v Admission, err error) {
-	if contextMessage != nil && (contextMessage.Role != "developer" || !contextMessage.Runtime || contextMessage.Content == "") {
+	if contextMessage != nil && (contextMessage.Type != llm.TypeRuntimeContext || contextMessage.Content == "") {
 		return v, errors.New(prompts.HistoryRuntimeContext)
 	}
 	data, err := json.Marshal(model)
@@ -89,7 +89,9 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 				return errors.New(prompts.HistoryNotificationDelivered)
 			}
 			delivered = append(delivered, m.EventSeq)
-			m.Runtime = true
+			if m.Type != llm.TypeRuntimeNotification && m.Type != llm.TypeChildGuidance {
+				return fmt.Errorf(prompts.HistoryNotificationMessageType, m.Type)
+			}
 			b, err := json.Marshal(m)
 			if err != nil {
 				return err
@@ -104,7 +106,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 			return errors.New(prompts.HistorySteeringActor)
 		}
 		for _, m := range steers {
-			if m.Role != "user" || m.Runtime {
+			if m.Type != llm.TypeUserInput {
 				return errors.New("steering must be a human user message")
 			}
 			m.InputSource = "steer"
@@ -173,7 +175,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 		// Foreground children carry their finish event in an immutable tool
 		// result rather than producing an extra notification message.
 		for _, m := range v.Messages {
-			if m.Role != "tool" {
+			if m.Type != llm.TypeToolResult {
 				continue
 			}
 			var result struct {
@@ -254,7 +256,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 				if err != nil {
 					return err
 				}
-				v.Notifications = append(v.Notifications, llm.Message{Role: "user", Runtime: true, EventSeq: id, Content: string(content)})
+				v.Notifications = append(v.Notifications, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: id, Content: string(content)})
 			}
 		}
 		return nil

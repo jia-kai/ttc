@@ -133,7 +133,7 @@ func TestChildMessageWaitsForForegroundBatch(t *testing.T) {
 		}
 		toolIndex, noticeIndex := -1, -1
 		for i, message := range req.Messages {
-			if message.Role == "tool" && message.CallID == "block" {
+			if message.Type == llm.TypeToolResult && message.CallID == "block" {
 				toolIndex = i
 			}
 			if strings.Contains(message.Content, `"type":"child_message"`) {
@@ -196,7 +196,7 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 				for _, message := range req.Messages {
 					if strings.Contains(message.Content, `"type":"child_message"`) {
 						count++
-						if !message.Runtime || message.InputSource != "" {
+						if !message.Type.IsRuntime() || message.InputSource != "" {
 							t.Error("parent guidance became a retained human prompt")
 						}
 					}
@@ -270,7 +270,7 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	}
 	queuedTokens := assignment.queuedTokens
 	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment}
-	input := []llm.Message{{Role: "user", Content: "task", InputSource: "task"}}
+	input := []llm.Message{{Type: llm.TypeUserInput, Content: "task", InputSource: "task"}}
 	var before int
 	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {
 		t.Fatal(err)

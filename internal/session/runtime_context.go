@@ -58,7 +58,7 @@ func (r *Runtime) projectInheritedSkillCatalogs(messages []llm.Message, actor st
 	}
 	projected := append([]llm.Message(nil), messages...)
 	for i, message := range projected {
-		if !message.Runtime || message.Role != "developer" {
+		if message.Type != llm.TypeRuntimeContext {
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -137,7 +137,7 @@ type runtimeContext struct {
 	BinaryFiles *[]nativeReadGroup `json:"binary_files,omitempty"` // Present only on initial/compacted admission or capability changes; [] clears support.
 	ImageClick  bool               `json:"image_click"`
 	Children    []tool.ChildView   `json:"children"`
-	Jobs        []jobs.Snapshot    `json:"live_jobs"`
+	Jobs        []jobs.Metadata    `json:"live_jobs"`
 	Timers      []TimerView        `json:"live_timers"`
 	Project     *projectContext    `json:"project,omitempty"` // Absent when unchanged; empty lists explicitly clear it.
 }
@@ -221,7 +221,7 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 	r.images.mu.Lock()
 	clicks := r.images.enabled
 	r.images.mu.Unlock()
-	v := runtimeContext{Type: "runtime_context", Actor: actor, Changes: []stateChange{}, Cwd: r.Workspace.Root, Scratch: path, Date: time.Now().UTC().Format("2006-01-02"), Model: selection.Provider + "/" + selection.Model.ID + "/" + selection.Variant, ImageInput: selection.Model.Images, ImageClick: clicks, Children: r.committedChildren(actor), Jobs: []jobs.Snapshot{}, Timers: []TimerView{}}
+	v := runtimeContext{Type: "runtime_context", Actor: actor, Changes: []stateChange{}, Cwd: r.Workspace.Root, Scratch: path, Date: time.Now().UTC().Format("2006-01-02"), Model: selection.Provider + "/" + selection.Model.ID + "/" + selection.Variant, ImageInput: selection.Model.Images, ImageClick: clicks, Children: r.committedChildren(actor), Jobs: []jobs.Metadata{}, Timers: []TimerView{}}
 	v.IsRepo, v.Branch = next.git.Repo != "", next.git.Branch
 	formats := nativeReadGroups(selection.Model.BinaryFileTypes())
 	v.BinaryFiles = &formats
@@ -240,7 +240,7 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 			v.Changes = append(v.Changes, stateChange{Kind: "job", ID: j.ID, Label: j.Label, From: previous.jobs[j.ID], To: status, ExitCode: j.ExitCode, Signal: j.Signal, FinishedAt: j.FinishedAt})
 		}
 		if j.Status == "running" {
-			v.Jobs = append(v.Jobs, j)
+			v.Jobs = append(v.Jobs, j.Metadata())
 		}
 	}
 	for _, timer := range r.committedTimers() {
@@ -279,25 +279,5 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 	if err != nil {
 		return nil, previous, err
 	}
-	return &llm.Message{Role: "developer", Runtime: true, Content: string(data)}, next, nil
-}
-
-func contextLabel(m llm.Message) string {
-	var v runtimeContext
-	if json.Unmarshal([]byte(m.Content), &v) != nil {
-		return "Runtime context · inspect"
-	}
-	parts := []string{"Runtime context"}
-	for _, status := range []string{"failed", "cancelled", "completed", "running", "fired", "scheduled"} {
-		count := 0
-		for _, c := range v.Changes {
-			if c.To == status {
-				count++
-			}
-		}
-		if count > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", count, status))
-		}
-	}
-	return strings.Join(append(parts, "inspect"), " · ")
+	return &llm.Message{Type: llm.TypeRuntimeContext, Content: string(data)}, next, nil
 }

@@ -23,21 +23,20 @@ import (
 
 // Event contains a view update, never authentication state. EntryID makes every record inspectable.
 type Event struct {
-	Generation uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
-	Kind, Text string
-	SessionID  string // Runtime conversation at emission; the frontend discards stale-view events.
-	EntryID    int64
-	RequestID  int64          // Producing model request for streamed/completed assistant text.
-	Actor      string         // Producing actor for any event; empty means the main actor.
-	CallID     string         // Stable tool-card identity across transient updates and the final record.
-	PendingKey string         // Request-scoped streamed announcement to replace when intent is committed.
-	JobID      string         // Optional live job for bounded inspector polling; never revived from history.
-	Detail     string         // Bounded detail for a transient tool update; final detail is loaded from history.
-	Human      bool           // True only for a submitted human instruction.
-	Runtime    bool           // Message content is a runtime-authored envelope, not a human/task prompt.
-	Image      *ImageSnapshot // Immutable image_show snapshot, not a live interaction handle.
-	Question   *QuestionForm  // Snapshot for question lifecycle events; never persisted as a live handle.
-	Retry      *llm.Retry     // Foreground retry backoff metadata; nil for background session naming.
+	Generation  uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
+	Kind, Text  string
+	SessionID   string // Runtime conversation at emission; the frontend discards stale-view events.
+	EntryID     int64
+	RequestID   int64           // Producing model request for streamed/completed assistant text.
+	Actor       string          // Producing actor for any event; empty means the main actor.
+	CallID      string          // Stable tool-card identity across transient updates and the final record.
+	PendingKey  string          // Request-scoped streamed announcement to replace when intent is committed.
+	JobID       string          // Optional live job for bounded inspector polling; never revived from history.
+	Detail      string          // Bounded detail for a transient tool update; final detail is loaded from history.
+	MessageType llm.MessageType // Canonical semantics for message events; zero for transient events.
+	Image       *ImageSnapshot  // Immutable image_show snapshot, not a live interaction handle.
+	Question    *QuestionForm   // Snapshot for question lifecycle events; never persisted as a live handle.
+	Retry       *llm.Retry      // Foreground retry backoff metadata; nil for background session naming.
 }
 
 // Inference is the protocol dependency consumed by sessions. Catalog discovery,
@@ -173,6 +172,7 @@ func (r *Runtime) resetTransient() {
 	tool.AddFiles(r.Tools, r.Workspace)
 	tool.AddShell(r.Tools, r.Jobs, r.Workspace, r)
 	tool.AddWatch(r.Tools, r.Jobs, r.Workspace)
+	tool.AddTmuxWatchRun(r.Tools, r.Jobs, r.Workspace)
 	tool.AddWeb(r.Tools, httpClient(), r.searchConfig)
 	tool.AddSkills(r.Tools, r.Skills)
 	w := newWakeups(r.ctx, r.publishTimer)
@@ -375,7 +375,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 				return e
 			}
 		}
-		r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, Human: true})
+		r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, MessageType: message.Type})
 	}
 	priorAttempts := 0
 	var recovery *llm.Message
@@ -390,7 +390,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			return e
 		}
 		system := systemTemplate
-		admitted, contextMessage, e := r.admitMain(ctx, turn, selection)
+		admitted, _, e := r.admitMain(ctx, turn, selection)
 		if errors.Is(e, errNeedsCompaction) {
 			r.emit(Event{Kind: "status", Text: "Compacting context…"})
 			result, err := r.compactContext(ctx, "", selection, recovery)
@@ -406,7 +406,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		request, messages := admitted.RequestID, admitted.Messages
 		defs := r.Tools.Definitions()
 		if admitted.ContextEntry != 0 {
-			r.emit(Event{Kind: "runtime_context", Text: contextLabel(*contextMessage), EntryID: admitted.ContextEntry})
+			r.emit(Event{Kind: "runtime_context", MessageType: llm.TypeRuntimeContext, EntryID: admitted.ContextEntry})
 		}
 		for _, entry := range admitted.SteerEntries {
 			v, e := r.Store.Entry(entry)
@@ -417,7 +417,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			if e = json.Unmarshal(v.Content, &m); e != nil {
 				return e
 			}
-			r.emit(Event{Kind: "message", Text: m.DisplayText(), EntryID: entry, Human: true})
+			r.emit(Event{Kind: "message", Text: m.DisplayText(), EntryID: entry, MessageType: m.Type})
 		}
 		for _, entry := range admitted.NoticeEntries {
 			v, e := r.Store.Entry(entry)
@@ -435,14 +435,14 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			if json.Unmarshal([]byte(m.Content), &wake) == nil && wake.ID != "" {
 				r.timers.deliveredThrough(wake.ID, wake.Fired)
 			}
-			r.emit(Event{Kind: "message", Text: m.Content, EntryID: entry, Runtime: m.Runtime})
+			r.emit(Event{Kind: "message", Text: m.Content, EntryID: entry, MessageType: m.Type})
 		}
 		promptEntry, e := r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
 		if e != nil {
 			return e
 		}
 		r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
-		reply := llm.Message{Role: "assistant"}
+		reply := llm.Message{Type: llm.TypeAssistant}
 		var text strings.Builder
 		var usage *llm.Usage
 		responseID := ""

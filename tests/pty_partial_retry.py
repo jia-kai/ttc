@@ -155,7 +155,8 @@ def main():
             assert db.execute('SELECT count(*) FROM tool_calls').fetchone()[0] == 1
             warning, visible = db.execute("SELECT content_json,model_visible FROM entries WHERE role='developer' AND json_extract(content_json,'$.content') LIKE '%TTC is retrying%'").fetchone()
             warning = json.loads(warning)
-            assert visible and warning['runtime'] and warning['request_id'] == rows[1][0]
+            assert visible and warning['type'] == 'runtime_instruction' and warning['request_id'] == rows[1][0]
+            assert 'role' not in warning and 'runtime' not in warning
             assert db.execute("SELECT count(*) FROM turns WHERE actor_id='main' AND status='completed'").fetchone()[0] == 1
         os.write(master, b'/undo\n')
         expect('undo completed')

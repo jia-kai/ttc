@@ -126,15 +126,15 @@ func TestHistoryArtifactMessagesAndWrapping(t *testing.T) {
 
 func TestHistoryAdmissionMessages(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
-	_, err := s.AdmitRequest(v.ID, turn, "main/child", v.Model, &llm.Message{Role: "user", Content: "wrong envelope"}, nil, nil)
+	_, err := s.AdmitRequest(v.ID, turn, "main/child", v.Model, &llm.Message{Type: llm.TypeUserInput, Content: "wrong envelope"}, nil, nil)
 	requireHistoryMessage(t, err, "runtime context must be a nonempty developer runtime message")
 	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, []llm.Message{{EventSeq: math.MaxInt64}}, nil)
 	requireHistoryMessage(t, err, "notification is not a committed event at request cutoff")
-	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, nil, llm.Message{Role: "user"})
+	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, nil, llm.Message{Type: llm.TypeUserInput})
 	requireHistoryMessage(t, err, "only main requests accept human steering")
-	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, nil, nil, nil, llm.Message{Role: "assistant"})
+	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, nil, nil, nil, llm.Message{Type: llm.TypeAssistant})
 	requireHistoryMessage(t, err, "steering must be a human user message")
-	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, []llm.Message{{Role: "tool", Content: fmt.Sprintf(`{"finish_event_seq":%d}`, int64(math.MaxInt64))}})
+	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, []llm.Message{{Type: llm.TypeToolResult, Content: fmt.Sprintf(`{"finish_event_seq":%d}`, int64(math.MaxInt64))}})
 	requireHistoryMessage(t, err, "child finish exceeds request cutoff")
 	if err := s.InvalidateContext(v.ID, "broken summary"); err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestHistoryAdmissionMessages(t *testing.T) {
 func TestHistoryArchiveCaptions(t *testing.T) {
 	s, v, turn, request := historyFixture(t)
 	snapshot := filepath.Join(t.TempDir(), "snapshot>file.pdf")
-	message, err := json.Marshal(llm.Message{Role: "assistant", Content: "Evidence", Files: []llm.BinaryFile{{Path: snapshot}}})
+	message, err := json.Marshal(llm.Message{Type: llm.TypeAssistant, Content: "Evidence", Files: []llm.BinaryFile{{Path: snapshot}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestHistoryArchiveCaptions(t *testing.T) {
 	if err != nil || !strings.HasPrefix(text, "Pending call:\n\n") {
 		t.Fatalf("pending call caption = %q, %v", text, err)
 	}
-	pending := &llm.Message{Role: "assistant", Content: "Last partial reply"}
+	pending := &llm.Message{Type: llm.TypeAssistant, Content: "Last partial reply"}
 	path, err := s.ArchiveActorTranscript(v.ID, "main/other-child", pending)
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestHistoryArchiveCaptions(t *testing.T) {
 	}
 	_, err = s.ArchiveActorTranscript(v.ID, " ", nil)
 	requireHistoryMessage(t, err, "actor transcript requires an actor")
-	_, err = s.ArchiveActorTranscript(v.ID, "main/child", &llm.Message{Role: "user"})
+	_, err = s.ArchiveActorTranscript(v.ID, "main/child", &llm.Message{Type: llm.TypeUserInput})
 	requireHistoryMessage(t, err, "pending transcript output must be an assistant message")
 	_, err = s.ExportText(Entry{Kind: "status", Content: json.RawMessage(`{"type":"job_completion"}`)})
 	requireHistoryMessage(t, err, "invalid job completion presentation")
@@ -204,7 +204,7 @@ func TestHistoryArchiveCaptions(t *testing.T) {
 
 func TestHistoryInputMessagesPreserveWrapping(t *testing.T) {
 	entry := Entry{ID: 7, Actor: "main", Kind: "message", Role: "user", Visible: true}
-	message := llm.Message{Role: "user"}
+	message := llm.Message{Type: llm.TypeUserInput}
 	_, err := enrichInput(nil, entry, message)
 	requireHistoryMessage(t, err, "original human input #7: sql: no rows in result set")
 	if !errors.Is(err, sql.ErrNoRows) {

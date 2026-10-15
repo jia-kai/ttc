@@ -1,6 +1,9 @@
 # History diagnostics can reach models through child failures and mutation tools.
 # Preserve exact prose, whitespace and printf slots; UI-only operator text stays in Go.
 HistoryArchiveConflict: "archive content conflict"
+HistoryDecodeCanonicalMessage: "decode canonical %s: %w"
+HistoryMessageIndexedRole: "message type %q requires indexed role %q, got %q"
+HistoryNotificationMessageType: "invalid notification message type %q"
 HistoryArtifactCategory: "invalid artifact category"
 HistoryArtifactConflict: "artifact hash conflict"
 HistoryArtifactLimit: "invalid saved artifact byte limit"

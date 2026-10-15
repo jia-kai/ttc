@@ -101,7 +101,7 @@ func TestShellStrictDefaultAndOptOut(t *testing.T) {
 			record := invoke(t, r, w, x, req, "shell", `{"command":`+string(command)+tc.extra+`}`)
 			ok(t, record)
 			var view jobs.Snapshot
-			if err := json.Unmarshal(record.Result, &view); err != nil || view.ExitCode == nil || (*view.ExitCode == 0) != tc.wantExitZero || strings.Contains(view.Stdout, "should-not-run") || view.Label != tc.command {
+			if err := json.Unmarshal(record.Result, &view); err != nil || view.ExitCode == nil || (*view.ExitCode == 0) != tc.wantExitZero || strings.Contains(view.Stdout, "should-not-run") || view.Label != "Shell command" {
 				t.Fatal(view, err)
 			}
 		})

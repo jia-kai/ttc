@@ -81,10 +81,14 @@ func canonicalCompaction(messages []llm.Message) []llm.Message {
 // expansion, replay state or attachment bytes. Retained human inputs include
 // typed original-source/commit and compaction metadata. Durable archives keep
 // exact records; summarization uses only the compacting actor's admitted messages.
-func summaryTranscript(messages []llm.Message) string {
+func summaryTranscript(messages []llm.Message) (string, error) {
 	var out strings.Builder
 	for _, message := range messages {
-		fmt.Fprintf(&out, prompts.SessionSummaryMessageHeader, message.Role)
+		content, err := message.ModelContent()
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&out, prompts.SessionSummaryMessageHeader, message.Role())
 		if message.CallID != "" {
 			fmt.Fprintf(&out, prompts.SessionSummaryCallID, message.CallID)
 		}
@@ -102,7 +106,7 @@ func summaryTranscript(messages []llm.Message) string {
 			out.Write(metadata)
 			out.WriteByte('\n')
 		}
-		out.WriteString(message.Content)
+		out.WriteString(content)
 		out.WriteByte('\n')
 		for _, call := range message.Calls {
 			fmt.Fprintf(&out, prompts.SessionSummaryToolCall, call.ID, call.Name, call.Arguments)
@@ -111,7 +115,7 @@ func summaryTranscript(messages []llm.Message) string {
 			fmt.Fprintf(&out, prompts.SessionSummaryBinaryAttachment, file.MIMEType, file.Path)
 		}
 	}
-	return out.String()
+	return out.String(), nil
 }
 
 func compactionLinks(summary, archive, exact string) string {
@@ -132,7 +136,7 @@ func compactionFits(selection llm.Selection, system string, tools []llm.ToolDefi
 // summarize shares one request across main, coding children and asides using
 // the compaction operation's context. Persistence follows the current continuation.
 func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection llm.Selection, prefix, focus string) (text string, err error) {
-	input := llm.Message{Role: "user", Content: fmt.Sprintf(prompts.CompactionInput, focus, prefix)}
+	input := llm.Message{Type: llm.TypeUserInput, Content: fmt.Sprintf(prompts.CompactionInput, focus, prefix)}
 	budget := selection
 	budget.Model.Budget.OutputAllowance = budget.Model.Budget.SummaryOutputAllowance
 	if !contextbuild.Fits(budget, summaryInstructions, nil, []llm.Message{input}, false) {
@@ -172,7 +176,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection l
 	r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · compaction", EntryID: id})
 	persist := func(message llm.Message, label string) error {
 		r.routeMu.RLock()
-		id, e := r.Store.RequestMessage(r.Current(), turn, "compaction", message.Role, request, message)
+		id, e := r.Store.RequestMessage(r.Current(), turn, "compaction", message.Role(), request, message)
 		r.routeMu.RUnlock()
 		if e == nil {
 			r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: label, EntryID: id})
@@ -207,7 +211,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection l
 		return nil
 	})
 	r.recordUsage(usage)
-	if failure := persist(llm.Message{Role: "assistant", Content: summary.String()}, "Compaction reply · inspect"); failure != nil {
+	if failure := persist(llm.Message{Type: llm.TypeAssistant, Content: summary.String()}, "Compaction reply · inspect"); failure != nil {
 		err = errors.Join(err, failure)
 	}
 	if err != nil {
@@ -252,24 +256,28 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 		return nil, cursor, err
 	}
 	records := archive + ".jsonl"
-	summary, err := r.summarize(ctx, task.actor, task.turn, task.selection, summaryTranscript(canonical[:retention.Start]), "")
+	transcript, err := summaryTranscript(canonical[:retention.Start])
+	if err != nil {
+		return nil, cursor, err
+	}
+	summary, err := r.summarize(ctx, task.actor, task.turn, task.selection, transcript, "")
 	if err != nil {
 		return nil, cursor, err
 	}
 	summary = compactionLinks(summary, archive, records)
-	result := []llm.Message{{Role: "assistant", Content: summary}}
+	result := []llm.Message{{Type: llm.TypeAssistant, Content: summary}}
 	result = append(result, retainedInputs...)
 	result = append(result, canonical[retention.Start:]...)
 	if task.aside {
 		present := false
 		for _, message := range result {
-			if message.Role == "developer" && message.Content == btwInstruction {
+			if message.Role() == "developer" && message.Content == btwInstruction {
 				present = true
 				break
 			}
 		}
 		if !present {
-			updated := []llm.Message{result[0], {Role: "developer", Runtime: true, Content: btwInstruction}}
+			updated := []llm.Message{result[0], {Type: llm.TypeRuntimeInstruction, Content: btwInstruction}}
 			result = append(updated, result[1:]...)
 		}
 	}
@@ -314,13 +322,13 @@ func childTranscript(messages []llm.Message) string {
 		for _, call := range message.Calls {
 			calls[call.ID] = call
 		}
-		if message.Role == "tool" {
+		if message.Type == llm.TypeToolResult {
 			finished[message.CallID] = true
 		}
 	}
 	var out strings.Builder
 	for _, message := range messages {
-		if message.Role == "tool" {
+		if message.Type == llm.TypeToolResult {
 			if call, ok := calls[message.CallID]; ok && json.Valid([]byte(message.Content)) {
 				fmt.Fprintf(&out, "### Tool · %s\n\n%s\n\n", render.Inline(call.Name), render.Tool(call.Name, call.Arguments, json.RawMessage(message.Content)).ExportText())
 				// Live inspectors recover captures through JobDetail. An archive
@@ -342,7 +350,7 @@ func childTranscript(messages []llm.Message) string {
 			if json.Valid([]byte(message.Content)) {
 				body = render.Fence(message.Content, "json")
 			}
-			fmt.Fprintf(&out, "### %s\n\n%s\n\n", render.Inline(message.Role), body)
+			fmt.Fprintf(&out, "### %s\n\n%s\n\n", render.Inline(message.Role()), body)
 		}
 		for _, call := range message.Calls {
 			if !finished[call.ID] {

@@ -107,9 +107,9 @@ func TestBinaryLive(t *testing.T) {
 				Selection:      selection, NoTools: true, MaxAttempts: 1, OutputTokens: 64,
 				System: "Read the supplied file. Return only its exact marker text, or UNREADABLE if its contents cannot be accessed. Do not invoke tools.",
 				Messages: []llm.Message{
-					{Role: "user", Content: "Return the exact synthetic marker inside the attached file. Do not guess."},
-					{Role: "assistant", Calls: []llm.ToolCall{{ID: "call_binary_live", Name: "read_file", Arguments: args}}},
-					{Role: "tool", CallID: "call_binary_live", Content: "Attached original file.", Files: []llm.BinaryFile{file}},
+					{Type: llm.TypeUserInput, Content: "Return the exact synthetic marker inside the attached file. Do not guess."},
+					{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "call_binary_live", Name: "read_file", Arguments: args}}},
+					{Type: llm.TypeToolResult, CallID: "call_binary_live", Content: "Attached original file.", Files: []llm.BinaryFile{file}},
 				},
 			}
 			var output strings.Builder

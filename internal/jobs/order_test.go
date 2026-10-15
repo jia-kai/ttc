@@ -63,7 +63,7 @@ func TestLaunchTimestampRetainsPrecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell, err := m.Start("main", "sleep 10", t.TempDir(), 0, true, true, false, capture.OutputOptions{})
+	shell, err := m.Start("main", "sleep 10", t.TempDir(), 0, true, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestCompletionTimestampRetainsPrecision(t *testing.T) {
 		var id string
 		var err error
 		if kind == "shell" {
-			id, err = m.Start("main", "true", t.TempDir(), 0, true, true, false, capture.OutputOptions{})
+			id, err = m.Start("main", "true", t.TempDir(), 0, true, true, false, capture.OutputOptions{}, "")
 		} else {
 			id, err = m.StartTask("main", TaskOptions{Kind: "subagent", Label: "task", Background: true}, func(context.Context, io.Writer, io.Writer) (TaskResult, error) {
 				return TaskResult{}, nil

@@ -22,7 +22,7 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 		{Text: "Parent used the delivered answer."},
 	})
 	r.Emit = nil
-	m := llm.Message{Role: "user", Content: "Run a disposable audit"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "Run a disposable audit"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 		Stdout     *string
 	}
 	for _, message := range messages {
-		if message.Role == "tool" && message.CallID == "child" {
+		if message.Type == llm.TypeToolResult && message.CallID == "child" {
 			if err := json.Unmarshal([]byte(message.Content), &result); err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +106,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 				text = ""
 			}
 			for _, m := range req.Messages {
-				if m.Role != "user" || !m.Runtime {
+				if m.Role() != "user" || !m.Type.IsRuntime() {
 					continue
 				}
 				var finish history.ChildFinish
@@ -126,7 +126,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 	}}
-	m := llm.Message{Role: "user", Content: "Launch an audit"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "Launch an audit"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ WHEN json_extract(NEW.content_json,'$.type')='child_turn_finished'
 BEGIN SELECT RAISE(ABORT,'injected child commit failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	m := llm.Message{Role: "user", Content: "Audit"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "Audit"}
 	err := r.Run(&m)
 	if err == nil || !strings.Contains(err.Error(), "injected child commit failure") {
 		t.Fatal("commit failure was not reported", err)

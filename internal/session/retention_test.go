@@ -23,7 +23,7 @@ func retentionFixture(t *testing.T) (*Runtime, chan Event, string) {
 	t.Cleanup(cancel)
 	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	path, id := t.TempDir(), history.NewID("session")
-	turn, _, err := store.StartSession(id, path, selection, llm.Message{Role: "user", Content: "Loaded conversation"})
+	turn, _, err := store.StartSession(id, path, selection, llm.Message{Type: llm.TypeUserInput, Content: "Loaded conversation"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func retentionFixture(t *testing.T) (*Runtime, chan Event, string) {
 func TestRetentionStartupProtectsLoadedLineageAndStops(t *testing.T) {
 	r, _, path := retentionFixture(t)
 	other := history.NewID("session")
-	turn, _, err := r.Store.StartSession(other, path, r.CurrentSelection(), llm.Message{Role: "user", Content: "Expired conversation"})
+	turn, _, err := r.Store.StartSession(other, path, r.CurrentSelection(), llm.Message{Type: llm.TypeUserInput, Content: "Expired conversation"})
 	if err != nil {
 		t.Fatal(err)
 	}

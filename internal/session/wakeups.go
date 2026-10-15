@@ -47,6 +47,27 @@ type wakeups struct {
 	closed bool
 }
 
+// wakeupView keeps routine inspection independent of reminder-body size.
+type wakeupView struct {
+	ID           string `json:"wakeup_id"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	NextAt       string `json:"next_at,omitempty"`
+	Repeat       int    `json:"repeat_seconds,omitempty"`
+	Fired        int    `json:"fired_count"`
+	Last         string `json:"last_result,omitempty"`
+	Message      string `json:"message,omitempty"`
+	StartupNotes string `json:"startup_notes,omitempty"`
+}
+
+func (w wakeup) listView(details bool) wakeupView {
+	v := wakeupView{ID: w.ID, Name: w.Name, Status: w.Status, NextAt: w.NextAt, Repeat: w.Repeat, Fired: w.Fired, Last: w.Last}
+	if details {
+		v.Message, v.StartupNotes = w.Message, w.startupText
+	}
+	return v
+}
+
 func newWakeups(ctx context.Context, notify func(wakeup)) *wakeups {
 	return &wakeups{ctx: ctx, items: map[string]*wakeup{}, notify: notify}
 }
@@ -57,7 +78,7 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 	if err != nil {
 		return wakeup{}, fmt.Errorf(prompts.WakeupEncodeStartup, err)
 	}
-	startupText := "### Original startup parameters\n\n" + render.Fence(string(startup), "json")
+	startupText := prompts.TimerStartupHeading + render.Fence(string(startup), "json")
 	repeat := 0
 	if a.Repeat != nil {
 		repeat = *a.Repeat
@@ -219,9 +240,15 @@ func (r *Runtime) addWakeupTools() {
 		}
 		return map[string]any{"wakeup_id": v.ID, "name": v.Name, "next_at": v.NextAt, "repeat_seconds": v.Repeat, "status": v.Status}, nil
 	})
-	type empty struct{}
-	tool.Register(r.Tools, "wakeup_list", prompts.ToolDescription("wakeup_list"), nil, nil, func(empty) error { return nil }, func(ctx context.Context, x tool.Execution, a empty) (any, error) {
-		return map[string]any{"wakeups": r.timers.list()}, nil
+	type list struct {
+		Details bool `json:"details,omitempty"`
+	}
+	tool.Register(r.Tools, "wakeup_list", prompts.ToolDescription("wakeup_list"), map[string]any{"details": tool.Property("boolean")}, nil, func(list) error { return nil }, func(ctx context.Context, x tool.Execution, a list) (any, error) {
+		views := make([]wakeupView, 0)
+		for _, timer := range r.timers.list() {
+			views = append(views, timer.listView(a.Details))
+		}
+		return map[string]any{"wakeups": views}, nil
 	})
 	type stop struct {
 		ID   *string `json:"wakeup_id,omitempty"`

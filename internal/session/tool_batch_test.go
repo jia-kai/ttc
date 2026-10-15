@@ -33,11 +33,23 @@ func batchIntents(t *testing.T, r *Runtime, actor string, calls []llm.ToolCall) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ids, err := r.Store.Assistant(r.Current(), turn, actor, request, llm.Message{Role: "assistant", Calls: calls})
+	_, ids, err := r.Store.Assistant(r.Current(), turn, actor, request, llm.Message{Type: llm.TypeAssistant, Calls: calls})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return turn, ids
+}
+
+func TestTmuxWatchRunIsOrderedControlWithInspectableJob(t *testing.T) {
+	if readOnlyTool("tmux_watch_run") || fileMutation("tmux_watch_run") {
+		t.Fatal("durable launch must be ordered control work")
+	}
+	if id := captureJobID("tmux_watch_run", json.RawMessage(`{"job_id":"job_observer","status":"watching"}`)); id != "job_observer" {
+		t.Fatal("durable launch lost watcher inspection", id)
+	}
+	if id := captureJobID("tmux_watch_run", json.RawMessage(`{"status":"launched_unobserved"}`)); id != "" {
+		t.Fatal("unobserved launch invented a watcher", id)
+	}
 }
 
 func receive[T any](t *testing.T, ch <-chan T) T {
@@ -265,7 +277,7 @@ func TestTurnsContinueBeyond64Cycles(t *testing.T) {
 			}
 			r, _ := runtimeFixture(t, responses)
 			r.Emit = nil
-			m := llm.Message{Role: "user", Content: "continue"}
+			m := llm.Message{Type: llm.TypeUserInput, Content: "continue"}
 			if err := r.Run(&m); err != nil {
 				t.Fatal(err)
 			}

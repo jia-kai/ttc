@@ -14,7 +14,7 @@ import (
 
 func branchWrite(t *testing.T, w *Manager, saved history.Session, turn, actor string, request int64, body string) int64 {
 	t.Helper()
-	_, calls, err := w.Store.Assistant(saved.ID, turn, actor, request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: history.NewID("call"), Name: "write", Arguments: []byte(`{"path":"result"}`)}}})
+	_, calls, err := w.Store.Assistant(saved.ID, turn, actor, request, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: history.NewID("call"), Name: "write", Arguments: []byte(`{"path":"result"}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

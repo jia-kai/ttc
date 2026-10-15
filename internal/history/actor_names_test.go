@@ -16,7 +16,7 @@ func TestSubagentNamesSurviveClosedChildAndCompaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	retained, err := s.Append(session.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "Retain this"})
+	retained, err := s.Append(session.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "Retain this"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,10 +41,10 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				warning := llm.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
+				warning := llm.Message{Type: llm.TypeRuntimeInstruction, RequestID: request, Content: prompts.Recovery}
 				messages := []llm.Message{
-					{Role: "user", Content: "Continue research", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
-					{Role: "assistant", Content: strings.Repeat("Oversized partial evidence. ", 400)},
+					{Type: llm.TypeUserInput, Content: "Continue research", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
+					{Type: llm.TypeAssistant, Content: strings.Repeat("Oversized partial evidence. ", 400)},
 					warning,
 				}
 				if actor == "main" {
@@ -76,7 +76,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 					t.Fatal(err)
 				}
 				summary := "Partial evidence summarized; continue carefully."
-				baseline := []llm.Message{{Role: "assistant", Content: compactionLinks(summary, archive, archive+".jsonl")}}
+				baseline := []llm.Message{{Type: llm.TypeAssistant, Content: compactionLinks(summary, archive, archive+".jsonl")}}
 				baseline = append(baseline, retained...)
 				system := childSystemTemplate
 				if actor == "main" {
@@ -84,7 +84,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				}
 				if aside {
 					system = asideSystemTemplate
-					baseline = append(baseline, llm.Message{Role: "developer", Runtime: true, Content: btwInstruction})
+					baseline = append(baseline, llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction})
 				}
 				runtime, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
 				if err != nil {
@@ -195,13 +195,13 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			warning := llm.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
+			warning := llm.Message{Type: llm.TypeRuntimeInstruction, RequestID: request, Content: prompts.Recovery}
 			if _, err := r.ensureRecovery(turn, actor, warning); err != nil {
 				t.Fatal(err)
 			}
 			messages := []llm.Message{
-				{Role: "user", Content: "Continue isolated task", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
-				{Role: "assistant", Content: strings.Repeat("Partial isolated evidence. ", 400)},
+				{Type: llm.TypeUserInput, Content: "Continue isolated task", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
+				{Type: llm.TypeAssistant, Content: strings.Repeat("Partial isolated evidence. ", 400)},
 				warning,
 			}
 			summaries := 0
@@ -287,7 +287,7 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 			}}
 			var err error
 			if actor == "main" {
-				err = r.Run(&llm.Message{Role: "user", Content: "Recover this task"})
+				err = r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Recover this task"})
 			} else {
 				seedRuntime(t, r, "Private main context")
 				turn, e := r.Store.BeginChildTurn(r.Current(), actor, r.selection)

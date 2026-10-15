@@ -22,7 +22,7 @@ func TestAdapterBinaryInputWithInMemoryResolver(t *testing.T) {
 	file := llm.BinaryFile{Path: "memory.pdf", MIMEType: "application/pdf", Bytes: len(data)}
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 	selection.Model.BinaryFiles = documentFileTypes()
-	req := llm.Request{ConversationID: "memory-binary", Selection: selection, NoTools: true, Messages: []llm.Message{{Role: "user", Files: []llm.BinaryFile{file}}}}
+	req := llm.Request{ConversationID: "memory-binary", Selection: selection, NoTools: true, Messages: []llm.Message{{Type: llm.TypeUserInput, Files: []llm.BinaryFile{file}}}}
 	// A nonexistent source and unusable cache root ensure no filesystem fallback.
 	t.Setenv("XDG_CACHE_HOME", "/dev/null/no-cache")
 	if _, err := wire(context.Background(), req, nil); err == nil || !strings.Contains(err.Error(), "configured resolver") {
@@ -133,7 +133,10 @@ func TestNativeDocumentsInHumanAndToolContent(t *testing.T) {
 				file.MIMEType, file.Bytes = format.MIMEType, len(data)
 				selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 				selection.Model.BinaryFiles = documentFileTypes()
-				m := llm.Message{Role: role, CallID: "read-document", Content: "metadata", Files: []llm.BinaryFile{file}}
+				m := llm.Message{Type: llm.TypeUserInput, Content: "metadata", Files: []llm.BinaryFile{file}}
+				if role == "tool" {
+					m.Type, m.CallID = llm.TypeToolResult, "read-document"
+				}
 				req := llm.Request{ConversationID: "documents", Selection: selection, Messages: []llm.Message{m}}
 				body, err := wire(context.Background(), req, binaryinput.Resolve)
 				if err != nil {
@@ -187,7 +190,7 @@ func TestDocumentCapabilitiesLimitsAndUnavailable(t *testing.T) {
 	file := originalBinaryFile(t, "document.pdf", data)
 	file.MIMEType, file.Bytes = "application/pdf", len(data)
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
-	m := llm.Message{Role: "tool", CallID: "read", Files: []llm.BinaryFile{file}}
+	m := llm.Message{Type: llm.TypeToolResult, CallID: "read", Files: []llm.BinaryFile{file}}
 	req := llm.Request{ConversationID: "documents", Selection: selection, Messages: []llm.Message{m}}
 	if _, err := wire(context.Background(), req, binaryinput.Resolve); err == nil || !strings.Contains(err.Error(), "does not support") {
 		t.Fatal("unsupported document accepted", err)

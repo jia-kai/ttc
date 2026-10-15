@@ -15,7 +15,7 @@ func TestPromoteReleasesForegroundAndKeepsCommandAlive(t *testing.T) {
 	m := New(context.Background(), func(v Snapshot) { notices <- v })
 	defer m.Close()
 	root := t.TempDir()
-	id, err := m.Start("main", "printf ready; while [ ! -e release ]; do sleep 0.01; done; printf done", root, 0, true, false, true, capture.OutputOptions{})
+	id, err := m.Start("main", "printf ready; while [ ! -e release ]; do sleep 0.01; done; printf done", root, 0, true, false, true, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestPromoteBeforeWaitPreservesNoWakePreference(t *testing.T) {
 	notices := make(chan Snapshot, 1)
 	m := New(context.Background(), func(v Snapshot) { notices <- v })
 	defer m.Close()
-	id, err := m.Start("main", "sleep 30", t.TempDir(), 0, true, false, false, capture.OutputOptions{})
+	id, err := m.Start("main", "sleep 30", t.TempDir(), 0, true, false, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

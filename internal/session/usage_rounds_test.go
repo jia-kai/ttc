@@ -41,7 +41,7 @@ func TestUsageAcrossToolRoundsAndTurns(t *testing.T) {
 		{2, 300, 85, 50, 13},
 		{3, 600, 205, 120, 13},
 	} {
-		if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
+		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 			t.Fatal(err)
 		}
 		got := r.UsageSnapshot()

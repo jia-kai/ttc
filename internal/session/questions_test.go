@@ -139,7 +139,7 @@ func TestQuestionAnswerRejectsDuplicateAfterChannelConsumed(t *testing.T) {
 func TestTypedQuestionLifecycleAndCancellation(t *testing.T) {
 	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Pick?","recommended_option_id":"b","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]}`)}}}})
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Role: "user", Content: "ask"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "ask"}; done <- r.Run(&m) }()
 	var view *QuestionForm
 	deadline := time.After(3 * time.Second)
 	for view == nil {
@@ -197,7 +197,7 @@ func TestDismissedQuestionRedirectIncludesResultAndHumanInputAtNextRequest(t *te
 		return emit(llm.StreamEvent{Kind: "text", Text: "Redirect received"})
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Role: "user", Content: "ask"}) }()
+	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "ask"}) }()
 	<-requests
 	var form QuestionForm
 	for form.ID == "" {
@@ -229,14 +229,14 @@ func TestDismissedQuestionRedirectIncludesResultAndHumanInputAtNextRequest(t *te
 	case req := <-requests:
 		resultAt, humanAt := -1, -1
 		for i, m := range req.Messages {
-			if m.Role == "tool" && m.CallID == "q" {
+			if m.Type == llm.TypeToolResult && m.CallID == "q" {
 				var result questionReply
 				if err := json.Unmarshal([]byte(m.Content), &result); err != nil || !result.Dismissed || len(result.Answers) != 0 {
 					t.Fatal("incorrect dismissal result", m.Content, err)
 				}
 				resultAt = i
 			}
-			if m.Role == "user" && !m.Runtime && m.Content == redirect.Text {
+			if m.Type == llm.TypeUserInput && m.Content == redirect.Text {
 				humanAt = i
 			}
 		}

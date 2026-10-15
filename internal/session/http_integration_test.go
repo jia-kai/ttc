@@ -402,7 +402,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() { r.Close(); stopEvents() })
-	if err := r.Run(&llm.Message{Role: "user", Content: "Exercise the reproducible HTTP fixture"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Exercise the reproducible HTTP fixture"}); err != nil {
 		t.Fatal(err)
 	}
 	// End-to-end persistence and shared file queue assertions.

@@ -56,7 +56,11 @@ func TestFileImagesInMessagesAndToolOutputs(t *testing.T) {
 			im := originalBinaryFile(t, "not-a-png-extension", data.Bytes())
 			selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 			selection.Model.Images = true
-			req := llm.Request{ConversationID: "file-images", Selection: selection, Messages: []llm.Message{{Role: role, CallID: "read-file", Content: "image", Files: []llm.BinaryFile{im}}}}
+			m := llm.Message{Type: llm.TypeUserInput, Content: "image", Files: []llm.BinaryFile{im}}
+			if role == "tool" {
+				m.Type, m.CallID = llm.TypeToolResult, "read-file"
+			}
+			req := llm.Request{ConversationID: "file-images", Selection: selection, Messages: []llm.Message{m}}
 			body, err := wire(context.Background(), req, binaryinput.Resolve)
 			if err != nil {
 				t.Fatal(err)
@@ -143,7 +147,7 @@ func TestUnavailableBinaryFileDoesNotDiscardOtherAttachments(t *testing.T) {
 	}
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 	selection.Model.Images = true
-	m := llm.Message{Role: "tool", CallID: "read-both", Content: "Original metadata", Files: []llm.BinaryFile{missing, valid}}
+	m := llm.Message{Type: llm.TypeToolResult, CallID: "read-both", Content: "Original metadata", Files: []llm.BinaryFile{missing, valid}}
 	body, err := wire(context.Background(), llm.Request{ConversationID: "mixed-availability", Selection: selection, Messages: []llm.Message{m}}, binaryinput.Resolve)
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +174,7 @@ func TestStreamImageReconstructionFailsBeforeAuth(t *testing.T) {
 	}})
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 	selection.Model.Images = true
-	req := llm.Request{ConversationID: "image-tools", Selection: selection, Messages: []llm.Message{{Role: "tool", CallID: "read", Files: []llm.BinaryFile{{}}}}}
+	req := llm.Request{ConversationID: "image-tools", Selection: selection, Messages: []llm.Message{{Type: llm.TypeToolResult, CallID: "read", Files: []llm.BinaryFile{{}}}}}
 	emit := func(llm.StreamEvent) error { t.Fatal("unexpected output"); return nil }
 	if err := a.Stream(context.Background(), req, emit); err == nil || !strings.Contains(err.Error(), "file-backed binary requires") {
 		t.Fatal("invalid image reached authentication", err)
@@ -221,7 +225,7 @@ func TestNativeImageToolOutputsPreserveBytesAndCallAssociation(t *testing.T) {
 				{ID: "read-text", Name: "read", Arguments: json.RawMessage(`{"path":"notes.txt"}`)},
 				{ID: "read-other-image", Name: "read", Arguments: json.RawMessage(`{"path":"static.gif"}`)},
 			}
-			assistant := llm.Message{Role: "assistant", Calls: calls}
+			assistant := llm.Message{Type: llm.TypeAssistant, Calls: calls}
 			if nativeReplay {
 				for _, call := range calls {
 					raw, err := json.Marshal(map[string]any{"type": "function_call", "call_id": call.ID, "name": call.Name, "arguments": string(call.Arguments)})
@@ -237,11 +241,11 @@ func TestNativeImageToolOutputsPreserveBytesAndCallAssociation(t *testing.T) {
 			// Tool completion order differs from call order. The call ID, not
 			// position in the batch, determines which result belongs to a call.
 			messages := []llm.Message{
-				{Role: "user", Content: "Read the files."},
+				{Type: llm.TypeUserInput, Content: "Read the files."},
 				assistant,
-				{Role: "tool", CallID: "read-other-image", Content: "GIF snapshot", Files: images[1:]},
-				{Role: "tool", CallID: "read-text", Content: "Original text output"},
-				{Role: "tool", CallID: "read-image", Content: metadata, Files: images},
+				{Type: llm.TypeToolResult, CallID: "read-other-image", Content: "GIF snapshot", Files: images[1:]},
+				{Type: llm.TypeToolResult, CallID: "read-text", Content: "Original text output"},
+				{Type: llm.TypeToolResult, CallID: "read-image", Content: metadata, Files: images},
 			}
 			body, err := wire(context.Background(), llm.Request{ConversationID: "image-tools", Selection: selection, Messages: messages}, binaryinput.Resolve)
 			if err != nil {
@@ -283,7 +287,7 @@ func TestToolOutputTextRepresentation(t *testing.T) {
 		for _, hasImage := range []bool{false, true} {
 			selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 			selection.Model.Images = hasImage
-			m := llm.Message{Role: "tool", CallID: "call", Content: content}
+			m := llm.Message{Type: llm.TypeToolResult, CallID: "call", Content: content}
 			if hasImage {
 				m.Files = []llm.BinaryFile{originalPNG(t)}
 			}
@@ -316,7 +320,10 @@ func TestImagesRejectedForNonvisionModelsBeforeReplay(t *testing.T) {
 			t.Run(role+"/"+stateModel, func(t *testing.T) {
 				selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 				selection.Model.Images = false
-				m := llm.Message{Role: role, CallID: "call", Files: []llm.BinaryFile{originalPNG(t)}}
+				m := llm.Message{Type: map[string]llm.MessageType{"user": llm.TypeUserInput, "tool": llm.TypeToolResult, "assistant": llm.TypeAssistant}[role], Files: []llm.BinaryFile{originalPNG(t)}}
+				if role == "tool" {
+					m.CallID = "call"
+				}
 				if stateModel != "" {
 					m.State = &llm.ReplayState{Provider: "openai", Model: stateModel, Version: replayVersion, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning"}`)}}
 				}
@@ -332,7 +339,7 @@ func TestImagesRejectedForNonvisionModelsBeforeReplay(t *testing.T) {
 func TestReplayStateDoesNotSilentlyDiscardCanonicalImages(t *testing.T) {
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 	selection.Model.Images = true
-	m := llm.Message{Role: "assistant", Files: []llm.BinaryFile{originalPNG(t)}}
+	m := llm.Message{Type: llm.TypeAssistant, Files: []llm.BinaryFile{originalPNG(t)}}
 	if err := m.AppendState(selection, replayVersion, json.RawMessage(`{"type":"reasoning"}`)); err != nil {
 		t.Fatal(err)
 	}

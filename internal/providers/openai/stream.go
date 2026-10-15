@@ -127,6 +127,9 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 			if len(m.Files) > 0 {
 				return nil, errors.New(prompts.OpenAIReplayBinaryUnsupported)
 			}
+			if err := m.Validate(); err != nil {
+				return nil, fmt.Errorf(prompts.OpenAIProjectModelMessage, err)
+			}
 			items, err := replayItems(m)
 			if err != nil {
 				return nil, err
@@ -134,7 +137,12 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 			input = append(input, items...)
 			continue
 		}
-		if m.Role == "tool" {
+		content, err := m.ModelContent()
+		if err != nil {
+			return nil, fmt.Errorf(prompts.OpenAIProjectModelMessage, err)
+		}
+		m.Content = content
+		if m.Type == llm.TypeToolResult {
 			var output any = m.Content
 			if len(m.Files) > 0 {
 				parts := []any{map[string]any{"type": "input_text", "text": m.Content}}
@@ -153,7 +161,7 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 		if m.Content != "" || len(m.Files) > 0 {
 			content := []any{}
 			kind := "input_text"
-			if m.Role == "assistant" {
+			if m.Type == llm.TypeAssistant {
 				kind = "output_text"
 			}
 			if m.Content != "" {
@@ -162,12 +170,12 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 			for _, im := range m.Files {
 				part, err := binaryPart(ctx, im, req.Selection.Model, kind, resolve)
 				if err != nil {
-					return nil, fmt.Errorf(prompts.OpenAIMessageBinaryFile, m.Role, err)
+					return nil, fmt.Errorf(prompts.OpenAIMessageBinaryFile, m.Role(), err)
 				}
 				content = append(content, part)
 			}
-			message := map[string]any{"type": "message", "role": m.Role, "content": content}
-			if m.Role == "assistant" && m.Phase != "" {
+			message := map[string]any{"type": "message", "role": m.Role(), "content": content}
+			if m.Type == llm.TypeAssistant && m.Phase != "" {
 				message["phase"] = m.Phase
 			}
 			input = append(input, message)
@@ -515,7 +523,7 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 				indices = append(indices, index)
 			}
 			sort.Ints(indices)
-			reply := llm.Message{Role: "assistant", Content: streamedText.String(), State: &llm.ReplayState{Version: replayVersion}}
+			reply := llm.Message{Type: llm.TypeAssistant, Content: streamedText.String(), State: &llm.ReplayState{Version: replayVersion}}
 			for _, index := range indices {
 				reply.State.Items = append(reply.State.Items, nativeItems[index])
 				if c := calls[index]; c != nil {

@@ -35,6 +35,44 @@ history/ reversible edits. This defines the complete v1 target;
   cleanup. Managed commands must stay in their process group; daemonization is
   unsupported.
 
+## Message semantics
+
+`llm.Message.Type` is the canonical, persisted message classification. A closed
+policy maps each semantic type to its model role and presentation category;
+neither role nor runtime provenance is stored as a competing flag. Actor, event
+sequence, request identity and input source remain separate metadata.
+
+| Semantic type           | Model role  | Presentation                            |
+| ----------------------- | ----------- | --------------------------------------- |
+| `user_input`            | `user`      | Authored input                          |
+| `assistant`             | `assistant` | Assistant response                      |
+| `tool_result`           | `tool`      | Tool result                             |
+| `system_instruction`    | `system`    | Inspectable instructions                |
+| `developer_instruction` | `developer` | Inspectable instructions                |
+| `runtime_context`       | `developer` | Compact runtime context                 |
+| `runtime_notification`  | `user`      | Runtime notice; attributed child result |
+| `runtime_instruction`   | `developer` | Inspectable runtime instructions        |
+| `child_guidance`        | `user`      | Main-agent assignment guidance          |
+
+- Producers assign types before admission. Human-authored JSON never changes its
+  semantic identity. Unknown types and incompatible tool/replay/input metadata
+  are rejected at persistence and provider boundaries.
+- Model projection adds `message_type` to notification and child-guidance JSON
+  objects, preserving their event-specific `type` and payload. This makes
+  provenance explicit without elevating payload authority. Provider roles are
+  derived from the semantic type; provider-native tool calls, attachments and
+  assistant replay state retain their specialized encoding.
+- `session.Event.MessageType` carries canonical identity to live rendering. The
+  TUI uses the same message projection for live delivery and history replay;
+  presentation flags are derived view state, not another message classifier.
+  Full content remains inspectable when a notification is summarized.
+- Progress, redraws, tool-stream updates and other transient UI events are not
+  conversation messages. They keep their own lifecycle rather than entering
+  model context merely to share a renderer.
+- Legacy role/runtime records are converted at the history schema migration
+  boundary. Runtime callers do not infer message types from legacy flags or
+  content. History migration never restores live jobs, timers or watchers.
+
 ## Go module structure
 
 One Go module uses direct construction and small interfaces at their consumers:
@@ -451,10 +489,10 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 6;
-  startup migrates schema 5 transactionally, validating before commit. Schemas
-  below 5, nonempty unversioned databases and unknown newer versions fail
-  explicitly; no automatic resets or credential deletion.
+- Empty databases initialize in one immediate transaction. Current schema is 7;
+  startup migrates schemas 5 and 6 transactionally, validating before commit.
+  Schemas below 5, nonempty unversioned databases and unknown newer versions
+  fail explicitly; no automatic resets or credential deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
   instances sharing that directory before upgrading: pre-lock binaries cannot be

@@ -30,13 +30,13 @@ func TestGroupedRetainedInputsHTTPWire(t *testing.T) {
 	image := llm.BinaryFile{Path: "/snapshot/plot.png", MIMEType: "image/png", Bytes: len(imageBytes)}
 	other := llm.BinaryFile{Path: "/snapshot/other.pdf", MIMEType: "application/pdf", Bytes: len(otherBytes)}
 	canonical := []llm.Message{
-		{Role: "assistant", Content: "Summary."},
-		{Role: "user", InputTimeMS: 3004, RetainedAtMS: 15344, Content: first, Files: []llm.BinaryFile{shared, image}},
-		{Role: "user", InputSource: "steer", InputTimeMS: 1001, RetainedAtMS: 15344, Content: second, Files: []llm.BinaryFile{other}},
-		{Role: "user", InputSource: "queue", InputTimeMS: 3001, RetainedAtMS: 15344, Content: third, Files: []llm.BinaryFile{shared}},
-		{Role: "user", InputSource: "task", InputTimeMS: 1001, RetainedAtMS: 15344, Content: fourth},
-		{Role: "user", InputSource: "btw", InputTimeMS: 3002, RetainedAtMS: 15344, Content: "aside literal", Files: []llm.BinaryFile{image}},
-		{Role: "assistant", Content: "Recent work."},
+		{Type: llm.TypeAssistant, Content: "Summary."},
+		{Type: llm.TypeUserInput, InputTimeMS: 3004, RetainedAtMS: 15344, Content: first, Files: []llm.BinaryFile{shared, image}},
+		{Type: llm.TypeUserInput, InputSource: "steer", InputTimeMS: 1001, RetainedAtMS: 15344, Content: second, Files: []llm.BinaryFile{other}},
+		{Type: llm.TypeUserInput, InputSource: "queue", InputTimeMS: 3001, RetainedAtMS: 15344, Content: third, Files: []llm.BinaryFile{shared}},
+		{Type: llm.TypeUserInput, InputSource: "task", InputTimeMS: 1001, RetainedAtMS: 15344, Content: fourth},
+		{Type: llm.TypeUserInput, InputSource: "btw", InputTimeMS: 3002, RetainedAtMS: 15344, Content: "aside literal", Files: []llm.BinaryFile{image}},
+		{Type: llm.TypeAssistant, Content: "Recent work."},
 	}
 	before, err := json.Marshal(canonical)
 	if err != nil {

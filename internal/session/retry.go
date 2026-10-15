@@ -25,7 +25,7 @@ func (r *Runtime) recoverPartial(ctx context.Context, turn, actor string, reques
 	if err := validateRetry(&failure.Retry); err != nil {
 		return llm.Message{}, err
 	}
-	message := llm.Message{Role: "developer", Runtime: true, RequestID: request, Content: prompts.Recovery}
+	message := llm.Message{Type: llm.TypeRuntimeInstruction, RequestID: request, Content: prompts.Recovery}
 	if _, err := r.ensureRecovery(turn, actor, message); err != nil {
 		return llm.Message{}, err
 	}
@@ -55,7 +55,7 @@ func (r *Runtime) ensureRecovery(turn, actor string, message llm.Message) (bool,
 		return false, fmt.Errorf(prompts.SessionReadRecoveryInstructions, err)
 	}
 	for _, entry := range entries {
-		if entry.Actor != actor || entry.Kind != "message" || entry.Role != message.Role {
+		if entry.Actor != actor || entry.Kind != "message" || entry.Role != message.Role() {
 			continue
 		}
 		var existing llm.Message
@@ -68,12 +68,12 @@ func (r *Runtime) ensureRecovery(turn, actor string, message llm.Message) (bool,
 			return false, nil
 		}
 	}
-	id, err := r.Store.Append(session, turn, actor, "message", message.Role, actor == "main", message)
+	id, err := r.Store.Append(session, turn, actor, "message", message.Role(), actor == "main", message)
 	r.routeMu.RUnlock()
 	if err != nil {
 		return false, fmt.Errorf(prompts.SessionRecordRecoveryInstructions, err)
 	}
-	r.emit(Event{Kind: "message_placeholder", Actor: actor, SessionID: session, EntryID: id, Text: "Recovery instructions · inspect"})
+	r.emit(Event{Kind: "message", Actor: actor, SessionID: session, EntryID: id, MessageType: message.Type})
 	return true, nil
 }
 

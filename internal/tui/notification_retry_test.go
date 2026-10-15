@@ -68,16 +68,16 @@ func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionT
 		failures: map[int]bool{2: true}, ready: make(chan struct{}), release: make(chan struct{}), interrupt: interrupt,
 	}
 	u := newQuestionTestUIWithSetup(t, p, nil, func(r *session.Runtime) {
-		seed := llm.Message{Role: "user", Content: "Seed research history"}
+		seed := llm.Message{Type: llm.TypeUserInput, Content: "Seed research history"}
 		if err := r.Run(&seed); err != nil {
 			t.Fatal(err)
 		}
 		if oversized {
 			for _, message := range []llm.Message{
-				{Role: "user", Content: "Older research task"},
-				{Role: "assistant", Content: strings.Repeat("older evidence ", 6000)},
+				{Type: llm.TypeUserInput, Content: "Older research task"},
+				{Type: llm.TypeAssistant, Content: strings.Repeat("older evidence ", 6000)},
 			} {
-				if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role, true, message); err != nil {
+				if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role(), true, message); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -129,7 +129,7 @@ func assertNotificationDelivered(t *testing.T, u *questionTestUI, req llm.Reques
 	t.Helper()
 	found := 0
 	for _, message := range req.Messages {
-		if message.Runtime && strings.Contains(message.Content, `"job_id":"`+id+`"`) && strings.Contains(message.Content, `"type":"job_exit"`) {
+		if message.Type.IsRuntime() && strings.Contains(message.Content, `"job_id":"`+id+`"`) && strings.Contains(message.Content, `"type":"job_exit"`) {
 			found++
 		}
 	}

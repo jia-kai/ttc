@@ -143,7 +143,7 @@ func historyFixture(t *testing.T) (*Store, Session, string, int64) {
 func startHistorySession(t *testing.T, s *Store, path string, model llm.Selection, text string) (Session, string) {
 	t.Helper()
 	id := NewID("session")
-	turn, _, err := s.StartSession(id, path, model, llm.Message{Role: "user", Content: text})
+	turn, _, err := s.StartSession(id, path, model, llm.Message{Type: llm.TypeUserInput, Content: text})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 			}
 			id, path := NewID("session"), t.TempDir()
 			model := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
-			if _, _, err := s.StartSession(id, path, model, llm.Message{Role: "user", Content: "first message"}); err == nil || !strings.Contains(err.Error(), "injected first-save failure") {
+			if _, _, err := s.StartSession(id, path, model, llm.Message{Type: llm.TypeUserInput, Content: "first message"}); err == nil || !strings.Contains(err.Error(), "injected first-save failure") {
 				t.Fatal(err)
 			}
 			for _, table := range []string{"workspaces", "sessions", "turns", "entries"} {
@@ -179,7 +179,7 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 			if _, err := s.DB.Exec("DROP TRIGGER reject_first"); err != nil {
 				t.Fatal(err)
 			}
-			turn, entry, err := s.StartSession(id, path, model, llm.Message{Role: "user", Content: "first message"})
+			turn, entry, err := s.StartSession(id, path, model, llm.Message{Type: llm.TypeUserInput, Content: "first message"})
 			if err != nil || turn == "" || entry == 0 {
 				t.Fatal("same blank identity could not retry", turn, entry, err)
 			}
@@ -254,16 +254,16 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	s, v, first, req := historyFixture(t)
 	s.FinishRequest(req, "completed", nil)
 	s.FinishTurn(first, "completed")
-	s.Append(v.ID, first, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "old"})
+	s.Append(v.ID, first, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "old"})
 	second, e := s.BeginTurn(v.ID, "user", v.Model)
 	if e != nil {
 		t.Fatal(e)
 	}
-	retained, e := s.Append(v.ID, second, "main", "message", "user", true, llm.Message{Role: "user", Content: "retain this"})
+	retained, e := s.Append(v.ID, second, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "retain this"})
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.Append(v.ID, second, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "reply", State: &llm.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"old"}`)}}})
+	s.Append(v.ID, second, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "reply", State: &llm.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"old"}`)}}})
 	s.FinishTurn(second, "completed")
 	archive, e := s.ArchiveTranscript(v.ID, 0)
 	if e != nil {

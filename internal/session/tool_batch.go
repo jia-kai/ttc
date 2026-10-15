@@ -18,6 +18,8 @@ func fileMutation(name string) bool {
 
 func readOnlyTool(name string) bool {
 	switch name {
+	case "tmux_watch_run":
+		return false // Launch is ordered control work, never a concurrent read.
 	case "read", "glob", "grep", "skill", "web_fetch", "web_search", "job_list", "job_read", "wakeup_list", "lsp_query":
 		return true
 	}

@@ -89,7 +89,7 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 		}
 		failures := 0
 		for _, m := range req.Messages {
-			if m.Role == "tool" && strings.Contains(m.Content, "unknown_tool") {
+			if m.Type == llm.TypeToolResult && strings.Contains(m.Content, "unknown_tool") {
 				failures++
 			}
 		}
@@ -102,7 +102,7 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 		return finish()
 	}}
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Role: "user", Content: "Keep main working"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "Keep main working"}; done <- r.Run(&m) }()
 	select {
 	case <-mainReady:
 	case <-time.After(3 * time.Second):

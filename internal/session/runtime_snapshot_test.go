@@ -75,7 +75,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 		t.Fatal("successful admission did not consume eligible input")
 	}
 	last := admitted.Messages[len(admitted.Messages)-1]
-	if last.Content != "Also inspect units." || last.Runtime {
+	if last.Content != "Also inspect units." || last.Type.IsRuntime() {
 		t.Fatal("steering not delivered", last)
 	}
 	var delivered int64
@@ -221,7 +221,7 @@ func TestChildAdmissionsOwnIndependentSnapshotCursors(t *testing.T) {
 			t.Fatal(err)
 		}
 		task := childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools}
-		messages := []llm.Message{{Role: "user", Content: "Inspect units"}}
+		messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Inspect units"}}
 		first, cursor, err := r.admitChild(context.Background(), task, messages, contextCursor{})
 		if err != nil || first.ContextEntry == 0 {
 			t.Fatal(first, err)
@@ -242,7 +242,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
 	for _, prompt := range []string{"Initial request", "Same runtime state"} {
-		if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
+		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,7 +252,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 	if r.mainContext.snapshot != "" || r.mainContext.project != "" {
 		t.Fatal("reload retained runtime cursor")
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "After reload"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "After reload"}); err != nil {
 		t.Fatal(err)
 	}
 	var snapshots int
@@ -264,7 +264,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "developer" && messages[i].Runtime {
+		if messages[i].Role() == "developer" && messages[i].Type.IsRuntime() {
 			if nativeAnnouncement(t, &messages[i]) == nil {
 				t.Fatal("reload omitted native-read capabilities")
 			}

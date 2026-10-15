@@ -60,7 +60,7 @@ func TestEnterSteersAndAltEnterQueues(t *testing.T) {
 			}
 			var humans []llm.Message
 			for _, m := range messages {
-				if m.Role == "user" && !m.Runtime {
+				if m.Type == llm.TypeUserInput {
 					humans = append(humans, m)
 				}
 			}

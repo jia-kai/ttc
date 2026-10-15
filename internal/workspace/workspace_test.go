@@ -46,7 +46,7 @@ func fixture(t *testing.T) (*Manager, history.Session, string, int64) {
 	}
 	model := llm.Selection{Model: llm.ScriptModel()}
 	id := history.NewID("session")
-	turn, _, e := s.StartSession(id, root, model, llm.Message{Role: "user", Content: "edit"})
+	turn, _, e := s.StartSession(id, root, model, llm.Message{Type: llm.TypeUserInput, Content: "edit"})
 	if e != nil {
 		t.Fatal(e)
 	}

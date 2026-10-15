@@ -43,7 +43,7 @@ func recoveryNotices(t *testing.T, s *Store, session string) []llm.Message {
 		t.Fatal(err)
 	}
 	for _, message := range m {
-		if message.Role != "user" || !message.Runtime || message.EventSeq <= 0 {
+		if message.Role() != "user" || !message.Type.IsRuntime() || message.EventSeq <= 0 {
 			t.Fatal(message)
 		}
 		var body struct {
@@ -107,7 +107,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			s, source, turn, _ := historyFixture(t)
 			delivered := appendRecoveryRuntime(t, s, source.ID, `{"type":"job_exit","job_id":"delivered"}`)
-			admitted, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Role: "user", Runtime: true, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil)
+			admitted, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,7 +290,7 @@ func TestLoadRecoverySelectedBranchAndBoundaryOnly(t *testing.T) {
 func TestLoadRecoverySkipsChildFinishCarriedByVisibleTool(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
 	finish := appendRecoveryChild(t, s, source.ID)
-	_, calls, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
+	_, calls, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

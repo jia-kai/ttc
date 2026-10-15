@@ -49,7 +49,7 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	defer m.Close()
 	launches := make(chan Snapshot, 2)
 	m.OnState = func(s Snapshot) { launches <- s }
-	id, err := m.StartWatch("main/child", dir, false)
+	id, err := m.StartWatch("main/child", dir, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 		t.Fatalf("view %+v %v", view, err)
 	}
 	for _, snapshot := range []Snapshot{<-launches, view} {
-		if snapshot.RecordDir != dir || snapshot.Label != "test-workload" {
+		if snapshot.RecordDir != dir || snapshot.Label != "External run" {
 			t.Fatalf("missing watch metadata: %+v", snapshot)
 		}
 	}
@@ -78,6 +78,27 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	}
 	if _, err = m.View("other", id); err == nil {
 		t.Fatal("watch leaked ownership")
+	}
+}
+
+func TestWatchLabelAndDetailedCommand(t *testing.T) {
+	dir, identity := watchFixture(t, true)
+	m := New(context.Background(), nil)
+	defer m.Close()
+	id, err := m.StartWatch("main", dir, false, "Training run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Wait(context.Background(), "main", id, nil); err != nil {
+		t.Fatal(err)
+	}
+	list := m.ListMetadata("main", true, true)
+	if len(list) != 1 || list[0].Label != "Training run" || list[0].Command != watchCommand(identity.Command) {
+		t.Fatal(list)
+	}
+	inspection, err := m.Inspect(context.Background(), "main", id)
+	if err != nil || inspection.Spec.Fields[1].Value != watchCommand(identity.Command) {
+		t.Fatal(inspection, err)
 	}
 }
 
@@ -106,7 +127,7 @@ func TestWatchIncompleteOutputPreservesStatusButFails(t *testing.T) {
 	}
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartWatch("main", dir, true)
+	id, err := m.StartWatch("main", dir, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +145,7 @@ func TestWatchStopAndCloseOnlyObservation(t *testing.T) {
 			dir, _ := watchFixture(t, false)
 			m := New(context.Background(), nil)
 			defer m.Close()
-			id, err := m.StartWatch("main", dir, true)
+			id, err := m.StartWatch("main", dir, true, "")
 			if err != nil {
 				t.Fatal(err)
 			}

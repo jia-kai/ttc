@@ -60,7 +60,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 		t.Fatal(choice, err)
 	}
 	id := r.Current()
-	if err := r.Run(&llm.Message{Role: "user", Content: "First submission"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "First submission"}); err != nil {
 		t.Fatal(err)
 	}
 	assertStoredSessions(t, r, 1)
@@ -87,7 +87,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 	if _, err := r.Command("/load " + id); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Second submission"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Second submission"}); err != nil {
 		t.Fatal(err)
 	}
 	var users int
@@ -110,7 +110,7 @@ func TestBlankFirstSaveFailurePreservesIdentityAndCanRetry(t *testing.T) {
 	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_first BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'injected first save failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	message := &llm.Message{Role: "user", Content: "Keep this first submission"}
+	message := &llm.Message{Type: llm.TypeUserInput, Content: "Keep this first submission"}
 	if err := r.Run(message); err == nil || !strings.Contains(err.Error(), "save first message") {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ import (
 
 func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 	s, session, _, _ := historyFixture(t)
-	source, err := s.Append(session.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Role: "assistant", Content: "full response"})
+	source, err := s.Append(session.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "full response"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 	if _, err := s.DB.Exec("UPDATE sessions SET lineage_id=? WHERE id=?", session.LineageID, foreign.ID); err != nil {
 		t.Fatal(err)
 	}
-	foreignSource, err := s.Append(foreign.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Role: "assistant", Content: "foreign response"})
+	foreignSource, err := s.Append(foreign.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "foreign response"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameWorkspace, _ := startHistorySession(t, s, root, session.Model, "different lineage")
-	sameWorkspaceSource, err := s.Append(sameWorkspace.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Role: "assistant", Content: "same workspace, foreign lineage"})
+	sameWorkspaceSource, err := s.Append(sameWorkspace.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "same workspace, foreign lineage"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,11 @@ func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			id, err := s.Append(session.ID, "", "main", "message", "user", true, llm.Message{Role: "user", Runtime: tc.runtime, Content: string(raw)})
+			typ := llm.TypeUserInput
+			if tc.runtime {
+				typ = llm.TypeRuntimeNotification
+			}
+			id, err := s.Append(session.ID, "", "main", "message", "user", true, llm.Message{Type: typ, Content: string(raw)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +82,7 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 		t.Run(map[bool]string{false: "foreground", true: "background"}[background], func(t *testing.T) {
 			s, original, turn, request := historyFixture(t)
 			full := strings.Repeat("full response\n", 1000) + "FULL TAIL"
-			source, err := s.Append(original.ID, turn, "main/child_test", "message", "assistant", false, llm.Message{Role: "assistant", Content: full})
+			source, err := s.Append(original.ID, turn, "main/child_test", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: full})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,10 +93,10 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 			}
 			var envelope int64
 			if background {
-				envelope, err = s.Append(original.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Runtime: true, Content: string(raw)})
+				envelope, err = s.Append(original.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeRuntimeNotification, Content: string(raw)})
 			} else {
 				call := llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"label":"helper","persistent":false}`)}
-				if _, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Calls: []llm.ToolCall{call}}); err != nil {
+				if _, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{call}}); err != nil {
 					t.Fatal(err)
 				}
 				callID, callErr := s.CallIntent(original.ID, turn, "main", request, call)
@@ -104,7 +108,7 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "main finished"}); err != nil {
+			if _, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "main finished"}); err != nil {
 				t.Fatal(err)
 			}
 			current := original

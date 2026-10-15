@@ -42,10 +42,10 @@ func (s *Script) Stream(ctx context.Context, req Request, emit func(StreamEvent)
 	s.mu.Unlock()
 	if v.Prefix != "" {
 		last := len(req.Messages) - 1
-		for last >= 0 && req.Messages[last].Role == "developer" {
+		for last >= 0 && req.Messages[last].Role() == "developer" {
 			last--
 		}
-		if last < 0 || !strings.HasPrefix(req.Messages[last].Role+": "+req.Messages[last].Content, v.Prefix) {
+		if last < 0 || !strings.HasPrefix(req.Messages[last].Role()+": "+req.Messages[last].Content, v.Prefix) {
 			return errors.New(prompts.LLMScriptPrefixMismatch + v.Prefix)
 		}
 	}

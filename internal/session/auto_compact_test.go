@@ -35,7 +35,7 @@ func compactionBudget(t *testing.T, r *Runtime) {
 func seedCompactionHistory(t *testing.T, r *Runtime, content string) {
 	t.Helper()
 	seedRuntime(t, r, "Earlier research task")
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: content}); err != nil {
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: content}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -45,7 +45,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
 	before, generation := r.Current(), r.Generation()
-	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{})
+	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 		}
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Continue the research."}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."}); err != nil {
 		t.Fatal(err)
 	}
 	if summaries != 1 || coding != 1 || r.Generation() != generation {
@@ -143,7 +143,7 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 					t.Fatal("opaque replay survived compaction")
 				}
 				found[message.Content] = true
-				if message.Role == "user" {
+				if message.Role() == "user" {
 					var group struct {
 						Type   string `json:"type"`
 						Inputs []struct {
@@ -156,13 +156,13 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 						}
 					}
 				}
-				if message.Role == "assistant" && strings.HasPrefix(message.Content, "Model reasoning 1") {
+				if message.Type == llm.TypeAssistant && strings.HasPrefix(message.Content, "Model reasoning 1") {
 					t.Fatal("older model message was not compacted")
 				}
 				for _, call := range message.Calls {
 					pending[call.ID] = true
 				}
-				if message.Role == "tool" {
+				if message.Type == llm.TypeToolResult {
 					if !pending[message.CallID] {
 						t.Fatal("orphan retained tool result", message)
 					}
@@ -213,7 +213,7 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 		}
 		return nil
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 5 || summaries != 1 {
@@ -265,16 +265,16 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				compactionBudget(t, r)
 				seedCompactionHistory(t, r, strings.Repeat("Earlier completed research. ", 700))
 				before := r.Current()
-				newest := []llm.Message{{Role: "user", Content: "Continue with the sidebar widget."}}
+				newest := []llm.Message{{Type: llm.TypeUserInput, Content: "Continue with the sidebar widget."}}
 				for i := range cycles {
 					id := fmt.Sprintf("read-%d", i)
 					newest = append(newest,
-						llm.Message{Role: "developer", Runtime: true, Content: "Current runtime metadata"},
-						llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: id, Name: "read", Arguments: []byte(`{"path":"fixture.go"}`)}}},
-						llm.Message{Role: "tool", CallID: id, Content: strings.Repeat("Recent tool result. ", 20)})
+						llm.Message{Type: llm.TypeRuntimeContext, Content: "Current runtime metadata"},
+						llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: id, Name: "read", Arguments: []byte(`{"path":"fixture.go"}`)}}},
+						llm.Message{Type: llm.TypeToolResult, CallID: id, Content: strings.Repeat("Recent tool result. ", 20)})
 				}
 				for _, message := range newest {
-					if _, err := r.Store.Append(before, "", "main", "message", message.Role, true, message); err != nil {
+					if _, err := r.Store.Append(before, "", "main", "message", message.Role(), true, message); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -312,7 +312,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				}
 				start := -1
 				for i, message := range messages {
-					if message.Role == "user" && message.Content == newest[0].Content {
+					if message.Role() == "user" && message.Content == newest[0].Content {
 						start = i
 						break
 					}
@@ -362,7 +362,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 					}
 				case "tail":
 					r.routeMu.RLock()
-					_, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Role: "user", Content: strings.Repeat("new committed tail ", 10000)})
+					_, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: strings.Repeat("new committed tail ", 10000)})
 					r.routeMu.RUnlock()
 					if err != nil {
 						t.Fatal(err)
@@ -370,7 +370,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Short valid summary."})
 			}}
-			err := r.Run(&llm.Message{Role: "user", Content: "Continue the research."})
+			err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."})
 			if err == nil || attempts != 1 || r.Current() != before {
 				t.Fatal("failed compaction changed session or retried indefinitely", err, attempts)
 			}

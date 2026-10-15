@@ -8,21 +8,21 @@ import (
 )
 
 func TestAppendPendingMessageIdentityAndPurity(t *testing.T) {
-	pending := llm.Message{Role: "developer", Runtime: true, RequestID: 17, Content: "Recovery warning"}
+	pending := llm.Message{Type: llm.TypeRuntimeContext, RequestID: 17, Content: "Recovery warning"}
 	for _, field := range []string{"same", "runtime", "role", "content", "request"} {
 		t.Run(field, func(t *testing.T) {
 			existing := pending
 			switch field {
 			case "runtime":
-				existing.Runtime = false
+				existing.Type = llm.TypeDeveloperInstruction
 			case "role":
-				existing.Role = "user"
+				existing.Type = llm.TypeRuntimeNotification
 			case "content":
 				existing.Content += " changed"
 			case "request":
 				existing.RequestID++
 			}
-			backing := []llm.Message{existing, {Role: "assistant", Content: "do not overwrite"}}
+			backing := []llm.Message{existing, {Type: llm.TypeAssistant, Content: "do not overwrite"}}
 			original := append([]llm.Message(nil), backing...)
 			result, added := AppendPendingMessage(backing[:1], &pending)
 			if added != (field != "same") || !reflect.DeepEqual(backing, original) {

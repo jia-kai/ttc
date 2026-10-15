@@ -173,7 +173,7 @@ func TestHTTPMockNamingAndCompactionShareDefaultRetries(t *testing.T) {
 				streamMockResponse(w, purpose, attempt, nil, "Recovered Research Session")
 			}))
 			if purpose == "naming" {
-				r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Role: "user", Content: "Research task"}, llm.Message{Role: "assistant", Content: "Research completed"})
+				r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Type: llm.TypeUserInput, Content: "Research task"}, llm.Message{Type: llm.TypeAssistant, Content: "Research completed"})
 				session, err := r.Store.Session(r.Current())
 				if err != nil || session.Name != "Recovered Research Session" {
 					t.Fatal("naming did not recover with the unified default", session.Name, err)
@@ -212,7 +212,7 @@ func TestHTTPMockPrivatePartialFailuresPersistAfterExhaustion(t *testing.T) {
 				fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"code\":\"unknown_backend_fault\",\"message\":\"Backend failure %d\"}}\n\n", attempts)
 			}))
 			if purpose == "naming" {
-				r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Role: "user", Content: "Research task"}, llm.Message{Role: "assistant", Content: "Research completed"})
+				r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Type: llm.TypeUserInput, Content: "Research task"}, llm.Message{Type: llm.TypeAssistant, Content: "Research completed"})
 			} else {
 				text, err := r.summarize(context.Background(), "main", "", r.CurrentSelection(), "Research transcript", "")
 				if err == nil || text != "" || !recoverableCompaction(err) {

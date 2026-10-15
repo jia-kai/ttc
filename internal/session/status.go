@@ -114,7 +114,7 @@ func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefini
 			continue
 		}
 		i := 2
-		if m.Role == "tool" {
+		if m.Type == llm.TypeToolResult {
 			i = 3
 		}
 		counts[i] += 16 + contextbuild.Estimate(m.Content)
@@ -164,8 +164,10 @@ func (r *Runtime) UsageSnapshot() ContextUsage {
 
 // TimerView contains only live timer metadata; no callbacks or retained output.
 type TimerView struct {
-	ID, Name, NextAt string
-	Repeat           int
+	ID     string `json:"wakeup_id"`
+	Name   string `json:"name"`
+	NextAt string `json:"next_at"`
+	Repeat int    `json:"repeat_seconds,omitempty"`
 }
 
 // LiveTimers returns scheduled timers only; replay never recreates timers.

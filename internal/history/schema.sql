@@ -1,4 +1,4 @@
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE entries (
     undo_owner_turn_id TEXT REFERENCES turns(id),
     actor_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('message','tool_call','tool_result','status','summary')),
-    role TEXT CHECK (role IN ('user','assistant','tool','developer')),
+    role TEXT CHECK (role IN ('user','assistant','tool','developer','system')),
     model_visible INTEGER NOT NULL CHECK (model_visible IN (0,1)),
     content_json TEXT NOT NULL CHECK (json_valid(content_json)),
     file_tip_id INTEGER REFERENCES file_changes(id),

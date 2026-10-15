@@ -16,7 +16,7 @@ func TestShellSelectedOutputMatchesCompletionNotification(t *testing.T) {
 			notified := make(chan Snapshot, 1)
 			m := New(context.Background(), func(v Snapshot) { notified <- v })
 			defer m.Close()
-			id, err := m.Start("main", "printf 0123456789; printf abcdefghij >&2", t.TempDir(), time.Second, true, true, true, capture.OutputOptions{Mode: mode, Bytes: 8})
+			id, err := m.Start("main", "printf 0123456789; printf abcdefghij >&2", t.TempDir(), time.Second, true, true, true, capture.OutputOptions{Mode: mode, Bytes: 8}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -48,7 +48,7 @@ func TestShellSelectedOutputMatchesCompletionNotification(t *testing.T) {
 func TestModestOutputIsCompleteIncludingBlankLines(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.Start("main", "i=0; while [ $i -lt 30 ]; do printf 'line-%s\\n' $i; i=$((i+1)); done; printf '\\n \\n'", t.TempDir(), time.Second, true, false, false, capture.OutputOptions{})
+	id, err := m.Start("main", "i=0; while [ $i -lt 30 ]; do printf 'line-%s\\n' $i; i=$((i+1)); done; printf '\\n \\n'", t.TempDir(), time.Second, true, false, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -378,7 +378,9 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	u.screen.EventQ() <- tcell.NewEventResize(140, 45)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
-	frame := u.wait(t, "[Sub research helper] assistant")
+	// An empty assistant block may precede its tool calls. Wait for the settled
+	// child answer before asserting that the write tool row is present.
+	frame := u.wait(t, "Named child answer")
 	if strings.Contains(frame, "main/child_") || !strings.Contains(frame, "[Sub research helper] Runtime context") || !strings.Contains(frame, "[Sub research helper] write") {
 		t.Fatal(frame)
 	}

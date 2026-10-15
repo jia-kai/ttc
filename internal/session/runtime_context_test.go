@@ -39,7 +39,7 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	decode := func(m *llm.Message) runtimeContext {
 		t.Helper()
 		var v runtimeContext
-		if m == nil || m.Role != "developer" || !m.Runtime {
+		if m == nil || m.Role() != "developer" || !m.Type.IsRuntime() {
 			t.Fatal(m)
 		}
 		if err := json.Unmarshal([]byte(m.Content), &v); err != nil {
@@ -61,7 +61,7 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(r.Workspace.Root, "AGENTS.md"), []byte("Use precise units."), 0600); err != nil {
 		t.Fatal(err)
 	}
-	id, err := r.Jobs.Start("main", "exit 7", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{})
+	id, err := r.Jobs.Start("main", "exit 7", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +74,8 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 		t.Fatal(v, err)
 	}
 	change := v.Changes[0]
-	if change.ID != id || change.To != "completed" || change.ExitCode == nil || *change.ExitCode != 7 || !strings.Contains(contextLabel(*m), "1 completed") {
-		t.Fatal(change, contextLabel(*m))
+	if change.ID != id || change.To != "completed" || change.ExitCode == nil || *change.ExitCode != 7 {
+		t.Fatal(change)
 	}
 	child, _, err := r.runtimeContext(context.Background(), "main/child_fixture", r.selection, contextCursor{})
 	if err != nil || len(decode(child).Changes) != 0 {
@@ -210,10 +210,10 @@ func TestInterruptedNativeCompletionResumesCanonicalHistory(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Resumed"})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Start"}); err != context.Canceled {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"}); err != context.Canceled {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -236,9 +236,6 @@ func TestRepeatingTimerContextHighlightsFiring(t *testing.T) {
 	if len(v.Changes) != 1 || v.Changes[0].To != "fired" || v.Changes[0].From != "scheduled" || v.Changes[0].FiredCount != 2 || len(v.Timers) != 1 {
 		t.Fatal(v)
 	}
-	if !strings.Contains(contextLabel(*m), "1 fired") {
-		t.Fatal(contextLabel(*m))
-	}
 }
 
 func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
@@ -256,7 +253,7 @@ func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "completed", Usage: usage})
 	}}
 	for _, prompt := range []string{"First", "Second"} {
-		if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
+		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 		if (r.UsageSnapshot().Reported != nil) != (prompt == "First") {
@@ -275,7 +272,7 @@ func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Inspect"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 || requests[0].System != systemTemplate || requests[1].System != requests[0].System {
@@ -283,13 +280,13 @@ func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 	}
 	for i, old := range requests[0].Messages {
 		next := requests[1].Messages[i]
-		if old.Role != next.Role || old.Content != next.Content {
+		if old.Type != next.Type || old.Content != next.Content {
 			t.Fatal("rewrote previous request context", old, next)
 		}
 	}
 	contexts := 0
 	for _, message := range requests[1].Messages {
-		if message.Role == "developer" && message.Runtime {
+		if message.Role() == "developer" && message.Type.IsRuntime() {
 			contexts++
 		}
 	}
@@ -340,11 +337,11 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Initial"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Initial"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{strings.Repeat("old research ", 700), "Recent task"} {
-		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
+		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -355,7 +352,7 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 	if before == r.Current() {
 		t.Fatal("no continuation")
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 	if coding != 2 {

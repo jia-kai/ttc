@@ -46,7 +46,7 @@ func TestHelpCommandDoesNotWaitForActiveTurn(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		m := llm.Message{Role: "user", Content: "start"}
+		m := llm.Message{Type: llm.TypeUserInput, Content: "start"}
 		done <- r.Run(&m)
 	}()
 	t.Cleanup(func() {

@@ -14,7 +14,7 @@ const replayVersion = 1
 // replayItems validates the native output against canonical history before
 // replaying it. Assistant phases, reasoning and original item IDs stay intact.
 func replayItems(m llm.Message) ([]any, error) {
-	if m.State.Version != replayVersion || m.Role != "assistant" || len(m.State.Items) == 0 {
+	if m.State.Version != replayVersion || m.Type != llm.TypeAssistant || len(m.State.Items) == 0 {
 		return nil, errors.New(prompts.OpenAIUnsupportedReplayState)
 	}
 	var content strings.Builder

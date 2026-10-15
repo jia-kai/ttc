@@ -188,16 +188,16 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	messages := append([]llm.Message(nil), task.prefix...)
 	r.routeMu.RLock()
 	if task.aside {
-		instruction := llm.Message{Role: "developer", Content: btwInstruction, Runtime: true}
+		instruction := llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction}
 		id, err := r.Store.Append(r.Current(), turn, actor, "message", "developer", false, instruction)
 		if err != nil {
 			r.routeMu.RUnlock()
 			return err
 		}
-		r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Aside instructions · inspect", EntryID: id})
+		r.emit(Event{Kind: "message", Actor: actor, MessageType: instruction.Type, EntryID: id})
 		messages = append(messages, instruction)
 	}
-	question := llm.Message{Role: "user", Content: prompt, InputSource: "task"}
+	question := llm.Message{Type: llm.TypeUserInput, Content: prompt, InputSource: "task"}
 	if task.aside {
 		question.InputSource = "btw"
 	}
@@ -212,7 +212,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		return err
 	}
 	messages = append(messages, question)
-	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry})
+	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry, MessageType: question.Type})
 	defs := task.tools.Definitions()
 	cursor := task.cursor
 	priorAttempts := 0
@@ -257,7 +257,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return err
 		}
 		r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · inspect", EntryID: entry})
-		reply := llm.Message{Role: "assistant"}
+		reply := llm.Message{Type: llm.TypeAssistant}
 		var text strings.Builder
 		started := time.Now()
 		var usage *llm.Usage
@@ -369,7 +369,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			if _, err := fmt.Fprintln(stderr, record.Markdown.Summary); err != nil {
 				return err
 			}
-			messages = append(messages, llm.Message{Role: "tool", CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
+			messages = append(messages, llm.Message{Type: llm.TypeToolResult, CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
 		}
 		if streamErr != nil {
 			var partial *llm.PartialError
@@ -402,7 +402,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				return err
 			}
 			messages = append(messages, *notification)
-			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id, Runtime: notification.Runtime})
+			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id, MessageType: notification.Type})
 		} else if len(reply.Calls) == 0 {
 			if task.child != nil {
 				// A final response and a parent send race on the same gate. A

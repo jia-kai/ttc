@@ -55,7 +55,7 @@ func TestSessionNamingScaffoldBytes(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Name this session")
 	user := strings.Repeat("x", 4095) + "πtail"
-	assistant := llm.Message{Role: "assistant", Content: "raw %s\nassistant", Calls: []llm.ToolCall{{Name: "read"}, {Name: "glob"}, {Name: "grep"}, {Name: "shell"}, {Name: "ignored"}}}
+	assistant := llm.Message{Type: llm.TypeAssistant, Content: "raw %s\nassistant", Calls: []llm.ToolCall{{Name: "read"}, {Name: "glob"}, {Name: "grep"}, {Name: "shell"}, {Name: "ignored"}}}
 	calls := 0
 	r.Provider = &childProvider{stream: func(_ context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 		calls++
@@ -65,7 +65,7 @@ func TestSessionNamingScaffoldBytes(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Small Research Tool Session"})
 	}}
-	r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Role: "user", Content: user}, assistant)
+	r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Type: llm.TypeUserInput, Content: user}, assistant)
 	if calls != 1 {
 		t.Fatalf("naming calls = %d, want 1", calls)
 	}
@@ -73,12 +73,23 @@ func TestSessionNamingScaffoldBytes(t *testing.T) {
 
 func TestSessionSummaryScaffoldPreservesRawBytes(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "assistant", Content: "raw %s\nπ", Calls: []llm.ToolCall{{ID: "c%1", Name: "read", Arguments: json.RawMessage("{\"path\": \"a%b\"}")}}},
-		{Role: "tool", CallID: "c%1", Content: "  {\"ok\":true}\n", Files: []llm.BinaryFile{{MIMEType: "image/png", Path: "/raw %s.png"}}},
+		{Type: llm.TypeAssistant, Content: "raw %s\nπ", Calls: []llm.ToolCall{{ID: "c%1", Name: "read", Arguments: json.RawMessage("{\"path\": \"a%b\"}")}}},
+		{Type: llm.TypeToolResult, CallID: "c%1", Content: "  {\"ok\":true}\n", Files: []llm.BinaryFile{{MIMEType: "image/png", Path: "/raw %s.png"}}},
 	}
 	want := "\n### assistant\nraw %s\nπ\nTool call c%1 · read\n{\"path\": \"a%b\"}\n\n### tool · c%1\n  {\"ok\":true}\n\nBinary attachment (image/png): /raw %s.png\n"
-	if got := summaryTranscript(messages); got != want {
+	if got, err := summaryTranscript(messages); err != nil || got != want {
 		t.Fatalf("summary transcript bytes changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestSummaryTranscriptUsesSemanticNotificationProjection(t *testing.T) {
+	input := llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit","job_id":"j"}`}
+	transcript, err := summaryTranscript([]llm.Message{input})
+	if err != nil || !strings.Contains(transcript, `"message_type":"runtime_notification"`) || !strings.Contains(transcript, `"type":"job_exit"`) {
+		t.Fatal(transcript, err)
+	}
+	if _, err := summaryTranscript([]llm.Message{{Type: "unknown"}}); err == nil {
+		t.Fatal("invalid semantic message summarized")
 	}
 }
 

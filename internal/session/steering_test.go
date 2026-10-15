@@ -29,7 +29,7 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 		} else {
 			found := false
 			for _, m := range req.Messages {
-				if m.Role == "user" && m.Content == "Steer: revise after first write" {
+				if m.Role() == "user" && m.Content == "Steer: revise after first write" {
 					found = true
 				}
 			}
@@ -47,7 +47,7 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 		arguments, _ := json.Marshal(map[string]string{"path": "result.txt", "content": content})
 		return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: content, Name: "write", Arguments: arguments}})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Write the result"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Write the result"}); err != nil {
 		t.Fatal(err)
 	}
 	if count, _ := r.SteeringPreview(0); requests != 3 || count != 0 {

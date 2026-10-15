@@ -37,14 +37,14 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 					}
 					r.selection.Model.BinaryFiles = pdfCapability()
 					messages := []llm.Message{
-						{Role: "user", Content: "Earlier research instruction", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
-						{Role: "assistant", Content: strings.Repeat("Older completed cycle. ", 1000)},
-						{Role: "user", Content: "Read the original document", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
-						{Role: "assistant", Calls: []llm.ToolCall{{ID: "unread-document", Name: "read", Arguments: []byte(`{"path":"unread.pdf"}`)}}},
-						{Role: "tool", CallID: "unread-document", Content: `{"ok":true,"kind":"document"}`, Files: []llm.BinaryFile{file}},
+						{Type: llm.TypeUserInput, Content: "Earlier research instruction", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+						{Type: llm.TypeAssistant, Content: strings.Repeat("Older completed cycle. ", 1000)},
+						{Type: llm.TypeUserInput, Content: "Read the original document", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
+						{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "unread-document", Name: "read", Arguments: []byte(`{"path":"unread.pdf"}`)}}},
+						{Type: llm.TypeToolResult, CallID: "unread-document", Content: `{"ok":true,"kind":"document"}`, Files: []llm.BinaryFile{file}},
 					}
 					if trailingInput {
-						messages = append(messages, llm.Message{Role: "user", Content: "Keep reading before answering", InputTimeMS: time.Now().UnixMilli()})
+						messages = append(messages, llm.Message{Type: llm.TypeUserInput, Content: "Keep reading before answering", InputTimeMS: time.Now().UnixMilli()})
 					}
 					if contextbuild.Tokens(messages[3:]) <= r.selection.Model.Budget.RecentTokensMax {
 						t.Fatal("fixture did not exceed the recent-cycle target")
@@ -61,7 +61,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 							if strings.Contains(message.Content, "Older completed cycle.") {
 								t.Fatal("older cycle was not compacted")
 							}
-							if message.Role == "user" && message.Content == "Keep reading before answering" {
+							if message.Role() == "user" && message.Content == "Keep reading before answering" {
 								inputs++
 							}
 							for _, call := range message.Calls {
@@ -72,7 +72,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 									}
 								}
 							}
-							if message.Role == "tool" && message.CallID == "unread-document" {
+							if message.Type == llm.TypeToolResult && message.CallID == "unread-document" {
 								files++
 								if !reflect.DeepEqual(message, messages[4]) {
 									t.Fatal("original document was replaced by metadata or summary", message)
@@ -107,7 +107,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 					cursor := contextCursor{project: "old project", snapshot: "old runtime"}
 					if actor == "main" {
 						for _, message := range messages {
-							if _, err := r.Store.Append(before, "", "main", "message", message.Role, true, message); err != nil {
+							if _, err := r.Store.Append(before, "", "main", "message", message.Role(), true, message); err != nil {
 								t.Fatal(err)
 							}
 						}
@@ -164,7 +164,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 					if actor == "btw" {
 						found := false
 						for _, message := range result {
-							found = found || message.Role == "developer" && message.Content == btwInstruction
+							found = found || message.Role() == "developer" && message.Content == btwInstruction
 						}
 						if !found {
 							t.Fatal("aside scope lost while preserving native original")

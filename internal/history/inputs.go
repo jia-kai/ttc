@@ -56,7 +56,7 @@ func inputMetadataWith(q historyReader, entries []Entry) (map[int64]inputMetadat
 // enrichInput derives human input metadata from the original immutable entry,
 // not the physical continuation copy or a caller-supplied timestamp.
 func enrichInput(metadata map[int64]inputMetadata, entry Entry, message llm.Message) (llm.Message, error) {
-	if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != "user" || message.Role != "user" || message.Runtime {
+	if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != "user" || message.Type != llm.TypeUserInput {
 		return message, nil
 	}
 	input, ok := metadata[entry.EventSeq()]

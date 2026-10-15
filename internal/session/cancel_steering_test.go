@@ -129,7 +129,7 @@ func TestCancelSteerCannotRemoveAdmittedInput(t *testing.T) {
 	}
 	found := false
 	for _, message := range admitted.Messages {
-		found = found || message.Role == "user" && !message.Runtime && message.Content == "admitted"
+		found = found || message.Type == llm.TypeUserInput && message.Content == "admitted"
 	}
 	if !found {
 		t.Fatal("admitted instruction disappeared", admitted.Messages)

@@ -23,7 +23,7 @@ func (s *Store) PromptHistory(ctx context.Context) ([]string, error) {
 		FROM entries e JOIN turns t ON t.id=e.turn_id
 		WHERE e.kind='message' AND e.role='user' AND e.actor_id='main'
 		AND e.model_visible=1 AND e.source_id IS NULL AND t.trigger IN ('user','steer')
-		AND coalesce(json_extract(e.content_json,'$.runtime'),0)=0
+		AND json_extract(e.content_json,'$.type')='user_input'
 		ORDER BY e.id DESC LIMIT ?`, MaxPromptHistoryBytes+1, MaxPromptHistoryEntries)
 	if err != nil {
 		return nil, fmt.Errorf("read prompt history: %w", err)

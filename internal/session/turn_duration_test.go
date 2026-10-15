@@ -49,7 +49,7 @@ func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 					return context.Canceled
 				}}
 			}
-			message := llm.Message{Role: "user", Content: "A short request"}
+			message := llm.Message{Type: llm.TypeUserInput, Content: "A short request"}
 			err := r.Run(&message)
 			if (err == nil) != (status == "completed") {
 				t.Fatalf("unexpected turn error: %v", err)

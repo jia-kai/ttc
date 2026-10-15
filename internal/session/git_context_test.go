@@ -39,7 +39,7 @@ func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {
 				}
 				found := false
 				for _, message := range req.Messages {
-					if message.Role != "developer" || !message.Runtime {
+					if message.Role() != "developer" || !message.Type.IsRuntime() {
 						continue
 					}
 					var env runtimeContext
@@ -59,7 +59,7 @@ func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 			}}
-			if err := r.Run(&llm.Message{Role: "user", Content: "Inspect environment"}); err != nil {
+			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect environment"}); err != nil {
 				t.Fatal(err)
 			}
 		})

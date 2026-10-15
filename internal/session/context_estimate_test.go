@@ -21,7 +21,7 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := llm.Message{Role: "assistant", State: &llm.ReplayState{Provider: "openai", Model: r.selection.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
+	m := llm.Message{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "openai", Model: r.selection.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
 	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, m); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childMessages := []llm.Message{{Role: "user", Content: "Continue reasoning."}, m}
+	childMessages := []llm.Message{{Type: llm.TypeUserInput, Content: "Continue reasoning."}, m}
 	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: childTurn, selection: r.selection, tools: r.Tools}, childMessages, contextCursor{}); err != nil {
 		t.Fatal("child compacted due to transport size", err)
 	}
@@ -69,7 +69,7 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Earlier notes. ", 700))
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	r.usage = ContextUsage{RequestID: 87, Input: 9000, Limit: r.selection.Model.Budget.ContextLimit}

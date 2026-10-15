@@ -21,7 +21,7 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 		return emit(llm.StreamEvent{Kind: "text", Text: "Finished"})
 	}
 	r.Provider = p
-	message := llm.Message{Role: "user", Content: "Run"}
+	message := llm.Message{Type: llm.TypeUserInput, Content: "Run"}
 	if err := r.Run(&message); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestMainFailureDetailsPersistWithoutBecomingModelInput(t *testing.T) {
 			p := &childProvider{}
 			p.stream = func(context.Context, llm.Request, func(llm.StreamEvent) error) error { return failure }
 			r.Provider = p
-			message := llm.Message{Role: "user", Content: "Run"}
+			message := llm.Message{Type: llm.TypeUserInput, Content: "Run"}
 			if err := r.Run(&message); !errors.Is(err, failure) {
 				t.Fatal("lost original failure", err)
 			}

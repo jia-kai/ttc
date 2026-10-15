@@ -80,29 +80,39 @@ cleaner.
 
 ## Long-running work
 
-Run work that must outlive TTC in tmux. Record its pane ID, command, working
-directory, log path and success criteria. Redirect logs to a suitable durable
-project path; do not rely only on scrollback. TTC scratch is for disposable
-experiments, not the only copy of important results. Use the supplied private
-scratch path for temporary scripts/sockets; do not change `/tmp/ttc` permissions
-or invent a shared scratch directory.
+When available, use `tmux_watch_run` for work that must outlive TTC. It creates
+a detached session, captures stdout/stderr and completion records, and starts a
+local watcher automatically. Choose a durable record directory with an existing
+parent and an absent final directory; do not add manual logging or status-file
+wrappers. Keep ordinary builds and tests in `shell(background=true)` instead.
+For example, start a local test web server that should remain available across
+TTC sessions:
 
-For example, launch a new workload window and print its pane ID. Replace the
-workdir/command and use unique log/status paths to avoid overwriting evidence:
-
-```sh
-tmux new-window -d -P -F '#{pane_id}' -n checks -c /path/to/project \
-    'make test > checks.log 2>&1; code=$?; printf "%s\n" "$code" > checks.exit; exec /bin/sh'
+```json
+{
+  "command": "python3 -m http.server 8000 --bind 127.0.0.1",
+  "workdir": "/path/to/project",
+  "record_dir": "/path/to/project/runs/web-server-unique",
+  "label": "Local test server"
+}
 ```
 
-The final shell keeps the pane available for inspection; `checks.exit` records
-the workload's exit code, not the shell's eventual exit status.
+Use the returned `job_id` with `job_read` for captured output. To resume
+observation in a later TTC session, pass the saved `record_dir` to `watch`.
+Session/pane IDs are available for direct tmux inspection or control. The
+session closes when the workload exits, but records remain. Stopping a watcher
+stops observation only, never the workload. Missing completion after recorder
+death means unknown outcome, not success.
 
-When launching a command, capture its exit code in the pane or a status file. A
-success marker must only print after success, for example
-`make test && printf '\nTESTS PASSED\n'`. A missing marker or vanished PID does
-not prove failure or success; inspect the logs and recorded exit status. Verify
-a server with a health check or listening socket, not only a startup message.
+Keep interactive editors, debuggers and shells in ordinary tmux panes using the
+inspection/input workflow above. For an existing workload without durable
+records, preserve logs and check its actual exit status; a vanished PID or
+missing success marker proves neither success nor failure. Verify a server with
+a health check or listening socket, not only a startup message.
+
+TTC scratch is for disposable experiments, not the only copy of important
+results. Use the supplied private scratch path for temporary scripts/sockets; do
+not change `/tmp/ttc` permissions or invent a shared scratch directory.
 
 For requested monitoring, use `wakeup_schedule` when available with a
 task-specific message and the requested or appropriate interval. Cancel it with

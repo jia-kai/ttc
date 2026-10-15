@@ -122,6 +122,7 @@ def main():
                                 notices.append(event)
                     if notices:
                         assert len(notices) == 1 and notices[0]['answer'] == answer
+                        assert notices[0]['message_type'] == 'runtime_notification'
                         if args.failure:
                             notice = notices[0]
                             assert notice['status'] == 'failed'
@@ -263,7 +264,8 @@ def main():
             else:
                 assert finish['answer'] == answer
             exact = json.loads(db.execute('SELECT content_json FROM entries WHERE id=?', (finish['result_entry_id'],)).fetchone()[0])
-            assert exact['content'] == answer
+            assert exact['type'] == 'assistant' and exact['content'] == answer
+            assert 'role' not in exact and 'runtime' not in exact
             states = db.execute("SELECT content_json FROM entries WHERE json_extract(content_json,'$.type')='child_state' ORDER BY id").fetchall()
             assert json.loads(states[-1][0])['child']['state'] == 'closed'
             assert db.execute("SELECT count(*) FROM tool_calls WHERE name IN ('job_read','job_stop')").fetchone()[0] == 0

@@ -175,7 +175,7 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, text := range []string{strings.Repeat("old research result ", 3000), "Continue the pending image interaction."} {
-		if _, err = u.runtime.Store.Append(u.runtime.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
+		if _, err = u.runtime.Store.Append(u.runtime.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}

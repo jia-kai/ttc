@@ -50,12 +50,12 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 	}
 	var pendingEntry *Entry
 	if pending != nil {
-		if !pending.Runtime || pending.Role != "developer" || pending.RequestID <= 0 {
+		if pending.Type != llm.TypeRuntimeInstruction || pending.RequestID <= 0 {
 			return Session{}, errors.New(prompts.HistoryContinuationWarning)
 		}
 		for i := range entries {
 			entry := &entries[i]
-			if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != pending.Role {
+			if !entry.Visible || entry.Actor != "main" || entry.Kind != "message" || entry.Role != pending.Role() {
 				continue
 			}
 			var message llm.Message
@@ -96,7 +96,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			if e := json.Unmarshal(entry.Content, &message); e != nil {
 				return e
 			}
-			if !entry.Visible || entry.Kind != "message" || entry.Role != "user" || entry.Actor != "main" || message.Role != "user" || message.Runtime {
+			if !entry.Visible || entry.Kind != "message" || entry.Role != "user" || entry.Actor != "main" || message.Type != llm.TypeUserInput {
 				return errors.New(prompts.HistoryContinuationInput)
 			}
 			message, e = enrichInput(metadata, entry, message)
@@ -143,7 +143,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 		if _, e = tx.Exec("UPDATE sessions SET file_tip_id=? WHERE id=?", n(baseline), id); e != nil {
 			return e
 		}
-		data, _ := json.Marshal(llm.Message{Role: "assistant", Content: summary})
+		data, _ := json.Marshal(llm.Message{Type: llm.TypeAssistant, Content: summary})
 		summaryID, e := appendTx(tx, id, "", "main", "summary", "assistant", true, data, 0)
 		if e != nil {
 			return e
@@ -180,7 +180,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 					}
 				}
 				m.State = nil
-				if pending != nil && entry.Actor == "main" && entry.Role == pending.Role {
+				if pending != nil && entry.Actor == "main" && entry.Role == pending.Role() {
 					_, added := ctxmgr.AppendPendingMessage([]llm.Message{m}, pending)
 					pendingCopied = pendingCopied || !added
 				}
@@ -210,7 +210,7 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 			if source == 0 {
 				source = pendingEntry.ID
 			}
-			if _, e = appendTx(tx, id, pendingEntry.TurnID, "main", "message", pending.Role, true, data, source); e != nil {
+			if _, e = appendTx(tx, id, pendingEntry.TurnID, "main", "message", pending.Role(), true, data, source); e != nil {
 				return e
 			}
 		}

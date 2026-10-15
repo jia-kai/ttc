@@ -254,7 +254,7 @@ func (s *Store) transact(fn func(*sql.Tx) error) error {
 // user message. The caller owns id before saving; errors leave no partial rows.
 // It returns the turn and message entry IDs, without restoring workspace files.
 func (s *Store) StartSession(id, path string, model llm.Selection, message llm.Message) (turn string, entry int64, err error) {
-	if id == "" || !filepath.IsAbs(path) || message.Role != "user" {
+	if id == "" || !filepath.IsAbs(path) || message.Role() != "user" {
 		return "", 0, errors.New("first session save requires an ID, absolute workspace path and user message")
 	}
 	wid := NewID("workspace")
@@ -428,6 +428,15 @@ func appendTx(tx *sql.Tx, session, turn, actor, kind, role string, visible bool,
 	if !json.Valid(data) {
 		return 0, errors.New(prompts.HistoryInvalidJSON)
 	}
+	if kind == "message" || kind == "summary" {
+		var message llm.Message
+		if err := json.Unmarshal(data, &message); err != nil {
+			return 0, fmt.Errorf(prompts.HistoryDecodeCanonicalMessage, kind, err)
+		}
+		if message.Role() != role {
+			return 0, fmt.Errorf(prompts.HistoryMessageIndexedRole, message.Type, message.Role(), role)
+		}
+	}
 	var parent, tip sql.NullInt64
 	var ro bool
 	if e := tx.QueryRow(`SELECT active_entry_id,file_tip_id,read_only FROM sessions WHERE id=?`, session).Scan(&parent, &tip, &ro); e != nil {
@@ -538,7 +547,7 @@ func messagesWith(q historyReader, session string) ([]llm.Message, error) {
 			if e = q.QueryRow("SELECT result_json,provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&result, &pcid); e != nil {
 				return nil, e
 			}
-			out = append(out, llm.Message{Role: "tool", CallID: pcid, Content: result, Files: ref.Files})
+			out = append(out, llm.Message{Type: llm.TypeToolResult, CallID: pcid, Content: result, Files: ref.Files})
 		} else {
 			var m llm.Message
 			if e = json.Unmarshal(v.Content, &m); e != nil {
@@ -562,11 +571,11 @@ func messagesWith(q historyReader, session string) ([]llm.Message, error) {
 // completion chronology. Missing results stay missing until callers settle them.
 func orderedToolResults(messages []llm.Message) []llm.Message {
 	for i, m := range messages {
-		if m.Role != "assistant" || len(m.Calls) < 2 {
+		if m.Type != llm.TypeAssistant || len(m.Calls) < 2 {
 			continue
 		}
 		end := i + 1
-		for end < len(messages) && messages[end].Role == "tool" {
+		for end < len(messages) && messages[end].Type == llm.TypeToolResult {
 			end++
 		}
 		if end-i-1 < 2 {
@@ -803,7 +812,7 @@ func (s *Store) Inspect(entry Entry) (string, error) {
 			Message       llm.Message
 		}
 		if json.Unmarshal(entry.Content, &internal) == nil && internal.Type == "request_message" {
-			if internal.Purpose == "compaction" && internal.Message.Role == "assistant" {
+			if internal.Purpose == "compaction" && internal.Message.Type == llm.TypeAssistant {
 				return render.Clean(internal.Message.Content), nil
 			}
 			b, e := json.MarshalIndent(internal.Message, "", "  ")

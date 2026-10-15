@@ -21,6 +21,7 @@ OpenAIReplayBinaryUnsupported:
 OpenAIToolBinaryFile: "tool output %q binary file: %w"
 OpenAIMessageBinaryFile: "%s message binary file: %w"
 OpenAIInvalidHistoryCallJSON: "invalid call JSON in history"
+OpenAIProjectModelMessage: "project model message: %w"
 OpenAIMaxAttemptsNonnegative: "max attempts must be nonnegative"
 OpenAIPriorAttemptsRange:
   "prior attempts must be nonnegative and below max attempts"

@@ -43,7 +43,7 @@ class ChildFixtureTests(unittest.TestCase):
             database = Path(root) / 'history.sqlite'
             self.assertFalse(demo_completed(database, 'notebook'))
             with sqlite3.connect(database) as db:
-                db.executescript("CREATE TABLE turns(actor_id,status); CREATE TABLE entries(id,actor_id,kind,role,content_json); INSERT INTO turns VALUES('main','running'); INSERT INTO entries VALUES(1,'main','message','assistant','{\"content\":\"notebook\"}');")
+                db.executescript("CREATE TABLE turns(actor_id,status); CREATE TABLE entries(id,actor_id,kind,role,content_json); INSERT INTO turns VALUES('main','running'); INSERT INTO entries VALUES(1,'main','message','assistant','{\"type\":\"assistant\",\"content\":\"notebook\"}');")
             self.assertFalse(demo_completed(database, 'notebook'))
             with sqlite3.connect(database) as db:
                 db.execute("UPDATE turns SET status='completed'")
@@ -58,7 +58,7 @@ class ChildFixtureTests(unittest.TestCase):
         with sqlite3.connect(':memory:') as db:
             db.execute('CREATE TABLE entries(id,actor_id,content_json)')
             db.execute('INSERT INTO entries VALUES(1,?,?)',
-                       ('main/child_fixture', json.dumps({'content': CHILD_ANSWER})))
+                       ('main/child_fixture', json.dumps({'type': 'assistant', 'content': CHILD_ANSWER})))
             result = {'answer': CHILD_ANSWER[:CHILD_ANSWER_CAP],
                       'answer_truncated': True, 'result_entry_id': 1}
             verify_child_answers(db, [result])
@@ -67,6 +67,13 @@ class ChildFixtureTests(unittest.TestCase):
                             dict(result, result_entry_id=2)):
                 with self.subTest(result=invalid), self.assertRaises(AssertionError):
                     verify_child_answers(db, [invalid])
+            for message in ({'content': CHILD_ANSWER},
+                            {'type': 'user_input', 'content': CHILD_ANSWER},
+                            {'type': 'assistant', 'role': 'assistant', 'content': CHILD_ANSWER},
+                            {'type': 'assistant', 'runtime': False, 'content': CHILD_ANSWER}):
+                db.execute('UPDATE entries SET content_json=? WHERE id=1', (json.dumps(message),))
+                with self.subTest(message=message), self.assertRaises(AssertionError):
+                    verify_child_answers(db, [result])
 
 
 if __name__ == '__main__':

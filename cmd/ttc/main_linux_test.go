@@ -162,7 +162,7 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 			previous := llm.Selection{Provider: "openai", Model: llm.ScriptModel(), Variant: "low"}
 			previous.Model.ID = "first"
 			id := history.NewID("session")
-			turn, _, err := s.StartSession(id, work, previous, llm.Message{Role: "user", Content: "Saved research"})
+			turn, _, err := s.StartSession(id, work, previous, llm.Message{Type: llm.TypeUserInput, Content: "Saved research"})
 			if err != nil {
 				t.Fatal(err)
 			}

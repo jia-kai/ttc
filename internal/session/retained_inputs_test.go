@@ -51,7 +51,7 @@ func assertRetainedProjection(t *testing.T, original, got []llm.Message, selecti
 			Timestamp string `json:"timestamp"`
 		} `json:"inputs"`
 	}
-	if projected[1].Role != "developer" || projected[1].Content != prompts.RetainedInputs || projected[2].Role != "user" || json.Unmarshal([]byte(projected[2].Content), &group) != nil || group.Type != "retained_inputs" || len(group.Inputs) != 4 {
+	if projected[1].Role() != "developer" || projected[1].Content != prompts.RetainedInputs || projected[2].Role() != "user" || json.Unmarshal([]byte(projected[2].Content), &group) != nil || group.Type != "retained_inputs" || len(group.Inputs) != 4 {
 		t.Fatal("retained projection is not one structured developer/user pair", projected)
 	}
 	for i := range group.Inputs {
@@ -95,7 +95,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 				hold()
 			}
 			r.Emit = func(event Event) {
-				if aside && event.Text == "Aside instructions · inspect" {
+				if aside && event.Kind == "message" && event.MessageType == llm.TypeRuntimeInstruction {
 					hold()
 				}
 			}
@@ -112,7 +112,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 						if aside {
 							source = "btw"
 						}
-						if message.Role != "user" || message.Runtime || message.InputSource != source || message.InputTimeMS != committed {
+						if message.Type != llm.TypeUserInput || message.InputSource != source || message.InputTimeMS != committed {
 							return fmt.Errorf("isolated input provenance differs from committed entry: %#v, want %s at %d", message, source, committed)
 						}
 					}
@@ -187,7 +187,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			}
 			appendMessage := func(message llm.Message, visible bool) {
 				t.Helper()
-				if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role, visible, message); err != nil {
+				if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role(), visible, message); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -196,12 +196,12 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					admit("queue", "new ordinary")
 					admit("steer", "new steer")
 				}
-				appendMessage(llm.Message{Role: "assistant", Content: strings.Repeat("completed older work ", 1200)}, true)
-				appendMessage(llm.Message{Role: "user", Runtime: true, InputSource: "steer", Content: "runtime notice is not a steer"}, true)
-				appendMessage(llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "a", Name: "read", Arguments: []byte(`{}`)}, {ID: "b", Name: "read", Arguments: []byte(`{}`)}}, State: &llm.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"native":true}`)}}}, true)
-				appendMessage(llm.Message{Role: "tool", CallID: "b", Content: "second result first"}, true)
-				appendMessage(llm.Message{Role: "tool", CallID: "a", Content: "first result second"}, true)
-				appendMessage(llm.Message{Role: "assistant", Content: "UI-only child output"}, false)
+				appendMessage(llm.Message{Type: llm.TypeAssistant, Content: strings.Repeat("completed older work ", 1200)}, true)
+				appendMessage(llm.Message{Type: llm.TypeRuntimeNotification, Content: "runtime notice is not a steer"}, true)
+				appendMessage(llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "a", Name: "read", Arguments: []byte(`{}`)}, {ID: "b", Name: "read", Arguments: []byte(`{}`)}}, State: &llm.ReplayState{Provider: "fixture", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"native":true}`)}}}, true)
+				appendMessage(llm.Message{Type: llm.TypeToolResult, CallID: "b", Content: "second result first"}, true)
+				appendMessage(llm.Message{Type: llm.TypeToolResult, CallID: "a", Content: "first result second"}, true)
+				appendMessage(llm.Message{Type: llm.TypeAssistant, Content: "UI-only child output"}, false)
 				original, err := r.Store.Messages(r.Current())
 				if err != nil {
 					t.Fatal(err)
@@ -304,7 +304,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 						if err := json.Unmarshal(entry.Content, &message); err != nil {
 							t.Fatal(err)
 						}
-						if !message.Runtime && entry.EventSeq() != originalIDs[message.Content] {
+						if !message.Type.IsRuntime() && entry.EventSeq() != originalIDs[message.Content] {
 							t.Fatal("original admission identity changed", entry)
 						}
 					}
@@ -337,10 +337,10 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			}}
 			var messages []llm.Message
 			for i, source := range []string{"task", "steer", "queue", "steer", "btw", "steer"} {
-				messages = append(messages, llm.Message{Role: "user", InputSource: source, InputTimeMS: time.Now().Add(-time.Duration(10-i) * time.Minute).UnixMilli(), Content: fmt.Sprintf("original %d", i)})
+				messages = append(messages, llm.Message{Type: llm.TypeUserInput, InputSource: source, InputTimeMS: time.Now().Add(-time.Duration(10-i) * time.Minute).UnixMilli(), Content: fmt.Sprintf("original %d", i)})
 			}
 			for range 2 {
-				messages = append(messages, llm.Message{Role: "assistant", Content: strings.Repeat("older work ", 3000)}, llm.Message{Role: "assistant", Content: "recent work"})
+				messages = append(messages, llm.Message{Type: llm.TypeAssistant, Content: strings.Repeat("older work ", 3000)}, llm.Message{Type: llm.TypeAssistant, Content: "recent work"})
 				result, _, err := r.compactChild(context.Background(), task, messages, contextCursor{}, nil)
 				if err != nil {
 					t.Fatal(err)

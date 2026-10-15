@@ -290,7 +290,7 @@ func assertQuestionEditorAnswers(t *testing.T, u *questionTestUI, want []session
 		t.Fatal(err)
 	}
 	for _, message := range messages {
-		if message.Role != "tool" || message.CallID != "q" {
+		if message.Type != llm.TypeToolResult || message.CallID != "q" {
 			continue
 		}
 		var result struct {

@@ -38,7 +38,7 @@ func TestLSPJobsOwnProtocolAndCancelQueries(t *testing.T) {
 	}
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartLSP("main/child", serverCommand(t), root, 0, true, false, capture.OutputOptions{})
+	id, err := m.StartLSP("main/child", serverCommand(t), root, 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestLSPJobsOwnProtocolAndCancelQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Stop must interrupt a request stalled waiting for the server.
-	id, err = m.StartLSP("main", "TTC_LSP_MODE=slow "+serverCommand(t), root, 0, true, false, capture.OutputOptions{})
+	id, err = m.StartLSP("main", "TTC_LSP_MODE=slow "+serverCommand(t), root, 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestStatePublicationPrecedesWorkerAndWait(t *testing.T) {
 		}
 	}
 	for _, background := range []bool{false, true} {
-		id, err := m.Start("main", "true", t.TempDir(), time.Second, true, background, false, capture.OutputOptions{})
+		id, err := m.Start("main", "true", t.TempDir(), time.Second, true, background, false, capture.OutputOptions{}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -148,7 +148,7 @@ func TestStatePublicationPrecedesWorkerAndWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(id)
-	id, err = m.StartLSP("main", serverCommand(t), t.TempDir(), 0, true, false, capture.OutputOptions{})
+	id, err = m.StartLSP("main", serverCommand(t), t.TempDir(), 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

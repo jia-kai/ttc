@@ -270,9 +270,9 @@ func TestInspectCommandAndLSPDefaultsRejectProtocolStdout(t *testing.T) {
 			var id string
 			var err error
 			if protocol {
-				id, err = m.StartLSP("main", command, t.TempDir(), 0, true, false, capture.OutputOptions{})
+				id, err = m.StartLSP("main", command, t.TempDir(), 0, true, false, capture.OutputOptions{}, "")
 			} else {
-				id, err = m.Start("main", command, t.TempDir(), 0, true, true, false, capture.OutputOptions{})
+				id, err = m.Start("main", command, t.TempDir(), 0, true, true, false, capture.OutputOptions{}, "")
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -334,7 +334,7 @@ func TestInspectWatchIdentityIsCapturedBeforeLaunch(t *testing.T) {
 			}
 		}
 	}
-	id, err := m.StartWatch("main", dir, false)
+	id, err := m.StartWatch("main", dir, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

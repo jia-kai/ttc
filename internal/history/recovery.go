@@ -309,7 +309,7 @@ func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string
 				rows.Close()
 				return nil, err
 			}
-			out = append(out, llm.Message{Role: "user", Runtime: true, EventSeq: id, Content: string(body)})
+			out = append(out, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: id, Content: string(body)})
 		}
 		if err = rows.Err(); err != nil {
 			rows.Close()

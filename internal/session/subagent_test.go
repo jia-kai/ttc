@@ -62,7 +62,7 @@ func TestInitialRequestDescribesSubagentCapacity(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "done"})
 	}}
-	m := llm.Message{Role: "user", Content: "hello"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "hello"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 		{Calls: []llm.ToolCall{{ID: "write", Name: "write", Arguments: []byte(`{"path":"child.txt","content":"result\n"}`)}}},
 		{Text: "Child finished."}, {Text: "Parent finished."},
 	})
-	m := llm.Message{Role: "user", Content: "Private parent context"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "Private parent context"}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, message := range messages {
-		if strings.Contains(message.Content, "Child finished.") && message.Role == "assistant" {
+		if strings.Contains(message.Content, "Child finished.") && message.Type == llm.TypeAssistant {
 			t.Fatal("child transcript leaked into parent", message)
 		}
 	}
@@ -137,7 +137,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 		if strings.HasPrefix(req.ConversationID, "main/child_") {
 			var latest runtimeContext
 			for _, message := range req.Messages {
-				if message.Role == "developer" && message.Runtime {
+				if message.Role() == "developer" && message.Type.IsRuntime() {
 					if err := json.Unmarshal([]byte(message.Content), &latest); err != nil {
 						return err
 					}
@@ -172,7 +172,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 			return emit(llm.StreamEvent{Kind: "text", Text: "Keep the child task and research state."})
 		}
 		last := req.Messages[len(req.Messages)-2]
-		if last.Role == "user" && strings.HasPrefix(last.Content, "Private parent") {
+		if last.Role() == "user" && strings.HasPrefix(last.Content, "Private parent") {
 			call := llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"write after gate","label":"background writer","background":true}`)}
 			return emit(llm.StreamEvent{Kind: "call", Call: &call})
 		}
@@ -180,7 +180,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	}
 	r.Provider = p
 	// Keep compaction pressure independent of generated identifier lengths.
-	m := llm.Message{Role: "user", Content: "Private parent starts a child\n" + strings.Repeat("research context ", 128)}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "Private parent starts a child\n" + strings.Repeat("research context ", 128)}
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}

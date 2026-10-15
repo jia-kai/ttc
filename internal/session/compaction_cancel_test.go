@@ -125,7 +125,7 @@ func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 	if r.Current() == loaded {
 		t.Fatal("manual compaction did not create continuation")
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Continue verification."}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue verification."}); err != nil {
 		t.Fatal(err)
 	}
 	if summaries != 1 || coding != 1 {

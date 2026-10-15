@@ -14,18 +14,18 @@ func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {
 	s, first, turn, _ := historyFixture(t)
 	appendMessage := func(actor, kind string, visible bool, m llm.Message) int64 {
 		t.Helper()
-		id, err := s.Append(first.ID, turn, actor, kind, m.Role, visible, m)
+		id, err := s.Append(first.ID, turn, actor, kind, m.Role(), visible, m)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return id
 	}
-	appendMessage("main", "message", true, llm.Message{Role: "assistant", Content: "assistant text"})
-	appendMessage("main", "message", true, llm.Message{Role: "user", Content: "runtime notice", Runtime: true})
-	appendMessage("main/child", "message", true, llm.Message{Role: "user", Content: "child instruction"})
-	appendMessage("main", "summary", true, llm.Message{Role: "user", Content: "compaction summary"})
-	appendMessage("main", "message", false, llm.Message{Role: "user", Content: "internal naming input"})
-	copyID := appendMessage("main", "message", true, llm.Message{Role: "user", Content: "hello"})
+	appendMessage("main", "message", true, llm.Message{Type: llm.TypeAssistant, Content: "assistant text"})
+	appendMessage("main", "message", true, llm.Message{Type: llm.TypeRuntimeNotification, Content: "runtime notice"})
+	appendMessage("main/child", "message", true, llm.Message{Type: llm.TypeUserInput, Content: "child instruction"})
+	appendMessage("main", "summary", true, llm.Message{Type: llm.TypeUserInput, Content: "compaction summary"})
+	appendMessage("main", "message", false, llm.Message{Type: llm.TypeUserInput, Content: "internal naming input"})
+	copyID := appendMessage("main", "message", true, llm.Message{Type: llm.TypeUserInput, Content: "hello"})
 	var original int64
 	if err := s.DB.QueryRow("SELECT min(id) FROM entries WHERE session_id=?", first.ID).Scan(&original); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Append(first.ID, steer, "main", "message", "user", true, llm.Message{Role: "user", Content: "Steering α\nsecond line"}); err != nil {
+	if _, err = s.Append(first.ID, steer, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Steering α\nsecond line"}); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.FinishTurn(steer, "completed"); err != nil {
@@ -48,11 +48,11 @@ func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {
 	}
 	second, next := startHistorySession(t, s, t.TempDir(), first.Model, "newer")
 	authored := "look @fixture.txt"
-	if _, err = s.Append(second.ID, next, "main", "message", "user", true, llm.Message{Role: "user", Content: "expanded private attachment", UserText: &authored}); err != nil {
+	if _, err = s.Append(second.ID, next, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "expanded private attachment", UserText: &authored}); err != nil {
 		t.Fatal(err)
 	}
 	empty := ""
-	if _, err = s.Append(second.ID, next, "main", "message", "user", true, llm.Message{Role: "user", Content: "attachment only", UserText: &empty}); err != nil {
+	if _, err = s.Append(second.ID, next, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "attachment only", UserText: &empty}); err != nil {
 		t.Fatal(err)
 	}
 	root := s.Root
@@ -79,7 +79,7 @@ func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {
 func TestPromptHistoryNewestCountAndByteBudget(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	for i := 0; i < MaxPromptHistoryEntries+5; i++ {
-		if _, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: fmt.Sprintf("prompt %d", i)}); err != nil {
+		if _, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: fmt.Sprintf("prompt %d", i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -89,7 +89,7 @@ func TestPromptHistoryNewestCountAndByteBudget(t *testing.T) {
 	}
 	big := strings.Repeat("界", (5<<20)/3)
 	for range 2 {
-		if _, err = s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: big}); err != nil {
+		if _, err = s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: big}); err != nil {
 			t.Fatal(err)
 		}
 	}

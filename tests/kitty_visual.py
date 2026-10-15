@@ -45,6 +45,11 @@ def main():
     sock = root / 'control.sock'
     env = dict(os.environ, LIBGL_ALWAYS_SOFTWARE='1')
     env.pop('TMUX', None)  # This is a new Kitty PTY, outside the caller's tmux.
+    env.pop('TMUX_PANE', None)
+    # Inherited tmux identity can override Kitty's client identification in a
+    # newly launched private tmux, disabling automatic graphics probing.
+    env.pop('TERM_PROGRAM', None)
+    env.pop('TERM_PROGRAM_VERSION', None)
     env.pop('NO_COLOR', None)  # Capture the normal colored UI, independent of CI preferences.
     read_fd, write_fd = os.pipe()
     xvfb_log = (root / 'xvfb.log').open('wb')

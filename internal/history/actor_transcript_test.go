@@ -18,7 +18,7 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	actor := "main/child_audit"
 	appendMessage := func(session, role, text string) int64 {
 		t.Helper()
-		id, err := s.Append(session, turn, actor, "message", role, false, llm.Message{Role: role, Content: text})
+		id, err := s.Append(session, turn, actor, "message", role, false, llm.Message{Type: map[string]llm.MessageType{"user": llm.TypeUserInput, "assistant": llm.TypeAssistant}[role], Content: text})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -29,7 +29,7 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	// Continuation removes native replay state from this retained copy. The
 	// actor export must still prefer the original entry's exact provider payload.
 	retained, err := s.Append(initial.ID, turn, actor, "message", "assistant", true, llm.Message{
-		Role: "assistant", Content: "Retained child tail",
+		Type: llm.TypeAssistant, Content: "Retained child tail",
 		State: &llm.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"original-native-state"}`)}},
 	})
 	if err != nil {
@@ -70,7 +70,7 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	}
 	second := appendMessage(continued.ID, "user", "Second persistent assignment")
 	partial := appendMessage(continued.ID, "assistant", "Last partial response")
-	if _, err := s.Append(continued.ID, turn, "main/other_child", "message", "assistant", false, llm.Message{Role: "assistant", Content: "Unrelated sibling evidence"}); err != nil {
+	if _, err := s.Append(continued.ID, turn, "main/other_child", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "Unrelated sibling evidence"}); err != nil {
 		t.Fatal(err)
 	}
 	// Archive/continue once more without retaining child entries. A current-branch
@@ -157,7 +157,7 @@ func TestArchiveActorTranscriptFollowsSelectedCutsOnly(t *testing.T) {
 	actor := "main/child_audit"
 	appendMessage := func(session, owner, text string) int64 {
 		t.Helper()
-		id, err := s.Append(session, turn, owner, "message", "assistant", false, llm.Message{Role: "assistant", Content: text})
+		id, err := s.Append(session, turn, owner, "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: text})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -263,12 +263,12 @@ func BenchmarkArchiveActorTranscriptUnrelatedPayload(b *testing.B) {
 				b.Cleanup(func() { s.Close() })
 				session := NewID("session")
 				model := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
-				turn, _, err := s.StartSession(session, b.TempDir(), model, llm.Message{Role: "user", Content: strings.Repeat("x", size)})
+				turn, _, err := s.StartSession(session, b.TempDir(), model, llm.Message{Type: llm.TypeUserInput, Content: strings.Repeat("x", size)})
 				if err != nil {
 					b.Fatal(err)
 				}
 				actor := "main/child_audit"
-				child, err := s.Append(session, turn, actor, "message", "assistant", false, llm.Message{Role: "assistant", Content: "Tiny child answer"})
+				child, err := s.Append(session, turn, actor, "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "Tiny child answer"})
 				if err != nil {
 					b.Fatal(err)
 				}

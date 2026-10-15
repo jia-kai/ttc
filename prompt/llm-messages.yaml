@@ -4,3 +4,10 @@ LLMMixedReplayState: mixed provider replay state
 LLMScriptExhausted: offline script exhausted
 LLMScriptPrefixMismatch: "offline script prefix mismatch: expected "
 LLMScriptNoTools: script returned tools to a no-tools request
+LLMInvalidMessageType: "invalid message type %q"
+LLMMessageToolCalls: "%s cannot contain tool calls"
+LLMMessageCallID: "%s cannot contain a tool call ID"
+LLMMessageReplayState: "%s cannot contain assistant replay state"
+LLMMessageInputMetadata: "%s cannot contain human input metadata"
+LLMLegacyMessageRole: "legacy message role requires history migration"
+LLMLegacyMessageRuntime: "legacy runtime flag requires history migration"

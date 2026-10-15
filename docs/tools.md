@@ -224,18 +224,19 @@ presentation; it never replaces or changes model-facing results.
 ### `shell`
 
 - Input:
-  `{command:string, workdir?:string, timeout_ms?:integer, background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean, output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer}`.
+  `{command:string, label?:string, workdir?:string, timeout_ms?:integer, background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean, output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer}`.
   `strict` defaults to true: `/bin/sh -eu -c` enables POSIX errexit and nounset,
   without pipefail. Set `strict:false` for commands requiring neither behavior;
   handle expected failures with conditionals or `||` when appropriate. The
-  original supplied command remains the job label. `workdir` defaults to the
-  session directory. Foreground `timeout_ms` defaults to 20000 and cannot be
-  disabled; explicit values are 1–86400000 ms. Background has no timeout by
-  default; `0` also means no timeout in background. A positive background
-  timeout is an optional explicit deadline. `background` defaults to false and
-  `wake_on_exit` to true. Commands are noninteractive with no PTY; ordinary
-  shell stdin is closed. LSP jobs reserve writable stdin for the protocol
-  manager. This tool does not support interactive terminal input.
+  optional label names the job in compact metadata; omission uses a short
+  default. Exact commands are available through `job_list(details=true)`.
+  `workdir` defaults to the session directory. Foreground `timeout_ms` defaults
+  to 20000 and cannot be disabled; explicit values are 1–86400000 ms. Background
+  has no timeout by default; `0` also means no timeout in background. A positive
+  background timeout is an optional explicit deadline. `background` defaults to
+  false and `wake_on_exit` to true. Commands are noninteractive with no PTY;
+  ordinary shell stdin is closed. LSP jobs reserve writable stdin for the
+  protocol manager. This tool does not support interactive terminal input.
 - Result:
   `{job_id:string, status:"running"|"completed"|"failed"|"cancelled"|"interrupted", stdout:string, stderr:string, exit_code?:integer, signal?:string, truncated:boolean}`.
   `exit_code` or `signal` appears only after observed exit. An observed command
@@ -344,9 +345,9 @@ presentation; it never replaces or changes model-facing results.
 
 - Input:
   `{message:string, job_id?:string, child_id?:string, child_turn_id?:string}`.
-  Main only. Target exactly one assignment using its `job_id` or both `child_id`
-  and `child_turn_id`; stale/inactive assignments reject the message rather than
-  sending it to a later assignment.
+  Main only. Prefer the assignment's existing `job_id`; alternatively supply
+  both `child_id` and `child_turn_id`; stale/inactive assignments reject the
+  message rather than sending it to a later assignment.
 - Result:
   `{state:"queued",delivered:false,message_event_seq:integer, child_id:string,child_turn_id:string,job_id:string}`.
   The original message and sending tool-call identity are durable. The child
@@ -369,12 +370,38 @@ presentation; it never replaces or changes model-facing results.
   shorten guidance or wait for admission to free capacity. Request admission,
   evidence acknowledgments and delivery reports commit in one transaction.
 
+### `tmux_watch_run`
+
+- Input:
+  `{command:string,record_dir:string,label?:string,workdir?:string,wake_on_exit?:boolean}`.
+  `command` is a shell string run with `/bin/sh -eu`, without pipefail. Relative
+  `record_dir` and `workdir` use the workspace, independently; `workdir`
+  defaults to the workspace. The record parent must exist and its final
+  directory must not. `label` is at most 64 bytes with no control characters;
+  `wake_on_exit` defaults to true.
+- Requires `tmux` on PATH. Launches a new detached session and automatically
+  creates a local watch job. Records capture stdout, stderr and completion
+  without manual redirection. The session closes when the workload exits;
+  records remain on disk.
+- Result includes absolute `record_dir`, `session_name`, available `session_id`
+  and `pane_id`, and `status`. `watching` includes `job_id` and `watcher`
+  snapshot. `launch_failed` indicates a definite pre-launch failure;
+  `launch_unknown` means launch may have happened. `launched_unobserved` means
+  launch succeeded but readiness or watcher setup failed. Inspect the returned
+  session/records before retrying ambiguous launches; use `watch` to establish
+  observation.
+- Incomplete launch staging expires after 60 seconds. This is not a workload
+  timeout and never terminates a successfully respawned workload.
+- `job_read` reads local capture and `job_stop` stops observation only. TTC exit
+  or session switching does not terminate the external workload. Use `watch`
+  with the saved record directory in a later session.
+
 ### `watch`
 
-- Input: `{record_dir:string,wake_on_exit?:boolean}`. Observe only runs created
-  by `ttc watch-run --record-dir DIR -- COMMAND [ARG...]`. Relative paths use
-  the workspace. Returns a background job snapshot with kind `watch`;
-  `wake_on_exit` defaults to true.
+- Input: `{record_dir:string,label?:string,wake_on_exit?:boolean}`. Reattach to
+  saved runs created by `tmux_watch_run`. Relative paths use the workspace.
+  Returns a background job snapshot with kind `watch`; `wake_on_exit` defaults
+  to true. `label` supplies a short job name; omission uses `External run`.
 - `job_read` pages captured stdout/stderr; `job_list` shows the watcher and
   `job_stop` cancels observation. Session changes and TTC exit also stop only
   observation, never signal the external wrapper/workload. A new runtime can
@@ -392,11 +419,16 @@ presentation; it never replaces or changes model-facing results.
 
 ### `job_list`
 
-- Input: `{state?:"running"|"all"}`; default `running`.
+- Input: `{state?:"running"|"all",details?:boolean}`; default `running`,
+  compact.
 - Result:
   `{jobs:[{job_id:string, kind:"shell"|"lsp"|"subagent"|"btw"|"watch", status:"running"|"completed"|"failed"|"cancelled"|"interrupted", owner_actor_id:string, label:string, started_at:string, finished_at?:string, exit_code?:integer}]}`.
   `owner_actor_id` is `main` or a live child ID; it stays unchanged through
   compaction. Times are ISO 8601 UTC.
+- Routine lists contain metadata only, never stdout/stderr. Labels are bounded
+  short names, not commands. `details=true` adds exact `command` values; use
+  `job_read` for captured output. Watch metadata also includes `record_dir`;
+  terminal metadata may include `signal`.
 - Include
   `children:[{child_id:string,label:string, state:"running"|"idle",job_id:string,child_turn_id:string}]`
   for retained coding children. The `running` filter excludes idle children;
@@ -686,9 +718,11 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 ### `wakeup_list`
 
-- Input: `{}`.
+- Input: `{details?:boolean}`; default compact.
 - Result:
-  `{wakeups:[{wakeup_id:string,name:string,message:string, status:"scheduled"|"fired"|"cancelled"|"failed", next_at?:string,repeat_seconds?:integer,fired_count:integer, last_result?:"delivered"|"failed"}]}`.
+  `{wakeups:[{wakeup_id:string,name:string,message?:string, status:"scheduled"|"fired"|"cancelled"|"failed", next_at?:string,repeat_seconds?:integer,fired_count:integer, last_result?:"delivered"|"failed"}]}`.
+  Reminder bodies are omitted unless `details=true`, which includes complete
+  `message` values and original `startup_notes`.
 
 ### `wakeup_cancel`
 
@@ -699,24 +733,35 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 ## Async messages sent to the model
 
 Job operations are scoped to the current runtime and caller/descendant jobs;
-only saved history artifacts survive its end. The UI records terminal status.
-Foreground shell exits return results without `job_exit`; background shell and
-watch jobs notify only with `wake_on_exit=true`, including shells moved to
-background with Ctrl+B. Completion notices include selected stdout/stderr,
-truncation/selection metadata and known exit code or signal. Coding children
-always deliver their turn event.
+handles do not survive its end. Saved history and external-run records remain;
+externally owned workloads continue independently. The UI records terminal
+status. Foreground shell exits return results without `job_exit`; background
+shell and watch jobs notify only with `wake_on_exit=true`, including shells
+moved to background with Ctrl+B. Completion notices include selected
+stdout/stderr, truncation/selection metadata and known exit code or signal.
+Coding children always deliver their turn event.
 
 Events arrive at the next model boundary or wake an idle session as separate
-`user` messages containing JSON strings:
+`user` messages containing JSON strings. The canonical semantic message type
+determines model role and presentation; neither a payload's event `type` nor
+human-authored JSON controls authority. Runtime notifications gain
+`message_type:"runtime_notification"` during model projection while preserving
+the event `type`. See [message semantics](design.md#message-semantics).
 
 ```json
-{ "type": "job_exit", "job_id": "job_7", "status": "completed" }
+{
+  "message_type": "runtime_notification",
+  "type": "job_exit",
+  "job_id": "job_7",
+  "status": "completed"
+}
 ```
 
 Coding child events use the same generic ordering/delivery contract:
 
 ```json
 {
+  "message_type": "runtime_notification",
   "type": "child_compacted",
   "event_seq": 39,
   "child_id": "c7",
@@ -729,6 +774,7 @@ Coding child events use the same generic ordering/delivery contract:
 
 ```json
 {
+  "message_type": "runtime_notification",
   "type": "child_turn_finished",
   "event_seq": 42,
   "child_id": "c7",
@@ -742,7 +788,12 @@ Coding child events use the same generic ordering/delivery contract:
 ```
 
 Wakeups send
-`{"type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}`.
+`{"message_type":"runtime_notification","type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}`.
+
+Child assignment guidance instead uses `message_type:"child_guidance"` with
+`type:"child_message"`. It remains user-role task guidance from main for the
+current assignment, not developer instructions. Quoted evidence in its `message`
+field remains data. Assignment `job_id` is the preferred routing handle.
 
 - A foreground child result carries its finish event; otherwise enqueue one main
   message. Emit `child_compacted` only after successful handoff. Payloads

@@ -34,10 +34,10 @@ func TestConcurrentStartupAndIndependentSessionCommits(t *testing.T) {
 			defer s.Close()
 			id := NewID("session")
 			model := llm.Selection{Provider: fmt.Sprintf("provider-%d", i), Model: llm.ScriptModel(), Variant: "none"}
-			turn, _, err := s.StartSession(id, work, model, llm.Message{Role: "user", Content: fmt.Sprint(i)})
+			turn, _, err := s.StartSession(id, work, model, llm.Message{Type: llm.TypeUserInput, Content: fmt.Sprint(i)})
 			if err == nil {
 				for j := 0; j < 10; j++ {
-					_, err = s.Append(id, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: fmt.Sprint(j)})
+					_, err = s.Append(id, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: fmt.Sprint(j)})
 					if err != nil {
 						break
 					}
@@ -108,7 +108,7 @@ func TestOpeningSharedHistoryDoesNotSettleLiveOrCrashedWork(t *testing.T) {
 func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
 	call := llm.ToolCall{ID: "done", Name: "read", Arguments: []byte(`{"path":"file"}`)}
-	_, ids, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{call}})
+	_, ids, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{call}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	if _, err := s.CallResult(source.ID, turn, "main", ids[0], result, nil, map[string]string{"name": "read"}, md, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Append(source.ID, turn, "main", "message", "developer", true, llm.Message{Role: "developer", Runtime: true, Content: "old live jobs"}); err != nil {
+	if _, err := s.Append(source.ID, turn, "main", "message", "developer", true, llm.Message{Type: llm.TypeRuntimeContext, Content: "old live jobs"}); err != nil {
 		t.Fatal(err)
 	}
 	want, err := s.Messages(source.ID)
@@ -126,7 +126,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	}
 	want = want[:len(want)-1] // The new runtime supplies its own environment.
 	call.ID = "unfinished"
-	if _, _, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Content: "incomplete", Calls: []llm.ToolCall{call}}); err != nil {
+	if _, _, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Type: llm.TypeAssistant, Content: "incomplete", Calls: []llm.ToolCall{call}}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := s.Session(source.ID)
@@ -162,7 +162,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 			}
 		}
 	}
-	newTurn, _, err := s.AdmitTurn(a.ID, "user", a.Model, &llm.Message{Role: "user", Content: "independent"})
+	newTurn, _, err := s.AdmitTurn(a.ID, "user", a.Model, &llm.Message{Type: llm.TypeUserInput, Content: "independent"})
 	if err != nil {
 		t.Fatal(err)
 	}

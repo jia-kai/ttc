@@ -219,7 +219,7 @@ func TestSwitchModelDatabaseRollbackDoesNotChangePreference(t *testing.T) {
 	defer s.Close()
 	previous := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	id := NewID("session")
-	if _, _, err := s.StartSession(id, t.TempDir(), previous, llm.Message{Role: "user", Content: "hello"}); err != nil {
+	if _, _, err := s.StartSession(id, t.TempDir(), previous, llm.Message{Type: llm.TypeUserInput, Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.LastSelection(previous.Provider); err != nil || got != nil {

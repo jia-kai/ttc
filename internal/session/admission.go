@@ -31,7 +31,7 @@ func (r *Runtime) queueNotificationLocked(content string) error {
 		r.orderError = errors.Join(r.orderError, err)
 		return err
 	}
-	m := llm.Message{Role: "user", Runtime: true, Content: eventContent(content, id), EventSeq: id}
+	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, id), EventSeq: id}
 	var incoming struct {
 		ID string `json:"wakeup_id"`
 	}
@@ -191,7 +191,7 @@ func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64
 			return errors.New(prompts.SessionEventAlreadyPending)
 		}
 	}
-	r.notifications = append(r.notifications, llm.Message{Role: "user", Runtime: true, Content: eventContent(content, eventID), EventSeq: eventID})
+	r.notifications = append(r.notifications, llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, eventID), EventSeq: eventID})
 	sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].EventSeq < r.notifications[j].EventSeq })
 	return nil
 }

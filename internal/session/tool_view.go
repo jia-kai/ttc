@@ -13,7 +13,7 @@ import (
 // captureJobID identifies tools returning short job previews. Reads and controls
 // already carry their exact result; expanding them would change the inspected page.
 func captureJobID(name string, result json.RawMessage) string {
-	if name != "shell" && name != "subagent" && name != "watch" {
+	if name != "shell" && name != "subagent" && name != "watch" && name != "tmux_watch_run" {
 		return ""
 	}
 	var v struct {

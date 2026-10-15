@@ -56,7 +56,7 @@ func (p *inputCompactionProvider) Stream(ctx context.Context, req llm.Request, e
 			base += contextbuild.Estimate(tool.Description) + contextbuild.Estimate(string(tool.Parameters)) + 16
 		}
 		for _, message := range req.Messages {
-			if message.Role != "user" || message.Runtime {
+			if message.Type != llm.TypeUserInput {
 				base += contextbuild.Tokens([]llm.Message{message})
 			}
 		}
@@ -180,7 +180,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	for i, request := range requests[1:] {
 		var found []llm.Message
 		for _, message := range request.Messages {
-			if message.Role == "user" && !message.Runtime && (strings.HasPrefix(message.Content, "Steered ") || strings.HasPrefix(message.Content, "Queued ")) {
+			if message.Type == llm.TypeUserInput && (strings.HasPrefix(message.Content, "Steered ") || strings.HasPrefix(message.Content, "Queued ")) {
 				found = append(found, message)
 			}
 		}
@@ -208,7 +208,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 	}
 	var humans []llm.Message
 	for _, message := range messages {
-		if message.Role == "user" && !message.Runtime && (strings.HasPrefix(message.Content, "Steered ") || strings.HasPrefix(message.Content, "Queued ")) {
+		if message.Type == llm.TypeUserInput && (strings.HasPrefix(message.Content, "Steered ") || strings.HasPrefix(message.Content, "Queued ")) {
 			humans = append(humans, message)
 		}
 	}

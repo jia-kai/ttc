@@ -19,7 +19,7 @@ func TestNativeToolReplayAfterHistorySerialization(t *testing.T) {
 	}
 	defer store.Close()
 	id := history.NewID("session")
-	turn, _, err := store.StartSession(id, t.TempDir(), selection, llm.Message{Role: "user", Content: "Read the research notes"})
+	turn, _, err := store.StartSession(id, t.TempDir(), selection, llm.Message{Type: llm.TypeUserInput, Content: "Read the research notes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestNativeToolReplayAfterHistorySerialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "provider-call", Name: "read", Arguments: arguments}}}
+	m := llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "provider-call", Name: "read", Arguments: arguments}}}
 	if err = m.AppendState(selection, replayVersion, native); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestNativeToolReplayAfterHistorySerialization(t *testing.T) {
 	if _, err = wire(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: selection, Messages: messages}, nil); err != nil {
 		t.Fatal("saved replay", err)
 	}
-	if len(messages) != 2 || messages[0].Role != "user" || messages[1].Role != "assistant" {
+	if len(messages) != 2 || messages[0].Role() != "user" || messages[1].Type != llm.TypeAssistant {
 		t.Fatalf("unexpected replay history: %+v", messages)
 	}
 	for _, field := range []string{"id", "name", "arguments", "large_integer"} {

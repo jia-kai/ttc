@@ -5,19 +5,22 @@ import (
 	"io"
 	"strings"
 
+	"ttc/internal/prompts"
 	"ttc/internal/watchrun"
 )
 
 // StartWatch observes an external wrapper using ordinary job capture, ownership,
 // read and notification machinery. Stop and Close cancel observation only; they
 // never signal the wrapper or its workload. Record logs remain externally owned.
-func (m *Manager) StartWatch(owner, dir string, wake bool) (string, error) {
+// label is normalized and bounded to 80 code points; its fallback
+// is "External run". Inspect and detailed metadata retain the exact recorded argv.
+func (m *Manager) StartWatch(owner, dir string, wake bool, label string) (string, error) {
 	identity, err := watchrun.ReadIdentity(dir)
 	if err != nil {
 		return "", err
 	}
 	command := watchCommand(identity.Command)
-	options := TaskOptions{Kind: "watch", Label: command, Background: true, WakeOnExit: wake, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
+	options := TaskOptions{Kind: "watch", Label: compactLabel(label, prompts.JobLabelWatch), command: command, Background: true, WakeOnExit: wake, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
 		return InspectionSpec{Fields: []InspectionField{{Name: "Record dir", Value: dir}, {Name: "Command", Value: command, Language: "sh"}}, Streams: defaultInspectionStreams(false)}
 	}}
 	return m.StartTask(owner, options, func(ctx context.Context, out, stderr io.Writer) (TaskResult, error) {

@@ -13,7 +13,7 @@ import (
 )
 
 // CurrentVersion is the schema version produced by Apply.
-const CurrentVersion = 6
+const CurrentVersion = 7
 
 // legacyMarker is the fixed schema-5 storage signature, not live model guidance.
 const legacyMarker = `The following user message is an original human input retained across compaction,
@@ -39,8 +39,8 @@ type entry struct {
 	message                     map[string]json.RawMessage
 }
 
-// Apply runs ordered upgrades from schema 5 to CurrentVersion inside tx. Version
-// 6 is a no-op; older and newer versions are rejected. It never commits tx.
+// Apply runs ordered upgrades from MinimumVersion to CurrentVersion inside tx.
+// Older and newer versions are rejected. It never commits tx.
 func Apply(tx *sql.Tx) error {
 	var version int
 	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -52,10 +52,15 @@ func Apply(tx *sql.Tx) error {
 	if version == CurrentVersion {
 		return nil
 	}
-	if err := upgrade5(tx); err != nil {
-		return fmt.Errorf("migrate history schema 5 to 6: %w", err)
+	if version == 5 {
+		if err := upgrade5(tx); err != nil {
+			return fmt.Errorf("migrate history schema 5 to 6: %w", err)
+		}
 	}
-	_, err := tx.Exec("PRAGMA user_version = 6")
+	if err := upgrade6(tx); err != nil {
+		return fmt.Errorf("migrate history schema 6 to 7: %w", err)
+	}
+	_, err := tx.Exec("PRAGMA user_version = 7")
 	return err
 }
 

@@ -27,7 +27,7 @@ func TestRequestIdentityAcrossToolBoundariesChildrenTurnsAndSessionChanges(t *te
 	}}
 	original := r.Current()
 	for _, prompt := range []string{"Start child", "Another turn"} {
-		if err := r.Run(&llm.Message{Role: "user", Content: prompt}); err != nil {
+		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -35,13 +35,13 @@ func TestRequestIdentityAcrossToolBoundariesChildrenTurnsAndSessionChanges(t *te
 		t.Fatal(err)
 	}
 	next := r.Current()
-	if err := r.Run(&llm.Message{Role: "user", Content: "New"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "New"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Command("/load " + original); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Continue"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ids) != 7 || ids[0] != original || ids[3] != original || ids[4] != original || ids[5] != next || ids[6] != r.Current() || r.Current() == original || next == original {

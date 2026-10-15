@@ -12,7 +12,7 @@ func TestManualRenameWinsPendingAutomaticNaming(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	p := &gatedNamingProvider{naming: make(chan llm.Request, 1), release: make(chan struct{})}
 	r.Provider, r.AutoName = p, true
-	message := llm.Message{Role: "user", Content: "Inspect this project"}
+	message := llm.Message{Type: llm.TypeUserInput, Content: "Inspect this project"}
 	if err := r.Run(&message); err != nil {
 		t.Fatal(err)
 	}

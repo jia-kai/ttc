@@ -32,7 +32,7 @@ func toolFixture(t *testing.T) (*Registry, *workspace.Manager, Execution, int64)
 	}
 	selection := llm.Selection{Model: llm.ScriptModel()}
 	id := history.NewID("session")
-	turn, _, e := s.StartSession(id, w.Root, selection, llm.Message{Role: "user", Content: "Exercise file tools"})
+	turn, _, e := s.StartSession(id, w.Root, selection, llm.Message{Type: llm.TypeUserInput, Content: "Exercise file tools"})
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -51,7 +51,7 @@ func helpTestRequest(t *testing.T, p *helpTestProvider, text string) {
 	case req := <-p.requests:
 		for i := len(req.Messages) - 1; i >= 0; i-- {
 			m := req.Messages[i]
-			if m.Role == "user" && !m.Runtime {
+			if m.Type == llm.TypeUserInput {
 				if m.Content != text {
 					t.Fatalf("latest input = %q, want %q", m.Content, text)
 				}
@@ -141,7 +141,7 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range messages {
-		if m.Role == "user" && !m.Runtime && strings.TrimSpace(m.Content) == "/help" {
+		if m.Type == llm.TypeUserInput && strings.TrimSpace(m.Content) == "/help" {
 			t.Fatal("help entered model history")
 		}
 	}

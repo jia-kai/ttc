@@ -13,7 +13,7 @@ func TestReplayEstimateExcludesTransportAndBase64Expansion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := llm.Message{Role: "assistant", State: &llm.ReplayState{Provider: "openai", Version: replayVersion, Items: []json.RawMessage{item, json.RawMessage(`{"type":"message","id":"transport2","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`), json.RawMessage(`{"type":"function_call","call_id":"c","name":"read","arguments":"{}"}`)}}}
+	m := llm.Message{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "openai", Version: replayVersion, Items: []json.RawMessage{item, json.RawMessage(`{"type":"message","id":"transport2","role":"assistant","content":[{"type":"output_text","text":"answer"}]}`), json.RawMessage(`{"type":"function_call","call_id":"c","name":"read","arguments":"{}"}`)}}}
 	a := &Adapter{}
 	if got := a.EstimateReplay(m); got != 18588+18+19 {
 		t.Fatal("transport bytes were treated as model tokens", got)

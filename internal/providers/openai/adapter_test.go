@@ -183,7 +183,7 @@ func TestCatalogAndStreamToolReasoningContinuity(t *testing.T) {
 		t.Fatal(e)
 	}
 	events := []llm.StreamEvent{}
-	e = a.Stream(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: sel, System: "system", Messages: []llm.Message{{Role: "user", Content: "hello"}}}, func(e llm.StreamEvent) error { events = append(events, e); return nil })
+	e = a.Stream(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: sel, System: "system", Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "hello"}}}, func(e llm.StreamEvent) error { events = append(events, e); return nil })
 	if e != nil || len(events) != 9 || events[7].Call.ID != "c" {
 		t.Fatal(events, e)
 	}
@@ -193,7 +193,7 @@ func TestCatalogAndStreamToolReasoningContinuity(t *testing.T) {
 			reasoning = event.StateItem
 		}
 	}
-	b, e := wire(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: sel, Messages: []llm.Message{{Role: "assistant", State: &llm.ReplayState{Provider: "openai", Model: sel.Model.RequestID(), Version: 1, Items: []json.RawMessage{reasoning}}}}}, nil)
+	b, e := wire(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: sel, Messages: []llm.Message{{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "openai", Model: sel.Model.RequestID(), Version: 1, Items: []json.RawMessage{reasoning}}}}}, nil)
 	if e != nil || !strings.Contains(string(b), "encrypted_content") {
 		t.Fatal(string(b), e)
 	}

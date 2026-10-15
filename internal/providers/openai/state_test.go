@@ -11,7 +11,7 @@ import (
 func TestAttachmentDisplayMetadataDoesNotChangeWireInput(t *testing.T) {
 	text := "Review this file."
 	content := text + "\n\nAttachment (text): file.txt\nPreserve complete snapshot."
-	body, err := wire(context.Background(), llm.Request{ConversationID: "attachments", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}, Messages: []llm.Message{{Role: "user", Content: content, UserText: &text}}}, nil)
+	body, err := wire(context.Background(), llm.Request{ConversationID: "attachments", Selection: llm.Selection{Provider: "openai", Model: llm.ScriptModel()}, Messages: []llm.Message{{Type: llm.TypeUserInput, Content: content, UserText: &text}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestNativePhaseStateUsageAndStatelessWire(t *testing.T) {
 		map[string]any{"type": "response.completed", "response": map[string]any{"usage": map[string]any{"input_tokens": 1000, "output_tokens": 100, "input_tokens_details": map[string]any{"cached_tokens": 800, "cache_write_tokens": 100}, "output_tokens_details": map[string]any{"reasoning_tokens": 70}}}},
 	}
 	selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
-	reply := llm.Message{Role: "assistant"}
+	reply := llm.Message{Type: llm.TypeAssistant}
 	var usage *llm.Usage
 	_, err := parseStream("", strings.NewReader(sseFrames(events...)), func(e llm.StreamEvent) error {
 		switch e.Kind {
@@ -95,7 +95,7 @@ func TestStateIsolationCodecAndCanonicalConsistency(t *testing.T) {
 		{"unsupported-codec", "openai", "scripted", 2, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			m := llm.Message{Role: "assistant", State: &llm.ReplayState{Provider: test.provider, Model: test.model, Version: test.version, Items: []json.RawMessage{item}}}
+			m := llm.Message{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: test.provider, Model: test.model, Version: test.version, Items: []json.RawMessage{item}}}
 			body, err := wire(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: selection, Messages: []llm.Message{m}}, nil)
 			if (err != nil) != test.wantError {
 				t.Fatal(err)
@@ -108,7 +108,7 @@ func TestStateIsolationCodecAndCanonicalConsistency(t *testing.T) {
 			}
 		})
 	}
-	m := llm.Message{Role: "assistant", Content: "different", State: &llm.ReplayState{Provider: "openai", Model: "scripted", Version: 1, Items: []json.RawMessage{item}}}
+	m := llm.Message{Type: llm.TypeAssistant, Content: "different", State: &llm.ReplayState{Provider: "openai", Model: "scripted", Version: 1, Items: []json.RawMessage{item}}}
 	if _, err := wire(context.Background(), llm.Request{ConversationID: "test-conversation", Selection: selection, Messages: []llm.Message{m}}, nil); err == nil {
 		t.Fatal("accepted contradictory canonical state")
 	}
@@ -134,7 +134,7 @@ func TestRefusalAndContradictoryNativeMessage(t *testing.T) {
 		if mismatch {
 			delta = "Other"
 		}
-		m := llm.Message{Role: "assistant"}
+		m := llm.Message{Type: llm.TypeAssistant}
 		selection := llm.Selection{Provider: "openai", Model: llm.ScriptModel()}
 		completed := false
 		_, err := parseStream("", strings.NewReader(sseFrames(map[string]any{"type": "response.refusal.delta", "delta": delta}, message, map[string]any{"type": "response.completed"})), func(e llm.StreamEvent) error {

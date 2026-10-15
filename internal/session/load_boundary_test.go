@@ -15,7 +15,7 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Current task")
 	target := history.Session{ID: history.NewID("session")}
-	turn, _, err := r.Store.StartSession(target.ID, r.Workspace.Root, r.selection, llm.Message{Role: "user", Content: "Target history"})
+	turn, _, err := r.Store.StartSession(target.ID, r.Workspace.Root, r.selection, llm.Message{Type: llm.TypeUserInput, Content: "Target history"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.ConversationID != r.Current() {
 			for _, m := range req.Messages {
-				if m.Role == "tool" {
+				if m.Type == llm.TypeToolResult {
 					return emit(llm.StreamEvent{Kind: "text", Text: "Finished"})
 				}
 			}
@@ -56,7 +56,7 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Child remains running"})
 	}}
-	if err := r.Run(&llm.Message{Role: "user", Content: "Start child"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start child"}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

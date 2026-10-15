@@ -54,12 +54,12 @@ func (s *Store) HistoryTree(ctx context.Context, session string) (BranchTree, er
 		substr(coalesce(CASE WHEN e.kind='tool_result' THEN json_extract(r.markdown_json,'$.summary')
 		WHEN e.kind='tool_call' THEN c.name || ' · call'
 		WHEN e.kind='status' AND json_extract(e.content_json,'$.type')='system_prompt' THEN 'System prompt'
-		WHEN e.role='user' AND coalesce(json_extract(e.content_json,'$.runtime'),0)=0 THEN coalesce(json_extract(e.content_json,'$.user_text'),json_extract(e.content_json,'$.content'))
+		WHEN e.role='user' AND json_extract(e.content_json,'$.type')='user_input' THEN coalesce(json_extract(e.content_json,'$.user_text'),json_extract(e.content_json,'$.content'))
 		ELSE coalesce(json_extract(e.content_json,'$.content'),json_extract(e.content_json,'$.text'),json_extract(e.content_json,'$.type')) END,e.kind),1,192),
 		CASE WHEN e.model_visible=1 AND e.role='assistant' THEN coalesce(json_array_length(e.content_json,'$.calls'),0)
 		WHEN e.model_visible=1 AND e.kind='tool_result' THEN -1 ELSE 0 END,
 		(e.kind='message' AND e.role='user' AND e.actor_id='main' AND e.model_visible=1
-		AND coalesce(json_extract(e.content_json,'$.runtime'),0)=0 AND coalesce(t.trigger IN ('user','steer'),0))
+		AND json_extract(e.content_json,'$.type')='user_input' AND coalesce(t.trigger IN ('user','steer'),0))
 		FROM entries e LEFT JOIN tool_records r ON r.entry_id=e.id
 		LEFT JOIN tool_calls c ON c.id=json_extract(e.content_json,'$.call_id')
 		LEFT JOIN turns t ON t.id=e.turn_id

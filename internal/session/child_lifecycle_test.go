@@ -31,7 +31,7 @@ func TestChildIdleFollowupRetainsContextAndDistinctAssignments(t *testing.T) {
 		if len(conversations) == 2 {
 			found := false
 			for _, m := range request.Messages {
-				found = found || m.Role == "assistant" && m.Content == "First complete answer"
+				found = found || m.Type == llm.TypeAssistant && m.Content == "First complete answer"
 			}
 			if !found {
 				t.Error("follow-up lost isolated context")

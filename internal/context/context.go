@@ -36,11 +36,15 @@ func Tokens(messages []llm.Message) int {
 func rawTokens(messages []llm.Message) int {
 	n := 0
 	for _, m := range messages {
+		content, err := m.ModelContent()
+		if err != nil {
+			return -1
+		}
 		if m.State != nil {
 			n += llm.ReplayTokens(m.State)
 			continue
 		}
-		n += 16 + Estimate(m.Content)
+		n += 16 + Estimate(content)
 		for _, c := range m.Calls {
 			n += 16 + Estimate(string(c.Arguments)) + Estimate(c.Name)
 		}
@@ -112,7 +116,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 			}
 			pending[call.ID] = true
 		}
-		if message.Role == "tool" {
+		if message.Type == llm.TypeToolResult {
 			if !pending[message.CallID] {
 				return fail(prompts.ContextUnpairedResult)
 			}
@@ -127,7 +131,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	inputs := make([]int, 0, 4)
 	normal, steers := 0, 0
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" && !messages[i].Runtime {
+		if messages[i].Type == llm.TypeUserInput {
 			if latestUser < 0 {
 				latestUser = i
 			}
@@ -152,7 +156,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	sort.Ints(inputs)
 	threshold, cycles := len(messages), 0
 	for i := len(messages) - 1; i > latestUser; i-- {
-		if messages[i].Role == "assistant" {
+		if messages[i].Type == llm.TypeAssistant {
 			threshold = i
 			cycles++
 			if cycles == 2 {
@@ -163,7 +167,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	target := min(maxTokens, max(minTokens, suffix[threshold]))
 	cut := len(messages)
 	for i := latestUser + 1; i < len(messages); i++ {
-		if messages[i].Role == "assistant" && safe[i] && suffix[i] <= target {
+		if messages[i].Type == llm.TypeAssistant && safe[i] && suffix[i] <= target {
 			cut = i
 			break
 		}
@@ -173,18 +177,18 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	// consumption; human/runtime messages alone do not.
 	latestAssistant := -1
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "assistant" {
+		if messages[i].Type == llm.TypeAssistant {
 			latestAssistant = i
 			break
 		}
 	}
 	if latestAssistant >= 0 {
 		for _, message := range messages[latestAssistant+1:] {
-			if message.Role == "tool" && len(message.Files) > 0 {
+			if message.Type == llm.TypeToolResult && len(message.Files) > 0 {
 				// Overlapping calls can leave the latest assistant inside an
 				// earlier cycle. Preserve all calls needed to pair its results.
 				start := latestAssistant
-				for start >= 0 && (messages[start].Role != "assistant" || !safe[start]) {
+				for start >= 0 && (messages[start].Type != llm.TypeAssistant || !safe[start]) {
 					start--
 				}
 				if start < 0 {
@@ -202,7 +206,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	// An unselected older human input does make progress, even without model work.
 	for i, message := range messages[:cut] {
 		selected := sort.SearchInts(inputs, i)
-		if !message.Runtime && (message.Role == "assistant" || message.Role == "user" && (selected == len(inputs) || inputs[selected] != i)) {
+		if message.Type == llm.TypeAssistant || message.Type.IsInput() && (selected == len(inputs) || inputs[selected] != i) {
 			return Retention{Start: cut, Inputs: inputs}, nil
 		}
 	}
@@ -379,10 +383,10 @@ type Input struct {
 // Message constructs the model-facing message without rereading attachment paths.
 func (i Input) Message() llm.Message {
 	if len(i.Attachments) == 0 {
-		return llm.Message{Role: "user", Content: i.Text, InputSource: i.Source}
+		return llm.Message{Type: llm.TypeUserInput, Content: i.Text, InputSource: i.Source}
 	}
 	text := i.Text
-	m := llm.Message{Role: "user", UserText: &text, InputSource: i.Source}
+	m := llm.Message{Type: llm.TypeUserInput, UserText: &text, InputSource: i.Source}
 	var content strings.Builder
 	content.WriteString(text)
 	for _, a := range i.Attachments {

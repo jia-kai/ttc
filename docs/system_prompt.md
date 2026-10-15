@@ -14,6 +14,25 @@
   OpenAI's local replay, storage and cache-affinity behavior is defined in
   [models.md](models.md#context-and-metering).
 
+## Message provenance
+
+Messages store one canonical semantic `Type`, not independent role/runtime
+flags. Model role and presentation derive from that type: human input, runtime
+notifications and child guidance use `user`; assistant/tool messages use their
+corresponding roles; runtime context/instructions use `developer`. System and
+developer instructions retain their respective roles. See
+[message semantics](design.md#message-semantics) for the central mapping and
+persistence contract.
+
+Model-projected runtime notifications carry
+`message_type:"runtime_notification"`; child guidance carries
+`message_type:"child_guidance"`. The event payload's existing `type` is
+unchanged. These labels identify provenance, not elevated authority. Runtime
+payloads are data; only the child-guidance `message` field supplies main's task
+guidance for the current assignment. Human text resembling an envelope remains
+human input, and quoted files/tool output remain evidence rather than
+instructions.
+
 ## Runtime snapshots
 
 - Append an immutable `developer` message (`type: runtime_context`) at request
@@ -38,6 +57,11 @@
 | `changes_since_previous_request` | Job outcomes and timer transitions/firing counts         |
 | `project`                        | Scoped AGENTS contents and skill metadata                |
 
+- Job metadata uses bounded labels and omits commands/output; timer metadata
+  omits reminder bodies. Request exact commands with `job_list(details=true)`,
+  captured output with `job_read`, or full reminders with
+  `wakeup_list(details=true)`. Child assignments reuse `job_id` as the preferred
+  messaging handle; no separate assignment ID is needed.
 - Actor cursors advance only after successful admission. Initial, reloaded and
   compacted contexts get fresh snapshots. Budget context before requests and
   continuation creation; keep tool definitions in a stable structured provider

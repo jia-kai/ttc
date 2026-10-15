@@ -14,7 +14,7 @@ func TestContinuationPendingRecoveryWarningIsAtomicAndDeduplicated(t *testing.T)
 	for _, mode := range []string{"summarized", "retained", "rollback", "missing"} {
 		t.Run(mode, func(t *testing.T) {
 			s, session, turn, request := historyFixture(t)
-			warning := llm.Message{Role: "developer", Runtime: true, RequestID: request, Content: "Mandatory recovery warning"}
+			warning := llm.Message{Type: llm.TypeRuntimeInstruction, RequestID: request, Content: "Mandatory recovery warning"}
 			warningID, err := s.Append(session.ID, turn, "main", "message", "developer", true, warning)
 			if err != nil {
 				t.Fatal(err)

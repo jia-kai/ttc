@@ -28,7 +28,9 @@ def verify_child_answers(db, results):
         row = db.execute('SELECT actor_id,content_json FROM entries WHERE id=?',
                          (result['result_entry_id'],)).fetchone()
         assert row is not None and row[0] != 'main', result
-        assert json.loads(row[1])['content'] == CHILD_ANSWER, result
+        message = json.loads(row[1])
+        assert message.get('type') == 'assistant' and message['content'] == CHILD_ANSWER, result
+        assert 'role' not in message and 'runtime' not in message, message
 
 
 def compact_rows(text, narrow=False):

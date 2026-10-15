@@ -72,10 +72,10 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 		}
 		var found []llm.Message
 		for _, message := range req.Messages {
-			if message.Role == "user" && !message.Runtime && strings.Contains(message.Content, "pending steer") {
+			if message.Type == llm.TypeUserInput && strings.Contains(message.Content, "pending steer") {
 				found = append(found, message)
 			}
-			if message.Role == "user" && !message.Runtime && strings.Contains(message.Content, "Cancel after handoff") {
+			if message.Type == llm.TypeUserInput && strings.Contains(message.Content, "Cancel after handoff") {
 				return fmt.Errorf("cancelled steer reached inference")
 			}
 		}
@@ -109,7 +109,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	done := make(chan error, 1)
 	stopped := make(chan struct{})
 	go func() {
-		done <- r.Run(&llm.Message{Role: "user", Content: "Continue current work"})
+		done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue current work"})
 		close(stopped)
 	}()
 	t.Cleanup(func() {
@@ -172,7 +172,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	}
 	var humans []llm.Message
 	for _, message := range messages {
-		if message.Role == "user" && !message.Runtime && (strings.Contains(message.Content, "pending steer") || strings.Contains(message.Content, "Cancel after handoff")) {
+		if message.Type == llm.TypeUserInput && (strings.Contains(message.Content, "pending steer") || strings.Contains(message.Content, "Cancel after handoff")) {
 			humans = append(humans, message)
 		}
 	}

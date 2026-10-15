@@ -10,7 +10,7 @@ func AppendPendingMessage(messages []llm.Message, pending *llm.Message) ([]llm.M
 		return messages, false
 	}
 	for _, message := range messages {
-		if message.Runtime == pending.Runtime && message.Role == pending.Role && message.Content == pending.Content && message.RequestID == pending.RequestID {
+		if message.Type == pending.Type && message.Content == pending.Content && message.RequestID == pending.RequestID {
 			return messages, false
 		}
 	}

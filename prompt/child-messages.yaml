@@ -1,6 +1,7 @@
 # Active-assignment message diagnostics. Role instructions live in system.yaml.
 ChildMessageNonempty: message must be nonempty UTF-8
-ChildMessageTarget: supply job_id or both child_id and child_turn_id
+ChildMessageTarget:
+  prefer the assignment's job_id, or supply both child_id and child_turn_id
 ChildMessageOwnership: only main can message a child assignment
 ChildMessageInactive:
   target child assignment is no longer active; message was not queued

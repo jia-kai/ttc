@@ -24,10 +24,10 @@ func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
 	seedCompactionHistory(t, r, strings.Repeat("Old coding facts. ", 700))
 	before := r.Current()
 	hidden := strings.Repeat("UI_ONLY_CHILD_DIAGNOSTIC ", 10000)
-	if _, err := r.Store.Append(before, "", "main/child_fixture", "message", "assistant", false, llm.Message{Role: "assistant", Content: hidden}); err != nil {
+	if _, err := r.Store.Append(before, "", "main/child_fixture", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: hidden}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -62,10 +62,10 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 			seedRuntime(t, r, "Research arrays.")
 			payload := "[" + strings.Repeat("0,", 7000) + "0]"
 			messages := []llm.Message{
-				{Role: "user", Content: "Inspect this array.", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
-				{Role: "assistant", Calls: []llm.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
-				{Role: "tool", CallID: "array", Content: payload},
-				{Role: "user", Content: "Continue.", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
+				{Type: llm.TypeUserInput, Content: "Inspect this array.", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
+				{Type: llm.TypeToolResult, CallID: "array", Content: payload},
+				{Type: llm.TypeUserInput, Content: "Continue.", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 			}
 			calls := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
@@ -85,7 +85,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 				_, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{}, nil)
 			} else {
 				for _, message := range messages {
-					if _, e := r.Store.Append(r.Current(), "", "main", "message", message.Role, true, message); e != nil {
+					if _, e := r.Store.Append(r.Current(), "", "main", "message", message.Role(), true, message); e != nil {
 						t.Fatal(e)
 					}
 				}
@@ -106,11 +106,11 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 			seedRuntime(t, r, "Earlier research.")
 			payload := strings.Repeat("large recent tool output ", 100)
 			messages := []llm.Message{
-				{Role: "user", Content: "Earlier task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
-				{Role: "assistant", Content: "Earlier result"},
-				{Role: "user", Content: "Continue the current task", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
-				{Role: "assistant", Calls: []llm.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}}},
-				{Role: "tool", CallID: "read", Content: payload},
+				{Type: llm.TypeUserInput, Content: "Earlier task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+				{Type: llm.TypeAssistant, Content: "Earlier result"},
+				{Type: llm.TypeUserInput, Content: "Continue the current task", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
+				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "read", Name: "read", Arguments: []byte(`{"path":"fixture.txt"}`)}}},
+				{Type: llm.TypeToolResult, CallID: "read", Content: payload},
 			}
 			requests := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
@@ -124,7 +124,7 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 			var err error
 			if actor == "main" {
 				for _, message := range messages {
-					if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role, true, message); err != nil {
+					if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role(), true, message); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -147,7 +147,7 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 				if message.Content == messages[2].Content {
 					foundInstruction = true
 				}
-				if len(message.Calls) > 0 || message.Role == "tool" || message.Content == payload {
+				if len(message.Calls) > 0 || message.Type == llm.TypeToolResult || message.Content == payload {
 					t.Fatal("oversized cycle survived the hard maximum")
 				}
 			}
@@ -163,7 +163,7 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Actual model history. ", 10000))
 	before := r.Current()
-	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -180,8 +180,8 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 
 func TestChildArchivePreservesModelVisibleJobOutput(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "assistant", Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: json.RawMessage(`{"command":"printf diagnostic"}`)}}},
-		{Role: "tool", CallID: "shell", Content: `{"job_id":"job_fixture","stdout":"diagnostic sentinel","stderr":"warning sentinel","status":"completed"}`},
+		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: json.RawMessage(`{"command":"printf diagnostic"}`)}}},
+		{Type: llm.TypeToolResult, CallID: "shell", Content: `{"job_id":"job_fixture","stdout":"diagnostic sentinel","stderr":"warning sentinel","status":"completed"}`},
 	}
 	text := childTranscript(messages)
 	for _, value := range []string{"diagnostic sentinel", "warning sentinel", "printf diagnostic", "stdout", "stderr"} {
@@ -193,8 +193,8 @@ func TestChildArchivePreservesModelVisibleJobOutput(t *testing.T) {
 
 func TestChildArchivePreservesWatchIdentityWithoutLiveInspector(t *testing.T) {
 	messages := []llm.Message{
-		{Role: "assistant", Calls: []llm.ToolCall{{ID: "watch", Name: "watch", Arguments: json.RawMessage(`{"record_dir":"relative-run"}`)}}},
-		{Role: "tool", CallID: "watch", Content: `{"job_id":"job_watch","kind":"watch","label":"python train.py --epochs=10","record_dir":"/resolved/relative-run","status":"running"}`},
+		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "watch", Name: "watch", Arguments: json.RawMessage(`{"record_dir":"relative-run"}`)}}},
+		{Type: llm.TypeToolResult, CallID: "watch", Content: `{"job_id":"job_watch","kind":"watch","label":"python train.py --epochs=10","record_dir":"/resolved/relative-run","status":"running"}`},
 	}
 	text := childTranscript(messages)
 	for _, want := range []string{"python train.py --epochs=10", "/resolved/relative-run", "relative-run"} {
@@ -231,7 +231,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
 			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
-			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue the research."}); err != nil {
+			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."}); err != nil {
 				t.Fatal(err)
 			}
 			before := r.Current()
@@ -258,7 +258,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 				t.Fatal("runtime guard", got)
 			}
 			if fatal {
-				if err := r.Run(&llm.Message{Role: "user", Content: "continue"}); err == nil {
+				if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "continue"}); err == nil {
 					t.Fatal("fatal context admitted inference")
 				}
 				if requests != 1 {
@@ -273,7 +273,7 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Earlier notes. ", 700))
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue."}); err != nil {
+	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	before := r.Current()
@@ -320,11 +320,11 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 				t.Fatal(err)
 			}
 			messages := []llm.Message{
-				{Role: "user", Content: "Earlier child task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
-				{Role: "assistant", Content: strings.Repeat("Old child research notes. ", 350)},
-				{Role: "user", Content: "Read the fixture", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
-				{Role: "assistant", Calls: []llm.ToolCall{{ID: "read_fixture", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.go"}`)}}, State: &llm.ReplayState{Provider: "script", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"private":"replay"}`)}}},
-				{Role: "tool", CallID: "read_fixture", Content: `{"content":"package fixture"}`},
+				{Type: llm.TypeUserInput, Content: "Earlier child task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+				{Type: llm.TypeAssistant, Content: strings.Repeat("Old child research notes. ", 350)},
+				{Type: llm.TypeUserInput, Content: "Read the fixture", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
+				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "read_fixture", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.go"}`)}}, State: &llm.ReplayState{Provider: "script", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"private":"replay"}`)}}},
+				{Type: llm.TypeToolResult, CallID: "read_fixture", Content: `{"content":"package fixture"}`},
 			}
 			exactOriginal, _ := json.Marshal(messages)
 			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {

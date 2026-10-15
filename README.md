@@ -249,8 +249,8 @@ shell commands default to a 20-second timeout and cannot disable it. Background
 commands have no default timeout; they can set an explicit deadline.
 
 Background jobs, subagents, and timers belong to the active runtime. Compaction
-preserves them; switching sessions or exiting cancels them. Use tmux for work
-that needs to outlive TTC.
+preserves them; switching sessions or exiting cancels them. Agents use tmux for
+work that needs to outlive TTC, with the `tmux_watch_run` tool.
 
 Main, child and aside compaction have a **10-minute timeout** and remain
 cancelable. A failed or interrupted main turn pauses automatic notification

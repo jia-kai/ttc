@@ -62,7 +62,7 @@ func TestBinaryAttachmentFrozenNativeInputAndHistory(t *testing.T) {
 				t.Helper()
 				count := 0
 				for _, m := range messages {
-					if m.Role != "user" || m.Runtime || m.DisplayText() != authored {
+					if m.Type != llm.TypeUserInput || m.DisplayText() != authored {
 						continue
 					}
 					count++

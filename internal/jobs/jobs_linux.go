@@ -31,6 +31,7 @@ const ForegroundTimeout = 20 * time.Second
 
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
+	command         string             // Exact launch command; exposed only by explicit inspection.
 	WakeOnExit      bool               `json:"-"` // Whether the background completion should notify the model.
 	ID              string             `json:"job_id"`
 	Kind            string             `json:"kind"`
@@ -89,18 +90,21 @@ func New(ctx context.Context, notify func(Snapshot)) *Manager {
 // Zero timeout selects ForegroundTimeout for foreground work and no deadline
 // for background work. A positive timeout is an explicit deadline in either mode.
 // output selects the model-facing payload independently of retained job_read data.
-func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool, output capture.OutputOptions) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, background, wake, false, output)
+// label is whitespace-normalized and bounded to 80 code points;
+// empty or whitespace selects "Shell command", never the command text.
+func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool, output capture.OutputOptions, label string) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, background, wake, false, output, compactLabel(label, prompts.JobLabelShell))
 }
 
 // StartLSP launches a background stdio server. Protocol stdout is owned by the
 // LSP client; only stderr is available through Read. Stop cancels the process group.
 // output selects bounded stderr diagnostics; protocol stdout is never presented.
-func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict, wake bool, output capture.OutputOptions) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, true, wake, true, output)
+// label follows Start's rules, with "Language server" as fallback.
+func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict, wake bool, output capture.OutputOptions, label string) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, true, wake, true, output, compactLabel(label, prompts.JobLabelLSP))
 }
 
-func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool, options capture.OutputOptions) (string, error) {
+func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool, options capture.OutputOptions, label string) (string, error) {
 	options, err := options.Normalize()
 	if err != nil {
 		return "", err
@@ -140,7 +144,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	}
 	cmd.WaitDelay = time.Second
 	startedAt := time.Now().UTC()
-	j := &job{startedAt: startedAt, view: Snapshot{ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: command, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j := &job{startedAt: startedAt, view: Snapshot{command: command, ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	j.inspector = commandInspector
 	cmd.Stdout = j.stdout
 	j.output = &options
@@ -488,7 +492,7 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
-	metadata := Snapshot{ID: history.NewID("job"), Kind: options.Kind, Label: options.Label, RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: options.WakeOnExit}
+	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: compactLabel(options.Label, options.Kind), RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: options.WakeOnExit}
 	inspector := options.Inspector
 	if inspector == nil {
 		inspector = taskInspector

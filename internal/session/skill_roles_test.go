@@ -44,7 +44,7 @@ func assertRoleCatalog(t *testing.T, role string, messages []llm.Message) {
 	catalogs := 0
 	receiverCatalog := false
 	for _, message := range messages {
-		if !message.Runtime || !strings.Contains(message.Content, `"type":"runtime_context"`) {
+		if !message.Type.IsRuntime() || !strings.Contains(message.Content, `"type":"runtime_context"`) {
 			continue
 		}
 		var v runtimeContext
@@ -104,7 +104,7 @@ func TestSkillRolesAtActualReceivingAndToolBoundaries(t *testing.T) {
 				}
 				found := false
 				for _, message := range req.Messages {
-					if message.Role != "tool" || message.CallID != "explicit-denial" {
+					if message.Type != llm.TypeToolResult || message.CallID != "explicit-denial" {
 						continue
 					}
 					found = true
@@ -119,7 +119,7 @@ func TestSkillRolesAtActualReceivingAndToolBoundaries(t *testing.T) {
 			}}
 			switch role {
 			case "main":
-				message := llm.Message{Role: "user", Content: "Review role skills"}
+				message := llm.Message{Type: llm.TypeUserInput, Content: "Review role skills"}
 				if err := r.Run(&message); err != nil {
 					t.Fatal(err)
 				}
@@ -194,7 +194,7 @@ func TestSkillRolesAsideInheritsRealMainAdmission(t *testing.T) {
 			}}
 			done := make(chan error, 1)
 			go func() {
-				message := llm.Message{Role: "user", Content: "Main question evidence"}
+				message := llm.Message{Type: llm.TypeUserInput, Content: "Main question evidence"}
 				done <- r.Run(&message)
 			}()
 			select {
@@ -231,7 +231,7 @@ func TestSkillRolesAsideInheritsRealMainAdmission(t *testing.T) {
 				assertRoleCatalog(t, "aside", request.Messages)
 				inheritedCatalog, historicalLoad, userEvidence := false, false, false
 				for _, message := range request.Messages {
-					if message.Runtime && strings.Contains(message.Content, `"type":"runtime_context"`) {
+					if message.Type.IsRuntime() && strings.Contains(message.Content, `"type":"runtime_context"`) {
 						var runtime runtimeContext
 						if err := json.Unmarshal([]byte(message.Content), &runtime); err != nil {
 							t.Fatal(err)
@@ -287,7 +287,7 @@ func TestSkillRolesInheritedProjectionPreservesOtherFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	initial.Content = string(data)
-	messages := []llm.Message{*initial, {Role: "tool", CallID: "loaded-skill", Content: "PRIVATE role-main historical instructions"}, {Role: "user", Content: initial.Content}}
+	messages := []llm.Message{*initial, {Type: llm.TypeToolResult, CallID: "loaded-skill", Content: "PRIVATE role-main historical instructions"}, {Type: llm.TypeUserInput, Content: initial.Content}}
 	before, err := json.Marshal(messages)
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +350,7 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 					t.Fatal(beginErr)
 				}
 				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: role == skills.Aside}
-				messages := []llm.Message{{Role: "user", Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Role: "assistant", Content: strings.Repeat("Earlier evidence. ", 700)}}
+				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)}}
 				_, cursor, err = r.compactChild(context.Background(), task, messages, cursor, nil)
 			}
 			if err != nil {

@@ -39,10 +39,10 @@ func TestAutomaticCompactionRefreshesConversationWithoutPopupAndPreservesDraft(t
 	u.wait(t, "Turn complete")
 	before := u.runtime.Current()
 	for _, message := range []llm.Message{
-		{Role: "user", Content: "Older research task"},
-		{Role: "assistant", Content: strings.Repeat("older evidence ", 6000)},
+		{Type: llm.TypeUserInput, Content: "Older research task"},
+		{Type: llm.TypeAssistant, Content: strings.Repeat("older evidence ", 6000)},
 	} {
-		if _, err := u.runtime.Store.Append(before, "", "main", "message", message.Role, true, message); err != nil {
+		if _, err := u.runtime.Store.Append(before, "", "main", "message", message.Role(), true, message); err != nil {
 			t.Fatal(err)
 		}
 	}

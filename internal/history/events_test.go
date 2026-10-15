@@ -19,8 +19,8 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notice := llm.Message{Role: "user", Runtime: true, Content: `{"type":"job_exit","job_id":"done"}`, EventSeq: source}
-	cm := &llm.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
+	notice := llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit","job_id":"done"}`, EventSeq: source}
+	cm := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context"}`}
 	before, err := s.Session(v.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 func TestRequestInputMetadataStaysBoundedForMainAndChildReplay(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	item := json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("A", 1<<20) + `"}`)
-	reply := llm.Message{Role: "assistant", State: &llm.ReplayState{Provider: v.Model.Provider, Model: v.Model.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
+	reply := llm.Message{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: v.Model.Provider, Model: v.Model.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
 	if _, err := s.Append(v.ID, turn, "main", "message", "assistant", true, reply); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestRequestInputMetadataStaysBoundedForMainAndChildReplay(t *testing.T) {
 		var prefix []llm.Message
 		actorTurn := turn
 		if actor != "main" {
-			prefix = []llm.Message{{Role: "user", Content: "Frozen parent context"}, reply}
+			prefix = []llm.Message{{Type: llm.TypeUserInput, Content: "Frozen parent context"}, reply}
 			var err error
 			actorTurn, err = s.BeginChildTurn(v.ID, actor, v.Model)
 			if err != nil {
@@ -183,8 +183,8 @@ func TestRejectedFutureNotificationRollsBackAndChildInputStaysIsolated(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	cm := &llm.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
-	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Role: "user", Content: "future", EventSeq: before.EntryTip + 100}}, nil)
+	cm := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context"}`}
+	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Type: llm.TypeUserInput, Content: "future", EventSeq: before.EntryTip + 100}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "cutoff") {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestRejectedFutureNotificationRollsBackAndChildInputStaysIsolated(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := []llm.Message{{Role: "user", Content: "frozen child prefix"}}
+	prefix := []llm.Message{{Type: llm.TypeUserInput, Content: "frozen child prefix"}}
 	admitted, err := s.AdmitRequest(v.ID, childTurn, "main/child", v.Model, cm, nil, prefix)
 	if err != nil || len(admitted.Messages) != 2 || admitted.Messages[0].Content != "frozen child prefix" {
 		t.Fatal(admitted, err)
@@ -225,10 +225,10 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 	if _, err = s.CallResult(v.ID, turn, "main", call, result, nil, map[string]string{}, render.Markdown{}, true); err != nil {
 		t.Fatal(err)
 	}
-	cm := &llm.Message{Role: "developer", Runtime: true, Content: `{"type":"runtime_context"}`}
+	cm := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context"}`}
 	// A fast background assignment can be represented by both its immutable
 	// launch result and the queued finish; it still receives one acknowledgment.
-	first, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Role: "user", Runtime: true, Content: `{"type":"child_turn_finished"}`, EventSeq: finish}}, nil)
+	first, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"child_turn_finished"}`, EventSeq: finish}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, calls, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Role: "assistant", Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
+	_, calls, err := s.Assistant(source.ID, turn, "main", request, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notice := llm.Message{Role: "user", Runtime: true, Content: "finished", EventSeq: finish}
+	notice := llm.Message{Type: llm.TypeRuntimeNotification, Content: "finished", EventSeq: finish}
 	if _, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, []llm.Message{notice}, nil); err == nil {
 		t.Fatal("loaded runtime accepted its source's live notification")
 	}

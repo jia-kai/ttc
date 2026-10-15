@@ -14,7 +14,7 @@ func TestContinuationRequiresBothArchiveFilesBeforeCommit(t *testing.T) {
 	for _, mode := range []string{"missing", "corrupt", "fifo", "symlink"} {
 		t.Run(mode, func(t *testing.T) {
 			s, v, turn, _ := historyFixture(t)
-			retained, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: "Retained task"})
+			retained, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Retained task"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +74,7 @@ func TestContinuationRequiresBothArchiveFilesBeforeCommit(t *testing.T) {
 
 func TestDeletedExactArchiveFailsReload(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
-	retained, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Role: "user", Content: "Retained task"})
+	retained, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Retained task"})
 	if err != nil {
 		t.Fatal(err)
 	}

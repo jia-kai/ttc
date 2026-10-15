@@ -27,7 +27,7 @@ func TestReceivingRolePromptsAndPersistedSystems(t *testing.T) {
 			}}
 			switch role {
 			case "main":
-				message := llm.Message{Role: "user", Content: "Review the inputs"}
+				message := llm.Message{Type: llm.TypeUserInput, Content: "Review the inputs"}
 				if err := r.Run(&message); err != nil {
 					t.Fatal(err)
 				}
@@ -75,7 +75,7 @@ func assertReceivingRolePrompt(t *testing.T, r *Runtime, role string, req llm.Re
 		if req.System != prompts.System+"\n"+prompts.Coding+"\n"+prompts.Main || !reflect.DeepEqual(req.Tools, r.Tools.Definitions()) {
 			t.Error("main lost role guidance or capabilities")
 		}
-		want := []string{"child_message", "edit", "glob", "grep", "image_show", "job_list", "job_read", "job_stop", "lsp_query", "patch", "question", "read", "shell", "skill", "subagent", "wakeup_cancel", "wakeup_list", "wakeup_schedule", "wakeup_update", "watch", "web_fetch", "web_search", "write"}
+		want := []string{"child_message", "edit", "glob", "grep", "image_show", "job_list", "job_read", "job_stop", "lsp_query", "patch", "question", "read", "shell", "skill", "subagent", "tmux_watch_run", "wakeup_cancel", "wakeup_list", "wakeup_schedule", "wakeup_update", "watch", "web_fetch", "web_search", "write"}
 		if !reflect.DeepEqual(names, want) {
 			t.Errorf("main advertised capabilities = %v, want %v", names, want)
 		}
@@ -96,7 +96,7 @@ func assertReceivingRolePrompt(t *testing.T, r *Runtime, role string, req llm.Re
 		}
 		foundScope := false
 		for _, message := range req.Messages {
-			foundScope = foundScope || message.Role == "developer" && message.Runtime && message.Content == prompts.Btw
+			foundScope = foundScope || message.Role() == "developer" && message.Type.IsRuntime() && message.Content == prompts.Btw
 		}
 		if !foundScope {
 			t.Error("aside missing separate-question runtime scope")
@@ -144,7 +144,7 @@ func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := []llm.Message{{Role: "developer", Runtime: true, Content: btwInstruction}, {Role: "user", Content: "Separate question"}}
+	messages := []llm.Message{{Type: llm.TypeRuntimeContext, Content: btwInstruction}, {Type: llm.TypeUserInput, Content: "Separate question"}}
 	cm, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
 	if err != nil {
 		t.Fatal(err)

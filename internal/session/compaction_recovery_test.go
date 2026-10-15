@@ -33,7 +33,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					result, err = r.Store.Append(source, turn, actor, "message", "assistant", false, llm.Message{Role: "assistant", Content: "Storage verified; 35 tests passed."})
+					result, err = r.Store.Append(source, turn, actor, "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "Storage verified; 35 tests passed."})
 					if err != nil {
 						return err
 					}
@@ -76,7 +76,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 					coding++
 					found := 0
 					for _, message := range req.Messages {
-						if !message.Runtime || message.Role != "user" {
+						if !message.Type.IsRuntime() || message.Role() != "user" {
 							continue
 						}
 						var notice history.ChildFinish

@@ -47,7 +47,7 @@ func TestChildImageEventRoutesToCurrentContinuation(t *testing.T) {
 	old := r.Current()
 	_, ids := batchIntents(t, r, "main/child_fixture", []llm.ToolCall{{ID: "old_child_call", Name: "image_show", Arguments: json.RawMessage(`{"path":"field.png","request_click":true}`)}})
 	for _, text := range []string{strings.Repeat("old research ", 3000), "Continue the child task."} {
-		if _, err := r.Store.Append(old, "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
+		if _, err := r.Store.Append(old, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -226,7 +226,7 @@ func TestImagePendingSurvivesCompactionButNeverReplay(t *testing.T) {
 	r.EnableImageClicks(true)
 	v := showTestImage(t, r, "pending", "main", true)
 	for _, text := range []string{strings.Repeat("old research ", 700), "recent question"} {
-		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Role: "user", Content: text}); err != nil {
+		if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}

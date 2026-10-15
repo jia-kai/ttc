@@ -78,7 +78,7 @@ func (r *Runtime) addChildMessageTool() {
 		content, _ := json.Marshal(body)
 		// Reserve the widest possible event identity before committing evidence.
 		// Escaping and routing overhead count against the same queue budget.
-		tokens := contextbuild.Tokens([]llm.Message{{Role: "user", Runtime: true, Content: eventContent(string(content), math.MaxInt64)}})
+		tokens := contextbuild.Tokens([]llm.Message{{Type: llm.TypeChildGuidance, Content: eventContent(string(content), math.MaxInt64)}})
 		if tokens > remaining {
 			return nil, tool.Fail("message_queue_capacity", fmt.Sprintf(prompts.ChildMessageQueueCapacity, remaining, maxChildMessageQueueCount))
 		}
@@ -88,7 +88,7 @@ func (r *Runtime) addChildMessageTool() {
 		}
 		// Parent guidance is delivered once as runtime input. Compaction may
 		// summarize it; it is not independently retained as a human prompt.
-		assignment.queued = append(assignment.queued, llm.Message{Role: "user", Runtime: true, Content: eventContent(string(content), id), EventSeq: id})
+		assignment.queued = append(assignment.queued, llm.Message{Type: llm.TypeChildGuidance, Content: eventContent(string(content), id), EventSeq: id})
 		assignment.queuedTokens += tokens
 		return map[string]any{"state": "queued", "delivered": false, "message_event_seq": id, "child_id": child.id, "child_turn_id": child.turn, "job_id": child.job}, nil
 	})

@@ -70,7 +70,7 @@ func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, message := range messages {
-					if message.Role != "tool" || message.CallID != "pdf-call" {
+					if message.Type != llm.TypeToolResult || message.CallID != "pdf-call" {
 						continue
 					}
 					if !reflect.DeepEqual(message.Files, []llm.BinaryFile{want}) || strings.Contains(message.Content, "base64") {

@@ -125,9 +125,9 @@ func TestWireInnerDiagnosticExactBytes(t *testing.T) {
 		messages []llm.Message
 		want     string
 	}{
-		{"invalid canonical call", []llm.Message{{Role: "assistant", Calls: []llm.ToolCall{{Arguments: []byte(`invalid`)}}}}, "invalid call JSON in history"},
-		{"unsupported replay", []llm.Message{{Role: "assistant", State: &llm.ReplayState{Provider: "openai", Model: "scripted", Version: 99}}}, "unsupported OpenAI replay state"},
-		{"invalid replay fields", []llm.Message{{Role: "assistant", State: &llm.ReplayState{Provider: "openai", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":123}`)}}}}, "invalid OpenAI replay item fields"},
+		{"invalid canonical call", []llm.Message{{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{Arguments: []byte(`invalid`)}}}}, "invalid call JSON in history"},
+		{"unsupported replay", []llm.Message{{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "openai", Model: "scripted", Version: 99}}}, "unsupported OpenAI replay state"},
+		{"invalid replay fields", []llm.Message{{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "openai", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":123}`)}}}}, "invalid OpenAI replay item fields"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := partialRequest(0, 1)

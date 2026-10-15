@@ -17,8 +17,11 @@ import (
 )
 
 func TestSummaryTranscriptPreservesRetainedProvenance(t *testing.T) {
-	input := llm.Message{Role: "user", InputSource: "task", InputTimeMS: 1000, RetainedAtMS: 9000, Content: "Original child task."}
-	transcript := summaryTranscript([]llm.Message{input})
+	input := llm.Message{Type: llm.TypeUserInput, InputSource: "task", InputTimeMS: 1000, RetainedAtMS: 9000, Content: "Original child task."}
+	transcript, err := summaryTranscript([]llm.Message{input})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{input.Content, `"input_source":"task"`, `"input_time_ms":1000`, `"retained_at_ms":9000`} {
 		if !strings.Contains(transcript, want) {
 			t.Fatalf("summary transcript lost retained provenance %q: %s", want, transcript)
@@ -61,12 +64,12 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			task.prefix = []llm.Message{
-				{Role: "user", InputSource: "normal", InputTimeMS: 500, Content: "Older unselected task"},
-				{Role: "assistant", Content: strings.Repeat("Old child research notes. ", 700)},
-				{Role: "user", InputSource: "queue", InputTimeMS: 1000, Content: queueText, Files: []llm.BinaryFile{shared, image}},
-				{Role: "user", InputSource: "steer", InputTimeMS: 2000, Content: steerText, Files: []llm.BinaryFile{other}},
-				{Role: "user", InputSource: "steer", InputTimeMS: 3000, Content: lastSteer, Files: []llm.BinaryFile{shared}},
-				{Role: "assistant", Content: "Recent isolated work."},
+				{Type: llm.TypeUserInput, InputSource: "normal", InputTimeMS: 500, Content: "Older unselected task"},
+				{Type: llm.TypeAssistant, Content: strings.Repeat("Old child research notes. ", 700)},
+				{Type: llm.TypeUserInput, InputSource: "queue", InputTimeMS: 1000, Content: queueText, Files: []llm.BinaryFile{shared, image}},
+				{Type: llm.TypeUserInput, InputSource: "steer", InputTimeMS: 2000, Content: steerText, Files: []llm.BinaryFile{other}},
+				{Type: llm.TypeUserInput, InputSource: "steer", InputTimeMS: 3000, Content: lastSteer, Files: []llm.BinaryFile{shared}},
+				{Type: llm.TypeAssistant, Content: "Recent isolated work."},
 			}
 			summaries, coding := 0, 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
@@ -83,21 +86,21 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 				}
 				formatIndex, formats, human := -1, 0, 0
 				for i, message := range req.Messages {
-					if message.Role == "developer" && message.Content == prompts.RetainedInputs {
+					if message.Role() == "developer" && message.Content == prompts.RetainedInputs {
 						formatIndex, formats = i, formats+1
 					}
-					if message.Role == "user" && !message.Runtime {
+					if message.Type == llm.TypeUserInput {
 						human++
 					}
 				}
 				wantIndex := 1
 				if aside {
 					wantIndex = 2
-					if req.Messages[1].Role != "developer" || req.Messages[1].Content != btwInstruction {
+					if req.Messages[1].Role() != "developer" || req.Messages[1].Content != btwInstruction {
 						return fmt.Errorf("aside scope instruction missing after handoff")
 					}
 				}
-				if formats != 1 || human != 1 || formatIndex != wantIndex || formatIndex+1 >= len(req.Messages) || req.Messages[formatIndex+1].Role != "user" {
+				if formats != 1 || human != 1 || formatIndex != wantIndex || formatIndex+1 >= len(req.Messages) || req.Messages[formatIndex+1].Role() != "user" {
 					return fmt.Errorf("expected one developer/user retained pair, got %#v", req.Messages)
 				}
 				grouped := req.Messages[formatIndex+1]
@@ -141,7 +144,7 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 				canonical := append([]llm.Message(nil), req.Messages[:formatIndex]...)
 				wantFiles := [][]llm.BinaryFile{{shared, image}, {other}, {shared}, nil}
 				for i := range wantContents {
-					canonical = append(canonical, llm.Message{Role: "user", InputSource: wantSources[i], InputTimeMS: wantOriginals[i], RetainedAtMS: at, Content: wantContents[i], Files: wantFiles[i]})
+					canonical = append(canonical, llm.Message{Type: llm.TypeUserInput, InputSource: wantSources[i], InputTimeMS: wantOriginals[i], RetainedAtMS: at, Content: wantContents[i], Files: wantFiles[i]})
 				}
 				canonical = append(canonical, req.Messages[formatIndex+2:]...)
 				if contextbuild.Tokens(canonical) != contextbuild.Tokens(req.Messages) || !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {

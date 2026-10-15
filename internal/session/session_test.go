@@ -51,7 +51,7 @@ func runtimeFixture(t *testing.T, responses []llm.ScriptResponse) (*Runtime, cha
 
 func seedRuntime(t *testing.T, r *Runtime, content string) {
 	t.Helper()
-	turn, _, err := r.Store.StartSession(r.Current(), r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: content})
+	turn, _, err := r.Store.StartSession(r.Current(), r.Workspace.Root, r.CurrentSelection(), llm.Message{Type: llm.TypeUserInput, Content: content})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func seedRuntime(t *testing.T, r *Runtime, content string) {
 }
 func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"verified\n"}`)}}}, {Text: "Saved result."}})
-	m := llm.Message{Role: "user", Content: "Write a result"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "Write a result"}
 	if e := r.Run(&m); e != nil {
 		t.Fatal(e)
 	}
@@ -73,7 +73,7 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 		t.Fatal(string(b), e)
 	}
 	messages, e := r.Store.Messages(r.Current())
-	if e != nil || len(messages) != 5 || messages[3].Role != "tool" {
+	if e != nil || len(messages) != 5 || messages[3].Type != llm.TypeToolResult {
 		t.Fatal(messages, e)
 	}
 	prompts := 0
@@ -110,7 +110,7 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 func TestQuestionAnswerAndPendingCancellation(t *testing.T) {
 	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"color","prompt":"Color?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}]}]}`)}}}, {Text: "Red selected."}})
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Role: "user", Content: "Ask"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "Ask"}; done <- r.Run(&m) }()
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
@@ -157,7 +157,7 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 	if len(listed) != 1 || listed[0].ID != wake.ID || listed[0].Last != "delivered" {
 		t.Fatal(listed)
 	}
-	id, e := r.Jobs.Start("main", "sleep 20", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{})
+	id, e := r.Jobs.Start("main", "sleep 20", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -173,7 +173,7 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 }
 func TestPartialFailureLeavesUndoableAndWellFormedHistory(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"x","content":"data"}`)}}}})
-	m := llm.Message{Role: "user", Content: "write"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "write"}
 	if e := r.Run(&m); e == nil {
 		t.Fatal("expected script exhaustion")
 	}
@@ -231,7 +231,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 	p := &gatedNamingProvider{naming: make(chan llm.Request, 2), release: make(chan struct{})}
 	r.Provider = p
 	r.AutoName = true
-	m := llm.Message{Role: "user", Content: "first prompt"}
+	m := llm.Message{Type: llm.TypeUserInput, Content: "first prompt"}
 	if e := r.Run(&m); e != nil {
 		t.Fatal(e)
 	}
@@ -251,7 +251,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 		t.Fatal("naming not started")
 	}
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Role: "user", Content: "second prompt"}; done <- r.Run(&m) }()
+	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "second prompt"}; done <- r.Run(&m) }()
 	select {
 	case e := <-done:
 		if e != nil {
@@ -276,7 +276,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 func TestBackgroundWithoutWakeStillPersistsOutput(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Start a background research command")
-	id, e := r.Jobs.Start("main", "printf retained-output", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{})
+	id, e := r.Jobs.Start("main", "printf retained-output", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -348,7 +348,7 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 		}
 		return initial, nil // Preserve the running launch snapshot after completion.
 	})
-	if err := r.Run(&llm.Message{Role: "user", Content: "background"}); err != nil {
+	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "background"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.HasNotifications() {

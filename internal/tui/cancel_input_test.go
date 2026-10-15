@@ -218,10 +218,10 @@ func originalInputCommitTime(t *testing.T, u *questionTestUI, content string) in
 
 func latestHumanInput(req llm.Request) llm.Message {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" && !req.Messages[i].Runtime {
+		if req.Messages[i].Type == llm.TypeUserInput {
 			// Tests asserting admitted input content should inspect the logical
 			// original, not the grouped retained-input transport envelope.
-			if i > 0 && req.Messages[i-1].Role == "developer" && req.Messages[i-1].Content == prompts.RetainedInputs {
+			if i > 0 && req.Messages[i-1].Role() == "developer" && req.Messages[i-1].Content == prompts.RetainedInputs {
 				var group struct {
 					Type   string `json:"type"`
 					Inputs []struct {
@@ -235,7 +235,7 @@ func latestHumanInput(req llm.Request) llm.Message {
 				}
 				last := group.Inputs[len(group.Inputs)-1]
 				// Canonical commit times are intentionally absent from wire JSON.
-				m := llm.Message{Role: "user", Content: last.Content, InputSource: last.Source}
+				m := llm.Message{Type: llm.TypeUserInput, Content: last.Content, InputSource: last.Source}
 				for _, index := range last.Files {
 					m.Files = append(m.Files, req.Messages[i].Files[index])
 				}

@@ -9,7 +9,7 @@ import (
 
 func TestRetainedInputPreInputBranchReplacementAndLoad(t *testing.T) {
 	s, original, turn, _ := historyFixture(t)
-	tail, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Role: "assistant", Content: "Completed model work."})
+	tail, err := s.Append(original.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "Completed model work."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRetainedInputPreInputBranchReplacementAndLoad(t *testing.T) {
 	if messages, err := s.Messages(loaded.ID); err != nil || len(messages) != 1 {
 		t.Fatal(messages, err)
 	}
-	replacement := llm.Message{Role: "user", Content: "Replacement task."}
+	replacement := llm.Message{Type: llm.TypeUserInput, Content: "Replacement task."}
 	turn, id, err := s.AdmitTurn(continued.ID, "user", continued.Model, &replacement)
 	if err != nil {
 		t.Fatal(err)

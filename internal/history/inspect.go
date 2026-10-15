@@ -36,7 +36,7 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 		if err := json.Unmarshal(entry.Content, &message); err != nil {
 			return 0, err
 		}
-		if !message.Runtime {
+		if message.Type != llm.TypeRuntimeNotification {
 			return 0, nil
 		}
 		var notice struct {
@@ -148,10 +148,20 @@ func (s *Store) Label(v Entry) string {
 	if v.Visible || v.Kind == "message" {
 		var m llm.Message
 		if json.Unmarshal(v.Content, &m) == nil {
-			if m.Runtime && m.Role == "developer" {
+			switch m.Type.Presentation() {
+			case llm.PresentationContext:
 				return "Runtime context · inspect"
+			case llm.PresentationInstruction:
+				if m.Type == llm.TypeRuntimeInstruction {
+					return "Runtime instructions · inspect"
+				}
+				return "Instructions · inspect"
+			case llm.PresentationNotification:
+				return "Runtime notification · inspect"
+			case llm.PresentationGuidance:
+				return "Child guidance · inspect"
 			}
-			return m.Role + " · " + render.Clean(m.DisplayText())
+			return m.Role() + " · " + render.Clean(m.DisplayText())
 		}
 	}
 	if v.Actor != "main" {

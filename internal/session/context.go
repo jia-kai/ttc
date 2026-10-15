@@ -100,7 +100,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		return
 	}
 	r.emit(Event{Kind: "system_prompt", Text: "System prompt · session naming", EntryID: id})
-	message := llm.Message{Role: "user", Content: text(user.Content) + "\n\n" + text(assistant.Content)}
+	message := llm.Message{Type: llm.TypeUserInput, Content: text(user.Content) + "\n\n" + text(assistant.Content)}
 	for i, call := range assistant.Calls {
 		if i == 4 {
 			break
@@ -130,7 +130,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		return nil
 	})
 	r.recordUsage(usage)
-	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "assistant", request, llm.Message{Role: "assistant", Content: title.String()}); e == nil {
+	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "assistant", request, llm.Message{Type: llm.TypeAssistant, Content: title.String()}); e == nil {
 		r.emit(Event{Kind: "message_placeholder", Text: "Session naming reply · inspect", EntryID: id})
 	} else {
 		r.namingFailure(ownerCtx, sessionID, turn, "save reply: "+e.Error())
@@ -242,7 +242,11 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	}
 	// Summarize the same actor projection used for admission and retention.
 	// UI-only child records and expanded tool presentations belong in archives.
-	text, e := r.summarize(ctx, "main", "", selection, summaryTranscript(messages[:retention.Start]), focus)
+	transcript, e := summaryTranscript(messages[:retention.Start])
+	if e != nil {
+		return "", e
+	}
+	text, e := r.summarize(ctx, "main", "", selection, transcript, focus)
 	if e != nil {
 		return "", e
 	}
@@ -262,7 +266,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if e != nil {
 		return "", e
 	}
-	assembled := []llm.Message{{Role: "assistant", Content: text}}
+	assembled := []llm.Message{{Type: llm.TypeAssistant, Content: text}}
 	assembled = append(assembled, retainedInputs...)
 	visible = 0
 	for _, entry := range currentEntries {

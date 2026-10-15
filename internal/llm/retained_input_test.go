@@ -8,7 +8,7 @@ import (
 )
 
 func TestRetainedInputMetadataJSON(t *testing.T) {
-	original := Message{Role: "user", InputSource: "queue", InputTimeMS: 1000, RetainedAtMS: 9000, Content: "original"}
+	original := Message{Type: TypeUserInput, InputSource: "queue", InputTimeMS: 1000, RetainedAtMS: 9000, Content: "original"}
 	encoded, err := json.Marshal(original)
 	if err != nil || !strings.Contains(string(encoded), `"retained_at_ms":9000`) {
 		t.Fatal(string(encoded), err)

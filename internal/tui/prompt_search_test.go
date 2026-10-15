@@ -81,7 +81,7 @@ func TestPromptSearchBoundedRowsAndWrappedMouse(t *testing.T) {
 func TestPromptRecallAndSearchSavedSessionInNewFrontend(t *testing.T) {
 	u := newQuestionTestUIWithSetup(t, &llm.Script{}, nil, func(r *session.Runtime) {
 		id := history.NewID("session")
-		turn, _, err := r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: "older saved α prompt"})
+		turn, _, err := r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), llm.Message{Type: llm.TypeUserInput, Content: "older saved α prompt"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestPromptRecallAndSearchSavedSessionInNewFrontend(t *testing.T) {
 			t.Fatal(err)
 		}
 		id = history.NewID("session")
-		turn, _, err = r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: "newer saved β prompt"})
+		turn, _, err = r.Store.StartSession(id, r.Workspace.Root, r.CurrentSelection(), llm.Message{Type: llm.TypeUserInput, Content: "newer saved β prompt"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +170,7 @@ func TestPromptHistoryStartupCancellation(t *testing.T) {
 func TestRecalledCommandsAndPathsKeepHistoryNavigation(t *testing.T) {
 	u := newQuestionTestUIWithSetup(t, &llm.Script{}, nil, func(r *session.Runtime) {
 		for _, text := range []string{"old prompt", "@README.md", "/help"} {
-			turn, _, err := r.Store.StartSession(history.NewID("session"), r.Workspace.Root, r.CurrentSelection(), llm.Message{Role: "user", Content: text})
+			turn, _, err := r.Store.StartSession(history.NewID("session"), r.Workspace.Root, r.CurrentSelection(), llm.Message{Type: llm.TypeUserInput, Content: text})
 			if err != nil {
 				t.Fatal(err)
 			}

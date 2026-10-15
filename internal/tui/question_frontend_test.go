@@ -204,7 +204,7 @@ func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
 			}
 			redirects, resultAt, inputAt := 0, -1, -1
 			for i, m := range messages {
-				if m.Role == "tool" && m.CallID == "q" {
+				if m.Type == llm.TypeToolResult && m.CallID == "q" {
 					var result struct {
 						Dismissed bool            `json:"dismissed"`
 						Answers   json.RawMessage `json:"answers"`
@@ -214,7 +214,7 @@ func TestDismissedQuestionNormalInputRedirectsWithoutAnotherTurn(t *testing.T) {
 					}
 					resultAt = i
 				}
-				if m.Role == "user" && !m.Runtime && m.Content == "Do something else" {
+				if m.Type == llm.TypeUserInput && m.Content == "Do something else" {
 					redirects++
 					inputAt = i
 				}
@@ -377,7 +377,7 @@ func TestQuestionFrontendSequentialRoundsPreserveNextDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, message := range messages {
-		if message.Role == "tool" && message.CallID == "qb" && strings.Contains(message.Content, "next draft") {
+		if message.Type == llm.TypeToolResult && message.CallID == "qb" && strings.Contains(message.Content, "next draft") {
 			return
 		}
 	}

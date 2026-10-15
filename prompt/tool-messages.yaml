@@ -183,18 +183,30 @@ WakeupUpdateRepeat: repeat_seconds must be 0–31536000; 0 disables repetition
 WakeupUpdateOwnership:
   only main or the scheduling child may update this reminder
 
-# Watch-run validation and observation diagnostics.
-WatchInvalidProcessStat: invalid watch-run process stat.
-WatchShortProcessStat: short watch-run process stat.
-WatchInvalidIdentity: invalid watch-run identity.
-WatchReadLog: "read %s watch-run log: %w"
-WatchLogTruncated: watch-run log was truncated.
-WatchLogReplaced: watch-run log file was replaced during observation.
-WatchInvalidCompletion: invalid watch-run completion.
-WatchOutcomeUnknown: watch-run wrapper is gone; command outcome is unknown.
+# External-run validation and observation diagnostics.
+WatchInvalidProcessStat: invalid recorder process stat.
+WatchShortProcessStat: short recorder process stat.
+WatchInvalidIdentity: invalid recorder identity.
+WatchReadLog: "read %s external-run log: %w"
+WatchLogTruncated: external-run log was truncated.
+WatchLogReplaced: external-run log file was replaced during observation.
+WatchInvalidCompletion: invalid external-run completion.
+WatchOutcomeUnknown: recorder is gone; command outcome is unknown.
 WatchDrainIncomplete:
-  watch-run output drain exceeded 5 seconds after command exit; captured output
+  recorder output drain exceeded 5 seconds after command exit; captured output
   is incomplete.
 WatchNonregularFile:
-  watch-run records and logs must be regular files, not special files.
-WatchMetadataTooLarge: watch-run metadata exceeds the 64 KiB limit.
+  external-run records and logs must be regular files, not special files.
+WatchMetadataTooLarge: external-run metadata exceeds the 64 KiB limit.
+TmuxWatchInvalidLabel:
+  label must be at most 64 bytes with no control characters.
+TmuxWatchReadinessTimeout:
+  recorder did not become ready within 5 seconds; the workload may still be
+  running. Inspect the returned session and record_dir before retrying; use
+  watch when records become available.
+
+# Compact job-label fallbacks; exact commands are available through inspection.
+JobLabelShell: Shell command
+JobLabelLSP: Language server
+JobLabelWatch: External run
+TimerStartupHeading: "### Original startup parameters\n\n"

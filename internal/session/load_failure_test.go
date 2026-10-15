@@ -22,14 +22,14 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			targetID := history.NewID("session")
 			selection := r.CurrentSelection()
 			selection.Model.ID = "other-model"
-			turn, _, err := r.Store.StartSession(targetID, r.Workspace.Root, selection, llm.Message{Role: "user", Content: "Archived research"})
+			turn, _, err := r.Store.StartSession(targetID, r.Workspace.Root, selection, llm.Message{Type: llm.TypeUserInput, Content: "Archived research"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 				t.Fatal(err)
 			}
-			retained, err := r.Store.Append(targetID, "", "main", "message", "user", true, llm.Message{Role: "user", Content: "Continue research"})
+			retained, err := r.Store.Append(targetID, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue research"})
 			if err != nil {
 				t.Fatal(err)
 			}

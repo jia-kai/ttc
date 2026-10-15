@@ -72,7 +72,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		}
 		found := false
 		for _, message := range messages {
-			if message.Role == "tool" && message.CallID == "image-call" {
+			if message.Type == llm.TypeToolResult && message.CallID == "image-call" {
 				found = true
 				if !reflect.DeepEqual(message.Files, []llm.BinaryFile{want}) || strings.Contains(message.Content, "data_url") {
 					t.Fatalf("history lost the image reference: %+v", message)
@@ -192,7 +192,7 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			r.Provider = adapter
 			r.selection.Provider = "openai"
 			r.selection.Model.Images = true
-			if err := r.Run(&llm.Message{Role: "user", Content: "Read the image."}); err != nil || requests != 2 {
+			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Read the image."}); err != nil || requests != 2 {
 				t.Fatal("initial image exchange failed", err, requests)
 			}
 			var err error
@@ -209,7 +209,7 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 			if _, err := r.Command("/load " + r.Current()); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.Run(&llm.Message{Role: "user", Content: "Continue using the image."}); err != nil || requests != 3 {
+			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue using the image."}); err != nil || requests != 3 {
 				t.Fatal("missing/changed source blocked cached continuation", err, requests)
 			}
 			cache, err := blobcache.Default()
@@ -221,7 +221,7 @@ func TestImageReadChangedOrMissingSourceRecoversThroughCacheAndNotices(t *testin
 				t.Fatal(err)
 			}
 			unavailable = true
-			if err := r.Run(&llm.Message{Role: "user", Content: "Continue after eviction."}); err != nil || requests != 4 {
+			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue after eviction."}); err != nil || requests != 4 {
 				t.Fatal("unavailable image blocked continuation", err, requests)
 			}
 			messages, err := r.Store.Messages(r.Current())

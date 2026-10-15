@@ -88,15 +88,26 @@ func scalar(t *testing.T, db *sql.DB, query string, args ...any) string {
 	}
 	return value
 }
-func apply(t *testing.T, db *sql.DB) {
+
+// applySchema5 isolates retention migration assertions from later payload codecs.
+func applySchema5(t *testing.T, db *sql.DB) {
 	t.Helper()
 	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err = Apply(tx); err != nil {
+	var version int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
+	}
+	if version == 5 {
+		if err = upgrade5(tx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec("PRAGMA user_version=6"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
@@ -113,7 +124,7 @@ func TestSchema5MigrationPreservesEvidenceAndCursors(t *testing.T) {
 	if err := os.WriteFile(archive, archiveBytes, 0600); err != nil {
 		t.Fatal(err)
 	}
-	apply(t, db)
+	applySchema5(t, db)
 	if got := scalar(t, db, "PRAGMA user_version"); got != "6" {
 		t.Fatal(got)
 	}
@@ -164,7 +175,7 @@ func TestSchema5MigrationPreservesEvidenceAndCursors(t *testing.T) {
 		t.Fatal("immutable tool result trigger removed")
 	}
 	before := scalar(t, db, "SELECT json_group_array(content_json) FROM entries")
-	apply(t, db)
+	applySchema5(t, db)
 	if got := scalar(t, db, "SELECT json_group_array(content_json) FROM entries"); got != before {
 		t.Fatal("version 6 not idempotent")
 	}
@@ -244,7 +255,7 @@ func TestUserLookalikeAndOtherSources(t *testing.T) {
 			}
 			lookalike := strings.Replace(marker(t, "normal", 100, 200), `"role":"developer"`, `"role":"user"`, 1)
 			insert(t, db, 43, "old", 2, 0, "", "message", "user", lookalike, 140)
-			apply(t, db)
+			applySchema5(t, db)
 			if got := scalar(t, db, "SELECT content_json FROM entries WHERE id=43"); got != lookalike {
 				t.Fatal("user text interpreted as marker")
 			}
@@ -259,7 +270,7 @@ func TestOriginalAdmissionFieldsAreEnrichedOnlyOnCopies(t *testing.T) {
 	exec(t, db, `UPDATE entries SET content_json=json_set(content_json,'$.input_time_ms',1) WHERE id=1`)
 	exec(t, db, `UPDATE entries SET content_json=json_set(content_json,'$.input_time_ms',1,'$.input_source','queue') WHERE id=2`)
 	before := scalar(t, db, `SELECT json_group_array(content_json) FROM entries WHERE id IN (1,2)`)
-	apply(t, db)
+	applySchema5(t, db)
 	if got := scalar(t, db, `SELECT json_group_array(content_json) FROM entries WHERE id IN (1,2)`); got != before {
 		t.Fatal("original admissions rewritten")
 	}
@@ -281,7 +292,7 @@ func TestFreshAdmissionFollowingCopiedMarkerCutIsUntouched(t *testing.T) {
 			}
 			insert(t, db, 40, "cut", 31, 0, "", "message", "user", human, 400)
 			exec(t, db, `UPDATE sessions SET active_entry_id=40 WHERE id='cut'`)
-			apply(t, db)
+			applySchema5(t, db)
 			if got := scalar(t, db, `SELECT content_json FROM entries WHERE id=40`); got != human {
 				t.Fatal("fresh admission rewritten", got)
 			}
@@ -320,7 +331,7 @@ func TestFreshReplacementAndCopiedDescendantsAreUntouched(t *testing.T) {
 				}
 				unchanged := `SELECT json_group_array(json_array(id,parent_id,source_id,created_ms,content_json)) FROM entries WHERE id IN (1,2,40,42,44)`
 				before := scalar(t, db, unchanged)
-				apply(t, db)
+				applySchema5(t, db)
 				if got := scalar(t, db, unchanged); got != before {
 					t.Fatal("original admissions or fresh replacement descendants changed", got)
 				}
@@ -356,7 +367,7 @@ func TestFreshReplacementCanBeRetainedByLaterCompaction(t *testing.T) {
 			retainReplacement(t, db)
 			unchanged := `SELECT json_group_array(json_array(id,parent_id,source_id,created_ms,content_json)) FROM entries WHERE id IN (1,2,40,42,44)`
 			before := scalar(t, db, unchanged)
-			apply(t, db)
+			applySchema5(t, db)
 			if got := scalar(t, db, unchanged); got != before {
 				t.Fatal("fresh admissions or their old-lineage copies changed", got)
 			}
@@ -454,7 +465,7 @@ func TestInvisibleChildAdmissionsAndHistoricalRequestsAreUntouched(t *testing.T)
 	exec(t, db, `UPDATE entries SET actor_id='main/child',model_visible=0 WHERE id=40`)
 	request := "[" + marker(t, "task", 125, 200) + "," + human + "]"
 	exec(t, db, `INSERT INTO model_requests(id,session_id,actor_id,input_json,purpose,model_json,status,attempts_json,created_ms) VALUES(2,'old','main/child',?,'coding','{}','completed','[]',200)`, request)
-	apply(t, db)
+	applySchema5(t, db)
 	if got := scalar(t, db, `SELECT content_json FROM entries WHERE id=40`); got != human {
 		t.Fatal("invisible child admission rewritten")
 	}
@@ -467,7 +478,7 @@ func TestInvisibleChildAdmissionsAndHistoricalRequestsAreUntouched(t *testing.T)
 }
 
 func TestUnsupportedVersions(t *testing.T) {
-	for _, version := range []string{"0", "4", "7", "999"} {
+	for _, version := range []string{"0", "4", "8", "999"} {
 		t.Run(version, func(t *testing.T) {
 			db, err := sql.Open("sqlite", ":memory:")
 			if err != nil {

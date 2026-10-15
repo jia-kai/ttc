@@ -163,8 +163,8 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				}
 				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}
 				messages := []llm.Message{
-					{Role: "user", Content: "Research", InputTimeMS: time.Now().UnixMilli()},
-					{Role: "assistant", Content: strings.Repeat("Earlier evidence. ", 700)},
+					{Type: llm.TypeUserInput, Content: "Research", InputTimeMS: time.Now().UnixMilli()},
+					{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)},
 				}
 				// An unsuccessful handoff must leave the original cursor intact.
 				r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { return context.Canceled }}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline PTY regression for saved prompt recall and Ctrl-R search after restart."""
+import argparse
 import fcntl
 import json
 import os
@@ -20,6 +21,9 @@ from scratch import private_scratch
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', default='./ttc')
+    args = parser.parse_args()
     root = Path(tempfile.mkdtemp(prefix='pty-history-', dir=private_scratch()))
     print(f'Artifacts: {root}', flush=True)
     project = root / 'project'
@@ -37,7 +41,7 @@ def main():
                       "root = Path(__file__).parent\n"
                       "with (root / 'drafts.jsonl').open('a') as out:\n"
                       "    out.write(json.dumps(Path(sys.argv[-1]).read_text()) + '\\n')\n")
-    binary = str(Path('./ttc').resolve())
+    binary = str(Path(args.binary).resolve())
     command = [binary, '--offline-script', str(script), '--workdir', str(project),
                '--data-dir', str(data), '--auto-name=false']
     process = master = None

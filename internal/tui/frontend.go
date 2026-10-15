@@ -405,20 +405,6 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 			fmt.Fprintln(f.Output, plainActor(actor, item.text))
 		}
 	}
-	childCompletion := func(item line, text string) line {
-		var notice struct {
-			Type    string `json:"type"`
-			ChildID string `json:"child_id"`
-			Answer  string `json:"answer"`
-		}
-		// Only runtime child-completion envelopes take this presentation path.
-		if json.Unmarshal([]byte(text), &notice) == nil && notice.Type == "child_turn_finished" && strings.HasPrefix(notice.ChildID, "main/child_") {
-			item = attribute(item, notice.ChildID)
-			item.text, item.speaker, item.compactResponse = notice.Answer, "final answer", true
-			item.markdown, item.system = false, false
-		}
-		return item
-	}
 	startEditor := func() {
 		text := draft.text
 		apply := func(result operationResult) {
@@ -631,31 +617,15 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				continue
 			}
 			item := attribute(line{text: f.Runtime.Store.Label(v), id: v.ID, system: v.Kind == "status" || v.Role == "system"}, v.Actor)
-			if v.Kind == "message" && v.Role == "developer" {
-				item.system = true
-			}
 			var status struct{ Type string }
 			if v.Kind == "tool_result" || json.Unmarshal(v.Content, &status) == nil && status.Type == "job_completion" {
 				item.markdown, item.brief, item.system = true, true, false
 			}
-			if v.Kind == "message" && v.Role == "user" && v.Actor == "main" && v.Visible {
+			if v.Kind == "message" || v.Kind == "summary" {
 				var message llm.Message
 				if err := json.Unmarshal(v.Content, &message); err == nil {
-					item.human = !message.Runtime
-				}
-			}
-			if (v.Kind == "message" || v.Kind == "summary") && v.Role == "assistant" {
-				var message llm.Message
-				if err := json.Unmarshal(v.Content, &message); err == nil {
-					title := "assistant"
-					item.text, item.speaker, item.markdown, item.complete, item.requestID = message.Content, title, true, true, message.RequestID
-					item = attribute(item, v.Actor)
-				}
-			}
-			if v.Kind == "message" && v.Role == "user" {
-				var message llm.Message
-				if json.Unmarshal(v.Content, &message) == nil && message.Runtime {
-					item = childCompletion(item, message.Content)
+					item = messageLine(item, message)
+					item = attribute(item, item.actor)
 				}
 			}
 			if v.Kind == "tool_result" && renderer != nil {
@@ -1277,7 +1247,9 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					fmt.Fprintln(f.Output, plainActor(event.Actor, brief))
 				}
 			case "delta":
-				item := attribute(line{text: event.Text, speaker: "assistant", requestID: event.RequestID}, event.Actor)
+				item := messageLine(line{}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID})
+				item.complete, item.markdown = false, false
+				item = attribute(item, event.Actor)
 				if item.compactResponse {
 					item.id = -event.RequestID // Negative UI-only identity until the saved response arrives.
 				}
@@ -1290,17 +1262,16 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 					modal.window.Text = view.lines[view.requests[event.RequestID]].text
 				}
 			case "assistant":
-				speaker := "assistant"
-				item := attribute(line{text: event.Text, speaker: speaker, requestID: event.RequestID, id: event.EntryID, complete: true, markdown: true}, event.Actor)
+				item := attribute(messageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID}), event.Actor)
 				index, streamed := view.requests[event.RequestID]
 				streamed = streamed && !view.lines[index].complete
 				if view.publish(item, "", false) && f.Plain {
 					if item.compactResponse {
-						fmt.Fprintln(f.Output, render.SubagentResponse(event.Actor, nameForActor(event.Actor), speaker, event.Text, 500, false))
+						fmt.Fprintln(f.Output, render.SubagentResponse(event.Actor, nameForActor(event.Actor), item.speaker, event.Text, 500, false))
 					} else if streamed {
 						fmt.Fprintln(f.Output)
 					} else {
-						fmt.Fprintln(f.Output, plainActor(event.Actor, speaker+" · "+event.Text))
+						fmt.Fprintln(f.Output, plainActor(event.Actor, item.speaker+" · "+event.Text))
 					}
 				}
 				if graphicsWarning != "" {
@@ -1341,19 +1312,22 @@ func (f *Frontend) Run(ctx context.Context) (runErr error) {
 				if showPrompt(event.EntryID) {
 					addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 				}
-			case "runtime_context", "status", "wake":
+			case "runtime_context":
+				addActor(messageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeRuntimeContext}), event.Actor)
+			case "status", "wake":
 				addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 			default:
-				item := attribute(line{text: event.Text, id: event.EntryID, human: event.Human}, event.Actor)
-				if event.Kind == "message" && event.Runtime {
-					item = childCompletion(item, event.Text)
+				item := line{text: event.Text, id: event.EntryID, actor: event.Actor}
+				if event.Kind == "message" {
+					item = messageLine(item, llm.Message{Type: event.MessageType, Content: event.Text})
 				}
+				item = attribute(item, item.actor)
 				view.append(item)
 				if f.Plain {
 					if item.compactResponse {
 						fmt.Fprintln(f.Output, render.SubagentResponse(item.actor, item.subagentName, item.speaker, item.text, 500, false))
 					} else {
-						fmt.Fprintln(f.Output, plainActor(event.Actor, event.Text))
+						fmt.Fprintln(f.Output, plainActor(item.actor, item.text))
 					}
 				}
 			}
