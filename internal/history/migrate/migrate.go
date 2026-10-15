@@ -39,9 +39,22 @@ type entry struct {
 	message                     map[string]json.RawMessage
 }
 
+// upgrades is the complete supported chain. Each entry upgrades from its version
+// to the next; unsupported older formats deliberately have no registry entry.
+var upgrades = [...]struct {
+	from int
+	run  func(*sql.Tx, *progressReporter) error
+}{
+	{5, upgrade5},
+	{6, upgrade6},
+}
+
 // Apply runs ordered upgrades from MinimumVersion to CurrentVersion inside tx.
-// Older and newer versions are rejected. It never commits tx.
-func Apply(tx *sql.Tx) error {
+// Older and newer versions are rejected. It never commits tx; the caller must
+// roll back on error, including errors after earlier steps succeeded. A non-nil
+// report receives synchronous progress callbacks; nil avoids progress count SQL.
+// Callbacks must not commit or roll back tx.
+func Apply(tx *sql.Tx, report func(Progress)) error {
 	var version int
 	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
@@ -49,22 +62,41 @@ func Apply(tx *sql.Tx) error {
 	if version < MinimumVersion || version > CurrentVersion {
 		return fmt.Errorf("unsupported history schema version %d (supported: %d–%d)", version, MinimumVersion, CurrentVersion)
 	}
-	if version == CurrentVersion {
-		return nil
-	}
-	if version == 5 {
-		if err := upgrade5(tx); err != nil {
-			return fmt.Errorf("migrate history schema 5 to 6: %w", err)
+	for _, step := range upgrades {
+		if step.from < version {
+			continue
 		}
+		if step.from != version {
+			return fmt.Errorf("missing history migration from schema %d", version)
+		}
+		var progress *progressReporter
+		if report != nil {
+			progress = &progressReporter{report: report, value: Progress{FromVersion: version, ToVersion: version + 1}}
+		}
+		if err := step.run(tx, progress); err != nil {
+			return fmt.Errorf("migrate history schema %d to %d: %w", version, version+1, err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", version+1)); err != nil {
+			return fmt.Errorf("set history schema version %d: %w", version+1, err)
+		}
+		version++
+		progress.finish()
 	}
-	if err := upgrade6(tx); err != nil {
-		return fmt.Errorf("migrate history schema 6 to 7: %w", err)
+	if version != CurrentVersion {
+		return fmt.Errorf("missing history migration from schema %d", version)
 	}
-	_, err := tx.Exec("PRAGMA user_version = 7")
-	return err
+	return nil
 }
 
-func upgrade5(tx *sql.Tx) error {
+func upgrade5(tx *sql.Tx, progress *progressReporter) error {
+	if progress != nil {
+		var count int64
+		if err := tx.QueryRow("SELECT count(*) FROM entries").Scan(&count); err != nil {
+			return err
+		}
+		// Four entry passes, cursor repair, and the schema-version update.
+		progress.start(4*count+2, "read_entries")
+	}
 	// Only human inputs and candidate developer markers need payloads. Assistant
 	// responses, tool results and status records can dominate historical size.
 	rows, err := tx.Query(`SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),e.created_ms,e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,
@@ -105,6 +137,7 @@ func upgrade5(tx *sql.Tx) error {
 		entries[e.id] = e
 		children[e.parent] = append(children[e.parent], e)
 		ordered = append(ordered, e)
+		progress.advance(1)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -112,8 +145,10 @@ func upgrade5(tx *sql.Tx) error {
 	}
 	rows.Close()
 	if len(markers) == 0 {
+		progress.advance(3*int64(len(ordered)) + 1)
 		return nil
 	}
+	progress.phase("validate_retention")
 	// Restoring either an original or copied pre-input marker cut can admit a
 	// fresh human on that branch. The admission and its copies are fresh only
 	// relative to that marker lineage; a later compaction can retain the input.
@@ -126,12 +161,14 @@ func upgrade5(tx *sql.Tx) error {
 			}
 			freshAdmissions[e.id] = markerOrigin.id
 		}
+		progress.advance(1)
 	}
 	// Validate every pair and copied cursor boundary before changing any rows.
 	updates := map[int64]metadata{}
 	for _, e := range ordered {
 		m, ok := markers[e.id]
 		if !ok {
+			progress.advance(1)
 			continue
 		}
 		origin, err := original(entries, e)
@@ -192,9 +229,11 @@ func upgrade5(tx *sql.Tx) error {
 		if !evidence {
 			return fmt.Errorf("marker %d: missing original human input evidence", e.id)
 		}
+		progress.advance(1)
 	}
 	// Cursor columns have no permanent indexes. Stage marker identities once,
 	// then scan each session/turn table once rather than once per marker.
+	progress.phase("rewrite_retention")
 	if _, err := tx.Exec(`CREATE TEMP TABLE retention_cuts (id INTEGER PRIMARY KEY, parent_id INTEGER)`); err != nil {
 		return err
 	}
@@ -227,7 +266,9 @@ func upgrade5(tx *sql.Tx) error {
 				return err
 			}
 		}
+		progress.advance(1)
 	}
+	progress.phase("update_cursors")
 	for _, query := range []string{
 		`UPDATE sessions SET
 		active_entry_id=CASE WHEN active_entry_id IN (SELECT id FROM retention_cuts) THEN (SELECT parent_id FROM retention_cuts WHERE id=active_entry_id) ELSE active_entry_id END,
@@ -241,6 +282,7 @@ func upgrade5(tx *sql.Tx) error {
 			return err
 		}
 	}
+	progress.advance(1)
 	return nil
 }
 func text(m map[string]json.RawMessage, key string) string {

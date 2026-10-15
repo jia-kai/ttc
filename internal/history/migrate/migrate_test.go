@@ -102,7 +102,7 @@ func applySchema5(t *testing.T, db *sql.DB) {
 		t.Fatal(err)
 	}
 	if version == 5 {
-		if err = upgrade5(tx); err != nil {
+		if err = upgrade5(tx, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = tx.Exec("PRAGMA user_version=6"); err != nil {
@@ -206,7 +206,7 @@ func TestCorruptionRollsBack(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = Apply(tx)
+			err = Apply(tx, nil)
 			if err == nil {
 				tx.Rollback()
 				t.Fatal("accepted corruption")
@@ -228,7 +228,7 @@ func TestCorruptionRollsBack(t *testing.T) {
 		exec(t, db, `CREATE TRIGGER reject_migration BEFORE UPDATE ON entries WHEN OLD.id=22 BEGIN SELECT RAISE(ABORT,'write failure'); END`)
 		before := scalar(t, db, "SELECT json_group_array(content_json) FROM entries")
 		tx, _ := db.Begin()
-		if err := Apply(tx); err == nil {
+		if err := Apply(tx, nil); err == nil {
 			t.Fatal("write failure ignored")
 		}
 		tx.Rollback()
@@ -404,7 +404,7 @@ func TestLaterRetentionOfFreshReplacementRejectsCorruption(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := Apply(tx); err == nil {
+			if err := Apply(tx, nil); err == nil {
 				tx.Rollback()
 				t.Fatal("accepted corrupt later retention")
 			}
@@ -439,7 +439,7 @@ func TestFreshReplacementDoesNotHideCorruptRetainedEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := Apply(tx); err == nil {
+			if err := Apply(tx, nil); err == nil {
 				tx.Rollback()
 				t.Fatal("fresh replacement hid corrupt retained evidence")
 			}
@@ -478,7 +478,7 @@ func TestInvisibleChildAdmissionsAndHistoricalRequestsAreUntouched(t *testing.T)
 }
 
 func TestUnsupportedVersions(t *testing.T) {
-	for _, version := range []string{"0", "4", "8", "999"} {
+	for _, version := range []string{"-1", "0", "1", "2", "3", "4", "8", "999"} {
 		t.Run(version, func(t *testing.T) {
 			db, err := sql.Open("sqlite", ":memory:")
 			if err != nil {
@@ -488,8 +488,12 @@ func TestUnsupportedVersions(t *testing.T) {
 			exec(t, db, "PRAGMA user_version="+version)
 			tx, _ := db.Begin()
 			defer tx.Rollback()
-			if err := Apply(tx); err == nil || !strings.Contains(err.Error(), "unsupported history schema version "+version) {
+			if err := Apply(tx, func(event Progress) { t.Fatalf("unsupported version reported progress: %+v", event) }); err == nil || !strings.Contains(err.Error(), "unsupported history schema version "+version) {
 				t.Fatal(err)
+			}
+			var after string
+			if err := tx.QueryRow("PRAGMA user_version").Scan(&after); err != nil || after != version {
+				t.Fatalf("unsupported version changed: version=%q err=%v", after, err)
 			}
 		})
 	}

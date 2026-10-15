@@ -49,9 +49,23 @@ func permitSystemRole(tx *sql.Tx) error {
 	if _, err := tx.Exec("PRAGMA defer_foreign_keys=ON"); err != nil {
 		return err
 	}
-	for _, statement := range []string{ddl, "INSERT INTO entries_message_types SELECT * FROM entries", "DROP TABLE entries", "ALTER TABLE entries_message_types RENAME TO entries"} {
+	for _, statement := range []string{ddl, "INSERT INTO entries_message_types SELECT * FROM entries"} {
 		if _, err := tx.Exec(statement); err != nil {
 			return fmt.Errorf("extend entries roles: %w", err)
+		}
+	}
+	if err := indexEntryReferences(tx); err != nil {
+		return err
+	}
+	for _, statement := range []string{"DROP TABLE entries", "ALTER TABLE entries_message_types RENAME TO entries"} {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("extend entries roles: %w", err)
+		}
+	}
+	for _, index := range entryReferenceIndexes {
+		// The original table's index already disappeared with DROP TABLE.
+		if _, err := tx.Exec("DROP INDEX IF EXISTS " + index.name); err != nil {
+			return err
 		}
 	}
 	for _, statement := range dependencies {
@@ -73,4 +87,31 @@ func permitSystemRole(tx *sql.Tx) error {
 	// referenced name. Check the final graph explicitly before clearing deferral.
 	_, err = tx.Exec("PRAGMA defer_foreign_keys=OFF")
 	return err
+}
+
+var entryReferenceIndexes = []struct{ name, table, column string }{
+	{"migration_original_source", "entries", "source_id"},
+	{"migration_entry_parent", "entries_message_types", "parent_id"},
+	{"migration_entry_source", "entries_message_types", "source_id"},
+	{"migration_session_active", "sessions", "active_entry_id"},
+	{"migration_session_redo", "sessions", "redo_entry_id"},
+	{"migration_session_floor", "sessions", "undo_floor_id"},
+	{"migration_turn_start", "turns", "start_entry_id"},
+	{"migration_compaction_source", "compactions", "source_tip_id"},
+	{"migration_compaction_summary", "compactions", "summary_entry_id"},
+}
+
+func indexEntryReferences(tx *sql.Tx) error {
+	// DROP TABLE implicitly deletes every row with FK checks, even when
+	// deferred. Every child lookup needs an index to avoid repeated table scans.
+	// In particular, the replacement still references the original table, and
+	// entry_source(session_id,source_id) cannot seek on source_id alone.
+	// entry_parent and tool_records' integer primary key already cover the
+	// remaining references. These sparse indexes exist only during the rebuild.
+	for _, index := range entryReferenceIndexes {
+		if _, err := tx.Exec("CREATE INDEX " + index.name + " ON " + index.table + "(" + index.column + ") WHERE " + index.column + " IS NOT NULL"); err != nil {
+			return fmt.Errorf("index history references for rebuild: %w", err)
+		}
+	}
+	return nil
 }

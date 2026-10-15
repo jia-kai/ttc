@@ -80,6 +80,7 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 
 func TestRetryActivityExcludesBackgroundNaming(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
+	retentionEvent(t, events) // Examine retry events after startup storage statistics.
 	seedRuntime(t, r, "Name this session")
 	for _, purpose := range []string{"coding", "compaction", "naming"} {
 		request, err := r.Store.StartRequest(r.Current(), "", "main", purpose, r.CurrentSelection())

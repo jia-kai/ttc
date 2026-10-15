@@ -9,10 +9,21 @@ import (
 )
 
 const messageTypeBatchSize = 64
+const messageTypeBatchBytes = 8 << 20
+
+const messageTypePredicate = `(kind IN ('message','summary') OR (kind='status' AND json_extract(content_json,'$.type')='request_message'))`
 
 // upgrade6 changes canonical entry payloads in bounded keyset batches. Saved
 // provider requests and archives are immutable evidence, not current decoder inputs.
-func upgrade6(tx *sql.Tx) error {
+func upgrade6(tx *sql.Tx, progress *progressReporter) error {
+	if progress != nil {
+		var count int64
+		if err := tx.QueryRow("SELECT count(*) FROM entries WHERE " + messageTypePredicate).Scan(&count); err != nil {
+			return err
+		}
+		// Message rows, the table rebuild, and the schema-version update.
+		progress.start(count+2, "convert_messages")
+	}
 	var last int64
 	for {
 		updates, err := messageTypeBatch(tx, last)
@@ -28,8 +39,15 @@ func upgrade6(tx *sql.Tx) error {
 			}
 		}
 		last = updates[len(updates)-1].id
+		progress.advance(int64(len(updates)))
 	}
-	return permitSystemRole(tx)
+	progress.phase("rebuild_entries")
+	if err := permitSystemRole(tx); err != nil {
+		return err
+	}
+	progress.advance(1)
+	progress.phase("rebuild_entries")
+	return nil
 }
 
 type messageTypeUpdate struct {
@@ -38,12 +56,13 @@ type messageTypeUpdate struct {
 }
 
 func messageTypeBatch(tx *sql.Tx, last int64) ([]messageTypeUpdate, error) {
-	rows, err := tx.Query(`SELECT id,kind,coalesce(role,''),content_json FROM entries WHERE id>? AND (kind IN ('message','summary') OR (kind='status' AND json_extract(content_json,'$.type')='request_message')) ORDER BY id LIMIT ?`, last, messageTypeBatchSize)
+	rows, err := tx.Query(`SELECT id,kind,coalesce(role,''),content_json FROM entries WHERE id>? AND `+messageTypePredicate+` ORDER BY id LIMIT ?`, last, messageTypeBatchSize)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	updates := make([]messageTypeUpdate, 0, messageTypeBatchSize)
+	var bytes int
 	for rows.Next() {
 		var id int64
 		var kind, role, raw string
@@ -54,7 +73,13 @@ func messageTypeBatch(tx *sql.Tx, last int64) ([]messageTypeUpdate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("entry %d: %w", id, err)
 		}
+		// Bound retained converted payloads as well as row count. One oversized
+		// entry must still make progress; a deferred row is reread next batch.
+		if len(updates) > 0 && bytes+len(body) > messageTypeBatchBytes {
+			break
+		}
 		updates = append(updates, messageTypeUpdate{id, body})
+		bytes += len(body)
 	}
 	return updates, rows.Err()
 }

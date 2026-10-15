@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,18 +16,16 @@ import (
 
 const lineageRetention = 30 * 24 * time.Hour
 
-// Cleanup expires entire lineages inactive for thirty days, protecting the loaded
-// conversation and its copies. SQL deletion is atomic and rechecks activity under
-// the database write transaction. Asset deletion is best effort; there are no
-// deletion journals or restart repairs. The result counts deleted lineages.
-func (s *Store) Cleanup(ctx context.Context, now time.Time, protectedSession string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// cleanupLocked expires whole inactive lineages and requires s.mu. The loaded
+// conversation protects its whole family. SQL deletion is atomic and rechecks
+// activity under the write transaction; asset deletion is best effort, without
+// deletion journals or restart repair. The result counts committed deletions.
+func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSession string) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	// Refresh the loaded lineage so other instances' sweeps also retain it.
-	if _, err := s.DB.ExecContext(ctx, "UPDATE sessions SET last_activity_ms=? WHERE id=?", now.UnixMilli(), protectedSession); err != nil {
+	if err := s.refreshLoadedActivity(ctx, now, protectedSession); err != nil {
 		return 0, err
 	}
 	cutoff := now.Add(-lineageRetention).UnixMilli()
@@ -48,29 +47,80 @@ func (s *Store) Cleanup(ctx context.Context, now time.Time, protectedSession str
 	if err != nil {
 		return 0, err
 	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	for _, id := range ids {
+		if !cleanupID(id) {
+			return 0, fmt.Errorf("invalid retention lineage ID %q", id)
+		}
+	}
 	assets, err := openCleanupDir(-1, filepath.Join(s.Root, "lineages"), true)
 	if err != nil {
 		return 0, err
 	}
 	defer assets.Close()
-	completed := 0
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	// A sweep builds child-key indexes only once, and removes them in this same
+	// transaction. A crash or failed sweep cannot leave schema additions behind.
+	if _, err := tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
+		return 0, err
+	}
+	var deletedIDs []string
 	for _, id := range ids {
-		if !cleanupID(id) {
-			return completed, fmt.Errorf("invalid retention lineage ID %q", id)
+		var activity sql.NullInt64
+		if err := tx.QueryRowContext(ctx, "SELECT max(last_activity_ms) FROM sessions WHERE lineage_id=?", id).Scan(&activity); err != nil {
+			return 0, err
 		}
-		deleted, err := s.deleteLineage(ctx, id, cutoff)
-		if err != nil {
-			return completed, fmt.Errorf("delete lineage %s history: %w", id, err)
-		}
-		if !deleted {
+		if !activity.Valid || activity.Int64 > cutoff {
 			continue
 		}
-		completed++
-		if err := removeCleanupTree(ctx, assets, id); err != nil {
-			return completed, fmt.Errorf("delete lineage %s assets: %w", id, err)
+		if len(deletedIDs) == 0 {
+			if err := indexCleanupReferences(ctx, tx); err != nil {
+				return 0, err
+			}
+		}
+		if err := deleteLineage(ctx, tx, id); err != nil {
+			return 0, fmt.Errorf("delete lineage %s history: %w", id, err)
+		}
+		deletedIDs = append(deletedIDs, id)
+	}
+	if len(deletedIDs) == 0 {
+		return 0, nil
+	}
+	for _, index := range cleanupReferenceIndexes {
+		if _, err := tx.ExecContext(ctx, "DROP INDEX "+index.name); err != nil {
+			return 0, fmt.Errorf("drop cleanup reference index: %w", err)
 		}
 	}
-	return completed, nil
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit history cleanup: %w", err)
+	}
+	var assetErrors error
+	for _, id := range deletedIDs {
+		if err := ctx.Err(); err != nil {
+			return len(deletedIDs), errors.Join(assetErrors, err)
+		}
+		if err := removeCleanupTree(ctx, assets, id); err != nil {
+			// SQL deletion has already committed for every family. Continue after
+			// ordinary filesystem failures so later families do not become orphans
+			// merely because an earlier directory could not be removed.
+			assetErrors = errors.Join(assetErrors, fmt.Errorf("delete lineage %s assets: %w", id, err))
+		}
+	}
+	return len(deletedIDs), assetErrors
+}
+
+func (s *Store) refreshLoadedActivity(ctx context.Context, now time.Time, protectedSession string) error {
+	_, err := s.DB.ExecContext(ctx, "UPDATE sessions SET last_activity_ms=max(last_activity_ms,?) WHERE id=?", now.UnixMilli(), protectedSession)
+	if err != nil {
+		return fmt.Errorf("refresh loaded history activity: %w", err)
+	}
+	return nil
 }
 
 func cleanupID(id string) bool {
@@ -101,24 +151,7 @@ func openCleanupDir(parent int, name string, create bool) (*os.File, error) {
 	return f, nil
 }
 
-func (s *Store) deleteLineage(ctx context.Context, id string, cutoff int64) (bool, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	var activity sql.NullInt64
-	if err := tx.QueryRowContext(ctx, "SELECT max(last_activity_ms) FROM sessions WHERE lineage_id=?", id).Scan(&activity); err != nil {
-		return false, err
-	}
-	if !activity.Valid || activity.Int64 > cutoff {
-		return false, nil
-	}
-	// All cross-table pointers belong to the lineage; defer cyclic entry/turn/
-	// file/session checks until the complete lineage has been removed.
-	if _, err = tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
-		return false, err
-	}
+func deleteLineage(ctx context.Context, tx *sql.Tx, id string) error {
 	const sessions = "SELECT id FROM sessions WHERE lineage_id=?"
 	queries := []string{
 		"DELETE FROM compactions WHERE continuation_id IN (" + sessions + ")",
@@ -131,11 +164,41 @@ func (s *Store) deleteLineage(ctx context.Context, id string, cutoff int64) (boo
 		"DELETE FROM sessions WHERE lineage_id=?",
 	}
 	for _, query := range queries {
-		if _, err = tx.ExecContext(ctx, query, id); err != nil {
-			return false, err
+		if _, err := tx.ExecContext(ctx, query, id); err != nil {
+			return err
 		}
 	}
-	return true, tx.Commit()
+	return nil
+}
+
+// SQLite checks child keys for each deleted parent even with deferred checks.
+// Existing compound indexes do not cover a lookup on their non-leading column.
+var cleanupReferenceIndexes = [...]struct{ name, table, column string }{
+	{"cleanup_session_active", "sessions", "active_entry_id"},
+	{"cleanup_session_redo", "sessions", "redo_entry_id"},
+	{"cleanup_session_floor", "sessions", "undo_floor_id"},
+	{"cleanup_session_file", "sessions", "file_tip_id"},
+	{"cleanup_turn_entry", "turns", "start_entry_id"},
+	{"cleanup_turn_file", "turns", "start_file_tip_id"},
+	{"cleanup_entry_source", "entries", "source_id"},
+	{"cleanup_entry_turn", "entries", "turn_id"},
+	{"cleanup_entry_request", "entries", "delivered_request_id"},
+	{"cleanup_entry_main_turn", "entries", "main_turn_id"},
+	{"cleanup_entry_undo_turn", "entries", "undo_owner_turn_id"},
+	{"cleanup_entry_file", "entries", "file_tip_id"},
+	{"cleanup_file_previous", "file_changes", "previous_id"},
+	{"cleanup_compaction_source", "compactions", "source_tip_id"},
+	{"cleanup_compaction_summary", "compactions", "summary_entry_id"},
+	{"cleanup_request_session", "model_requests", "session_id"},
+}
+
+func indexCleanupReferences(ctx context.Context, tx *sql.Tx) error {
+	for _, index := range cleanupReferenceIndexes {
+		if _, err := tx.ExecContext(ctx, "CREATE INDEX "+index.name+" ON "+index.table+"("+index.column+") WHERE "+index.column+" IS NOT NULL"); err != nil {
+			return fmt.Errorf("index history references for cleanup: %w", err)
+		}
+	}
+	return nil
 }
 
 func removeCleanupTree(ctx context.Context, parent *os.File, name string) error {

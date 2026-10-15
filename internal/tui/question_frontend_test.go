@@ -93,6 +93,16 @@ func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(c
 		t.Fatal(err)
 	}
 	r.AutoName = false
+	// Startup maintenance publishes asynchronously. Finish that publication
+	// before setup hooks wrap Emit, retaining the event for the frontend.
+	select {
+	case event := <-events:
+		events <- event
+	case <-time.After(3 * time.Second):
+		cancel()
+		r.Close()
+		t.Fatal("startup history maintenance did not report")
+	}
 	if setup != nil {
 		setup(r)
 	}

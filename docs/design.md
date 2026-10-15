@@ -490,9 +490,12 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
 - Empty databases initialize in one immediate transaction. Current schema is 7;
-  startup migrates schemas 5 and 6 transactionally, validating before commit.
-  Schemas below 5, nonempty unversioned databases and unknown newer versions
-  fail explicitly; no automatic resets or credential deletion.
+  startup runs ordered, adjacent upgrades (5 → 6 → 7) in one transaction,
+  validating before commit. Each step reports its own progress; completion of a
+  step is not a committed upgrade. Rebuilding entries temporarily indexes all
+  incoming foreign-key lookups to avoid per-entry table scans. Schemas below 5,
+  nonempty unversioned databases and unknown newer versions fail explicitly; no
+  automatic resets or credential deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
   instances sharing that directory before upgrading: pre-lock binaries cannot be
@@ -535,7 +538,17 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   deduplicate only within the lineage. No global durable blob table or durable
   job/timer/inbox table. Enforce the
   [retention policy](requirement.md#data-retention) with an atomic activity
-  recheck before lineage deletion. Copies protect shared ancestry/assets.
+  recheck before lineage deletion. Startup/hourly maintenance gates the 30-day
+  inactive-lineage sweep on database-plus-WAL size of at least 2 GiB, without
+  forcing the database below the threshold. After deletions, attempt SQLite
+  compaction and WAL truncation with a two-minute limit. Compaction requires
+  exclusive lifetime use, coordinated under the initialization lock; other open
+  stores defer it rather than blocking their ordinary writes with VACUUM. Later
+  checks retry SQLite free pages/WAL residue without another forced eviction.
+  Failures appear as UI-only warnings and may occur after history deletions have
+  committed. Copies protect shared ancestry/assets. Startup statistics (physical
+  database plus WAL bytes, entry count, oldest-entry age) are UI-only status,
+  not model input or a new persisted conversation entry.
 
 ## Validation
 

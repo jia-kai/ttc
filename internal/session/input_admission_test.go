@@ -84,6 +84,7 @@ func assertInputHistoryCounts(t *testing.T, r *Runtime, want int) {
 
 func TestInputCancellationBeforeInitialAdmissionLeavesNoHistory(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
+	retentionEvent(t, events) // Startup storage statistics are unrelated to input admission.
 	unlock := holdInputAdmission(t, r)
 	original := contextbuild.Input{Text: "  original\n\tλ  ", Attachments: []contextbuild.Attachment{{Path: "removed.txt", Kind: "text", Text: "immutable snapshot"}}}
 	input := r.PrepareInput(original)

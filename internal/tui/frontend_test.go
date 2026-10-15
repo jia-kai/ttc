@@ -78,6 +78,7 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	wait("/help")
 	screen.SetSize(100, 30)
 	screen.EventQ() <- tcell.NewEventResize(100, 30)
+	wait("History database:")
 	for _, ch := range "hello" {
 		screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(ch), 0)
 	}
@@ -86,7 +87,17 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	if strings.Contains(latest, "You are TTC") {
 		t.Fatal("system body leaked into main conversation")
 	}
-	screen.EventQ() <- tcell.NewEventMouse(3, 2, tcell.Button1, 0)
+	placeholderY := -1
+	for y, row := range strings.Split(latest, "\n") {
+		if strings.Contains(row, "System prompt") {
+			placeholderY = y
+			break
+		}
+	}
+	if placeholderY < 0 {
+		t.Fatal("system prompt placeholder not visible", latest)
+	}
+	screen.EventQ() <- tcell.NewEventMouse(3, placeholderY, tcell.Button1, 0)
 	wait("You are TTC")
 	screen.EventQ() <- tcell.NewEventKey(tcell.KeyEscape, "", 0)
 	wait("System prompt")

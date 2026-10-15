@@ -46,6 +46,14 @@ func runtimeFixture(t *testing.T, responses []llm.ScriptResponse) (*Runtime, cha
 	}
 	r.AutoName = false
 	t.Cleanup(r.Close)
+	// Finish startup publication before tests replace Emit or mutate fixtures.
+	// Retain the UI-only status for tests that inspect construction events.
+	select {
+	case event := <-events:
+		events <- event
+	case <-time.After(3 * time.Second):
+		t.Fatal("startup history maintenance did not report")
+	}
 	return r, events
 }
 

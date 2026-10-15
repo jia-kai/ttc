@@ -73,6 +73,7 @@ type Runtime struct {
 	publishedTimers   map[string]wakeup
 	publishedChildren map[string]tool.ChildView
 	retentionStop     func()
+	retentionDue      time.Time               // Next full attempt; worker-owned across cancel/join restarts, not guarded by mu.
 	children          map[string]*codingChild // Owned by childStartMu; live handles never restored.
 	childStartMu      sync.Mutex              // Serializes child capacity checks and admission, never child execution.
 	routeMu           sync.RWMutex            // Keeps child commits/file mutations within the current continuation.

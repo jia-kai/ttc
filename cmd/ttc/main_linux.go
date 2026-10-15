@@ -170,7 +170,9 @@ func runWithModules(modules []providers.Module) error {
 	if _, e = scratch.Verify(); e != nil {
 		return e
 	}
-	store, e := history.Open(*data)
+	progress := newMigrationProgress(os.Stderr)
+	store, e := history.OpenWithProgress(*data, progress.report)
+	progress.finish(e)
 	if e != nil {
 		return e
 	}

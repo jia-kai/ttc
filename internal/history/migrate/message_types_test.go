@@ -17,7 +17,7 @@ func applyCurrent(t *testing.T, db *sql.DB) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := Apply(tx); err != nil {
+	if err := Apply(tx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -127,7 +127,7 @@ func TestSchema6CorruptClassificationRollsBack(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := Apply(tx); err == nil {
+			if err := Apply(tx, nil); err == nil {
 				tx.Rollback()
 				t.Fatal("accepted invalid legacy classification")
 			}
@@ -141,5 +141,57 @@ func TestSchema6CorruptClassificationRollsBack(t *testing.T) {
 				t.Fatal("partially migrated corrupt history")
 			}
 		})
+	}
+}
+
+func TestMessageTypeBatchBoundsBytesAndAllowsOversizedEntry(t *testing.T) {
+	db := fixture(t)
+	applySchema5(t, db)
+	lengths := []int{3 << 20, 3 << 20, 3 << 20, 3 << 20, 9 << 20}
+	for i, size := range lengths {
+		raw, err := json.Marshal(map[string]string{"role": "assistant", "content": strings.Repeat("x", size)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		insert(t, db, int64(100+i), "old", 2, 0, "", "message", "assistant", string(raw), 150)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	last, seen := int64(99), 0
+	var batchSizes []int
+	for {
+		updates, err := messageTypeBatch(tx, last)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(updates) == 0 {
+			break
+		}
+		batchSizes = append(batchSizes, len(updates))
+		var bytes int
+		for _, update := range updates {
+			if update.id != int64(100+seen) {
+				t.Fatal("byte boundary skipped an entry", update.id, seen)
+			}
+			var message llm.Message
+			if err := json.Unmarshal(update.body, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.Type != llm.TypeAssistant || len(message.Content) != lengths[seen] || strings.Trim(message.Content, "x") != "" {
+				t.Fatal("large payload changed", update.id)
+			}
+			bytes += len(update.body)
+			seen++
+		}
+		if bytes > messageTypeBatchBytes && len(updates) != 1 {
+			t.Fatal("batch exceeded byte limit with multiple entries", bytes)
+		}
+		last = updates[len(updates)-1].id
+	}
+	if seen != len(lengths) || fmt.Sprint(batchSizes) != "[2 2 1]" {
+		t.Fatal("incorrect byte-bounded batches", seen, batchSizes)
 	}
 }

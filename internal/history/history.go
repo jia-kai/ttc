@@ -95,6 +95,15 @@ func DataRoot() (string, error) {
 // Current-version stores share a lifetime lock; upgrades require all stores closed.
 // Older binaries without lifetime locking must be stopped before upgrading.
 func Open(root string) (*Store, error) {
+	return OpenWithProgress(root, nil)
+}
+
+// OpenWithProgress opens history like Open, reporting supported schema upgrades
+// synchronously when report is non-nil. Reports describe work within an uncommitted
+// transaction; only a successful return confirms the upgraded store is ready.
+// Empty and current-version stores emit no progress. The callback must not use
+// the store being opened, and library code does not print progress itself.
+func OpenWithProgress(root string, report func(migrate.Progress)) (*Store, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -103,11 +112,15 @@ func Open(root string) (*Store, error) {
 		return nil, err
 	}
 	// SQLite's initial transition into WAL can return BUSY without invoking its
-	// busy handler. Serialize only connection/schema setup, never session work.
+	// busy handler. Serialize connection/schema setup and fence exclusive-use
+	// compaction; normal session work does not hold this initialization lock.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	lock, err := filelock.Acquire(ctx, filepath.Join(root, "history-init.lock"))
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("history initialization or maintenance in progress; retry when finished: %w", err)
+		}
 		return nil, fmt.Errorf("initialize shared history: %w", err)
 	}
 	defer lock.Close()
@@ -133,6 +146,9 @@ func Open(root string) (*Store, error) {
 	}
 	if err != nil {
 		db.Close()
+		if version == schemaVersion {
+			return nil, fmt.Errorf("history maintenance in progress; retry when finished: %w", err)
+		}
 		return nil, fmt.Errorf("upgrade history: stop all TTC instances sharing this data directory: %w", err)
 	}
 	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
@@ -151,7 +167,7 @@ func Open(root string) (*Store, error) {
 			return nil
 		}
 		if version != 0 {
-			return migrate.Apply(tx)
+			return migrate.Apply(tx, report)
 		}
 		var nonempty bool
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%')").Scan(&nonempty); err != nil {
@@ -215,7 +231,9 @@ func openDatabase(root string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Close closes history after the runtime workers have stopped.
+// Close closes history after runtime workers and maintenance have stopped.
+// It must not run concurrently with any Store operation, including reclamation
+// that temporarily converts the lifetime lock to exclusive use.
 func (s *Store) Close() error {
 	err := s.DB.Close()
 	if s.useLock != nil {
