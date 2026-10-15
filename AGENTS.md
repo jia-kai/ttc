@@ -23,8 +23,9 @@ for remaining features. Linux hosts are the only supported platform. See
 - Keep all TTC-authored LLM-facing text in `prompt/`, including runtime/tool
   guidance and bundled skills. Go supplies behavior and dynamic values; use
   generated prompt constants and run `make prompts` after changing assets.
-  Inline UI-only text in its owning Go code. Export/archive visibility alone does
-  not make presentation text LLM-facing; trace deliberate model-input paths.
+  Inline UI-only text in its owning Go code. Export/archive visibility alone
+  does not make presentation text LLM-facing; trace deliberate model-input
+  paths.
 - Validate changes with the checks available in the repository. For terminal
   behavior, exercise the affected workflow in a headless terminal when
   practical; for rendering changes, verify Kitty-specific behavior.
@@ -80,6 +81,8 @@ requirements documents to catalog completed features unless requested.
 - For non-trivial one-off analysis, write a patchable script in a temporary
   directory instead of embedding a long program in a shell command.
 - Pad Markdown table columns so the source remains readable in a terminal.
+- After modifying Markdown or YAML, run `make format` (Prettier), then
+  `make format-check` to verify formatting.
 - New tests should be self-contained and avoid machine-local paths or external
   datasets; embed small fixtures or track larger ones with the repository.
 - Before reproducing a failure, save its complete exception output and useful

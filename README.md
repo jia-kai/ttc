@@ -269,7 +269,8 @@ Markdown and YAML formatting uses Prettier 3.8.1 with the repository's 80-column
 configuration. CI checks tracked files. To format them locally:
 
 ```sh
-npx --yes prettier@3.8.1 --write '**/*.{md,yaml,yml}'
+make format
+make format-check
 ```
 
 Validation uses self-contained unit tests and a **local mock OpenAI HTTP

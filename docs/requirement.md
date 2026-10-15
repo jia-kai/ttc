@@ -158,10 +158,9 @@
   assistant text up to 4 KiB each and four tool names; mark truncation.
 - Request a plain descriptive title using the canonical format in
   [prompt/naming.md](../prompt/naming.md), with a 32-token output allowance and
-  15-second request deadline. Trim
-  quotes/Markdown/whitespace; reject controls, line breaks and titles outside
-  those word/character bounds, never cutting a word. Invalid/failure leaves
-  default name and an inspectable notice.
+  15-second request deadline. Trim quotes/Markdown/whitespace; reject controls,
+  line breaks and titles outside those word/character bounds, never cutting a
+  word. Invalid/failure leaves default name and an inspectable notice.
 - Persist claim/trigger before inference so restart cannot resend; mark crash/
   timeout failed. Inputs/replies are inspectable but outside model history, do
   not delay queued turns, and may finish while main continues. Later failures do

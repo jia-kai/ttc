@@ -60,11 +60,11 @@ Coding: >
   ## Long-running tasks with watch-run
 
   For really long-running tasks, or work that must survive TTC session exit or
-  switching, launch `ttc watch-run --record-dir DIR -- COMMAND [ARG...]` in tmux,
-  not as a TTC-owned background shell job. Choose a durable record path whose
-  parent exists and whose final directory does not yet exist; watch-run creates
-  it. It captures stdout and stderr automatically, so do not add extra output
-  redirections or tee pipelines just to save logs.
+  switching, launch `ttc watch-run --record-dir DIR -- COMMAND [ARG...]` in
+  tmux, not as a TTC-owned background shell job. Choose a durable record path
+  whose parent exists and whose final directory does not yet exist; watch-run
+  creates it. It captures stdout and stderr automatically, so do not add extra
+  output redirections or tee pipelines just to save logs.
 
   Use `watch` with that `record_dir` to observe the run, then `job_read` for
   captured output. The tmux workload and records survive TTC exit; watcher

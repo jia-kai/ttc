@@ -66,13 +66,13 @@ presentation; it never replaces or changes model-facing results.
   label child rows/inspectors; names over 26 characters display 23 plus `...`,
   unchanged in storage.
 - Live job and completion inspection share typed metadata and job-local fields/
-  stream policies. Shell, watch and child records save at most the last 8 KiB per
-  stream; LSP exposes stderr only, and `/btw` keeps at most 64 KiB per stream with
-  its answer rendered as Markdown. Job running time uses whole seconds as
-  `1h2m3s`; watch time measures observation, not external workload runtime.
-  Historical inspection uses saved text, never live callbacks.
-  `job_read` inspectors show only the returned page with
-  its stream/cursor/filter, never additional current capture tails.
+  stream policies. Shell, watch and child records save at most the last 8 KiB
+  per stream; LSP exposes stderr only, and `/btw` keeps at most 64 KiB per
+  stream with its answer rendered as Markdown. Job running time uses whole
+  seconds as `1h2m3s`; watch time measures observation, not external workload
+  runtime. Historical inspection uses saved text, never live callbacks.
+  `job_read` inspectors show only the returned page with its
+  stream/cursor/filter, never additional current capture tails.
 - `Execution.Update` replaces the card identified by its committed call and
   refreshes open inspection. Shell/child waits sample bounded captures every 250
   ms with synchronous callbacks, no polling queue or separate polling goroutine.

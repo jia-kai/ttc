@@ -1,10 +1,16 @@
 .DEFAULT_GOAL := build
 
-.PHONY: prompts build test check integration rail-integration demo kitty-test ci-test full-test
+.PHONY: prompts build test check format format-check integration rail-integration demo kitty-test ci-test full-test
 # Share build prerequisites, but never run suites concurrently, even with -j.
 .NOTPARALLEL: ci-test full-test
 prompts:
 	go run ./cmd/embed-prompts
+
+format:
+	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.8.1 --write
+
+format-check:
+	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.8.1 --check
 
 build: prompts
 	go build -o ttc ./cmd/ttc

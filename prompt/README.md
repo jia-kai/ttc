@@ -1,16 +1,17 @@
 # Embedded LLM text
 
-All TTC-authored text deliberately sent to models belongs here: instructions, tool
-descriptions, validation/recovery guidance, runtime warnings, fallback notices
-and message framing. Go owns behavior and supplies dynamic values, not the
-authored prose. UI-only wording, protocol/schema keys, status values, external
-diagnostic payloads and user/project content are not prompt assets. TTC-authored
-diagnostic captions and validation text are assets when their delivery path
-includes model input, even when wrapped by another error. Inline UI-only captions,
-archive formatting, CLI-only diagnostics and server-only protocol replies in their
-owning Go code. A model's later reading of an export does not make its presentation
-text a prompt asset. Shared captions deliberately included in child feedback
-remain assets. Synthetic test conversations stay in fixtures.
+All TTC-authored text deliberately sent to models belongs here: instructions,
+tool descriptions, validation/recovery guidance, runtime warnings, fallback
+notices and message framing. Go owns behavior and supplies dynamic values, not
+the authored prose. UI-only wording, protocol/schema keys, status values,
+external diagnostic payloads and user/project content are not prompt assets.
+TTC-authored diagnostic captions and validation text are assets when their
+delivery path includes model input, even when wrapped by another error. Inline
+UI-only captions, archive formatting, CLI-only diagnostics and server-only
+protocol replies in their owning Go code. A model's later reading of an export
+does not make its presentation text a prompt asset. Shared captions deliberately
+included in child feedback remain assets. Synthetic test conversations stay in
+fixtures.
 
 ## Sources
 
@@ -30,9 +31,9 @@ remain assets. Synthetic test conversations stay in fixtures.
   wakeup updates and external-watch diagnostics.
 - `runtime.yaml`: failed-child caller guidance and fallback messages.
 - `*-messages.yaml`: tool/session guidance, model-facing diagnostics and input
-  framing. Each key is an exported Go constant
-  name; values are nonempty UTF-8 strings. Preserve printf slots and whitespace;
-  static constants let `go vet` check callers.
+  framing. Each key is an exported Go constant name; values are nonempty UTF-8
+  strings. Preserve printf slots and whitespace; static constants let `go vet`
+  check callers.
 - `skills/*/SKILL.md`: bundled skill instructions, embedded by
   `skills/embed.go`. External project/user skills retain their own source files
   and precedence. Optional opening YAML `roles` selects `main`, `child` and/or
