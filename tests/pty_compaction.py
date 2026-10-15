@@ -20,6 +20,47 @@ from scratch import private_scratch
 from pty_screen import Screen
 
 
+def export_responses(root):
+    """Exercise export and existing file tools after the compacted handoff."""
+    markdown, exact = root / 'history.md', root / 'before-compaction.jsonl'
+    return [
+        {'prefix': 'user: export history', 'calls': [
+            {'id': 'export-markdown', 'name': 'conversation_export',
+             'arguments': {'path': str(markdown)}},
+            {'id': 'export-exact', 'name': 'conversation_export',
+             'arguments': {'path': str(exact), 'format': 'jsonl', 'scope': 'before_compaction'}},
+        ]},
+        {'calls': [
+            {'id': 'lookup-original', 'name': 'grep',
+             'arguments': {'path': str(markdown), 'pattern': 'Growth 1 complete.', 'literal': True}},
+            {'id': 'read-export', 'name': 'read',
+             'arguments': {'path': str(exact), 'offset': 1, 'limit': 1}},
+        ]},
+        {'text': 'On-demand history lookup verified.'},
+        {'prefix': 'user: reject existing export', 'calls': [
+            {'id': 'reject-existing', 'name': 'conversation_export',
+             'arguments': {'path': str(markdown)}},
+        ]},
+        {'text': 'Existing export preserved.'},
+    ]
+
+
+def verify_exports(db, root, original):
+    """Check actual tool outcomes and original precompaction evidence."""
+    markdown = (root / 'history.md').read_bytes()
+    assert markdown == original, 'Existing-target rejection changed exported contents'
+    assert b'Growth 1 complete.' in markdown, 'Export lost original summarized evidence'
+    exact = [json.loads(line) for line in (root / 'before-compaction.jsonl').read_text().splitlines()]
+    encoded = json.dumps(exact)
+    assert 'Growth 1 complete.' in encoded and 'Automatic continuation verified.' not in encoded
+    rows = db.execute('SELECT provider_call_id,result_json FROM tool_calls').fetchall()
+    outcomes = {call: json.loads(result) for call, result in rows}
+    for call in ('export-markdown', 'export-exact', 'lookup-original', 'read-export'):
+        assert outcomes[call]['ok'], (call, outcomes[call])
+    assert not outcomes['reject-existing']['ok'], outcomes['reject-existing']
+    assert 'Growth 1 complete.' in json.dumps(outcomes['lookup-original']), outcomes['lookup-original']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, default=Path('./ttc'),
@@ -42,6 +83,7 @@ def main():
         {'prefix': 'user: Focus:', 'text': '## Research checkpoint\n\nThree earlier research rounds completed; continue.'},
         {'prefix': 'user: {"type":"retained_inputs",', 'text': 'Automatic continuation verified.'},
     ])
+    responses.extend(export_responses(root))
     script.write_text(json.dumps(responses))
     binary = str(args.binary.resolve(strict=True))
     data = root / 'data'
@@ -148,8 +190,17 @@ def main():
             assert any(item['path'] == str(project / 'AGENTS.md') for item in project_context['instructions'])
             assert any(item['name'] == 'fixture' and item['path'] == str(skill)
                        for item in project_context['available_skills'])
-            archive = Path(db.execute('SELECT archive_path FROM compactions').fetchone()[0])
-        assert archive.exists() and Path(str(archive) + '.jsonl').exists()
+            source_tip = db.execute('SELECT source_tip_id FROM compactions').fetchone()[0]
+            assert source_tip > 0
+        assert not list(data.glob('lineages/*/compactions')), 'Compaction eagerly created archive directories'
+        os.write(fd, b'export history\r')
+        expect('On-demand history lookup verified.', 'Turn complete', completed_turns=5)
+        original = (root / 'history.md').read_bytes()
+        os.write(fd, b'reject existing export\r')
+        expect('Existing export preserved.', 'Turn complete', completed_turns=6)
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            verify_exports(db, root, original)
+        assert not list(data.glob('lineages/*/compactions')), 'On-demand export created eager archive directories'
         os.write(fd, b'\x03')
         # Drain pending frames while joining: terminal writes can otherwise
         # fill the PTY buffer and prevent the child from processing Ctrl-C.
@@ -171,7 +222,7 @@ def main():
                     pass
         save()
         assert os.waitstatus_to_exitcode(status) == 0, status
-        print('PASS: automatic continuation, archive, ancestor instructions and skills; artifacts:', root)
+        print('PASS: automatic continuation, on-demand history exports, existing-target safety, ancestor instructions and skills; artifacts:', root)
     except BaseException:
         save()
         (root / 'failure.txt').write_text(traceback.format_exc())

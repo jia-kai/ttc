@@ -95,6 +95,8 @@ type Runtime struct {
 	mainPrefix        []llm.Message  // Latest balanced main request input, immutable after publication under mu.
 	prefixSelection   llm.Selection
 	prefixTurn        string
+	prefixSession     string // Durable source of mainPrefix, frozen at request admission.
+	prefixTip         int64  // Selected branch tip of prefixSession, not a global event cutoff.
 	namingCtx         context.Context
 	namingCancel      context.CancelFunc
 	namingDone        chan struct{} // Serial main-loop ownership; closed after the one naming task finishes.
@@ -143,6 +145,7 @@ func (r *Runtime) resetTransient() {
 	r.mainContext = contextCursor{}
 	r.mainPrefix = nil
 	r.prefixTurn = ""
+	r.prefixSession, r.prefixTip = "", 0
 	r.generation++
 	r.mu.Unlock()
 	r.namingCtx, r.namingCancel = context.WithCancel(r.ctx)
@@ -189,6 +192,7 @@ func (r *Runtime) resetTransient() {
 	r.questions.mu.Unlock()
 	r.addQuestionTool()
 	r.addSubagentTool()
+	r.addConversationExportTool()
 }
 
 // Current returns the conversation pointer used by completion writers.
@@ -454,6 +458,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		r.mu.Lock()
 		r.mainPrefix = append([]llm.Message(nil), messages...)
 		r.prefixSelection, r.prefixTurn = selection, turn
+		r.prefixSession, r.prefixTip = r.current, admitted.EntryTip
 		r.mu.Unlock()
 		projected, e := contextbuild.ProjectRetainedInputs(messages)
 		if e != nil {

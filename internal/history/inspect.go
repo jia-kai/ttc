@@ -172,32 +172,6 @@ func (s *Store) Label(v Entry) string {
 	return v.Actor + " · " + v.Kind
 }
 
-// ValidateArchive verifies both required files at handoff/load boundaries.
-// Ordinary metadata reads avoid repeatedly hashing immutable private archives.
-func (s *Store) ValidateArchive(session string) error {
-	rows, e := s.DB.Query("SELECT archive_path,archive_sha256,archive_exact_sha256 FROM compactions WHERE continuation_id=?", session)
-	if e != nil {
-		return e
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var path, hash, exactHash string
-		if e = rows.Scan(&path, &hash, &exactHash); e != nil {
-			return e
-		}
-		for _, file := range []struct{ path, hash string }{{path, hash}, {path + ".jsonl", exactHash}} {
-			actual, err := filepathHash(file.path)
-			if err != nil {
-				return fmt.Errorf("required compaction archive %s is missing or unreadable: %w", file.path, err)
-			}
-			if actual != file.hash || file.hash == "" {
-				return fmt.Errorf("required compaction archive %s is corrupt", file.path)
-			}
-		}
-	}
-	return rows.Err()
-}
-
 // RequestMessage records internal naming/summary messages outside the coding
 // context, attributed to the owning request actor. Purpose controls inspection.
 func (s *Store) RequestMessage(session, turn, purpose, role string, request int64, message llm.Message) (int64, error) {

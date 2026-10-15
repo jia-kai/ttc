@@ -478,7 +478,7 @@ func TestInvisibleChildAdmissionsAndHistoricalRequestsAreUntouched(t *testing.T)
 }
 
 func TestUnsupportedVersions(t *testing.T) {
-	for _, version := range []string{"-1", "0", "1", "2", "3", "4", "9", "999"} {
+	for _, version := range []string{"-1", "0", "1", "2", "3", "4", "10", "999"} {
 		t.Run(version, func(t *testing.T) {
 			db, err := sql.Open("sqlite", ":memory:")
 			if err != nil {

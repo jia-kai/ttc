@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,8 +12,8 @@ import (
 	"ttc/internal/llm"
 )
 
-func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) {
-	for _, failure := range []string{"missing", "corrupt"} {
+func TestFailedHistoryLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) {
+	for _, failure := range []string{"empty call ID", "duplicate call ID"} {
 		t.Run(failure, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			seedRuntime(t, r, "Active research")
@@ -33,11 +32,7 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			archive, err := r.Store.ArchiveTranscript(targetID, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			target, err := r.Store.Continue(targetID, "Research handoff", archive, retained, nil, time.Now(), nil)
+			target, err := r.Store.Continue(targetID, "Research handoff", retained, retained, nil, time.Now(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -48,15 +43,16 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if _, err := r.Store.DB.Exec("UPDATE entries SET created_ms=? WHERE id=?", time.Now().Add(-2*time.Hour).UnixMilli(), prompt); err != nil {
 				t.Fatal(err)
 			}
-			target, err = r.Store.Session(target.ID)
-			if err != nil {
+			// Invalid durable tool exchanges must still reject the load before
+			// replacing live state, independently of disposable export files.
+			calls := []llm.ToolCall{{ID: "", Name: "read"}}
+			if failure == "duplicate call ID" {
+				calls = []llm.ToolCall{{ID: "duplicate", Name: "read"}, {ID: "duplicate", Name: "read"}}
+			}
+			if _, err := r.Store.Append(target.ID, "", "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Calls: calls}); err != nil {
 				t.Fatal(err)
 			}
-			if failure == "missing" {
-				err = os.Remove(archive + ".jsonl")
-			} else {
-				err = os.WriteFile(archive+".jsonl", []byte("Broken exact archive"), 0600)
-			}
+			target, err = r.Store.Session(target.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,8 +75,8 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			r.images.actors["main"] = "click"
 			r.images.mu.Unlock()
 			jobs, generation := r.Jobs, r.Generation()
-			if _, err := r.Command("/load " + target.ID); err == nil || !strings.Contains(err.Error(), "compaction archive") {
-				t.Fatal("broken archive accepted", err)
+			if _, err := r.Command("/load " + target.ID); err == nil || !strings.Contains(err.Error(), "invalid tool exchange") {
+				t.Fatal("invalid history accepted", err)
 			}
 			if r.Current() != current || r.Jobs != jobs || r.Generation() != generation || len(r.Jobs.Live()) != 1 || r.PendingQuestion() == nil || !r.ImageClickPending("click") {
 				t.Fatal("failed load changed active runtime", r.Current(), r.Generation(), r.Jobs.Live(), r.PendingQuestion(), r.ImageClickPending("click"))
@@ -90,5 +86,32 @@ func TestFailedArchiveLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 				t.Fatal("failed preflight changed target instructions or model", after, err)
 			}
 		})
+	}
+}
+
+func TestLoadContinuationWithoutArchiveFiles(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Earlier research evidence")
+	before := r.Current()
+	retained, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue research"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued, err := r.Store.Continue(before, "Research handoff", retained, retained, nil, time.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No transcript fixture has been generated: SQLite alone must load the
+	// handoff and retain access to the evidence replaced by its summary.
+	if _, err := r.Command("/load " + continued.ID); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := r.CurrentSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := r.Store.ActorTranscriptJSONL(loaded.ID, "main", loaded.EntryTip)
+	if err != nil || !strings.Contains(string(text), "Earlier research evidence") || !strings.Contains(string(text), "Continue research") {
+		t.Fatal("loaded continuation lost on-demand ancestry", err, string(text))
 	}
 }

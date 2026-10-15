@@ -1,4 +1,4 @@
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -114,8 +114,6 @@ CREATE TABLE compactions (
     predecessor_id TEXT NOT NULL UNIQUE REFERENCES sessions(id),
     source_tip_id INTEGER NOT NULL REFERENCES entries(id),
     ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
-    archive_path TEXT NOT NULL,
-    archive_sha256 TEXT NOT NULL,
-    archive_exact_sha256 TEXT NOT NULL,
     summary_entry_id INTEGER NOT NULL REFERENCES entries(id)
 );
+CREATE UNIQUE INDEX compaction_summary ON compactions(summary_entry_id);

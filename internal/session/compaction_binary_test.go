@@ -121,6 +121,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						if e != nil {
 							t.Fatal(e)
 						}
+						seedIsolatedHistory(t, r, id, turn, messages)
 						result, cursor, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, cursor, nil)
 						mainAfter, e := r.Store.Messages(r.Current())
 						if e != nil || r.Current() != before || !reflect.DeepEqual(mainAfter, mainBefore) {

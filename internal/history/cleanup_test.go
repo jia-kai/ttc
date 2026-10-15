@@ -28,11 +28,11 @@ func retainedContinuation(t *testing.T, s *Store, v Session) Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(v.ID, saved.EntryTip)
+	cut, err := s.Session(v.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(v.ID, "Saved research handoff.", archive, saved.EntryTip, nil, time.Now(), nil)
+	next, err := s.Continue(v.ID, "Saved research handoff.", cut.EntryTip, saved.EntryTip, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

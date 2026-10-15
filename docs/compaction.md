@@ -11,7 +11,7 @@ interactions stay live; explicit session changes/exit cancel them.
   estimated input `I`, compact when `I + O + M >= C`. A handoff must satisfy:
 
   ```text
-  fixed_input + summary_and_archive_links + retained_history + O + M
+  fixed_input + summary + retained_history + O + M
       + next_turn_input_reserve < C
   recent_cycle_tail <= recent_tokens_max  (except unread binary-tool cycle)
   ```
@@ -61,9 +61,9 @@ interactions stay live; explicit session changes/exit cancel them.
   capacity/next-turn headroom. Fail if no older model work or unretained human
   input can be summarized.
 
-## Summary and archives
+## Summary and history retrieval
 
-- Freeze/archive a cut; summarize its canonical actor prefix once, without
+- Freeze a committed cut; summarize its canonical actor prefix once, without
   tools, using the actor's model and summary output allowance. The canonical
   [summary instructions](../prompt/compaction.yaml) define handoff content.
   Include raw arguments/results, not UI activity or expanded tool views. Binary
@@ -73,33 +73,34 @@ interactions stay live; explicit session changes/exit cancel them.
   not a validated schema.
 - No chunking or regeneration. Reject empty/tool-calling summaries, oversized
   summary requests and summaries over 1 MiB. Output reserves follow
-  [model metadata](models.md#budget-metadata); input/link templates live in
+  [model metadata](models.md#budget-metadata); input templates live in
   [prompt/compaction.yaml](../prompt/compaction.yaml).
 - Main, child and aside compaction use a cooperative 10-minute deadline for the
-  whole operation, including naming, archives, summary inference/retries and
-  handoff. Earlier owning-operation deadlines and cancellation still apply.
-  Synchronous storage I/O or lock waits can delay return after the deadline
-  expires.
-- Private immutable archives belong to the main lineage:
-
-  ```text
-  <data-root>/lineages/<lineage-id>/compactions/<content-hash>.md
-  <data-root>/lineages/<lineage-id>/compactions/<content-hash>.md.jsonl
-  ```
-
-  Main Markdown matches dense `/export`, omitting system bodies/duplicated
-  request payloads. JSONL preserves exact envelopes, tool records, instructions,
-  actors, replay and attachments. Child archives contain selected child
-  messages; `/btw` includes its frozen main prefix. Source history remains
-  inspectable. Include retained suffixes; later arrivals belong to another
-  archive.
-
-- Append verified absolute archive paths and grep/read guidance to the summary.
-  Drop opaque replay from replacement input; resupply full project instructions
+  whole operation, including naming, summary inference/retries and handoff.
+  Earlier owning-operation deadlines and cancellation still apply. Synchronous
+  storage I/O or lock waits can delay return after the deadline expires.
+- Main, child and aside compaction write no eager transcript files. Durable
+  SQLite history remains the source for inspection and on-demand
+  [`conversation_export`](tools.md#conversation_export). Its actor-selected
+  scope follows compaction and load-copy ancestry, deduplicates source entries
+  and excludes sibling branches and unrelated actors. Main exports only main
+  history; children export their own selected history across assignments; asides
+  include their recorded frozen main prefix and their own history.
+  `before_compaction` selects the latest successful actor cut, including its
+  retained suffix, not later arrivals. Without a successful cut it fails. The
+  tool contract specifies historical child/aside migration limits.
+- Export files live in per-UID scratch, not durable archive storage. They can
+  disappear with scratch cleanup and do not pin attachment cache contents.
+  Existing archive files and immutable historical evidence remain unchanged;
+  stale archive links in old summaries do not prevent history-based exports.
+- Drop opaque replay from replacement input; resupply full project instructions
   and current runtime context next request. Summaries are not live-job status.
 
 ## Handoff
 
+- Shared preparation selects the cut and retained history, checks budgets and
+  generates the summary. Main and child/aside handoffs retain separate ownership
+  of their history and live state.
 - Pause only the compacting actor; others may append committed tails. Main takes
   the routing gate, waits for file mutations and rechecks summary, retained
   input, committed tail, pending notices and fresh context together. Abort if
@@ -116,8 +117,8 @@ interactions stay live; explicit session changes/exit cancel them.
   historical representation.
 - Child handoff preserves ID/read-only policy, leaving main session/file
   tip/undo untouched. Commit one `child_compacted` on success with child/turn,
-  archive links and estimated usage, not the summary body. Failure ends the
-  child turn without a success event. `/btw` uses the same algorithm with
+  estimated usage, not archive links or the summary body. Failure ends the child
+  turn without a success event. `/btw` uses the same algorithm with
   events/answers outside main input.
 - Refresh main estimated occupancy immediately; label previous reported usage
   separately. Summary inference counts once in run totals even if handoff fails.
@@ -134,13 +135,16 @@ interactions stay live; explicit session changes/exit cancel them.
   fails; cancel jobs/timers/interactions. History remains
   inspectable/exportable. Start or load another usable session; reloading does
   not clear failure. Failed children close without invalidating main.
-- Failed handoff never switches/freezes main history. Unused archives are
-  disposable with their lineage. Startup leaves execution records untouched;
-  manual loading copies balanced context without work repair or restored jobs,
-  timers or pending clicks.
+- Failed handoff never switches/freezes main history. Child failure/cancellation
+  still captures eager immutable diagnostic transcripts; these are not
+  compaction archives. Startup leaves execution records untouched; manual
+  loading copies balanced context without work repair or restored jobs, timers
+  or pending clicks.
 
 ## Reload recovery
 
+- Reload reads durable history and needs no compaction archive files. Migration
+  preserves existing files, old summary text and saved request/export evidence.
 - `/load ID` and `--session ID` copy writable history at its last complete tool
   exchange. If selected history ends at main compaction or a handoff before the
   next coding request, recover committed, undelivered child completions and

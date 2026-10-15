@@ -34,12 +34,12 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err := s.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(original.ID, 0)
+	cut, err := s.Session(original.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ids := append([]int64{original.EntryTip, queued}, admitted.SteerEntries...)
-	source, err := s.Continue(original.ID, "summary", archive, tail, ids, time.Now(), nil)
+	source, err := s.Continue(original.ID, "summary", cut.EntryTip, tail, ids, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 			originalInputs[entry.EventSeq()] = message
 		}
 	}
-	for cut := range 3 {
+	for iteration := range 3 {
 		entries, err := s.Branch(loaded.ID, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -83,15 +83,15 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 				ids = append(ids, entry.ID)
 			}
 		}
-		archive, err := s.ArchiveTranscript(loaded.ID, 0)
+		cut, err := s.Session(loaded.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		boundary := loaded.UndoFloor
-		if cut == 2 {
+		if iteration == 2 {
 			boundary = loaded.EntryTip + 1 // Summarize the exact imported floor too.
 		}
-		loaded, err = s.Continue(loaded.ID, "copy summary", archive, boundary, ids, time.Now(), nil)
+		loaded, err = s.Continue(loaded.ID, "copy summary", cut.EntryTip, boundary, ids, time.Now(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,11 +163,11 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 			ids = append(ids, entry.ID)
 		}
 	}
-	archive, err = s.ArchiveTranscript(source.ID, 0)
+	cut, err = s.Session(source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Continue(source.ID, "independent source summary", archive, source.EntryTip+1, ids, time.Now(), nil); err != nil {
+	if _, err := s.Continue(source.ID, "independent source summary", cut.EntryTip, source.EntryTip+1, ids, time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.UndoTarget(loaded.ID); err == nil {
@@ -309,11 +309,11 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 	inputs := append([]llm.Message(nil), messages[:4]...)
 	at := time.Now().Add(time.Hour)
 	for iteration := range 2 {
-		archive, err := s.ArchiveTranscript(session.ID, 0)
+		cut, err := s.Session(session.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		session, err = s.Continue(session.ID, "summary", archive, tail, ids, at, nil)
+		session, err = s.Continue(session.ID, "summary", cut.EntryTip, tail, ids, at, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -376,12 +376,12 @@ func TestContinuationValidatesRetainedInputsBeforeFreezing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(session.ID, 0)
+	cut, err := s.Session(session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, selected := range [][]int64{{ids[0], ids[0]}, {ids[1], ids[0]}, {tail}, {runtime}, {child}, {ids[0], ids[1], ids[2]}, ids, {ids[0] + 1}} {
-		if _, err := s.Continue(session.ID, "summary", archive, tail, selected, time.Now(), nil); err == nil {
+		if _, err := s.Continue(session.ID, "summary", cut.EntryTip, tail, selected, time.Now(), nil); err == nil {
 			t.Fatal("accepted invalid selection", selected)
 		}
 		old, err := s.Session(session.ID)
@@ -397,11 +397,11 @@ func TestContinuationAllowsEmptyModelSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(session.ID, 0)
+	cut, err := s.Session(session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, "summary", archive, old.EntryTip+1, []int64{session.EntryTip}, time.Now(), nil)
+	continued, err := s.Continue(session.ID, "summary", cut.EntryTip, old.EntryTip+1, []int64{session.EntryTip}, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,11 +491,11 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	suffixTip := change(suffixTurn)
-	archive, err := s.ArchiveTranscript(session.ID, 0)
+	cut, err := s.Session(session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, "summary", archive, tail, []int64{first, second, steer.ID}, time.Now(), nil)
+	continued, err := s.Continue(session.ID, "summary", cut.EntryTip, tail, []int64{first, second, steer.ID}, time.Now(), nil)
 	if err != nil || continued.FileTip != suffixTip {
 		t.Fatal(continued, err)
 	}

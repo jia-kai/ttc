@@ -250,7 +250,7 @@ func TestHistoryImmutableResultsBranchAndSystemInspection(t *testing.T) {
 		t.Fatal(e)
 	}
 }
-func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
+func TestContinuationRebasesRetainedUndoWithoutArchiveDependency(t *testing.T) {
 	s, v, first, req := historyFixture(t)
 	s.FinishRequest(req, "completed", nil)
 	s.FinishTurn(first, "completed")
@@ -265,7 +265,7 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	}
 	s.Append(v.ID, second, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "reply", State: &llm.ReplayState{Provider: "script", Model: "scripted", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"old"}`)}}})
 	s.FinishTurn(second, "completed")
-	archive, e := s.ArchiveTranscript(v.ID, 0)
+	archive, e := s.ArchiveActorTranscript(v.ID, "main", nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -274,7 +274,11 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 	if e = s.SaveSelection(latest); e != nil {
 		t.Fatal(e)
 	}
-	continuation, e := s.Continue(v.ID, "summary", archive, retained, nil, time.Now(), nil)
+	cut, e := s.Session(v.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	continuation, e := s.Continue(v.ID, "summary", cut.EntryTip, retained, nil, time.Now(), nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -302,7 +306,7 @@ func TestContinuationRebasesRetainedUndoAndValidatesArchive(t *testing.T) {
 		t.Fatal(old, e)
 	}
 	os.Remove(archive)
-	if _, e = s.Load(continuation.ID); e == nil {
-		t.Fatal("accepted missing archive")
+	if _, e = s.Load(continuation.ID); e != nil {
+		t.Fatal("missing optional archive prevented load", e)
 	}
 }

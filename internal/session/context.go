@@ -180,7 +180,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	// Record the boundary before naming/archive preparation so a process killed
+	// Record the boundary before naming/summary preparation so a process killed
 	// before summary-request admission can still recover pending messages.
 	if _, err := r.Store.Append(session, "", "main", "status", "", false, map[string]string{"type": "compaction_started"}); err != nil {
 		return "", fmt.Errorf("record compaction boundary: %w", err)
@@ -199,13 +199,11 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if e != nil {
 		return "", e
 	}
-	// Continuations drop opaque provider replay, so budget their canonical form.
-	messages = canonicalCompaction(messages)
-	compactedAt := time.Now()
-	retention, e := contextbuild.Retain(messages, selection.Model.Budget.RecentTokensMin, selection.Model.Budget.RecentTokensMax)
+	prepared, e := prepareCompaction(messages, selection)
 	if e != nil {
 		return "", e
 	}
+	retention := prepared.retention
 	entries, e := r.Store.Branch(r.Current(), 0)
 	if e != nil {
 		return "", e
@@ -232,25 +230,13 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if visible < retention.Start || len(inputIDs) != len(retention.Inputs) {
 		return "", errors.New("no safe compaction cut")
 	}
-	retainedInputs, e := contextbuild.RetainedInputMessages(messages, retention.Inputs, compactedAt)
-	if e != nil {
-		return "", e
-	}
-	archive, e := r.Store.ArchiveTranscript(r.Current(), entries[len(entries)-1].ID)
-	if e != nil {
-		return "", e
-	}
 	// Summarize the same actor projection used for admission and retention.
-	// UI-only child records and expanded tool presentations belong in archives.
-	transcript, e := summaryTranscript(messages[:retention.Start])
+	// UI-only child records and expanded tool presentations remain in history.
+	text, e := r.summarize(ctx, "main", "", selection, prepared.transcript, focus)
 	if e != nil {
 		return "", e
 	}
-	text, e := r.summarize(ctx, "main", "", selection, transcript, focus)
-	if e != nil {
-		return "", e
-	}
-	text = compactionLinks(text, archive, archive+".jsonl")
+	text = compactionHandoff(text)
 	r.routeMu.Lock()
 	defer r.routeMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -267,7 +253,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		return "", e
 	}
 	assembled := []llm.Message{{Type: llm.TypeAssistant, Content: text}}
-	assembled = append(assembled, retainedInputs...)
+	assembled = append(assembled, prepared.inputs...)
 	visible = 0
 	for _, entry := range currentEntries {
 		if !entry.Visible {
@@ -304,7 +290,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		v, e := r.Store.Continue(r.current, text, archive, retainFrom, inputIDs, compactedAt, pending)
+		v, e := r.Store.Continue(r.current, text, entries[len(entries)-1].ID, retainFrom, inputIDs, prepared.at, pending)
 		if e != nil {
 			return e
 		}

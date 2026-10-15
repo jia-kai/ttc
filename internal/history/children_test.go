@@ -174,7 +174,7 @@ func TestChildRecoveryPreservesCanonicalBodyAndOriginalEvidence(t *testing.T) {
 			if _, err := s.StartRequest(source.ID, turn, "main", "compaction", source.Model); err != nil {
 				t.Fatal(err)
 			}
-			archive, err := s.ArchiveTranscript(source.ID, 0)
+			archive, err := s.ArchiveActorTranscript(source.ID, "main", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

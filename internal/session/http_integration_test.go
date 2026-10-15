@@ -471,15 +471,6 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 	if usage.Requests != 9 || usage.ReportedRequests != 9 || usage.Tokens.InputTokens != 900 || usage.Tokens.OutputTokens != 90 || usage.Tokens.CachedInputTokens == nil || *usage.Tokens.CachedInputTokens != 288 {
 		t.Fatal("all-agent usage", usage)
 	}
-	archive, err := r.Store.ArchiveTranscript(r.Current(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{archive, archive + ".jsonl"} {
-		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
-			t.Fatal("archive missing", path, err)
-		}
-	}
 	export := filepath.Join(t.TempDir(), "conversation.md")
 	if err := r.Store.Export(r.Current(), export); err != nil {
 		t.Fatal(err)
@@ -522,5 +513,5 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		t.Errorf("mock failure buffer dropped %d additional errors", dropped)
 	}
 	sort.Strings(names)
-	t.Logf("HTTP requests=%d, tools=%d %v; cumulative usage input=%d cached=%d output=%d; archive=%s", requests, len(names), names, usage.Tokens.InputTokens, *usage.Tokens.CachedInputTokens, usage.Tokens.OutputTokens, archive)
+	t.Logf("HTTP requests=%d, tools=%d %v; cumulative usage input=%d cached=%d output=%d; export=%s", requests, len(names), names, usage.Tokens.InputTokens, *usage.Tokens.CachedInputTokens, usage.Tokens.OutputTokens, export)
 }

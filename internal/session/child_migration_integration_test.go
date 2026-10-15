@@ -89,7 +89,13 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			// This is exclusively the fixture's temporary database. Stop workers
 			// before changing its version, then release the lifetime migration lock.
 			r.Close()
-			if _, err := r.Store.DB.Exec("PRAGMA user_version=7"); err != nil {
+			// Reconstruct the schema-7 compaction boundary, not just its version.
+			// Schema 9 removed these columns and added a summary identity index.
+			if _, err := r.Store.DB.Exec(`DROP INDEX compaction_summary;
+				ALTER TABLE compactions ADD COLUMN archive_path TEXT NOT NULL DEFAULT '';
+				ALTER TABLE compactions ADD COLUMN archive_sha256 TEXT NOT NULL DEFAULT '';
+				ALTER TABLE compactions ADD COLUMN archive_exact_sha256 TEXT NOT NULL DEFAULT '';
+				PRAGMA user_version=7`); err != nil {
 				t.Fatal(err)
 			}
 			if err := r.Store.Close(); err != nil {
@@ -101,7 +107,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			}
 			t.Cleanup(func() { store.Close() })
 			var version int
-			if err := store.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 8 {
+			if err := store.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 9 {
 				t.Fatalf("automatic migration version=%d: %v", version, err)
 			}
 			state := tc.state

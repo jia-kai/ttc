@@ -35,34 +35,35 @@
   [model compatibility](models.md#switching-and-replay) define the contract.
 - Compact automatically near capacity or with `/compact`. Create named main
   continuations and freeze predecessors while preserving inspectable source
-  history and searchable archives. Visible input matches the summary/recent
-  messages sent. Main and child cuts follow [compaction.md](compaction.md),
-  including retention, single-pass summary, continuation naming, handoff and
-  failures.
+  history and on-demand searchable exports, without eager compaction files.
+  Visible input matches the summary/recent messages sent. Main and child cuts
+  follow [compaction.md](compaction.md), including retention, single-pass
+  summary, continuation naming, handoff and failures.
 
 ## LLM-facing tools
 
-| Tool              | Purpose                                            |
-| ----------------- | -------------------------------------------------- |
-| `read`            | Read a file/list one directory with paging         |
-| `glob`, `grep`    | Bounded path/content search                        |
-| `web_fetch`       | HTTP(S) readable text, source and truncation       |
-| `web_search`      | Bounded source titles, URLs and snippets           |
-| `shell`           | Foreground/background command in chosen cwd        |
-| `edit`            | Exact replacement, unique unless `replace_all`     |
-| `write`           | Create/overwrite from complete contents            |
-| `patch`           | Structured add/edit/move/delete                    |
-| `image_show`      | Inline image/dimensions, optional confirmed point  |
-| `question`        | Single-choice/free-text question round             |
-| `skill`           | Load named project/user/embedded instructions      |
-| `lsp_query`       | Managed stdio definitions/references/hover/symbols |
-| `subagent`        | Isolated coding assignment or idle follow-up       |
-| `job_list`        | Live command/child IDs, owners and states          |
-| `job_read`        | Retained output/status/result                      |
-| `job_stop`        | Stop process group or close child                  |
-| `wakeup_schedule` | One-shot/repeating runtime reminder                |
-| `wakeup_list`     | Reminders, next firings and last results           |
-| `wakeup_cancel`   | Cancel by ID/name                                  |
+| Tool                  | Purpose                                            |
+| --------------------- | -------------------------------------------------- |
+| `read`                | Read a file/list one directory with paging         |
+| `conversation_export` | Export selected actor history to scratch           |
+| `glob`, `grep`        | Bounded path/content search                        |
+| `web_fetch`           | HTTP(S) readable text, source and truncation       |
+| `web_search`          | Bounded source titles, URLs and snippets           |
+| `shell`               | Foreground/background command in chosen cwd        |
+| `edit`                | Exact replacement, unique unless `replace_all`     |
+| `write`               | Create/overwrite from complete contents            |
+| `patch`               | Structured add/edit/move/delete                    |
+| `image_show`          | Inline image/dimensions, optional confirmed point  |
+| `question`            | Single-choice/free-text question round             |
+| `skill`               | Load named project/user/embedded instructions      |
+| `lsp_query`           | Managed stdio definitions/references/hover/symbols |
+| `subagent`            | Isolated coding assignment or idle follow-up       |
+| `job_list`            | Live command/child IDs, owners and states          |
+| `job_read`            | Retained output/status/result                      |
+| `job_stop`            | Stop process group or close child                  |
+| `wakeup_schedule`     | One-shot/repeating runtime reminder                |
+| `wakeup_list`         | Reminders, next firings and last results           |
+| `wakeup_cancel`       | Cancel by ID/name                                  |
 
 - [tools.md](tools.md) defines exact inputs/results;
   [prompt/tools.yaml](../prompt/tools.yaml) is canonical model guidance. Tool
@@ -81,8 +82,10 @@
 - Supply its absolute runtime-context path; reverify/recreate before use after
   `/tmp` cleanup. Report unsafe/unavailable paths instead of supplying them.
 - One-time scripts/probes use scratch cwd; requested project edits stay in the
-  workspace. Scratch is ephemeral/outside SQLite and undo: no archives,
-  attachment snapshots or retained output artifacts there.
+  workspace. Scratch is ephemeral/outside SQLite and undo. On-demand
+  conversation exports may live there, but durable diagnostic archives,
+  attachment snapshots and retained output artifacts must not. Scratch exports
+  do not pin attachment cache contents.
 
 ## Async behavior
 

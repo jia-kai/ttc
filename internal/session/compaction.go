@@ -13,7 +13,6 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
-	"ttc/internal/render"
 )
 
 const summaryInstructions = prompts.Compaction
@@ -79,7 +78,7 @@ func canonicalCompaction(messages []llm.Message) []llm.Message {
 
 // summaryTranscript preserves model text and raw tool payloads without display
 // expansion, replay state or attachment bytes. Retained human inputs include
-// typed original-source/commit and compaction metadata. Durable archives keep
+// typed original-source/commit and compaction metadata. Durable history keeps
 // exact records; summarization uses only the compacting actor's admitted messages.
 func summaryTranscript(messages []llm.Message) (string, error) {
 	var out strings.Builder
@@ -118,8 +117,34 @@ func summaryTranscript(messages []llm.Message) (string, error) {
 	return out.String(), nil
 }
 
-func compactionLinks(summary, archive, exact string) string {
-	return fmt.Sprintf(prompts.CompactionLinks, summary, archive, exact)
+func compactionHandoff(summary string) string {
+	return fmt.Sprintf(prompts.CompactionHandoff, summary)
+}
+
+// preparedCompaction is shared by main, children and asides. Selection and
+// summary input use exactly the admitted actor projection; durable history
+// boundaries and handoff ownership remain with the caller.
+type preparedCompaction struct {
+	messages   []llm.Message
+	retention  contextbuild.Retention
+	inputs     []llm.Message
+	transcript string
+	at         time.Time
+}
+
+func prepareCompaction(messages []llm.Message, selection llm.Selection) (preparedCompaction, error) {
+	p := preparedCompaction{messages: canonicalCompaction(messages), at: time.Now()}
+	var err error
+	p.retention, err = contextbuild.Retain(p.messages, selection.Model.Budget.RecentTokensMin, selection.Model.Budget.RecentTokensMax)
+	if err != nil {
+		return p, err
+	}
+	p.inputs, err = contextbuild.RetainedInputMessages(p.messages, p.retention.Inputs, p.at)
+	if err != nil {
+		return p, err
+	}
+	p.transcript, err = summaryTranscript(p.messages[:p.retention.Start])
+	return p, err
 }
 
 func compactionFits(selection llm.Selection, system string, tools []llm.ToolDefinition, retained, notices []llm.Message, runtime *llm.Message) error {
@@ -237,37 +262,25 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if task.actor == "" || task.tools == nil {
 		return nil, cursor, errors.New(prompts.ChildCompactionIdentity)
 	}
-	canonical := canonicalCompaction(messages)
-	compactedAt := time.Now()
-	retention, err := contextbuild.Retain(canonical, task.selection.Model.Budget.RecentTokensMin, task.selection.Model.Budget.RecentTokensMax)
+	prepared, err := prepareCompaction(messages, task.selection)
 	if err != nil {
 		return nil, cursor, err
 	}
-	retainedInputs, err := contextbuild.RetainedInputMessages(canonical, retention.Inputs, compactedAt)
-	if err != nil {
-		return nil, cursor, err
-	}
-	// Exact provider replay and attachment bytes stay in the private sidecar.
-	markdown := fmt.Sprintf("# Child context · %s\n\n", render.Inline(task.actor)) + childTranscript(messages)
 	r.routeMu.RLock()
-	archive, err := r.Store.ArchiveMessages(r.Current(), task.actor, markdown, messages)
+	sourceSession := r.Current()
+	source, err := r.Store.Session(sourceSession)
 	r.routeMu.RUnlock()
 	if err != nil {
 		return nil, cursor, err
 	}
-	records := archive + ".jsonl"
-	transcript, err := summaryTranscript(canonical[:retention.Start])
+	summary, err := r.summarize(ctx, task.actor, task.turn, task.selection, prepared.transcript, "")
 	if err != nil {
 		return nil, cursor, err
 	}
-	summary, err := r.summarize(ctx, task.actor, task.turn, task.selection, transcript, "")
-	if err != nil {
-		return nil, cursor, err
-	}
-	summary = compactionLinks(summary, archive, records)
+	summary = compactionHandoff(summary)
 	result := []llm.Message{{Type: llm.TypeAssistant, Content: summary}}
-	result = append(result, retainedInputs...)
-	result = append(result, canonical[retention.Start:]...)
+	result = append(result, prepared.inputs...)
+	result = append(result, prepared.messages[prepared.retention.Start:]...)
 	if task.aside {
 		present := false
 		for _, message := range result {
@@ -300,66 +313,23 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 		return nil, cursor, err
 	}
 	if pending != nil {
-		// Main compaction may have archived the original child-only entry while
-		// summarization ran. Keep one durable warning in the active branch.
+		// Main compaction may have moved the warning behind a continuation cut
+		// while summarization ran. Keep one durable warning in the active branch.
 		if _, err = r.ensureRecovery(task.turn, task.actor, *pending); err != nil {
 			return nil, cursor, err
 		}
 	}
+	r.routeMu.RLock()
+	err = r.Store.RecordActorCompaction(r.Current(), task.turn, task.actor, sourceSession, source.EntryTip)
+	r.routeMu.RUnlock()
+	if err != nil {
+		return nil, cursor, err
+	}
 	if !task.aside {
-		event, _ := json.Marshal(map[string]any{"type": "child_compacted", "child_id": task.actor, "turn_id": task.turn, "archive": archive, "records": records, "context_tokens_estimate": contextbuild.Tokens(result)})
+		event, _ := json.Marshal(map[string]any{"type": "child_compacted", "child_id": task.actor, "turn_id": task.turn, "context_tokens_estimate": contextbuild.Tokens(result)})
 		if err = r.queueNotification(string(event)); err != nil {
 			return nil, cursor, err
 		}
 	}
 	return result, next, nil
-}
-
-func childTranscript(messages []llm.Message) string {
-	calls := map[string]llm.ToolCall{}
-	finished := map[string]bool{}
-	for _, message := range messages {
-		for _, call := range message.Calls {
-			calls[call.ID] = call
-		}
-		if message.Type == llm.TypeToolResult {
-			finished[message.CallID] = true
-		}
-	}
-	var out strings.Builder
-	for _, message := range messages {
-		if message.Type == llm.TypeToolResult {
-			if call, ok := calls[message.CallID]; ok && json.Valid([]byte(message.Content)) {
-				fmt.Fprintf(&out, "### Tool · %s\n\n%s\n\n", render.Inline(call.Name), render.Tool(call.Name, call.Arguments, json.RawMessage(message.Content)).ExportText())
-				// Live inspectors recover captures through JobDetail. An archive
-				// has no live handle, so retain the model-visible selected output here.
-				var result map[string]json.RawMessage
-				if json.Unmarshal([]byte(message.Content), &result) == nil && result["job_id"] != nil {
-					for _, stream := range []string{"stdout", "stderr"} {
-						var text string
-						if json.Unmarshal(result[stream], &text) == nil && text != "" {
-							fmt.Fprintf(&out, "#### %s\n\n%s\n", stream, render.Fence(text, "text"))
-						}
-					}
-				}
-				continue
-			}
-		}
-		if message.Content != "" {
-			body := render.Clean(message.Content)
-			if json.Valid([]byte(message.Content)) {
-				body = render.Fence(message.Content, "json")
-			}
-			fmt.Fprintf(&out, "### %s\n\n%s\n\n", render.Inline(message.Role()), body)
-		}
-		for _, call := range message.Calls {
-			if !finished[call.ID] {
-				out.WriteString(render.Tool(call.Name, call.Arguments, nil).Detail + "\n\n")
-			}
-		}
-		for _, file := range message.Files {
-			fmt.Fprintf(&out, "Binary file: %s\n\n", render.Inline(file.Path))
-		}
-	}
-	return out.String()
 }

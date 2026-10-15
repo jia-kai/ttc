@@ -97,14 +97,10 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(loaded.ID)
-	archive, err := r.Store.ArchiveTranscript(original, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range []string{archive, archive + ".jsonl"} {
-		data, err := os.ReadFile(file)
+	for _, export := range []func(string, int64) ([]byte, error){r.Store.Transcript, r.Store.TranscriptJSONL} {
+		data, err := export(original, 0)
 		if err != nil || !bytes.Contains(data, []byte(checksum)) || bytes.Contains(data, []byte("data_url")) || bytes.Contains(data, []byte("base64")) {
-			t.Fatalf("archive must retain references, not pixels: %s, %v", file, err)
+			t.Fatalf("history must retain references, not pixels: %v", err)
 		}
 	}
 	entries, err := r.Store.Branch(original, 0)
@@ -118,7 +114,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 			break
 		}
 	}
-	continued, err := r.Store.Continue(original, "Image inspected.", archive, retainFrom, nil, time.Now(), nil)
+	continued, err := r.Store.Continue(original, "Image inspected.", entries[len(entries)-1].ID, retainFrom, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

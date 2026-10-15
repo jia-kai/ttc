@@ -30,9 +30,11 @@ func (e Entry) EventSeq() int64 {
 // NoticeEntries are presentation-only delivery rows.
 type Admission struct {
 	RequestID, ContextEntry, Cutoff int64
-	NoticeEntries                   []int64
-	SteerEntries                    []int64
-	Messages                        []llm.Message
+	// EntryTip is the selected physical branch tip frozen at admission commit.
+	EntryTip      int64
+	NoticeEntries []int64
+	SteerEntries  []int64
+	Messages      []llm.Message
 	// Notifications are committed parent delivery reports, ready for in-memory
 	// publication after admission succeeds. Failure returns no committed reports.
 	Notifications []llm.Message
@@ -153,7 +155,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 				return err
 			}
 		}
-		_, err = appendTx(tx, session, turn, actor, "status", "", false, json.RawMessage(fmt.Sprintf(`{"type":"request_admitted","request_id":%d,"event_cutoff":%d}`, v.RequestID, v.Cutoff)), 0)
+		v.EntryTip, err = appendTx(tx, session, turn, actor, "status", "", false, json.RawMessage(fmt.Sprintf(`{"type":"request_admitted","request_id":%d,"event_cutoff":%d}`, v.RequestID, v.Cutoff)), 0)
 		if err != nil {
 			return err
 		}
@@ -259,7 +261,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 				v.Notifications = append(v.Notifications, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: id, Content: string(content)})
 			}
 		}
-		return nil
+		return tx.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&v.EntryTip)
 	})
 	if err != nil {
 		v = Admission{} // Rolled-back identities must never escape for publication.

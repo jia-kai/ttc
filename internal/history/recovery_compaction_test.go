@@ -19,7 +19,7 @@ func TestContinuationPendingRecoveryWarningIsAtomicAndDeduplicated(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			archive, err := s.ArchiveTranscript(session.ID, 0)
+			cut, err := s.Session(session.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func TestContinuationPendingRecoveryWarningIsAtomicAndDeduplicated(t *testing.T)
 			if err := s.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&before); err != nil {
 				t.Fatal(err)
 			}
-			next, err := s.Continue(session.ID, "Handoff summary", archive, boundary, nil, time.Now(), &warning)
+			next, err := s.Continue(session.ID, "Handoff summary", cut.EntryTip, boundary, nil, time.Now(), &warning)
 			if mode == "rollback" || mode == "missing" {
 				if err == nil || mode == "rollback" && !strings.Contains(err.Error(), "warning persistence rejected") {
 					t.Fatal("expected warning commit failure", err)

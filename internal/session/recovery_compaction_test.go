@@ -69,14 +69,9 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				// Hashes differ in the actual archive, but path lengths (and token
-				// estimates) are fixed. Compute the exact replacement baseline.
-				archive, err := r.Store.ArchiveTranscript(before, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
+				// Count the same on-demand history guidance as the actual handoff.
 				summary := "Partial evidence summarized; continue carefully."
-				baseline := []llm.Message{{Type: llm.TypeAssistant, Content: compactionLinks(summary, archive, archive+".jsonl")}}
+				baseline := []llm.Message{{Type: llm.TypeAssistant, Content: compactionHandoff(summary)}}
 				baseline = append(baseline, retained...)
 				system := childSystemTemplate
 				if actor == "main" {

@@ -39,11 +39,11 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	if err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(initial.ID, 0)
+	cut, err := s.Session(initial.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(initial.ID, "Main summary omits child details", archive, retained, nil, time.Now(), nil)
+	continued, err := s.Continue(initial.ID, "Main summary omits child details", cut.EntryTip, retained, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +73,9 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	if _, err := s.Append(continued.ID, turn, "main/other_child", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "Unrelated sibling evidence"}); err != nil {
 		t.Fatal(err)
 	}
-	// Archive/continue once more without retaining child entries. A current-branch
+	// Continue once more without retaining child entries. A current-branch
 	// exporter would now see none of the child's original conversation.
-	archive, err = s.ArchiveTranscript(continued.ID, 0)
+	cut, err = s.Session(continued.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err = s.Continue(continued.ID, "Second main summary", archive, continued.EntryTip+1, nil, time.Now(), nil)
+	continued, err = s.Continue(continued.ID, "Second main summary", cut.EntryTip, continued.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +175,11 @@ func TestArchiveActorTranscriptFollowsSelectedCutsOnly(t *testing.T) {
 	appendMessage(initial.ID, "main", "Unrelated connector")
 	second := appendMessage(initial.ID, actor, "Selected second")
 	tip := appendMessage(initial.ID, "main/other_child", "Unrelated sibling actor")
-	archive, err := s.ArchiveTranscript(initial.ID, 0)
+	cut, err := s.Session(initial.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(initial.ID, "Main summary", archive, tip+1, nil, time.Now(), nil)
+	continued, err := s.Continue(initial.ID, "Main summary", cut.EntryTip, tip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,9 +200,8 @@ func TestArchiveActorTranscriptFollowsSelectedCutsOnly(t *testing.T) {
 		want    []int64
 	}{
 		{"continuation", continued.ID, []int64{first, second, third}},
-		// A manual snapshot inherits only copied selected entries, not the
-		// compaction ancestry of its source conversation.
-		{"manual_snapshot", snapshot.ID, []int64{third}},
+		// Copied summaries retain their selected frozen source ancestry.
+		{"manual_snapshot", snapshot.ID, []int64{first, second, third}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path, err := s.ArchiveActorTranscript(tc.session, actor, nil)
@@ -273,11 +272,11 @@ func BenchmarkArchiveActorTranscriptUnrelatedPayload(b *testing.B) {
 					b.Fatal(err)
 				}
 				if compacted {
-					archive, err := s.ArchiveTranscript(session, 0)
+					cut, err := s.Session(session)
 					if err != nil {
 						b.Fatal(err)
 					}
-					continued, err := s.Continue(session, "Main summary", archive, child, nil, time.Now(), nil)
+					continued, err := s.Continue(session, "Main summary", cut.EntryTip, child, nil, time.Now(), nil)
 					if err != nil {
 						b.Fatal(err)
 					}

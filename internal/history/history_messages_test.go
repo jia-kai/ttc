@@ -213,7 +213,7 @@ func TestHistoryInputMessagesPreserveWrapping(t *testing.T) {
 	_, err = enrichInput(map[int64]inputMetadata{7: {source: "invalid"}}, entry, message)
 	requireHistoryMessage(t, err, `original human input #7 has invalid source "invalid"`)
 	cause := errors.New("fixture cause")
-	for _, format := range []string{prompts.HistoryCompactionValidateMarkdown, prompts.HistoryCompactionValidateExact, prompts.HistoryInputMetadata, prompts.HistoryNotificationSource} {
+	for _, format := range []string{prompts.HistoryInputMetadata, prompts.HistoryNotificationSource} {
 		if err := fmt.Errorf(format, cause); !errors.Is(err, cause) {
 			t.Fatal("history error format lost cause", format, err)
 		}
@@ -225,16 +225,17 @@ func TestHistoryInputMessagesPreserveWrapping(t *testing.T) {
 // inspection pagination or prompt-recall UI text.
 func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 	functions := map[string][]string{
-		"archive.go":   {"ArchiveMessages", "writeArchive"},
-		"artifact.go":  {"readArtifact", "openArtifact"},
-		"children.go":  {"FinishChildTurn", "validateChildFinish", "validateChildFinishFields", "validateChildFinishState", "readChildFinish"},
-		"compact.go":   {"Continue", "filepathHash"},
-		"events.go":    {"AdmitRequest", "BeginChildTurn", "InvalidateContext"},
-		"export.go":    {"transcriptEntries", "ExportText", "ArchiveActorTranscript", "actorTranscriptEntriesWith", "ArchiveTranscript", "transcriptJSONLEntries"},
-		"history.go":   {"appendTx", "Append", "Messages", "messagesWith", "StartRequest", "FinishRequest", "CallIntent", "CallResult", "Artifact", "RecordSystemPrompt", "Assistant", "Inspect"},
-		"inputs.go":    {"inputMetadataWith", "enrichInput"},
-		"inspect.go":   {"RequestMessage"},
-		"mutations.go": {"CommitChange"},
+		"archive.go":    {"writeArchive", "filepathHash"},
+		"artifact.go":   {"readArtifact", "openArtifact"},
+		"children.go":   {"FinishChildTurn", "validateChildFinish", "validateChildFinishFields", "validateChildFinishState", "readChildFinish"},
+		"compact.go":    {"Continue"},
+		"events.go":     {"AdmitRequest", "BeginChildTurn", "InvalidateContext"},
+		"export.go":     {"writeTranscriptEntries", "exportTextWith", "ArchiveActorTranscript", "writeTranscriptJSONLEntries"},
+		"transcript.go": {"validateTranscriptTip", "recordActorBoundary", "selectedActorEntries", "WriteActorTranscript", "ActorCompactionTip"},
+		"history.go":    {"appendTx", "Append", "Messages", "messagesWith", "StartRequest", "FinishRequest", "CallIntent", "CallResult", "Artifact", "RecordSystemPrompt", "Assistant", "Inspect"},
+		"inputs.go":     {"inputMetadataWith", "enrichInput"},
+		"inspect.go":    {"RequestMessage"},
+		"mutations.go":  {"CommitChange"},
 	}
 	// Keep exemptions tied to exact diagnostics and their owning methods: these
 	// errors validate main-only operator actions, not child or mutation tools.

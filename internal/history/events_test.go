@@ -290,11 +290,11 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	}
 	// Compaction continues the original runtime and must still acknowledge its
 	// retained finish event, even though the physical tool-result row is copied.
-	archive, err := s.ArchiveTranscript(source.ID, 0)
+	cut, err := s.Session(source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(source.ID, "handoff", archive, finish, nil, time.Now(), nil)
+	next, err := s.Continue(source.ID, "handoff", cut.EntryTip, finish, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

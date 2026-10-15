@@ -166,6 +166,9 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 					{Type: llm.TypeUserInput, Content: "Research", InputTimeMS: time.Now().UnixMilli()},
 					{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)},
 				}
+				if actor != "main" {
+					seedIsolatedHistory(t, r, actor, turn, messages)
+				}
 				// An unsuccessful handoff must leave the original cursor intact.
 				r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { return context.Canceled }}
 				if actor == "main" {

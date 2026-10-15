@@ -351,6 +351,7 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 				}
 				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: role == skills.Aside}
 				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)}}
+				seedIsolatedHistory(t, r, actor, turn, messages)
 				_, cursor, err = r.compactChild(context.Background(), task, messages, cursor, nil)
 			}
 			if err != nil {

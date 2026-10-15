@@ -1,6 +1,7 @@
 # History diagnostics can reach models through child failures and mutation tools.
 # Preserve exact prose, whitespace and printf slots; UI-only operator text stays in Go.
 HistoryArchiveConflict: "archive content conflict"
+HistoryActorBoundary: "isolated actor boundary requires a non-main actor"
 HistoryDecodeCanonicalMessage: "decode canonical %s: %w"
 HistoryMessageIndexedRole: "message type %q requires indexed role %q, got %q"
 HistoryNotificationMessageType: "invalid notification message type %q"
@@ -32,8 +33,8 @@ HistoryCompactionAncestry: "cyclic compaction ancestry"
 HistoryCompactionArchiveRegularFile: "compaction archive must be a regular file"
 HistoryCompactionContextUnusable:
   "session unusable after compaction: %s; start or load another session"
-HistoryCompactionValidateExact: "validate exact compaction archive: %w"
-HistoryCompactionValidateMarkdown: "validate Markdown compaction archive: %w"
+HistoryCompactionSourceTip:
+  "compaction source tip is not on the selected branch"
 HistoryContinuation: "invalid continuation"
 HistoryContinuationBoundary: "invalid continuation retention boundary"
 HistoryContinuationInput:
@@ -62,5 +63,10 @@ HistorySteeringActor: "only main requests accept human steering"
 HistorySystemPromptTooLarge: "instruction snapshot exceeds 1 MiB"
 HistoryToolArguments: "tool arguments are not JSON"
 HistoryTranscriptActor: "actor transcript requires an actor"
+HistoryTranscriptFormat: "unsupported transcript format %q"
+HistoryTranscriptNegativeTip: "transcript tip must be nonnegative"
+HistoryTranscriptNoCompaction:
+  "selected actor history has no successful compaction; use scope=full"
+HistoryTranscriptTip: "transcript tip does not belong to session"
 HistoryTranscriptPendingRole:
   "pending transcript output must be an assistant message"

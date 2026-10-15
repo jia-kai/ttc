@@ -169,11 +169,11 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	if err := s.FinishTurn(newTurn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(a.ID, 0)
+	cut, err := s.Session(a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(a.ID, "copy handoff", archive, a.UndoFloor, nil, time.Now(), nil)
+	next, err := s.Continue(a.ID, "copy handoff", cut.EntryTip, a.UndoFloor, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -92,14 +92,14 @@ func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			check(loaded.ID)
-			archive, err := r.Store.ArchiveTranscript(original, 0)
+			saved, err := r.Store.Session(original)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, file := range []string{archive, archive + ".jsonl"} {
-				body, err := os.ReadFile(file)
+			for _, export := range []func(string, string, int64) ([]byte, error){r.Store.ActorTranscript, r.Store.ActorTranscriptJSONL} {
+				body, err := export(original, "main", saved.EntryTip)
 				if err != nil || !strings.Contains(string(body), want.SHA256) || strings.Contains(string(body), "base64") {
-					t.Fatal("archive lost document reference or copied bytes", file, err)
+					t.Fatal("history export lost document reference or copied bytes", err)
 				}
 			}
 		})

@@ -3,27 +3,19 @@ package history
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"ttc/internal/llm"
 	"ttc/internal/privatefile"
 	"ttc/internal/prompts"
 )
-
-// ArchiveMessages freezes an isolated actor's model input as Markdown and exact
-// JSONL envelopes, including replay state and attachment bytes. The caller owns
-// the supplied Markdown projection; managed files are immutable and private.
-func (s *Store) ArchiveMessages(session, actor, markdown string, messages []llm.Message) (string, error) {
-	exact, err := archiveMessageJSONL(actor, messages, false)
-	if err != nil {
-		return "", err
-	}
-	return s.writeArchive(session, []byte(markdown), exact)
-}
 
 func archiveMessageJSONL(actor string, messages []llm.Message, uncommitted bool) ([]byte, error) {
 	var exact bytes.Buffer
@@ -38,6 +30,26 @@ func archiveMessageJSONL(actor string, messages []llm.Message, uncommitted bool)
 		}
 	}
 	return exact.Bytes(), nil
+}
+
+func filepathHash(path string) (string, error) {
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if e != nil {
+		return "", e
+	}
+	defer f.Close()
+	info, e := f.Stat()
+	if e != nil {
+		return "", e
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New(prompts.HistoryCompactionArchiveRegularFile)
+	}
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		return "", e
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (s *Store) writeArchive(session string, text, exact []byte) (string, error) {

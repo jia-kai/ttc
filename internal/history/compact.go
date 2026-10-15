@@ -1,15 +1,10 @@
 package history
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"syscall"
 	"time"
 	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
@@ -17,6 +12,8 @@ import (
 )
 
 // Continue atomically freezes a predecessor and copies a retained visible suffix.
+// sourceTip is the original selected cut summarized before inference, not the
+// predecessor tip at handoff; actor commits after that cut remain copied tails.
 // Callers pause main model work and serialize this handoff against child/file commits.
 // inputIDs selects sorted, unique visible main human entries strictly before
 // retainFrom: at most two normal/queued inputs combined and two steers. Each copy
@@ -25,15 +22,7 @@ import (
 // identify an active-branch entry, or the final entry ID plus one for an empty suffix.
 // pending preserves an already-persisted runtime recovery warning, with its
 // original request/source identity, if it is not in the copied visible suffix.
-func (s *Store) Continue(session, summary, archive string, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
-	archiveHash, e := filepathHash(archive)
-	if e != nil {
-		return Session{}, fmt.Errorf(prompts.HistoryCompactionValidateMarkdown, e)
-	}
-	exactHash, e := filepathHash(archive + ".jsonl")
-	if e != nil {
-		return Session{}, fmt.Errorf(prompts.HistoryCompactionValidateExact, e)
-	}
+func (s *Store) Continue(session, summary string, sourceTip, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
 	old, e := s.Session(session)
 	if e != nil {
 		return Session{}, e
@@ -47,6 +36,15 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 	}
 	if retainFrom <= 0 || compactedAt.IsZero() || len(inputIDs) > 4 {
 		return Session{}, errors.New(prompts.HistoryContinuationBoundary)
+	}
+	// The summary cut is frozen before the model request; later actor commits
+	// may extend the retained suffix but must not move historical ancestry.
+	cutFound := false
+	for _, entry := range entries {
+		cutFound = cutFound || entry.ID == sourceTip
+	}
+	if !cutFound {
+		return Session{}, errors.New(prompts.HistoryCompactionSourceTip)
 	}
 	var pendingEntry *Entry
 	if pending != nil {
@@ -255,31 +253,11 @@ func (s *Store) Continue(session, summary, archive string, retainFrom int64, inp
 		if _, e = tx.Exec("UPDATE turns SET session_id=? WHERE session_id=? AND status='running'", id, session); e != nil {
 			return e
 		}
-		_, e = tx.Exec("INSERT INTO compactions(continuation_id,predecessor_id,source_tip_id,ordinal,archive_path,archive_sha256,archive_exact_sha256,summary_entry_id) VALUES(?,?,?,?,?,?,?,?)", id, session, old.EntryTip, ordinal, archive, archiveHash, exactHash, summaryID)
+		_, e = tx.Exec("INSERT INTO compactions(continuation_id,predecessor_id,source_tip_id,ordinal,summary_entry_id) VALUES(?,?,?,?,?)", id, session, sourceTip, ordinal, summaryID)
 		return e
 	})
 	if e != nil {
 		return Session{}, e
 	}
 	return s.Session(id)
-}
-
-func filepathHash(path string) (string, error) {
-	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
-	if e != nil {
-		return "", e
-	}
-	defer f.Close()
-	info, e := f.Stat()
-	if e != nil {
-		return "", e
-	}
-	if !info.Mode().IsRegular() {
-		return "", errors.New(prompts.HistoryCompactionArchiveRegularFile)
-	}
-	h := sha256.New()
-	if _, e = io.Copy(h, f); e != nil {
-		return "", e
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }

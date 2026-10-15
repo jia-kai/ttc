@@ -69,7 +69,7 @@ func TestChildMessageStatusExportsAndArchives(t *testing.T) {
 	if err := s.Export(v.ID, path); err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(v.ID, 0)
+	archive, err := s.ArchiveActorTranscript(v.ID, "main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestImageOnlyMessagesRemainInMarkdownAndArchive(t *testing.T) {
 	if err != nil || text != "Binary file: [snapshot](<"+path+">) · 2×3" {
 		t.Fatal("image-only message lost or duplicated exact data", text, err)
 	}
-	archive, err := s.ArchiveTranscript(v.ID, 0)
+	archive, err := s.ArchiveActorTranscript(v.ID, "main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 	if !foundResult {
 		t.Fatalf("completed exact records missing:\n%s", exactCompleted)
 	}
-	archive, err := s.ArchiveTranscript(v.ID, cut)
+	archive, err := s.writeArchive(v.ID, pending, before)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 			t.Fatalf("archive cut differs from export projection: %s: %v", file.path, err)
 		}
 	}
-	duplicate, err := s.ArchiveTranscript(v.ID, cut)
+	duplicate, err := s.writeArchive(v.ID, pending, before)
 	if err != nil || duplicate != archive {
 		t.Fatalf("immutable archive not deduplicated: %q %v", duplicate, err)
 	}

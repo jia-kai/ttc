@@ -318,22 +318,22 @@ func TestLoadRecoveryFindsSummarizedContinuationAncestors(t *testing.T) {
 	if _, err := s.StartRequest(source.ID, turn, "main", "compaction", source.Model); err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(source.ID, 0)
+	cut, err := s.Session(source.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tip, _ := s.Session(source.ID)
-	first, err := s.Continue(source.ID, "summary one", archive, tip.EntryTip+1, nil, time.Now(), nil)
+	first, err := s.Continue(source.ID, "summary one", cut.EntryTip, tip.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	appendRecoveryRuntime(t, s, first.ID, `{"type":"job_exit","job_id":"during_handoff"}`)
-	archive, err = s.ArchiveTranscript(first.ID, 0)
+	cut, err = s.Session(first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tip, _ = s.Session(first.ID)
-	second, err := s.Continue(first.ID, "summary two", archive, tip.EntryTip+1, nil, time.Now(), nil)
+	second, err := s.Continue(first.ID, "summary two", cut.EntryTip, tip.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,11 +357,11 @@ func TestLoadRecoveryFindsSummarizedContinuationAncestors(t *testing.T) {
 	}
 	// An in-memory runtime can compact before admitting recovered notices; the
 	// read API must follow original ownership through that continuation as well.
-	archive, err = s.ArchiveTranscript(loaded.ID, 0)
+	cut, err = s.Session(loaded.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(loaded.ID, "recovered handoff", archive, loaded.EntryTip+1, nil, time.Now(), nil)
+	next, err := s.Continue(loaded.ID, "recovered handoff", cut.EntryTip, loaded.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

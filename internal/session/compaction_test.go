@@ -18,7 +18,7 @@ import (
 	"ttc/internal/prompts"
 )
 
-func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
+func TestCompactionIgnoresUIOnlyHistoryWithoutEagerArchives(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Old coding facts. ", 700))
@@ -43,14 +43,12 @@ func TestCompactionIgnoresUIOnlyHistoryButArchivesIt(t *testing.T) {
 		t.Fatal("UI-only records prevented handoff", err, calls)
 	}
 	files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before, "compactions", "*"))
-	if err != nil || len(files) != 2 {
-		t.Fatal("missing complete archives", files, err)
+	if err != nil || len(files) != 0 {
+		t.Fatal("compaction eagerly wrote archives", files, err)
 	}
-	for _, file := range files {
-		body, err := os.ReadFile(file)
-		if err != nil || !strings.Contains(string(body), hidden) {
-			t.Fatal("archive lost child history", file, err)
-		}
+	body, err := r.Store.TranscriptJSONL(before, 0)
+	if err != nil || !strings.Contains(string(body), hidden) {
+		t.Fatal("durable history lost child diagnostics", err)
 	}
 }
 
@@ -82,6 +80,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
+				seedIsolatedHistory(t, r, actor, turn, messages)
 				_, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{}, nil)
 			} else {
 				for _, message := range messages {
@@ -137,6 +136,7 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
+				seedIsolatedHistory(t, r, id, turn, messages)
 				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
 			}
 			if err != nil || requests != 1 || r.checkContext() != nil {
@@ -173,33 +173,77 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 		t.Fatal("oversized canonical input was admitted", err, calls)
 	}
 	files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before, "compactions", "*"))
-	if err != nil || len(files) != 2 {
-		t.Fatal("failed input was not archived", files, err)
+	if err != nil || len(files) != 0 {
+		t.Fatal("rejected compaction eagerly wrote archives", files, err)
+	}
+	exact, err := r.Store.TranscriptJSONL(before, 0)
+	if err != nil || !strings.Contains(string(exact), "Actual model history.") {
+		t.Fatal("rejected compaction lost durable input", err)
 	}
 }
 
-func TestChildArchivePreservesModelVisibleJobOutput(t *testing.T) {
+func TestChildHistoryExportPreservesModelVisibleJobOutput(t *testing.T) {
 	messages := []llm.Message{
 		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: json.RawMessage(`{"command":"printf diagnostic"}`)}}},
 		{Type: llm.TypeToolResult, CallID: "shell", Content: `{"job_id":"job_fixture","stdout":"diagnostic sentinel","stderr":"warning sentinel","status":"completed"}`},
 	}
-	text := childTranscript(messages)
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Parent task")
+	actor := "main/child_export"
+	for _, message := range messages {
+		if _, err := r.Store.Append(r.Current(), "", actor, "message", message.Role(), false, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := r.Store.Session(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := r.Store.ActorTranscript(selected.ID, actor, selected.EntryTip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact, err := r.Store.ActorTranscriptJSONL(selected.ID, actor, selected.EntryTip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body) + string(exact)
 	for _, value := range []string{"diagnostic sentinel", "warning sentinel", "printf diagnostic", "stdout", "stderr"} {
 		if !strings.Contains(text, value) {
-			t.Fatal("child archive lost tool information", value, text)
+			t.Fatal("child history export lost tool information", value, text)
 		}
 	}
 }
 
-func TestChildArchivePreservesWatchIdentityWithoutLiveInspector(t *testing.T) {
+func TestChildHistoryExportPreservesWatchIdentityWithoutLiveInspector(t *testing.T) {
 	messages := []llm.Message{
 		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "watch", Name: "watch", Arguments: json.RawMessage(`{"record_dir":"relative-run"}`)}}},
 		{Type: llm.TypeToolResult, CallID: "watch", Content: `{"job_id":"job_watch","kind":"watch","label":"python train.py --epochs=10","record_dir":"/resolved/relative-run","status":"running"}`},
 	}
-	text := childTranscript(messages)
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Parent task")
+	actor := "main/child_export"
+	for _, message := range messages {
+		if _, err := r.Store.Append(r.Current(), "", actor, "message", message.Role(), false, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := r.Store.Session(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := r.Store.ActorTranscript(selected.ID, actor, selected.EntryTip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact, err := r.Store.ActorTranscriptJSONL(selected.ID, actor, selected.EntryTip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body) + string(exact)
 	for _, want := range []string{"python train.py --epochs=10", "/resolved/relative-run", "relative-run"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("standalone archive lost %q: %s", want, text)
+			t.Fatalf("history export lost %q: %s", want, text)
 		}
 	}
 }
@@ -296,7 +340,7 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 	}
 }
 
-func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
+func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 	for _, aside := range []bool{false, true} {
 		t.Run(fmt.Sprint(aside), func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
@@ -319,13 +363,19 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			binary := llm.BinaryFile{Path: filepath.Join(r.Workspace.Root, "earlier.pdf"), SHA256: strings.Repeat("a", 64), MIMEType: "application/pdf", Bytes: 100}
 			messages := []llm.Message{
 				{Type: llm.TypeUserInput, Content: "Earlier child task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
+				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "old_read", Name: "read", Arguments: json.RawMessage(`{"path":"earlier.pdf"}`)}}},
+				{Type: llm.TypeToolResult, CallID: "old_read", Content: `{"ok":true,"kind":"document"}`, Files: []llm.BinaryFile{binary}},
 				{Type: llm.TypeAssistant, Content: strings.Repeat("Old child research notes. ", 350)},
 				{Type: llm.TypeUserInput, Content: "Read the fixture", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "read_fixture", Name: "read", Arguments: json.RawMessage(`{"path":"fixture.go"}`)}}, State: &llm.ReplayState{Provider: "script", Model: "fixture", Version: 1, Items: []json.RawMessage{json.RawMessage(`{"private":"replay"}`)}}},
 				{Type: llm.TypeToolResult, CallID: "read_fixture", Content: `{"content":"package fixture"}`},
 			}
+			// Model input is already durable before compaction; history export
+			// must recover it without a compaction-generated transcript.
+			seedIsolatedHistory(t, r, actor, turn, messages)
 			exactOriginal, _ := json.Marshal(messages)
 			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if !req.NoTools || len(req.Tools) != 0 || !strings.Contains(req.Messages[0].Content, "Old child research notes") {
@@ -346,8 +396,8 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 				t.Fatal("incorrect retained child projection", cursor, result)
 			}
 			for _, message := range result {
-				if message.State != nil {
-					t.Fatal("opaque replay survived compaction")
+				if message.State != nil || len(message.Files) != 0 {
+					t.Fatal("opaque replay or consumed binary survived compaction")
 				}
 				if aside && result[1].Content != btwInstruction {
 					t.Fatal("aside scope lost during compaction")
@@ -378,17 +428,23 @@ func TestChildCompactionIsolatedArchiveAndNotification(t *testing.T) {
 			if after.ID != before.ID || after.ReadOnly || after.FileTip != before.FileTip || after.UndoFloor != before.UndoFloor || string(encodedMain) != string(originalMain) {
 				t.Fatal("child changed parent context or undo state", after)
 			}
-			archiveLine := strings.Split(strings.Split(result[0].Content, "Earlier history: ")[1], "\n")[0]
-			exact, err := os.ReadFile(archiveLine + ".jsonl")
+			if !strings.Contains(result[0].Content, "conversation_export") {
+				t.Fatal("handoff lost on-demand history guidance", result[0].Content)
+			}
+			files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before.LineageID, "compactions", "*"))
+			if err != nil || len(files) != 0 {
+				t.Fatal("child compaction eagerly wrote archives", files, err)
+			}
+			exact, err := r.Store.ActorTranscriptJSONL(after.ID, actor, after.EntryTip)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(exact), `"private":"replay"`) || !strings.Contains(string(exact), actor) {
-				t.Fatal("missing exact actor replay", string(exact))
+			if !strings.Contains(string(exact), `"private":"replay"`) || !strings.Contains(string(exact), actor) || !strings.Contains(string(exact), binary.SHA256) || !strings.Contains(string(exact), binary.Path) {
+				t.Fatal("missing exact actor replay or binary reference", string(exact))
 			}
-			md, err := os.ReadFile(archiveLine)
+			md, err := r.Store.ActorTranscript(after.ID, actor, after.EntryTip)
 			if err != nil || !strings.Contains(string(md), "Old child research notes") {
-				t.Fatal("invalid Markdown archive", err)
+				t.Fatal("invalid on-demand Markdown history", err)
 			}
 			r.orderMu.Lock()
 			notices := append([]llm.Message(nil), r.notifications...)

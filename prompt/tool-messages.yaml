@@ -1,5 +1,13 @@
 # Authored tool-result and validation messages sent to the model.
 # Protocol keys and dynamic diagnostic values remain in Go.
+ConversationExportActor: "conversation export requires an execution actor"
+ConversationExportFormat: "format must be markdown or jsonl"
+ConversationExportScope: "scope must be full or before_compaction"
+ScratchExportAbsolute: "export path must be absolute"
+ScratchExportTraversal: "export path must not contain parent traversal"
+ScratchExportOutside:
+  "export path must name a new file inside the verified per-UID scratch
+  directory"
 ToolBinaryPagination:
   "binary reads do not support offset or limit; omit pagination arguments"
 ToolContentRequired: "content required"

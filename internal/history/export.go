@@ -1,9 +1,9 @@
 package history
 
 import (
-	"database/sql"
+	"bytes"
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"ttc/internal/llm"
@@ -38,35 +37,54 @@ func (s *Store) Transcript(session string, tip int64) ([]byte, error) {
 }
 
 func (s *Store) transcriptEntries(name string, entries []Entry) ([]byte, error) {
+	return s.transcriptEntriesContext(context.Background(), name, entries)
+}
+
+func (s *Store) transcriptEntriesContext(ctx context.Context, name string, entries []Entry) ([]byte, error) {
+	var out bytes.Buffer
+	if err := s.writeTranscriptEntries(ctx, s.DB, &out, name, entries); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func (s *Store) writeTranscriptEntries(ctx context.Context, q historyReader, out io.Writer, name string, entries []Entry) error {
 	completed := map[string]bool{}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.Kind == "tool_result" {
 			var ref struct {
 				CallID string `json:"call_id"`
 			}
 			if err := json.Unmarshal(entry.Content, &ref); err != nil {
-				return nil, err
+				return err
 			}
 			completed[ref.CallID] = true
 		}
 	}
-	var out strings.Builder
-	fmt.Fprintf(&out, "# %s\n\n", render.Inline(name))
+	if _, err := fmt.Fprintf(out, "# %s\n\n", render.Inline(name)); err != nil {
+		return err
+	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entry.Kind == "tool_call" {
 			var ref struct {
 				CallID string `json:"call_id"`
 			}
 			if err := json.Unmarshal(entry.Content, &ref); err != nil {
-				return nil, err
+				return err
 			}
 			if completed[ref.CallID] {
 				continue
 			}
 		}
-		text, err := s.ExportText(entry)
+		text, err := s.exportTextWith(ctx, q, entry)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if text == "" {
 			continue
@@ -75,15 +93,21 @@ func (s *Store) transcriptEntries(name string, entries []Entry) ([]byte, error) 
 		if kind == "" {
 			kind = entry.Kind
 		}
-		fmt.Fprintf(&out, "### %s · %s · #%d\n\n%s\n\n", render.Inline(entry.Actor), render.Inline(kind), entry.ID, text)
+		if _, err := fmt.Fprintf(out, "### %s · %s · #%d\n\n%s\n\n", render.Inline(entry.Actor), render.Inline(kind), entry.ID, text); err != nil {
+			return err
+		}
 	}
-	return []byte(out.String()), nil
+	return ctx.Err()
 }
 
 // ExportText renders the same inspectable content without metadata duplication.
 // System instructions have no export presentation. Tool records may override
 // their inspector presentation with a compact export body.
 func (s *Store) ExportText(entry Entry) (string, error) {
+	return s.exportTextWith(context.Background(), s.DB, entry)
+}
+
+func (s *Store) exportTextWith(ctx context.Context, q historyReader, entry Entry) (string, error) {
 	if entry.InternalEvent() {
 		return "", nil
 	}
@@ -137,14 +161,14 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 			return "", err
 		}
 		var call, name string
-		if err := s.DB.QueryRow("SELECT name,call_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &call); err != nil {
+		if err := q.QueryRow("SELECT name,call_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &call); err != nil {
 			return "", err
 		}
 		return "Pending call:\n\n" + render.Tool(name, json.RawMessage(call), nil).Detail, nil
 	}
 	if entry.Kind == "tool_result" {
 		var raw string
-		if err := s.DB.QueryRow("SELECT markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&raw); err != nil {
+		if err := q.QueryRow("SELECT markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&raw); err != nil {
 			return "", err
 		}
 		var md render.Markdown
@@ -168,16 +192,30 @@ func (s *Store) TranscriptJSONL(session string, tip int64) ([]byte, error) {
 }
 
 func (s *Store) transcriptJSONLEntries(entries []Entry) ([]byte, error) {
-	var out strings.Builder
-	enc := json.NewEncoder(&out)
+	return s.transcriptJSONLEntriesContext(context.Background(), entries)
+}
+
+func (s *Store) transcriptJSONLEntriesContext(ctx context.Context, entries []Entry) ([]byte, error) {
+	var out bytes.Buffer
+	if err := s.writeTranscriptJSONLEntries(ctx, s.DB, &out, entries); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func (s *Store) writeTranscriptJSONLEntries(ctx context.Context, q historyReader, out io.Writer, entries []Entry) error {
+	enc := json.NewEncoder(out)
 	enc.SetEscapeHTML(false)
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		record := map[string]any{"entry": entry, "event_seq": entry.EventSeq()}
 		var status struct{ Type, Path string }
 		if entry.Kind == "status" && json.Unmarshal(entry.Content, &status) == nil && status.Type == "system_prompt" {
 			prompt, err := readArtifact(status.Path, instructionSnapshotBytes)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			record["instructions"] = string(prompt)
 		}
@@ -186,32 +224,28 @@ func (s *Store) transcriptJSONLEntries(entries []Entry) ([]byte, error) {
 				CallID string `json:"call_id"`
 			}
 			if err := json.Unmarshal(entry.Content, &ref); err != nil {
-				return nil, err
+				return err
 			}
-			var call string
-			if err := s.DB.QueryRow("SELECT call_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&call); err != nil {
-				return nil, err
-			}
+			var call, providerID, name string
 			var request int64
 			var version int
-			var providerID, name string
-			if err := s.DB.QueryRow("SELECT request_id,call_version,provider_call_id,name FROM tool_calls WHERE id=?", ref.CallID).Scan(&request, &version, &providerID, &name); err != nil {
-				return nil, err
+			if err := q.QueryRow("SELECT call_json,request_id,call_version,provider_call_id,name FROM tool_calls WHERE id=?", ref.CallID).Scan(&call, &request, &version, &providerID, &name); err != nil {
+				return err
 			}
 			record["call"] = map[string]any{"id": ref.CallID, "request_id": request, "version": version, "provider_call_id": providerID, "name": name, "payload": json.RawMessage(call)}
 			if entry.Kind == "tool_result" {
 				var raw, md string
-				if err := s.DB.QueryRow("SELECT record_json,markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&raw, &md); err != nil {
-					return nil, err
+				if err := q.QueryRow("SELECT record_json,markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&raw, &md); err != nil {
+					return err
 				}
 				record["tool_record"], record["presentation"] = json.RawMessage(raw), json.RawMessage(md)
 			}
 		}
 		if err := enc.Encode(record); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return []byte(out.String()), nil
+	return ctx.Err()
 }
 
 // ArchiveActorTranscript freezes an actor's complete selected conversation in a
@@ -230,22 +264,14 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 	if pending != nil && pending.Type != llm.TypeAssistant {
 		return "", fmt.Errorf(prompts.HistoryTranscriptPendingRole)
 	}
-	entries, err := actorTranscriptEntriesWith(s.DB, session, actor)
+	v, err := s.Session(session)
 	if err != nil {
 		return "", err
 	}
-	unique := map[int64]Entry{}
-	for _, entry := range entries {
-		seq := entry.EventSeq()
-		if previous, ok := unique[seq]; !ok || entry.ID < previous.ID {
-			unique[seq] = entry // Prefer the original, with unmodified provider state.
-		}
+	entries, err := selectedActorEntries(context.Background(), s.DB, session, actor, v.EntryTip)
+	if err != nil {
+		return "", err
 	}
-	entries = make([]Entry, 0, len(unique))
-	for _, entry := range unique {
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].EventSeq() < entries[j].EventSeq() })
 	text, err := s.transcriptEntries(fmt.Sprintf("Child conversation · %s", actor), entries)
 	if err != nil {
 		return "", err
@@ -273,40 +299,9 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 	return s.writeArchive(session, text, exact)
 }
 
-// actorTranscriptEntriesWith follows the same frozen compaction cuts as recovery
-// ancestry, but loads payloads only for the exported actor. Manual snapshot
-// sources and unselected sibling branches are not compaction predecessors.
-func actorTranscriptEntriesWith(q historyReader, session, actor string) ([]Entry, error) {
-	var out []Entry
-	var tip int64
-	seen := map[string]bool{session: true}
-	for {
-		branch, err := actorBranchWith(q, session, tip, actor)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, branch...)
-		var predecessor string
-		err = q.QueryRow("SELECT predecessor_id,source_tip_id FROM compactions WHERE continuation_id=?", session).Scan(&predecessor, &tip)
-		if errors.Is(err, sql.ErrNoRows) {
-			return out, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if seen[predecessor] {
-			return nil, errors.New(prompts.HistoryCompactionAncestry)
-		}
-		seen[predecessor] = true
-		session = predecessor
-	}
-}
-
-func actorBranchWith(q historyReader, session string, tip int64, actor string) ([]Entry, error) {
-	if tip == 0 {
-		if err := q.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); err != nil {
-			return nil, err
-		}
+func actorBranchWith(q historyReader, session string, tip int64, actor string, boundariesOnly bool) ([]Entry, error) {
+	if err := validateTranscriptTip(q, session, tip); err != nil {
+		return nil, err
 	}
 	// Actor filtering must follow, not constrain, recursion: another actor's row
 	// can connect two selected actor entries. Keep payloads out of the recursive
@@ -316,7 +311,7 @@ func actorBranchWith(q historyReader, session string, tip int64, actor string) (
 		UNION ALL
 		SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id
 	) SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),coalesce(e.file_tip_id,0),e.session_id,coalesce(e.turn_id,''),e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,e.content_json,e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
-	FROM ancestry a JOIN entries e ON e.id=a.id WHERE e.actor_id=?`, tip, session, actor)
+	FROM ancestry a JOIN entries selected ON selected.id=a.id JOIN entries e ON e.id=coalesce(selected.source_id,selected.id) WHERE (e.actor_id=? OR e.kind='summary') AND (?=0 OR e.kind='summary' OR (e.kind='status' AND json_extract(e.content_json,'$.type')='actor_compacted'))`, tip, session, actor, boundariesOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -332,20 +327,6 @@ func actorBranchWith(q historyReader, session string, tip int64, actor string) (
 		out = append(out, entry)
 	}
 	return out, rows.Err()
-}
-
-// ArchiveTranscript writes the same Markdown/JSONL pair used by /export under
-// the lineage, deduplicating immutable Markdown by content hash.
-func (s *Store) ArchiveTranscript(session string, tip int64) (string, error) {
-	text, err := s.Transcript(session, tip)
-	if err != nil {
-		return "", err
-	}
-	exact, err := s.TranscriptJSONL(session, tip)
-	if err != nil {
-		return "", err
-	}
-	return s.writeArchive(session, text, exact)
 }
 
 // Export rejects existing targets and copies referenced snapshots into a sibling assets directory.

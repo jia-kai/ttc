@@ -25,6 +25,10 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if err := r.checkContext(); err != nil {
 		return "", err
 	}
+	// Keep the frozen source and its descriptor on the same selected continuation
+	// while main compaction may otherwise advance routing during aside admission.
+	r.routeMu.RLock()
+	defer r.routeMu.RUnlock()
 	question = strings.TrimSpace(question)
 	if question == "" || len(question) > 4096 || !utf8.ValidString(question) || strings.ContainsRune(question, 0) {
 		return "", errors.New("/btw requires a UTF-8 question of 1–4096 bytes without NUL")
@@ -33,6 +37,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	persisted, active := r.persisted, r.activeCancel != nil
 	prefix := append([]llm.Message(nil), r.mainPrefix...)
 	selection, turn := r.prefixSelection, r.prefixTurn
+	prefixSession, prefixTip := r.prefixSession, r.prefixTip
 	sessionID := r.current
 	if !active {
 		selection = r.selection
@@ -64,6 +69,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 			return "", err
 		}
 		prefix = llm.ContextFor(selection, prefix)
+		prefixSession, prefixTip = sessionID, saved.EntryTip
 		turn = "" // Idle asides belong to the session, not a completed turn.
 	}
 	actor := "main/" + history.NewID("btw")
@@ -86,6 +92,9 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	}
 	if count >= maxChildSlots {
 		return "", fmt.Errorf("all %d child slots are occupied; close an idle child with job_stop or wait for a running aside to finish", maxChildSlots)
+	}
+	if err := r.Store.RecordActorPrefix(sessionID, turn, actor, prefixSession, prefixTip); err != nil {
+		return "", err
 	}
 	return r.Jobs.StartTask(task.actor, jobs.TaskOptions{
 		Kind: "btw", Label: string(label), Background: true,

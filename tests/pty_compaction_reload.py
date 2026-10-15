@@ -221,8 +221,9 @@ def verify_recovery(db, source, before, wanted, delivered, result, answer):
     assert context['live_jobs'] == [] and context['children'] == [] and context['live_timers'] == [], context
     # The interrupted source request survives; the fresh snapshot compacts once.
     assert db.execute("SELECT count(*) FROM model_requests WHERE purpose='compaction' AND status='completed'").fetchone() == (1,)
-    archive = Path(db.execute('SELECT archive_path FROM compactions WHERE continuation_id=?', (session,)).fetchone()[0])
-    assert archive.exists() and Path(str(archive)+'.jsonl').exists(), archive
+    predecessor, source_tip = db.execute(
+        'SELECT predecessor_id,source_tip_id FROM compactions WHERE continuation_id=?', (session,)).fetchone()
+    assert db.execute('SELECT session_id FROM entries WHERE id=?', (source_tip,)).fetchone() == (predecessor,)
     return session
 
 
@@ -273,6 +274,7 @@ def run_case(root, mode, status, binary):
             current = verify_recovery(db, source, before, wanted, delivered, result, answer)
             count = db.execute('SELECT count(*) FROM model_requests').fetchone()[0]
             recovered_count = db.execute("SELECT count(*) FROM entries WHERE source_id IS NULL AND json_extract(content_json,'$.recovered_from_event_seq') IS NOT NULL").fetchone()[0]
+        assert not list(data.glob('lineages/*/compactions')), 'Recovery compaction eagerly wrote archives'
         idle = root / 'idle.json'
         idle.write_text('[]')  # Any unintended inference fails loudly.
         terminal = Terminal(base + ['--offline-script', str(idle), '--session', current],

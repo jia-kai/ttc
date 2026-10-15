@@ -1,3 +1,14 @@
+conversation_export:
+  description: >-
+    Generate the calling actor's selected conversation from durable history,
+    including earlier compactions. Write to a new absolute path inside
+    runtime_context.scratch_directory; parent directory must exist. Output is
+    opened atomically and fails if the path exists, including a symlink. format
+    is markdown (default) or jsonl for exact records. scope is full (default,
+    through a frozen invocation cut) or before_compaction (through the latest
+    successful compaction cut; fails if none). Children see their own history;
+    asides also include their frozen main prefix. Returns path and export
+    metadata, not transcript text; inspect with grep/read.
 child_message:
   description: >-
     Queue evidence or revised instructions for an active child assignment.

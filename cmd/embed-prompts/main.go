@@ -30,7 +30,7 @@ type toolPrompt struct {
 type compactionPrompts struct {
 	Instructions string `yaml:"instructions"`
 	Input        string `yaml:"input"`
-	Links        string `yaml:"links"`
+	Handoff      string `yaml:"handoff"`
 }
 
 var assetName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
@@ -45,7 +45,7 @@ var rolePromptNames = map[string]bool{
 // Reserved names belong to structured assets or the handwritten prompts API.
 var reservedNames = map[string]bool{
 	"Compaction":      true,
-	"CompactionInput": true, "CompactionLinks": true,
+	"CompactionInput": true, "CompactionHandoff": true,
 	"ToolDescription": true, "ToolNote": true, "ToolNames": true,
 }
 
@@ -214,13 +214,13 @@ func generate(root, output string) error {
 	if err = decodeYAML(filepath.Join(directory, "compaction.yaml"), &compaction); err != nil {
 		return err
 	}
-	for name, text := range map[string]string{"Compaction": compaction.Instructions, "CompactionInput": compaction.Input, "CompactionLinks": compaction.Links} {
+	for name, text := range map[string]string{"Compaction": compaction.Instructions, "CompactionInput": compaction.Input, "CompactionHandoff": compaction.Handoff} {
 		if !validText(text) {
 			return fmt.Errorf("compaction %s must contain nonempty UTF-8 text without NUL", name)
 		}
 		texts[name] = text
 	}
-	for name, slots := range map[string]int{"CompactionInput": 2, "CompactionLinks": 3} {
+	for name, slots := range map[string]int{"CompactionInput": 2, "CompactionHandoff": 1} {
 		text := texts[name]
 		if strings.Count(text, "%s") != slots || strings.Contains(strings.ReplaceAll(text, "%s", ""), "%") {
 			return fmt.Errorf("%s format must contain exactly %d %%s placeholders", name, slots)

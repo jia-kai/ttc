@@ -16,7 +16,7 @@ func fixture(t *testing.T) string {
 	for path, text := range map[string]string{
 		"prompt/system.yaml":           fixtureSystem,
 		"prompt/child-messages.yaml":   "ChildMessageNonempty: message must be nonempty UTF-8\n",
-		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nlinks: '%s Archives: %s %s'\n",
+		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nhandoff: '%s Export earlier history on demand.'\n",
 		"prompt/naming.md":             "Name it.\r\n\n",
 		"prompt/tools.yaml":            "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
 		"prompt/runtime.yaml":          "RuntimeWarning: 'Synthetic warning: %s'\n",
@@ -93,7 +93,7 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	put(t, root, "prompt/system.yaml", strings.Replace(fixtureSystem,
 		"Child: \"Child instructions.\\n\"\n",
 		"Child: >\n  First wrapped\n  paragraph.\n\n  Second paragraph.\n", 1))
-	put(t, root, "prompt/compaction.yaml", "instructions: Summary.\ninput: |-\n  Focus: %s\n\n  %s\nlinks: |-\n  %s\n\n  Earlier history: %s\n  Exact records: %s\n")
+	put(t, root, "prompt/compaction.yaml", "instructions: Summary.\ninput: |-\n  Focus: %s\n\n  %s\nhandoff: |-\n  %s\n\n  Export earlier history on demand.\n")
 	if err := generate(root, "generated.go"); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	for _, want := range []string{
 		`const Child = "First wrapped paragraph.\nSecond paragraph.\n"`,
 		`const CompactionInput = "Focus: %s\n\n%s"`,
-		`const CompactionLinks = "%s\n\nEarlier history: %s\nExact records: %s"`,
+		`const CompactionHandoff = "%s\n\nExport earlier history on demand."`,
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("generated output missing %s", want)
@@ -133,9 +133,9 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"empty naming", "prompt/naming.md", "", "nonempty UTF-8"},
 		{"naming encoding", "prompt/naming.md", "\xff", "UTF-8"},
 		{"naming nul", "prompt/naming.md", "Name\x00it.", "NUL"},
-		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\ninput: '%s %s'\nlinks: '%s %s %s'", "nonempty"},
-		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\ninput: '%s %s'\nlinks: '%s %s %s'\ntypo: bad", "field typo"},
-		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\ninput: Focus %s\nlinks: '%s %s %s'", "format"},
+		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\ninput: '%s %s'\nhandoff: '%s'", "nonempty"},
+		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\ninput: '%s %s'\nhandoff: '%s'\ntypo: bad", "field typo"},
+		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\ninput: Focus %s\nhandoff: '%s'", "format"},
 		{"empty messages", "prompt/runtime.yaml", "{}", "model-facing messages"},
 		{"empty message", "prompt/runtime.yaml", "RuntimeWarning: ''", "nonempty"},
 		{"message nul", "prompt/runtime.yaml", "RuntimeWarning: \"bad\\0text\"", "NUL"},

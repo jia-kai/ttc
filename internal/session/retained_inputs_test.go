@@ -339,8 +339,11 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			for i, source := range []string{"task", "steer", "queue", "steer", "btw", "steer"} {
 				messages = append(messages, llm.Message{Type: llm.TypeUserInput, InputSource: source, InputTimeMS: time.Now().Add(-time.Duration(10-i) * time.Minute).UnixMilli(), Content: fmt.Sprintf("original %d", i)})
 			}
-			for range 2 {
+			for iteration := range 2 {
 				messages = append(messages, llm.Message{Type: llm.TypeAssistant, Content: strings.Repeat("older work ", 3000)}, llm.Message{Type: llm.TypeAssistant, Content: "recent work"})
+				if iteration == 0 {
+					seedIsolatedHistory(t, r, actor, task.turn, messages)
+				}
 				result, _, err := r.compactChild(context.Background(), task, messages, contextCursor{}, nil)
 				if err != nil {
 					t.Fatal(err)

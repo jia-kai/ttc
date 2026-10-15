@@ -16,11 +16,11 @@ func TestRetainedInputPreInputBranchReplacementAndLoad(t *testing.T) {
 	if err := s.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	archive, err := s.ArchiveTranscript(original.ID, 0)
+	cut, err := s.Session(original.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(original.ID, "Summary before retained input.", archive, tail, []int64{original.EntryTip}, time.Now().Add(time.Second), nil)
+	continued, err := s.Continue(original.ID, "Summary before retained input.", cut.EntryTip, tail, []int64{original.EntryTip}, time.Now().Add(time.Second), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

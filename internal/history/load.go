@@ -17,9 +17,6 @@ import (
 // recovers durable pending events into fresh snapshot-owned notification rows.
 // Read-only predecessors open for inspection.
 func (s *Store) Load(id string) (Session, error) {
-	if err := s.ValidateArchive(id); err != nil {
-		return Session{}, err
-	}
 	loaded := id
 	err := s.transact(func(tx *sql.Tx) error {
 		var readOnly bool

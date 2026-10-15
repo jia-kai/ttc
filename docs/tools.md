@@ -42,8 +42,8 @@ These are TTC's complete target contracts. Current code:
 ## Saved presentation and live updates
 
 Each invocation saves a version-one portable Markdown record alongside its exact
-JSON. CLI, inspectors, exports and compaction archives share the saved
-presentation; it never replaces or changes model-facing results.
+JSON. CLI, inspectors and exports share the saved presentation; it never
+replaces or changes model-facing results.
 
 - `summary`: normally one clipped row with the primary argument and
   status/error. Glob shows only its pattern plus any failure. Commands use `sh`
@@ -83,6 +83,44 @@ presentation; it never replaces or changes model-facing results.
   polling.
 
 ## Files and search
+
+### `conversation_export`
+
+Input: `{path, format?, scope?}`.
+
+- `path` must be absolute and inside the runtime-supplied scratch directory,
+  shared by actors with the same UID. The parent must already exist. Atomically
+  create the file exclusively with mode 0600; fail if the target exists,
+  including a symlink, or if path resolution escapes scratch. Do not overwrite
+  files or create parent directories. Contents are streamed after creation: a
+  partial file may be visible before success, not published by a final rename.
+- `format` is `markdown` (default) or `jsonl`. Markdown is a dense readable
+  transcript; JSONL preserves exact saved records, including envelopes, tool
+  records and replay metadata. This is one requested file, not `/export`'s
+  Markdown/JSONL/assets bundle. Use existing `grep`/`read` tools to inspect it.
+- Success returns `path`, `bytes`, `actor`, `source_session`, `source_tip`,
+  `scope` and `format`, identifying the frozen selection and file size in bytes.
+- `scope` is `full` (default) or `before_compaction`. Full freezes the selected
+  committed history at the call; before-compaction freezes the latest successful
+  cut for the calling actor, including retained messages at that cut, and fails
+  if there is no successful compaction. Later arrivals are excluded.
+- Actor selection is automatic, with no actor/session selector. Main exports
+  only selected main history; a child exports only its own selected history,
+  including earlier compactions and assignments. An aside exports its admitted
+  frozen main prefix plus its own history, not main messages arriving later.
+  Durable SQLite selection follows compaction and load-copy ancestry,
+  deduplicates source identities and excludes sibling branches and unrelated
+  actors. This is not a dump of the lineage or live runtime state.
+- Migration from schemas 5–8 does not backfill isolated `actor_compacted` or
+  `actor_context_prefix` records. Historical child/aside cuts are therefore
+  unavailable to `before_compaction`; historical aside exports include only
+  their own recorded entries, not an unreconstructable frozen main prefix.
+  Historical main cuts remain available through `compactions`.
+- Export files are ephemeral scratch artifacts outside undo and durable
+  retention. Scratch cleanup may remove them; exports do not pin or recreate
+  evicted attachment bytes. Compaction and reload do not depend on these files.
+  Child failure/cancellation diagnostic archives remain a separate eager,
+  immutable capture.
 
 ### `read`
 
@@ -795,8 +833,6 @@ Coding child events use the same generic ordering/delivery contract:
   "event_seq": 39,
   "child_id": "c7",
   "turn_id": "t3",
-  "archive": "/private/archive.md",
-  "records": "/private/archive.md.jsonl",
   "context_tokens_estimate": 12000
 }
 ```
@@ -827,8 +863,8 @@ field remains data. Assignment `job_id` is the preferred routing handle.
 
 - A foreground child result carries its finish event; otherwise enqueue one main
   message. Emit `child_compacted` only after successful handoff. Payloads
-  reference committed immutable results/archives; sequence, not wall-clock time
-  or later child state, determines order. `/btw` stays UI-only.
+  reference committed immutable results; sequence, not wall-clock time or later
+  child state, determines order. `/btw` stays UI-only.
 - Commit history before delivery. Tool results and later messages are distinct
   events visible in the TUI/model conversation. The live pending queue is
   memory-only; semantic event bodies and admitted delivery IDs are durable.

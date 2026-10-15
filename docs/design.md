@@ -14,7 +14,7 @@ history/ reversible edits. This defines the complete v1 target;
 | Tool arguments, results and Markdown records | Shell/LSP jobs, children and output buffers              |
 | Model selections, request usage and events   | Live timers and notification queues                      |
 | File snapshots and undo cursors              | Queued prompts, steers, questions and armed image clicks |
-| Attachments and compaction archives          | Child contexts and concurrency slots                     |
+| Attachments and diagnostic archives          | Child contexts and concurrency slots                     |
 
 - History records execution, never restarts it. No agent daemon, IPC service,
   process adoption or durable scheduler. Long-lived work belongs in tmux;
@@ -445,6 +445,24 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
 - `/export <path>` freezes a committed cut and writes dense Markdown, exact
   `.jsonl` and sibling assets with relative links. Reject existing targets; user
   exports are outside retention cleanup.
+- [`conversation_export`](tools.md#conversation_export) instead writes one
+  actor-selected Markdown or JSONL file in scratch shared by the UID, using
+  atomic exclusive creation with mode 0600. Contents stream into the created
+  file and may be partially visible before success; there is no final-rename
+  publication guarantee. Serialization streams, but selected entry payloads
+  remain buffered. SQLite selection follows compaction and load-copy ancestry
+  and deduplicates source identities, never traversing sibling branches or
+  unrelated actors. Main selects main history, children their own history across
+  assignments, and asides their recorded frozen main prefix plus their own
+  history. Full scope ends at the committed call cut; before-compaction scope
+  ends at the latest successful actor cut. Scratch is ephemeral; exporting does
+  not pin attachment cache bytes.
+- Compaction creates no eager main/child/aside transcript files. Shared
+  preparation selects and budgets actor history and generates the summary; main
+  continuation and child/aside handoffs own their distinct commits. Child
+  failure/cancellation still writes immutable diagnostic transcripts. Existing
+  archive files, saved summaries and immutable evidence are preserved by
+  migration, not rewritten or required for loading.
 
 ## Serialized edits and shared undo
 
@@ -489,9 +507,9 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 8;
-  startup supports schemas 5–8 and runs ordered, adjacent upgrades (5 → 6 → 7
-  → 8) in one transaction, validating before commit. Each step reports its own
+- Empty databases initialize in one immediate transaction. Current schema is 9;
+  startup supports schemas 5–9 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9) in one transaction, validating before commit. Each step reports its own
   progress; completion of a step is not a committed upgrade. Rebuilding entries
   temporarily indexes all incoming foreign-key lookups to avoid per-entry table
   scans. Schemas below 5, nonempty unversioned databases and unknown newer
@@ -513,7 +531,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   `unknown`; new completions require observed `idle` or `closed`. Runtime reads
   accept only the canonical format, without old-key fallbacks. Saved original
   provider requests, tool results, model messages and archive files remain
-  original evidence; migration does not repair or replay execution.
+  original evidence; migration does not repair or replay execution. The 8 → 9
+  step removes generated compaction archive metadata, preserving frozen cuts,
+  original summaries and existing archive files. Archives are no longer load
+  prerequisites. Upgrades from schemas 5–8 do not backfill isolated
+  `actor_compacted` or `actor_context_prefix` rows: historical child/aside cuts
+  are unavailable to `before_compaction`, and historical aside exports contain
+  only their own recorded entries, without reconstructing the frozen main
+  prefix. Historical main cuts remain available in `compactions`.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting
@@ -571,7 +596,7 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
 - Round-trip every tool codec; verify immutable results and stale-handle errors.
 - Exercise mixed parent/child edits, idle child writes, branching and conflict-
   checked undo/redo across SQL/filesystem failures.
-- Test compaction archive/commit boundaries with live jobs, timers and
+- Test compaction selection/commit boundaries with live jobs, timers and
   interruption; restart must never relaunch work. Check indexed queries on
   realistic histories.
 - Run `make test` and `make check`; use self-contained mock providers and
@@ -726,14 +751,15 @@ The concrete boundaries above are TTC decisions, informed by:
 - `/sessions`/Ctrl-X L queries at most 100 workspace-filtered metadata rows, not
   transcripts. Group local activity dates: Today, Yesterday, six prior weekdays,
   then ISO dates. Headers cannot select; click selects, Enter uses idle `/load`.
-- `/load` and `--session` preflight archives and copy writable history before
-  activation. Failed preparation leaves the prior runtime usable; read-only
-  history stays immutable. Every coding request uses current system
-  instructions. [Runtime snapshots](system_prompt.md#runtime-snapshots) define
-  initial metadata and per-request refresh. Explicit loads never restore source
-  live state. [Compaction-boundary recovery](compaction.md#reload-recovery)
-  copies saved undelivered notifications into fresh events owned by the loaded
-  session; automatic delivery never acknowledges the source runtime's events.
+- `/load` and `--session` copy writable SQLite history before activation,
+  without requiring compaction archives. Failed preparation leaves the prior
+  runtime usable; read-only history stays immutable. Every coding request uses
+  current system instructions.
+  [Runtime snapshots](system_prompt.md#runtime-snapshots) define initial
+  metadata and per-request refresh. Explicit loads never restore source live
+  state. [Compaction-boundary recovery](compaction.md#reload-recovery) copies
+  saved undelivered notifications into fresh events owned by the loaded session;
+  automatic delivery never acknowledges the source runtime's events.
 - Events carry generation to reject stale publications after session changes or
   same-session restore. Metering updates after responses and tool batches. Loads
   replay without an acknowledgment window; new/clear, undo/redo and export use

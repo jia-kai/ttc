@@ -50,9 +50,10 @@ input: |-
   Focus: %s
 
   %s
-links: |-
+handoff: |-
   %s
 
-  Earlier history: %s
-  Exact records: %s
-  Search with grep, then read matching lines.
+  Earlier conversation remains in durable history. If needed, use
+  conversation_export with a new absolute path inside scratch_directory;
+  scope=before_compaction selects the latest successful compaction cut.
+  Search the generated Markdown with grep, then read matching lines.

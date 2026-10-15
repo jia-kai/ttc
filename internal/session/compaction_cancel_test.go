@@ -67,6 +67,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 					if e != nil {
 						t.Fatal(e)
 					}
+					seedIsolatedHistory(t, r, id, turn, messages)
 					_, _, err = r.compactChild(ctx, childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
 				}
 				if calls != 1 {
