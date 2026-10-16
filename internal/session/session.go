@@ -73,7 +73,7 @@ type Runtime struct {
 	publishedTimers   map[string]wakeup
 	publishedChildren map[string]tool.ChildView
 	retentionStop     func()
-	retentionDue      time.Time               // Next full attempt; worker-owned across cancel/join restarts, not guarded by mu.
+	activityStop      func()
 	children          map[string]*codingChild // Owned by childStartMu; live handles never restored.
 	childStartMu      sync.Mutex              // Serializes child capacity checks and admission, never child execution.
 	routeMu           sync.RWMutex            // Keeps child commits/file mutations within the current continuation.
@@ -126,6 +126,7 @@ func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Infe
 	r.resetTransient()
 	r.notifications = notices
 	r.retentionStop = r.startRetention()
+	r.activityStop = r.startActivityRefresh()
 	return r, nil
 }
 func (r *Runtime) resetTransient() {
@@ -251,6 +252,10 @@ func (r *Runtime) Close() {
 	if r.retentionStop != nil {
 		r.retentionStop()
 		r.retentionStop = nil
+	}
+	if r.activityStop != nil {
+		r.activityStop()
+		r.activityStop = nil
 	}
 	r.cancel()
 	r.Interrupt()
@@ -607,7 +612,7 @@ func (r *Runtime) Command(text string) (string, error) {
 			r.retentionStop()
 			r.retentionStop = nil
 		}
-		defer func() { r.retentionStop = r.startRetention() }()
+		defer func() { r.refreshLoadedActivity(r.ctx, time.Now()) }()
 	}
 	switch parts[0] {
 	case "/undo", "/redo", "/branch", "/compact":

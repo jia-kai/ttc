@@ -579,13 +579,15 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   deduplicate only within the lineage. No global durable blob table or durable
   job/timer/inbox table. Enforce the
   [retention policy](requirement.md#data-retention) with an atomic activity
-  recheck before lineage deletion. Startup/hourly maintenance gates the 30-day
+  recheck before lineage deletion. Startup-only maintenance gates the 30-day
   inactive-lineage sweep on database-plus-WAL size of at least 2 GiB, without
   forcing the database below the threshold. After deletions, attempt SQLite
   compaction and WAL truncation with a two-minute limit. Compaction requires
   exclusive lifetime use, coordinated under the initialization lock; other open
   stores defer it rather than blocking their ordinary writes with VACUUM. Later
-  checks retry SQLite free pages/WAL residue without another forced eviction.
+  startups retry SQLite free pages/WAL residue without another forced eviction.
+  An hourly activity-only heartbeat protects idle loaded sessions from other
+  instances' startup sweeps; lifecycle commands also refresh loaded activity.
   Failures appear as UI-only warnings and may occur after history deletions have
   committed. Copies protect shared ancestry/assets. Startup statistics (physical
   database plus WAL bytes, entry count, oldest-entry age) are UI-only status,

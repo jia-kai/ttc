@@ -11,57 +11,27 @@ import (
 	"ttc/internal/render"
 )
 
-// startRetention refreshes loaded activity immediately, maintaining full history
-// only at startup and on the hourly deadline preserved across worker restarts.
-// The caller owns the returned idempotent cancel/join closure and must call it
-// before lifecycle preflight/session changes, restarting after activation fails
-// or succeeds. This keeps loaded-session protection stable during asset deletion.
-// The active worker owns retentionDue; lifecycle callers transfer ownership by
-// joining the old worker before starting its replacement.
+// startRetention runs maintenance once at startup. The returned idempotent
+// closure cancels and joins it before shutdown or a lifecycle command changes
+// the loaded session. Canceled maintenance is not restarted.
 func (r *Runtime) startRetention() func() {
 	ctx, cancel := context.WithCancel(r.ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		timer := time.NewTimer(0)
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				r.maintainRetention(ctx, time.Now())
-				if ctx.Err() != nil {
-					return
-				}
-				timer.Reset(max(0, time.Until(r.retentionDue)))
-			}
-		}
+		defer cancel()
+		r.maintainRetention(ctx, time.Now())
 	}()
 	return func() { cancel(); <-done }
 }
 
-// maintainRetention runs on the retention worker, or with that worker joined.
-// Attempts consume their hourly slots even on failure, avoiding expensive retries
-// during lifecycle commands. A canceled initial pass remains due until it can
-// publish startup statistics; canceling later hourly work keeps its next slot.
+// maintainRetention performs the startup sweep and publishes UI-only statistics.
 func (r *Runtime) maintainRetention(ctx context.Context, now time.Time) {
 	if ctx.Err() != nil {
 		return
 	}
-	if now.Before(r.retentionDue) {
-		if err := r.Store.RefreshLoadedActivity(ctx, now, r.Current()); err != nil && ctx.Err() == nil {
-			r.emit(Event{Kind: "status", Text: "History activity refresh failed: " + render.Clean(err.Error())})
-		}
-		return
-	}
-	startup := r.retentionDue.IsZero()
-	r.retentionDue = now.Add(time.Hour)
 	result, err := r.Store.Maintain(ctx, now, r.Current())
 	if ctx.Err() != nil {
-		if startup {
-			r.retentionDue = time.Time{}
-		}
 		return
 	}
 	if err != nil {
@@ -74,9 +44,6 @@ func (r *Runtime) maintainRetention(ctx context.Context, now time.Time) {
 		// the requested startup footprint visible even when maintenance warns.
 		result.Stats, err = r.Store.StorageStats(ctx)
 		if ctx.Err() != nil {
-			if startup {
-				r.retentionDue = time.Time{}
-			}
 			return
 		}
 		if err != nil {
@@ -87,6 +54,33 @@ func (r *Runtime) maintainRetention(ctx context.Context, now time.Time) {
 	// Transient view events neither admit model input nor create database entries
 	// for blank conversations. Frontends consume them after initial history replay.
 	r.emit(Event{Kind: "status", Text: historyStorageStatus(result, now)})
+}
+
+// startActivityRefresh protects idle loaded sessions from other instances'
+// startup sweeps without scanning, deleting, or compacting history.
+func (r *Runtime) startActivityRefresh() func() {
+	ctx, cancel := context.WithCancel(r.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				r.refreshLoadedActivity(ctx, now)
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
+}
+
+func (r *Runtime) refreshLoadedActivity(ctx context.Context, now time.Time) {
+	if err := r.Store.RefreshLoadedActivity(ctx, now, r.Current()); err != nil && ctx.Err() == nil {
+		r.emit(Event{Kind: "status", Text: "History activity refresh failed: " + render.Clean(err.Error())})
+	}
 }
 
 func historyStorageStatus(result history.MaintenanceResult, now time.Time) string {

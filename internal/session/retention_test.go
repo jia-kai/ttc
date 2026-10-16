@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"ttc/internal/history"
@@ -119,7 +120,7 @@ func TestRetentionStartupDoesNotPersistBlankConversationOrModelInput(t *testing.
 	}
 }
 
-func TestRetentionRestartsRefreshActivityWithoutScanningOrDelayingFullPass(t *testing.T) {
+func TestRetentionLifecycleRefreshesActivityWithoutRepeatingStartupMaintenance(t *testing.T) {
 	r, events, path := retentionFixture(t)
 	other := history.NewID("session")
 	turn, _, err := r.Store.StartSession(other, path, r.CurrentSelection(), llm.Message{Type: llm.TypeUserInput, Content: "Next loaded conversation"})
@@ -130,12 +131,9 @@ func TestRetentionRestartsRefreshActivityWithoutScanningOrDelayingFullPass(t *te
 		t.Fatal(err)
 	}
 	stop := r.startRetention()
+	t.Cleanup(stop)
 	retentionEvent(t, events)
 	stop()
-	due := r.retentionDue // Ownership transfers only after joining the worker.
-	if due.IsZero() {
-		t.Fatal("startup did not schedule the next full attempt")
-	}
 	// Removing the statistics source makes any unintended count/min scan fail,
 	// while session activity updates and their foreign keys remain valid.
 	if _, err := r.Store.DB.Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
@@ -149,49 +147,28 @@ func TestRetentionRestartsRefreshActivityWithoutScanningOrDelayingFullPass(t *te
 			t.Fatal(err)
 		}
 		before := time.Now().UnixMilli()
-		stop := r.startRetention()
-		deadline := time.Now().Add(2 * time.Second)
-		for {
-			var activity int64
-			if err := r.Store.DB.QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", other).Scan(&activity); err != nil {
-				stop()
-				t.Fatal(err)
-			}
-			if activity >= before {
-				break
-			}
-			if time.Now().After(deadline) {
-				stop()
-				t.Fatal("restart did not refresh the newly loaded conversation")
-			}
-			time.Sleep(time.Millisecond)
+		// Even a failed lifecycle command refreshes the still-loaded session.
+		if _, err := r.Command("/load missing-session"); err == nil {
+			t.Fatal("load unexpectedly succeeded")
 		}
-		stop()
-		if r.retentionDue != due || len(events) != 0 {
-			t.Fatalf("restart rescanned history or delayed maintenance: due=%v want=%v events=%d", r.retentionDue, due, len(events))
+		var activity int64
+		if err := r.Store.DB.QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", other).Scan(&activity); err != nil || activity < before {
+			t.Fatal("lifecycle command did not refresh loaded activity", activity, err)
 		}
-	}
-	if _, err := r.Store.DB.Exec("ALTER TABLE hidden_entries RENAME TO entries"); err != nil {
-		t.Fatal(err)
-	}
-	r.maintainRetention(r.ctx, due.Add(-time.Nanosecond))
-	if r.retentionDue != due || len(events) != 0 {
-		t.Fatal("full maintenance ran before its original hourly deadline")
-	}
-	r.maintainRetention(r.ctx, due)
-	if event := retentionEvent(t, events); !strings.HasPrefix(event.Text, "History database:") || r.retentionDue != due.Add(time.Hour) {
-		t.Fatal("full maintenance did not run on its original hourly deadline", event, r.retentionDue)
+		if len(events) != 0 {
+			t.Fatal("lifecycle command repeated startup maintenance", len(events))
+		}
 	}
 }
 
-func TestRetentionFailedAttemptWaitsAnHourAndPreAttemptCancellationKeepsStartupDue(t *testing.T) {
+func TestRetentionCanceledAndFailedStartup(t *testing.T) {
 	r, events, _ := retentionFixture(t)
 	now := time.Now()
 	canceled, cancel := context.WithCancel(r.ctx)
 	cancel()
 	r.maintainRetention(canceled, now)
-	if !r.retentionDue.IsZero() || len(events) != 0 {
-		t.Fatal("cancellation before the startup attempt consumed its slot")
+	if len(events) != 0 {
+		t.Fatal("canceled startup published a status")
 	}
 	if _, err := r.Store.DB.Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
 		t.Fatal(err)
@@ -203,21 +180,72 @@ func TestRetentionFailedAttemptWaitsAnHourAndPreAttemptCancellationKeepsStartupD
 	if event := retentionEvent(t, events); !strings.HasPrefix(event.Text, "History storage statistics unavailable:") {
 		t.Fatal("missing statistics source was not reported", event)
 	}
-	due := now.Add(time.Hour)
-	if r.retentionDue != due {
-		t.Fatal("failed attempt did not schedule an hourly retry", r.retentionDue)
-	}
-	if _, err := r.Store.DB.Exec("ALTER TABLE hidden_entries RENAME TO entries"); err != nil {
+}
+
+func TestRetentionLifecycleCancelsBlockedStartupWithoutRestarting(t *testing.T) {
+	r, events, _ := retentionFixture(t)
+	connection, err := r.Store.DB.Conn(r.ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	r.maintainRetention(r.ctx, now.Add(time.Minute))
-	if r.retentionDue != due || len(events) != 0 {
-		t.Fatal("failed full maintenance retried before its hourly deadline")
+	defer connection.Close()
+	stop := r.startRetention()
+	defer stop()
+	joined := make(chan struct{})
+	r.retentionStop = func() { stop(); close(joined) }
+	finished := make(chan error, 1)
+	go func() {
+		_, err := r.Command("/load missing-session")
+		finished <- err
+	}()
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		connection.Close()
+		<-finished
+		t.Fatal("lifecycle command did not cancel blocked startup maintenance")
 	}
-	r.maintainRetention(r.ctx, due)
-	if event := retentionEvent(t, events); !strings.HasPrefix(event.Text, "History database:") {
-		t.Fatal("hourly maintenance did not recover from a failed attempt", event)
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
 	}
+	if err := <-finished; err == nil {
+		t.Fatal("load unexpectedly succeeded")
+	}
+	if r.retentionStop != nil || len(events) != 0 {
+		t.Fatal("lifecycle command restarted canceled startup maintenance")
+	}
+}
+
+func TestActivityHeartbeatRefreshesWithoutMaintenanceAndStops(t *testing.T) {
+	r, events, _ := retentionFixture(t)
+	// The heartbeat's context must be owned by the virtual-time bubble, not by
+	// the fixture's real-time cleanup.
+	r.ctx = context.Background()
+	// A statistics scan would fail, but the cheap activity update still works.
+	if _, err := r.Store.DB.Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
+		t.Fatal(err)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		stop := r.startActivityRefresh()
+		defer stop()
+		for i := 0; i < 2; i++ {
+			if _, err := r.Store.DB.Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", r.Current()); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			time.Sleep(time.Hour)
+			synctest.Wait()
+			var activity int64
+			if err := r.Store.DB.QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", r.Current()).Scan(&activity); err != nil || activity != time.Now().UnixMilli() {
+				t.Fatal("heartbeat did not refresh loaded activity", activity, err)
+			}
+			if len(events) != 0 {
+				t.Fatal("heartbeat scanned history or published maintenance statistics")
+			}
+		}
+		stop()
+		stop()
+	})
 }
 
 func TestRetentionMaintenanceWarningStillReportsStorageStatistics(t *testing.T) {
@@ -240,7 +268,7 @@ func TestRetentionMaintenanceWarningStillReportsStorageStatistics(t *testing.T) 
 	}
 }
 
-func TestRetentionCanceledInitialAttemptRemainsDueUntilStartupStatistics(t *testing.T) {
+func TestRetentionCancellationDuringStartupSuppressesStatistics(t *testing.T) {
 	r, events, _ := retentionFixture(t)
 	// Hold the sole SQL connection so maintenance reaches its first activity
 	// update but cannot finish before this context expires.
@@ -253,15 +281,8 @@ func TestRetentionCanceledInitialAttemptRemainsDueUntilStartupStatistics(t *test
 	defer cancel()
 	now := time.Now()
 	r.maintainRetention(ctx, now)
-	if ctx.Err() == nil || !r.retentionDue.IsZero() || len(events) != 0 {
-		t.Fatal("canceled initial attempt suppressed the startup notice", ctx.Err(), r.retentionDue, len(events))
-	}
-	if err := connection.Close(); err != nil {
-		t.Fatal(err)
-	}
-	r.maintainRetention(r.ctx, now.Add(time.Minute))
-	if event := retentionEvent(t, events); !strings.HasPrefix(event.Text, "History database:") || r.retentionDue.IsZero() {
-		t.Fatal("replacement worker did not retry initial statistics", event, r.retentionDue)
+	if ctx.Err() == nil || len(events) != 0 {
+		t.Fatal("canceled startup published statistics", ctx.Err(), len(events))
 	}
 }
 

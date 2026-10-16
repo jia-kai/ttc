@@ -174,7 +174,7 @@
 
 ## Data retention
 
-- Check at startup/hourly; refresh loaded-session activity for other instances.
+- Check only at startup; refresh loaded-session activity for other instances.
   When SQLite database plus WAL storage is at least 2 GiB, expire entire
   lineages after 30 inactive days; copies share retention. Sweep once and
   reclaim space without deleting newer history to meet a size target. Show
