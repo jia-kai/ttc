@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 )
@@ -31,7 +32,7 @@ func TestManualRenameWinsPendingAutomaticNaming(t *testing.T) {
 		t.Fatal(session, err)
 	}
 	var source string
-	if err := r.Store.DB.QueryRow("SELECT name_source FROM sessions WHERE id=?", session.ID).Scan(&source); err != nil || source != "manual" {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT name_source FROM sessions WHERE id=?", session.ID).Scan(&source); err != nil || source != "manual" {
 		t.Fatal(source, err)
 	}
 	found := false
@@ -59,7 +60,7 @@ func TestRenameValidationDoesNotPersistBlankSession(t *testing.T) {
 		t.Fatal("renamed empty session")
 	}
 	var count int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
 	seedRuntime(t, r, "Inspect the project")

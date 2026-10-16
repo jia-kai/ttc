@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 )
@@ -94,7 +95,7 @@ func TestHelpCommandDoesNotWaitForActiveTurn(t *testing.T) {
 		t.Fatal("turn did not finish")
 	}
 	var requests int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM model_requests WHERE purpose='coding'").Scan(&requests); err != nil || requests != 1 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM model_requests WHERE purpose='coding'").Scan(&requests); err != nil || requests != 1 {
 		t.Fatal("help made an inference request", requests, err)
 	}
 }

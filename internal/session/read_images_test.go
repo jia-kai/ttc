@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
@@ -120,7 +121,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 	}
 	check(continued.ID)
 	var payloadRecords int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM tool_records WHERE record_json LIKE '%"data_url"%' OR record_json LIKE '%base64%'`).Scan(&payloadRecords); err != nil || payloadRecords != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM tool_records WHERE record_json LIKE '%"data_url"%' OR record_json LIKE '%base64%'`).Scan(&payloadRecords); err != nil || payloadRecords != 0 {
 		t.Fatal("image payload stored in DB", payloadRecords, err)
 	}
 	if _, err := os.Stat(filepath.Join(r.Store.Root, "lineages", original, "images")); !os.IsNotExist(err) {

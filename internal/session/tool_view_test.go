@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/capture"
 	"ttc/internal/jobs"
@@ -56,7 +57,7 @@ func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {
 			}
 			var entryID int64
 			var result string
-			if err := r.Store.DB.QueryRow("SELECT r.entry_id,c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read'").Scan(&entryID, &result); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT r.entry_id,c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read'").Scan(&entryID, &result); err != nil {
 				t.Fatal(err)
 			}
 			entry, err := r.Store.Entry(entryID)
@@ -70,9 +71,9 @@ func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				got, err := r.Store.Inspect(entry)
-				if err != nil || got != want || strings.Contains(got, "unselected-current-tail") || strings.Contains(got, "showing tail") {
-					t.Fatal("inspector substituted live capture for requested page", got, err)
+				got, err := r.Store.ReadInspection(context.Background(), entry.ID)
+				if err != nil || got.Text != want || strings.Contains(got.Text, "unselected-current-tail") || strings.Contains(got.Text, "showing tail") {
+					t.Fatal("inspector substituted live capture for requested page", got.Text, err)
 				}
 			}
 		})
@@ -247,16 +248,16 @@ func TestCustomJobInspectionIsMaterializedWithoutHistoricalCallbacks(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := r.Store.Inspect(entry)
+	first, err := r.Store.ReadInspection(context.Background(), entry.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Command("/clear"); err != nil {
 		t.Fatal(err)
 	}
-	second, err := r.Store.Inspect(entry)
-	if err != nil || second != first || !strings.Contains(second, "training.tsv") || calls.Load() != before {
-		t.Fatalf("historical inspection invoked live provider or changed: %v, calls %d -> %d\n%s", err, before, calls.Load(), second)
+	second, err := r.Store.ReadInspection(context.Background(), entry.ID)
+	if err != nil || second.Text != first.Text || !strings.Contains(second.Text, "training.tsv") || calls.Load() != before {
+		t.Fatalf("historical inspection invoked live provider or changed: %v, calls %d -> %d\n%s", err, before, calls.Load(), second.Text)
 	}
 }
 
@@ -296,11 +297,11 @@ func TestBTWInspectionDisclosesTruncatedFeedbackInSavedDetail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := r.Store.Inspect(entry)
+	detail, err := r.Store.ReadInspection(context.Background(), entry.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, inspected := range []string{r.JobDetail(id, ""), detail} {
+	for _, inspected := range []string{r.JobDetail(id, ""), detail.Text} {
 		for _, want := range []string{"## Aside answer", "**Tool feedback**", "Retained stderr output was truncated.", "retained-feedback-end", "```text"} {
 			if !strings.Contains(inspected, want) {
 				t.Fatalf("aside inspection missing %q", want)

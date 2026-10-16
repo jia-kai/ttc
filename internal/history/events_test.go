@@ -26,10 +26,10 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	var countBefore int
-	if err := s.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&countBefore); err != nil {
+	if err := s.db.QueryRow("SELECT count(*) FROM model_requests").Scan(&countBefore); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
+	if _, err := s.db.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{notice}, nil); err == nil {
@@ -40,13 +40,13 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	var countAfter int
-	if err := s.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&countAfter); err != nil {
+	if err := s.db.QueryRow("SELECT count(*) FROM model_requests").Scan(&countAfter); err != nil {
 		t.Fatal(err)
 	}
 	if before.EntryTip != after.EntryTip || countBefore != countAfter {
 		t.Fatal("admission rollback changed committed history", before, after, countBefore, countAfter)
 	}
-	if _, err := s.DB.Exec("DROP TRIGGER fail_admission"); err != nil {
+	if _, err := s.db.Exec("DROP TRIGGER fail_admission"); err != nil {
 		t.Fatal(err)
 	}
 	admitted, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{notice}, nil)
@@ -58,7 +58,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	}
 	var input, ack string
 	var cutoff int64
-	if err := s.DB.QueryRow("SELECT event_cutoff,input_json,delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&cutoff, &input, &ack); err != nil {
+	if err := s.db.QueryRow("SELECT event_cutoff,input_json,delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&cutoff, &input, &ack); err != nil {
 		t.Fatal(err)
 	}
 	var metadata requestInputMetadata
@@ -82,7 +82,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reread string
-	if err := s.DB.QueryRow("SELECT input_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&reread); err != nil || reread != input {
+	if err := s.db.QueryRow("SELECT input_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&reread); err != nil || reread != input {
 		t.Fatal(reread, err)
 	}
 }
@@ -114,7 +114,7 @@ func TestRequestInputMetadataStaysBoundedForMainAndChildReplay(t *testing.T) {
 			t.Fatal("bounded metadata changed replay", actor)
 		}
 		var input string
-		if err := s.DB.QueryRow("SELECT input_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&input); err != nil {
+		if err := s.db.QueryRow("SELECT input_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&input); err != nil {
 			t.Fatal(err)
 		}
 		var metadata requestInputMetadata
@@ -241,7 +241,7 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 		want string
 	}{{first.RequestID, fmt.Sprintf("[%d]", finish)}, {second.RequestID, "[]"}} {
 		var ack string
-		if err := s.DB.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", test.id).Scan(&ack); err != nil || ack != test.want {
+		if err := s.db.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", test.id).Scan(&ack); err != nil || ack != test.want {
 			t.Fatal(ack, test.want, err)
 		}
 	}
@@ -281,11 +281,11 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	var delivered sql.NullInt64
-	if err := s.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&delivered); err != nil || delivered.Valid {
+	if err := s.db.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&delivered); err != nil || delivered.Valid {
 		t.Fatal("loaded history acknowledged source runtime", delivered, err)
 	}
 	var acknowledgments string
-	if err := s.DB.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&acknowledgments); err != nil || acknowledgments != "[]" {
+	if err := s.db.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&acknowledgments); err != nil || acknowledgments != "[]" {
 		t.Fatal(acknowledgments, err)
 	}
 	// Compaction continues the original runtime and must still acknowledge its
@@ -302,7 +302,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&delivered); err != nil || !delivered.Valid || delivered.Int64 != original.RequestID {
+	if err := s.db.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&delivered); err != nil || !delivered.Valid || delivered.Int64 != original.RequestID {
 		t.Fatal("compaction lost live event ownership", delivered, err)
 	}
 }

@@ -656,9 +656,9 @@ func (r *Runtime) Command(text string) (string, error) {
 			return "", e
 		}
 		if v.WorkspaceID != "" {
-			var path string
-			if e = r.Store.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", v.WorkspaceID).Scan(&path); e != nil {
-				return "", e
+			path, err := r.Store.WorkspacePath(r.ctx, v.WorkspaceID)
+			if err != nil {
+				return "", err
 			}
 			if path != r.Workspace.Root {
 				return "", errors.New("session belongs to another workspace")

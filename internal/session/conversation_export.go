@@ -72,8 +72,7 @@ func (r *Runtime) exportConversation(ctx context.Context, x tool.Execution, a co
 	// before snapshot selection, rendering, or filesystem work.
 	r.routeMu.RLock()
 	session := r.Current()
-	var tip int64
-	err := r.Store.DB.QueryRowContext(ctx, "SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip)
+	tip, err := r.Store.SessionTip(ctx, session)
 	r.routeMu.RUnlock()
 	if err != nil {
 		return nil, err

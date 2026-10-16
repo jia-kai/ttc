@@ -1,13 +1,35 @@
 package history
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
+
 	"ttc/internal/llm"
 	"ttc/internal/render"
 )
+
+// contextSQLReader is implemented by both the commit DB and frozen read Tx.
+type contextSQLReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// contextHistoryReader makes the shared acquisition helpers cancellable without
+// replacing the caller's connection or escaping its read snapshot.
+type contextHistoryReader struct {
+	ctx    context.Context
+	reader contextSQLReader
+}
+
+func (q contextHistoryReader) Query(query string, args ...any) (*sql.Rows, error) {
+	return q.reader.QueryContext(q.ctx, query, args...)
+}
+func (q contextHistoryReader) QueryRow(query string, args ...any) *sql.Row {
+	return q.reader.QueryRowContext(q.ctx, query, args...)
+}
 
 // ChildResponse resolves a foreground subagent result or runtime completion
 // message to its full committed assistant response. Zero means no reference is
@@ -16,14 +38,23 @@ import (
 // Loaded sessions retain references to immutable entries in their source session.
 // The original entry remains independently inspectable for completion metadata.
 func (s *Store) ChildResponse(id int64) (int64, error) {
-	entry, err := s.Entry(id)
-	if err != nil {
+	// This lookup runs before paged inspection. Keep unrelated messages and the
+	// referenced assistant's potentially large replay envelope out of Go memory.
+	var entry Entry
+	entry.ID = id
+	var messageType string
+	if err := s.db.QueryRow(`SELECT session_id,kind,coalesce(role,''),
+		CASE WHEN kind='message' AND role='user' THEN coalesce((
+			SELECT value FROM json_each(entries.content_json) AS field
+			WHERE lower(field.key)='type' AND field.type='text' ORDER BY field.id DESC LIMIT 1
+		),'') ELSE '' END
+		FROM entries WHERE id=?`, id).Scan(&entry.SessionID, &entry.Kind, &entry.Role, &messageType); err != nil {
 		return 0, err
 	}
 	var raw []byte
 	if entry.Kind == "tool_result" {
 		var result string
-		err := s.DB.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, id).Scan(&result)
+		err := s.db.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, id).Scan(&result)
 		if err == sql.ErrNoRows {
 			return 0, nil
 		}
@@ -31,21 +62,24 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 			return 0, err
 		}
 		raw = []byte(result)
-	} else if entry.Kind == "message" && entry.Role == "user" {
-		var message llm.Message
-		if err := json.Unmarshal(entry.Content, &message); err != nil {
+	} else if messageType == string(llm.TypeRuntimeNotification) {
+		var content string
+		// Append validates with Go's canonical decoder, which accepts case-folded
+		// field names and uses the last non-null string among duplicate keys.
+		// Match those semantics without loading the complete message envelope.
+		if err := s.db.QueryRow(`SELECT coalesce((
+			SELECT value FROM json_each(entries.content_json) AS field
+			WHERE lower(field.key)='content' AND field.type='text' ORDER BY field.id DESC LIMIT 1
+		),'') FROM entries WHERE id=?`, id).Scan(&content); err != nil {
 			return 0, err
-		}
-		if message.Type != llm.TypeRuntimeNotification {
-			return 0, nil
 		}
 		var notice struct {
 			Type string `json:"type"`
 		}
-		if json.Unmarshal([]byte(message.Content), &notice) != nil || notice.Type != "child_turn_finished" {
+		if json.Unmarshal([]byte(content), &notice) != nil || notice.Type != "child_turn_finished" {
 			return 0, nil
 		}
-		raw = []byte(message.Content)
+		raw = []byte(content)
 	} else {
 		return 0, nil
 	}
@@ -59,12 +93,13 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 	if reference.ResultEntry == 0 {
 		return 0, nil
 	}
-	target, err := s.Entry(reference.ResultEntry)
-	if err != nil {
+	var target Entry
+	target.ID = reference.ResultEntry
+	if err := s.db.QueryRow("SELECT session_id,actor_id,kind,coalesce(role,'') FROM entries WHERE id=?", target.ID).Scan(&target.SessionID, &target.Actor, &target.Kind, &target.Role); err != nil {
 		return 0, fmt.Errorf("child response reference: %w", err)
 	}
 	var sameLineage bool
-	if err := s.DB.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, target.SessionID, entry.SessionID).Scan(&sameLineage); err != nil {
+	if err := s.db.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, target.SessionID, entry.SessionID).Scan(&sameLineage); err != nil {
 		return 0, err
 	}
 	if !strings.HasPrefix(reference.ChildID, "main/child_") || !sameLineage || target.Actor != reference.ChildID || target.Kind != "message" || target.Role != "assistant" {
@@ -73,110 +108,131 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 	return target.ID, nil
 }
 
-// InternalEvent identifies durable ordering and delivery records whose effects
-// are already presented by messages or tool results. They remain inspectable in
-// the history tree and exact JSONL transcript, but do not add conversation rows.
-func (v Entry) InternalEvent() bool {
-	if v.Kind != "status" {
-		return false
-	}
-	var status struct{ Type string }
-	if json.Unmarshal(v.Content, &status) != nil {
-		return false
-	}
-	switch status.Type {
-	case "request_admitted", "request_finished", "job_state", "timer_state", "child_state", "turn_finished", "runtime_event", "compaction_started", "compaction_recovery", "file_changed":
-		return true
-	}
-	return false
-}
-
 // Entry loads one node for inspection, including hidden system/status records.
 func (s *Store) Entry(id int64) (Entry, error) {
-	var v Entry
-	var b string
-	e := s.DB.QueryRow(`SELECT id,coalesce(parent_id,0),coalesce(source_id,0),coalesce(file_tip_id,0),session_id,coalesce(turn_id,''),actor_id,kind,coalesce(role,''),model_visible,content_json,created_ms,coalesce(main_turn_id,''),coalesce(undo_owner_turn_id,'') FROM entries WHERE id=?`, id).Scan(&v.ID, &v.Parent, &v.Source, &v.FileTip, &v.SessionID, &v.TurnID, &v.Actor, &v.Kind, &v.Role, &v.Visible, &b, &v.CreatedMS, &v.MainTurnID, &v.UndoOwnerTurnID)
-	v.Content = json.RawMessage(b)
-	return v, e
+	return entryWith(s.db, id)
 }
 
-// Label returns a short view title without actor decoration, keeping system
-// prompt contents behind a placeholder. Frontends own actor attribution styles.
-func (s *Store) Label(v Entry) string {
-	if v.Kind == "tool_result" {
-		var raw string
-		if e := s.DB.QueryRow("SELECT markdown_json FROM tool_records WHERE entry_id=?", v.ID).Scan(&raw); e == nil {
-			var md render.Markdown
-			if json.Unmarshal([]byte(raw), &md) == nil {
-				return md.Summary
-			}
-		}
-	}
+func entryWith(q historyReader, id int64) (Entry, error) {
+	var v Entry
+	var b string
+	err := q.QueryRow(`SELECT id,coalesce(parent_id,0),coalesce(source_id,0),coalesce(file_tip_id,0),session_id,coalesce(turn_id,''),actor_id,kind,coalesce(role,''),model_visible,content_json,created_ms,coalesce(main_turn_id,''),coalesce(undo_owner_turn_id,'') FROM entries WHERE id=?`, id).Scan(&v.ID, &v.Parent, &v.Source, &v.FileTip, &v.SessionID, &v.TurnID, &v.Actor, &v.Kind, &v.Role, &v.Visible, &b, &v.CreatedMS, &v.MainTurnID, &v.UndoOwnerTurnID)
+	v.Content = json.RawMessage(b)
+	return v, err
+}
 
-	if v.Kind == "status" {
-		var marker struct{ Type string }
-		if json.Unmarshal(v.Content, &marker) == nil && marker.Type == "child_turn_finished" {
-			if finish, err := readChildFinish(v.Content); err == nil {
-				label := "Assignment " + finish.TurnID + " · " + render.Status(finish.Outcome)
-				if finish.Error != "" {
-					label += " · " + render.Clean(finish.Error)
-				}
-				return label
-			}
+// ReadView decodes a supplied entry for frontend replay, loading only tool summary
+// and prompt-purpose metadata. It never loads tool details or instruction files.
+func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err error) {
+	defer func() { err = intentError(fmt.Sprintf("read entry #%d view", entry.ID), err) }()
+	if err := ctx.Err(); err != nil {
+		return EntryView{}, err
+	}
+	data, err := decodePresentation(entry)
+	if err != nil {
+		return EntryView{}, err
+	}
+	q := contextHistoryReader{ctx, s.db}
+	if entry.Kind == "tool_result" {
+		var summary string
+		if err := q.QueryRow("SELECT coalesce(json_extract(markdown_json,'$.summary'),'') FROM tool_records WHERE entry_id=?", entry.ID).Scan(&summary); err != nil {
+			return EntryView{}, err
 		}
-		var job struct {
-			Type     string
-			Markdown render.Markdown
-		}
-		if json.Unmarshal(v.Content, &job) == nil && job.Type == "job_completion" {
-			return job.Markdown.Summary
-		}
-		var x struct{ Type, Text, Label, Purpose, Role string }
-		if json.Unmarshal(v.Content, &x) == nil {
-			if x.Type == "request_message" {
-				return fmt.Sprintf("%s %s · inspect", x.Purpose, x.Role)
-			}
-			if x.Type == "system_prompt" {
-				return "System prompt · inspect"
-			}
-			if x.Text != "" {
-				return render.Clean(x.Text)
-			}
-			if v.InternalEvent() {
-				return render.Clean(x.Type)
-			}
+		data.ToolSummary = &summary
+	}
+	if data.Prompt != nil && data.Prompt.RequestID > 0 {
+		if err := q.QueryRow("SELECT purpose FROM model_requests WHERE id=?", data.Prompt.RequestID).Scan(&data.Prompt.Purpose); err != nil {
+			return EntryView{}, err
 		}
 	}
-	if v.Visible || v.Kind == "message" {
-		var m llm.Message
-		if json.Unmarshal(v.Content, &m) == nil {
-			switch m.Type.Presentation() {
-			case llm.PresentationContext:
-				return "Runtime context · inspect"
-			case llm.PresentationInstruction:
-				if m.Type == llm.TypeRuntimeInstruction {
-					return "Runtime instructions · inspect"
-				}
-				return "Instructions · inspect"
-			case llm.PresentationNotification:
-				return "Runtime notification · inspect"
-			case llm.PresentationGuidance:
-				return "Child guidance · inspect"
-			}
-			return m.Role() + " · " + render.Clean(m.DisplayText())
+	return projectView(data), ctx.Err()
+}
+
+// ReadEntryView loads an entry by ID and decodes its small replay view with
+// cancellation. Like ReadView, it does not load tool details or instruction files.
+// Unknown entries return ErrNotFound.
+func (s *Store) ReadEntryView(ctx context.Context, id int64) (EntryView, error) {
+	entry, err := entryWith(contextHistoryReader{ctx, s.db}, id)
+	if err != nil {
+		return EntryView{}, intentError(fmt.Sprintf("read entry #%d view", id), err)
+	}
+	return s.ReadView(ctx, entry)
+}
+
+// ReadInspection loads and projects one complete small inspector. Call InspectPage
+// first for potentially large records; this method deliberately loads full data.
+// Unknown entries or missing required related rows return ErrNotFound.
+func (s *Store) ReadInspection(ctx context.Context, id int64) (inspection Inspection, err error) {
+	defer func() { err = intentError(fmt.Sprintf("read entry #%d inspection", id), err) }()
+	q := contextHistoryReader{ctx, s.db}
+	entry, err := entryWith(q, id)
+	if err != nil {
+		return Inspection{}, err
+	}
+	data, err := loadInspectionPresentation(ctx, q, entry)
+	if err != nil {
+		return Inspection{}, err
+	}
+	return projectInspection(data)
+}
+
+func loadInspectionPresentation(ctx context.Context, q historyReader, entry Entry) (entryPresentation, error) {
+	data, err := decodePresentation(entry)
+	if err != nil {
+		return data, err
+	}
+	data, err = decodeInspectionBody(data)
+	if err != nil {
+		return data, err
+	}
+	if entry.Kind == "tool_result" {
+		md, err := toolMarkdownWith(q, entry.ID)
+		if err != nil {
+			return data, err
 		}
+		data.Markdown, data.ToolSummary = md, &md.Summary
 	}
-	if v.Actor != "main" {
-		return v.Kind
+	if entry.Kind == "tool_call" {
+		var ref struct {
+			CallID string `json:"call_id"`
+		}
+		if err := json.Unmarshal(entry.Content, &ref); err != nil {
+			return data, err
+		}
+		var args, name string
+		var result sql.NullString
+		if err := q.QueryRow("SELECT name,call_json,result_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &args, &result); err != nil {
+			return data, err
+		}
+		data.Call = &callPresentation{Name: name, Arguments: json.RawMessage(args), Result: json.RawMessage(result.String)}
 	}
-	return v.Actor + " · " + v.Kind
+	if data.Prompt != nil {
+		text, _, err := instructionPage(ctx, data.Prompt.Path, 0, instructionSnapshotBytes)
+		if err != nil {
+			return data, err
+		}
+		data.PromptText = text
+	}
+	return data, ctx.Err()
+}
+
+func toolMarkdownWith(q historyReader, id int64) (*render.Markdown, error) {
+	var raw string
+	if err := q.QueryRow("SELECT markdown_json FROM tool_records WHERE entry_id=?", id).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var md render.Markdown
+	if err := json.Unmarshal([]byte(raw), &md); err != nil {
+		return nil, err
+	}
+	return &md, nil
 }
 
 // RequestMessage records internal naming/summary messages outside the coding
 // context, attributed to the owning request actor. Purpose controls inspection.
 func (s *Store) RequestMessage(session, turn, purpose, role string, request int64, message llm.Message) (int64, error) {
 	var actor string
-	if err := s.DB.QueryRow("SELECT actor_id FROM model_requests WHERE id=?", request).Scan(&actor); err != nil {
+	if err := s.db.QueryRow("SELECT actor_id FROM model_requests WHERE id=?", request).Scan(&actor); err != nil {
 		return 0, err
 	}
 	return s.Append(session, turn, actor, "status", "", false, map[string]any{"type": "request_message", "purpose": purpose, "request_id": request, "role": role, "message": message})

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/blobcache"
@@ -137,7 +138,7 @@ func TestPDFBinaryAttachmentHeadlessCompletionAndCommand(t *testing.T) {
 				t.Fatal(err)
 			}
 			const loadedName = "Reloaded native PDF fixture"
-			if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name=? WHERE id=?", loadedName, original); err != nil {
+			if _, err := historytest.DB(t, u.runtime.Store).Exec("UPDATE sessions SET name=? WHERE id=?", loadedName, original); err != nil {
 				t.Fatal(err)
 			}
 			u.typeText("/load " + original)

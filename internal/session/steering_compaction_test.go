@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -180,7 +181,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 		t.Fatal("steering was not persisted exactly once in FIFO order", humans)
 	}
 	var checkpoints int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil || checkpoints != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil || checkpoints != 2 {
 		t.Fatal("cancelled steer created a checkpoint or admitted steer duplicated one", checkpoints, err)
 	}
 }

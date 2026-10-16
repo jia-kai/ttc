@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/providers/openai"
@@ -56,7 +57,7 @@ func TestHTTPMockUnknownErrorsPersistAcrossBoundedRetries(t *testing.T) {
 					}
 					request := assertHTTPRetryHistory(t, r, actor, "coding", shape)
 					var status, recordedError string
-					if err := r.Store.DB.QueryRow("SELECT status,coalesce(json_extract(attempts_json,'$[0].error'),'') FROM model_requests WHERE id=?", request).Scan(&status, &recordedError); err != nil {
+					if err := historytest.DB(t, r.Store).QueryRow("SELECT status,coalesce(json_extract(attempts_json,'$[0].error'),'') FROM model_requests WHERE id=?", request).Scan(&status, &recordedError); err != nil {
 						t.Fatal(err)
 					}
 					if recover {
@@ -78,7 +79,7 @@ func TestHTTPMockUnknownErrorsPersistAcrossBoundedRetries(t *testing.T) {
 						}
 						if actor == "main" {
 							var turnError string
-							if err := r.Store.DB.QueryRow("SELECT json_extract(content_json,'$.error') FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='turn_end'", actor).Scan(&turnError); err != nil || turnError != recordedError {
+							if err := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(content_json,'$.error') FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='turn_end'", actor).Scan(&turnError); err != nil || turnError != recordedError {
 								t.Fatal("terminal history lost request diagnostic", turnError, err)
 							}
 						}
@@ -131,22 +132,22 @@ func assertHTTPRetryHistory(t *testing.T, r *Runtime, actor, purpose, shape stri
 			t.Fatal("incorrect persisted retry contract", entry, notice)
 		}
 		var requestActor, requestPurpose string
-		if err := r.Store.DB.QueryRow("SELECT actor_id,purpose FROM model_requests WHERE id=?", notice.RequestID).Scan(&requestActor, &requestPurpose); err != nil || requestActor != actor || requestPurpose != purpose {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT actor_id,purpose FROM model_requests WHERE id=?", notice.RequestID).Scan(&requestActor, &requestPurpose); err != nil || requestActor != actor || requestPurpose != purpose {
 			t.Fatal("retry lost originating request", requestActor, requestPurpose, err)
 		}
 		if request != 0 && request != notice.RequestID {
 			t.Fatal("pre-output retries unexpectedly admitted another request")
 		}
 		request = notice.RequestID
-		inspected, err := r.Store.Inspect(entry)
-		if err != nil || !strings.Contains(inspected, "model_retry") || !strings.Contains(inspected, fmt.Sprintf("mock-upstream-%d", count)) {
-			t.Fatal("retry diagnostics not inspectable", inspected, err)
+		inspected, err := r.Store.ReadInspection(context.Background(), entry.ID)
+		if err != nil || !strings.Contains(inspected.Text, "model_retry") || !strings.Contains(inspected.Text, fmt.Sprintf("mock-upstream-%d", count)) {
+			t.Fatal("retry diagnostics not inspectable", inspected.Text, err)
 		}
-		if shape == "bare" && (!strings.Contains(inspected, "error details missing") || !strings.Contains(inspected, "shape=")) {
-			t.Fatal("bare terminal error lost its structural diagnostic", inspected)
+		if shape == "bare" && (!strings.Contains(inspected.Text, "error details missing") || !strings.Contains(inspected.Text, "shape=")) {
+			t.Fatal("bare terminal error lost its structural diagnostic", inspected.Text)
 		}
-		if shape == "nested" && (!strings.Contains(inspected, "unknown_backend_fault") || !strings.Contains(inspected, fmt.Sprintf("Backend failure %d", count))) {
-			t.Fatal("nested retry diagnostic lost before success/exhaustion", inspected)
+		if shape == "nested" && (!strings.Contains(inspected.Text, "unknown_backend_fault") || !strings.Contains(inspected.Text, fmt.Sprintf("Backend failure %d", count))) {
+			t.Fatal("nested retry diagnostic lost before success/exhaustion", inspected.Text)
 		}
 	}
 	if count != llm.DefaultMaxAttempts-1 {
@@ -224,7 +225,7 @@ func TestHTTPMockPrivatePartialFailuresPersistAfterExhaustion(t *testing.T) {
 			}
 			request := assertHTTPRetryHistory(t, r, "main", purpose, "nested")
 			var status, diagnostic string
-			if err := r.Store.DB.QueryRow("SELECT status,json_extract(attempts_json,'$[0].error') FROM model_requests WHERE id=?", request).Scan(&status, &diagnostic); err != nil || status != "failed" || !strings.Contains(diagnostic, "upstream attempt 3/3") || !strings.Contains(diagnostic, "Backend failure 3") {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT status,json_extract(attempts_json,'$[0].error') FROM model_requests WHERE id=?", request).Scan(&status, &diagnostic); err != nil || status != "failed" || !strings.Contains(diagnostic, "upstream attempt 3/3") || !strings.Contains(diagnostic, "Backend failure 3") {
 				t.Fatal("private request final failure was not recorded", status, diagnostic, err)
 			}
 			exact, err := r.Store.TranscriptJSONL(r.Current(), 0)

@@ -2,6 +2,7 @@ package history
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -31,9 +32,9 @@ func TestInternalEventsRemainExactWithoutConversationDuplication(t *testing.T) {
 	if err != nil || text != "" || !entry.InternalEvent() {
 		t.Fatalf("bookkeeping became a conversation row: %q, %v", text, err)
 	}
-	detail, err := s.Inspect(entry)
-	if err != nil || !strings.Contains(detail, "running") || s.Label(entry) != "job_state" {
-		t.Fatalf("bookkeeping no longer inspectable: %q, %v", detail, err)
+	inspection, err := s.ReadInspection(context.Background(), id)
+	if err != nil || !strings.Contains(inspection.Text, "running") || inspection.Title != "job_state" {
+		t.Fatalf("bookkeeping no longer inspectable: %+v, %v", inspection, err)
 	}
 	exact, err := s.TranscriptJSONL(v.ID, 0)
 	if err != nil || !bytes.Contains(exact, []byte(`"type":"job_state"`)) {
@@ -110,14 +111,11 @@ func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		entry, err := s.Entry(id)
+		inspection, err := s.ReadInspection(context.Background(), id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.Inspect(entry)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := inspection.Text
 		if purpose == "compaction" {
 			if got != content {
 				t.Fatalf("compaction reply escaped as metadata: %q", got)

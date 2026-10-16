@@ -66,7 +66,7 @@ func TestOpenMigratesSchema5AndIsIdempotent(t *testing.T) {
 	}
 	defer first.Close()
 	var version int
-	if err := first.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+	if err := first.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("migrated version %d: %v", version, err)
 	}
 	second, err := Open(root)

@@ -254,7 +254,7 @@ func TestSlowTranscriptWriterDoesNotBlockCommits(t *testing.T) {
 
 func TestCompactionSummaryLookupUsesIndex(t *testing.T) {
 	s, _, _, _ := historyFixture(t)
-	rows, err := s.DB.Query("EXPLAIN QUERY PLAN SELECT predecessor_id,source_tip_id FROM compactions WHERE summary_entry_id=?", 1)
+	rows, err := s.db.Query("EXPLAIN QUERY PLAN SELECT predecessor_id,source_tip_id FROM compactions WHERE summary_entry_id=?", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

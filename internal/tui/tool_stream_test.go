@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"ttc/internal/historytest"
 	"ttc/internal/llm"
 )
 
@@ -49,7 +50,7 @@ func TestAwaitingToolInspectorAndTransition(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "awaiting write (2seg/9bytes) ...")
 	var count int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM tool_calls").Scan(&count); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM tool_calls").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -59,7 +60,7 @@ func TestAwaitingToolInspectorAndTransition(t *testing.T) {
 		t.Fatal("tool ran before complete arguments", err)
 	}
 	var id int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", id))

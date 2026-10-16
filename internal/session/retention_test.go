@@ -7,6 +7,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -57,7 +58,7 @@ func TestRetentionSmallStoreKeepsOldHistoryRefreshesActivityAndStops(t *testing.
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-31 * 24 * time.Hour).UnixMilli()
-	if _, err := r.Store.DB.Exec("UPDATE sessions SET last_activity_ms=?", old); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET last_activity_ms=?", old); err != nil {
 		t.Fatal(err)
 	}
 	before := time.Now().UnixMilli()
@@ -85,7 +86,7 @@ func TestRetentionSmallStoreKeepsOldHistoryRefreshesActivityAndStops(t *testing.
 
 func TestRetentionMaintenanceErrorsAreVisibleAndShutdownJoins(t *testing.T) {
 	r, events, _ := retentionFixture(t)
-	if err := r.Store.DB.Close(); err != nil {
+	if err := r.Store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	stop := r.startRetention()
@@ -111,7 +112,7 @@ func TestRetentionStartupDoesNotPersistBlankConversationOrModelInput(t *testing.
 	}
 	for _, table := range []string{"sessions", "entries", "model_requests", "turns"} {
 		var count int
-		if err := r.Store.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("startup status persisted %s: count=%d err=%v", table, count, err)
 		}
 	}
@@ -136,14 +137,14 @@ func TestRetentionLifecycleRefreshesActivityWithoutRepeatingStartupMaintenance(t
 	stop()
 	// Removing the statistics source makes any unintended count/min scan fail,
 	// while session activity updates and their foreign keys remain valid.
-	if _, err := r.Store.DB.Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
 		t.Fatal(err)
 	}
 	r.mu.Lock()
 	r.current = other
 	r.mu.Unlock()
 	for i := 0; i < 3; i++ {
-		if _, err := r.Store.DB.Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", other); err != nil {
+		if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", other); err != nil {
 			t.Fatal(err)
 		}
 		before := time.Now().UnixMilli()
@@ -152,7 +153,7 @@ func TestRetentionLifecycleRefreshesActivityWithoutRepeatingStartupMaintenance(t
 			t.Fatal("load unexpectedly succeeded")
 		}
 		var activity int64
-		if err := r.Store.DB.QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", other).Scan(&activity); err != nil || activity < before {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", other).Scan(&activity); err != nil || activity < before {
 			t.Fatal("lifecycle command did not refresh loaded activity", activity, err)
 		}
 		if len(events) != 0 {
@@ -170,7 +171,7 @@ func TestRetentionCanceledAndFailedStartup(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatal("canceled startup published a status")
 	}
-	if _, err := r.Store.DB.Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
 		t.Fatal(err)
 	}
 	r.maintainRetention(r.ctx, now)
@@ -184,7 +185,7 @@ func TestRetentionCanceledAndFailedStartup(t *testing.T) {
 
 func TestRetentionLifecycleCancelsBlockedStartupWithoutRestarting(t *testing.T) {
 	r, events, _ := retentionFixture(t)
-	connection, err := r.Store.DB.Conn(r.ctx)
+	connection, err := historytest.LockWriter(t, r.Store, r.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,21 +223,21 @@ func TestActivityHeartbeatRefreshesWithoutMaintenanceAndStops(t *testing.T) {
 	// the fixture's real-time cleanup.
 	r.ctx = context.Background()
 	// A statistics scan would fail, but the cheap activity update still works.
-	if _, err := r.Store.DB.Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("ALTER TABLE entries RENAME TO hidden_entries"); err != nil {
 		t.Fatal(err)
 	}
 	synctest.Test(t, func(t *testing.T) {
 		stop := r.startActivityRefresh()
 		defer stop()
 		for i := 0; i < 2; i++ {
-			if _, err := r.Store.DB.Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", r.Current()); err != nil {
+			if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", r.Current()); err != nil {
 				t.Fatal(err)
 			}
 			synctest.Wait()
 			time.Sleep(time.Hour)
 			synctest.Wait()
 			var activity int64
-			if err := r.Store.DB.QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", r.Current()).Scan(&activity); err != nil || activity != time.Now().UnixMilli() {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT last_activity_ms FROM sessions WHERE id=?", r.Current()).Scan(&activity); err != nil || activity != time.Now().UnixMilli() {
 				t.Fatal("heartbeat did not refresh loaded activity", activity, err)
 			}
 			if len(events) != 0 {
@@ -250,7 +251,7 @@ func TestActivityHeartbeatRefreshesWithoutMaintenanceAndStops(t *testing.T) {
 
 func TestRetentionMaintenanceWarningStillReportsStorageStatistics(t *testing.T) {
 	r, events, _ := retentionFixture(t)
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_activity_refresh BEFORE UPDATE OF last_activity_ms ON sessions
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_activity_refresh BEFORE UPDATE OF last_activity_ms ON sessions
 		BEGIN SELECT RAISE(ABORT,'activity refresh denied'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -270,9 +271,9 @@ func TestRetentionMaintenanceWarningStillReportsStorageStatistics(t *testing.T) 
 
 func TestRetentionCancellationDuringStartupSuppressesStatistics(t *testing.T) {
 	r, events, _ := retentionFixture(t)
-	// Hold the sole SQL connection so maintenance reaches its first activity
+	// Hold SQLite's writer reservation so maintenance reaches its first activity
 	// update but cannot finish before this context expires.
-	connection, err := r.Store.DB.Conn(r.ctx)
+	connection, err := historytest.LockWriter(t, r.Store, r.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

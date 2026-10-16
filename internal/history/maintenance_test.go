@@ -21,7 +21,7 @@ func testSelection() llm.Selection {
 func assertNoCleanupIndexes(t *testing.T, s *Store) {
 	t.Helper()
 	var count int
-	if err := s.DB.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE type='index' AND name GLOB 'cleanup_*'`).Scan(&count); err != nil || count != 0 {
+	if err := s.db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE type='index' AND name GLOB 'cleanup_*'`).Scan(&count); err != nil || count != 0 {
 		t.Fatal("transient cleanup indexes survived", count, err)
 	}
 }
@@ -120,7 +120,7 @@ func TestMaintainPurgesOnlyOldUnprotectedWholeFamilies(t *testing.T) {
 		ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	}
 	// One recent descendant protects the whole recent family.
-	if _, err := s.DB.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", now.Add(-29*24*time.Hour).UnixMilli(), recentNext.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", now.Add(-29*24*time.Hour).UnixMilli(), recentNext.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"user-export.md", "openai-auth.json"} {
@@ -130,7 +130,7 @@ func TestMaintainPurgesOnlyOldUnprotectedWholeFamilies(t *testing.T) {
 	}
 	const survivingEntries = `SELECT json_group_array(json_array(id,session_id,parent_id,source_id,content_json,created_ms)) FROM (SELECT * FROM entries WHERE session_id IN (?,?,?,?) ORDER BY id)`
 	var beforeEntries string
-	if err := s.DB.QueryRow(survivingEntries, protected.ID, protectedNext.ID, recent.ID, recentNext.ID).Scan(&beforeEntries); err != nil {
+	if err := s.db.QueryRow(survivingEntries, protected.ID, protectedNext.ID, recent.ID, recentNext.ID).Scan(&beforeEntries); err != nil {
 		t.Fatal(err)
 	}
 	result, err := s.maintain(context.Background(), now, protected.ID, 1)
@@ -148,7 +148,7 @@ func TestMaintainPurgesOnlyOldUnprotectedWholeFamilies(t *testing.T) {
 		}
 	}
 	var afterEntries string
-	if err := s.DB.QueryRow(survivingEntries, protected.ID, protectedNext.ID, recent.ID, recentNext.ID).Scan(&afterEntries); err != nil || afterEntries != beforeEntries {
+	if err := s.db.QueryRow(survivingEntries, protected.ID, protectedNext.ID, recent.ID, recentNext.ID).Scan(&afterEntries); err != nil || afterEntries != beforeEntries {
 		t.Fatal("maintenance changed retained entries or their identities", err)
 	}
 	for _, name := range []string{"user-export.md", "openai-auth.json"} {
@@ -161,14 +161,14 @@ func TestMaintainPurgesOnlyOldUnprotectedWholeFamilies(t *testing.T) {
 
 func TestMaintainNoEligibleOrFreePagesDoesNotVacuum(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
-	if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("active payload", 100000), v.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("active payload", 100000), v.ID); err != nil {
 		t.Fatal(err)
 	}
 	var beforeVersion, freePages int64
-	if err := s.DB.QueryRow("PRAGMA schema_version").Scan(&beforeVersion); err != nil {
+	if err := s.db.QueryRow("PRAGMA schema_version").Scan(&beforeVersion); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.QueryRow("PRAGMA freelist_count").Scan(&freePages); err != nil || freePages != 0 {
+	if err := s.db.QueryRow("PRAGMA freelist_count").Scan(&freePages); err != nil || freePages != 0 {
 		t.Fatal("active fixture unexpectedly has free pages", freePages, err)
 	}
 	result, err := s.maintain(context.Background(), time.Now(), "", 1)
@@ -178,7 +178,7 @@ func TestMaintainNoEligibleOrFreePagesDoesNotVacuum(t *testing.T) {
 	// VACUUM increments schema_version, unlike a checkpoint. This also catches
 	// needless full compaction when a large active database stays over threshold.
 	var afterVersion int64
-	if err := s.DB.QueryRow("PRAGMA schema_version").Scan(&afterVersion); err != nil || afterVersion != beforeVersion {
+	if err := s.db.QueryRow("PRAGMA schema_version").Scan(&afterVersion); err != nil || afterVersion != beforeVersion {
 		t.Fatal("active database was needlessly vacuumed", beforeVersion, afterVersion, err)
 	}
 	if _, err := s.Session(v.ID); err != nil {
@@ -189,10 +189,10 @@ func TestMaintainNoEligibleOrFreePagesDoesNotVacuum(t *testing.T) {
 func TestMaintainReclaimsDiskAndPreservesIdentityHighWater(t *testing.T) {
 	s, old, _, _ := historyFixture(t)
 	keep, _ := startHistorySession(t, s, t.TempDir(), old.Model, "keep")
-	if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("large old payload", 100000), old.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("large old payload", 100000), old.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("UPDATE sqlite_sequence SET seq=1000000 WHERE name='entries'"); err != nil {
+	if _, err := s.db.Exec("UPDATE sqlite_sequence SET seq=1000000 WHERE name='entries'"); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -203,7 +203,7 @@ func TestMaintainReclaimsDiskAndPreservesIdentityHighWater(t *testing.T) {
 		t.Fatal("disk was not reclaimed", before, result, err)
 	}
 	var highWater int64
-	if err := s.DB.QueryRow("SELECT seq FROM sqlite_sequence WHERE name='entries'").Scan(&highWater); err != nil || highWater != 1000000 {
+	if err := s.db.QueryRow("SELECT seq FROM sqlite_sequence WHERE name='entries'").Scan(&highWater); err != nil || highWater != 1000000 {
 		t.Fatal("VACUUM lost entry identity high-water mark", highWater, err)
 	}
 }
@@ -219,11 +219,11 @@ func TestMaintainSQLFailureRollsBackAllFamiliesAndIndexes(t *testing.T) {
 	if second.ID > later {
 		later = second.ID
 	}
-	if _, err := s.DB.Exec(fmt.Sprintf("CREATE TRIGGER reject_maintenance BEFORE DELETE ON sessions WHEN OLD.id='%s' BEGIN SELECT RAISE(ABORT,'maintenance failure'); END", later)); err != nil {
+	if _, err := s.db.Exec(fmt.Sprintf("CREATE TRIGGER reject_maintenance BEFORE DELETE ON sessions WHEN OLD.id='%s' BEGIN SELECT RAISE(ABORT,'maintenance failure'); END", later)); err != nil {
 		t.Fatal(err)
 	}
 	var before int64
-	if err := s.DB.QueryRow("SELECT count(*) FROM entries").Scan(&before); err != nil {
+	if err := s.db.QueryRow("SELECT count(*) FROM entries").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	result, err := s.maintain(context.Background(), now, "", 1)
@@ -236,7 +236,7 @@ func TestMaintainSQLFailureRollsBackAllFamiliesAndIndexes(t *testing.T) {
 		}
 	}
 	var after int64
-	if err := s.DB.QueryRow("SELECT count(*) FROM entries").Scan(&after); err != nil || after != before {
+	if err := s.db.QueryRow("SELECT count(*) FROM entries").Scan(&after); err != nil || after != before {
 		t.Fatal("failed sweep lost entries", after, before, err)
 	}
 	assertNoCleanupIndexes(t, s)
@@ -263,7 +263,7 @@ func TestMaintainCancellation(t *testing.T) {
 
 func TestMaintainRetriesReclamationAfterBusyCheckpoint(t *testing.T) {
 	s, old, _, _ := historyFixture(t)
-	if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?)", strings.Repeat("old payload", 100000)); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?)", strings.Repeat("old payload", 100000)); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -275,7 +275,7 @@ func TestMaintainRetriesReclamationAfterBusyCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	if _, err := s.DB.Exec("PRAGMA busy_timeout=1"); err != nil {
+	if _, err := s.db.Exec("PRAGMA busy_timeout=1"); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := reader.Query("SELECT id FROM entries")
@@ -307,7 +307,7 @@ func TestMaintainRetriesWALOnlyCheckpointWithoutVacuum(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	rows, err := reader.DB.Query("SELECT id FROM entries")
+	rows, err := reader.db.Query("SELECT id FROM entries")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,17 +315,17 @@ func TestMaintainRetriesWALOnlyCheckpointWithoutVacuum(t *testing.T) {
 	if !rows.Next() {
 		t.Fatal("fixture has no read snapshot")
 	}
-	if _, err := s.DB.Exec("PRAGMA busy_timeout=1"); err != nil {
+	if _, err := s.db.Exec("PRAGMA busy_timeout=1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("active payload", 100000), active.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("active payload", 100000), active.ID); err != nil {
 		t.Fatal(err)
 	}
 	var beforeVersion, freePages int64
-	if err := s.DB.QueryRow("PRAGMA schema_version").Scan(&beforeVersion); err != nil {
+	if err := s.db.QueryRow("PRAGMA schema_version").Scan(&beforeVersion); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DB.QueryRow("PRAGMA freelist_count").Scan(&freePages); err != nil || freePages != 0 {
+	if err := s.db.QueryRow("PRAGMA freelist_count").Scan(&freePages); err != nil || freePages != 0 {
 		t.Fatal("fixture must have WAL residue but no free pages", freePages, err)
 	}
 	result, err := s.maintain(context.Background(), time.Now(), "", 1)
@@ -341,14 +341,14 @@ func TestMaintainRetriesWALOnlyCheckpointWithoutVacuum(t *testing.T) {
 		t.Fatal("WAL was not truncated after reader release", wal, err)
 	}
 	var afterVersion int64
-	if err := s.DB.QueryRow("PRAGMA schema_version").Scan(&afterVersion); err != nil || afterVersion != beforeVersion {
+	if err := s.db.QueryRow("PRAGMA schema_version").Scan(&afterVersion); err != nil || afterVersion != beforeVersion {
 		t.Fatal("WAL-only retry needlessly vacuumed active history", beforeVersion, afterVersion, err)
 	}
 }
 
 func TestCleanupIndexesCoverEveryDeletedParentLookup(t *testing.T) {
 	s, _, _, _ := historyFixture(t)
-	tx, err := s.DB.Begin()
+	tx, err := s.db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestMaintainContinuesAssetsAndReclaimsAfterAssetFailure(t *testing.T) {
 	if err := os.Chmod(filepath.Join(s.Root, "lineages", bad.LineageID), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("old payload", 100000), bad.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?) WHERE session_id=?", strings.Repeat("old payload", 100000), bad.ID); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 	"unicode/utf8"
 
 	"ttc/internal/history"
@@ -186,7 +187,7 @@ func TestChildCommitFailureStopsPersistentOwnedJobs(t *testing.T) {
 		{Text: "Final audit answer"},
 	})
 	r.Emit = nil
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_child_finish BEFORE INSERT ON entries
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_child_finish BEFORE INSERT ON entries
 WHEN json_extract(NEW.content_json,'$.type')='child_turn_finished'
 BEGIN SELECT RAISE(ABORT,'injected child commit failure'); END`); err != nil {
 		t.Fatal(err)

@@ -165,7 +165,7 @@ func TestArchiveActorTranscriptFollowsSelectedCutsOnly(t *testing.T) {
 	}
 	selectTip := func(session string, tip int64) {
 		t.Helper()
-		if _, err := s.DB.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", tip, session); err != nil {
+		if _, err := s.db.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", tip, session); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 	"unicode/utf8"
 
 	"ttc/internal/binaryinput"
@@ -413,7 +414,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		}
 	}
 	var names []string
-	rows, err := r.Store.DB.Query("SELECT DISTINCT name FROM tool_calls ORDER BY name")
+	rows, err := historytest.DB(t, r.Store).Query("SELECT DISTINCT name FROM tool_calls ORDER BY name")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,12 +440,12 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		`SELECT count(*) FROM model_requests WHERE input_json LIKE '%"data_url"%' OR input_json LIKE '%base64%'`,
 	} {
 		var storedPixels int
-		if err := r.Store.DB.QueryRow(query).Scan(&storedPixels); err != nil || storedPixels != 0 {
+		if err := historytest.DB(t, r.Store).QueryRow(query).Scan(&storedPixels); err != nil || storedPixels != 0 {
 			t.Fatal("tool image payload stored in database", query, storedPixels, err)
 		}
 	}
 	var broken int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM tool_calls WHERE result_json IS NULL OR json_extract(result_json,'$.ok')!=1").Scan(&broken); err != nil || broken != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM tool_calls WHERE result_json IS NULL OR json_extract(result_json,'$.ok')!=1").Scan(&broken); err != nil || broken != 0 {
 		t.Fatal("tool failure", broken, err)
 	}
 	if len(r.ChildViews("main")) != 0 {
@@ -454,17 +455,17 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		t.Fatal("integration left jobs running", r.Jobs.Live())
 	}
 	var owners int
-	if err := r.Store.DB.QueryRow("SELECT count(DISTINCT undo_owner_turn_id) FROM entries WHERE json_extract(content_json,'$.type')='file_changed'").Scan(&owners); err != nil || owners != 1 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(DISTINCT undo_owner_turn_id) FROM entries WHERE json_extract(content_json,'$.type')='file_changed'").Scan(&owners); err != nil || owners != 1 {
 		t.Fatal("child edits diverged from main undo ownership", owners, err)
 	}
 	var finishes, acknowledged, requestsStored int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_turn_finished'").Scan(&finishes); err != nil || finishes != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_turn_finished'").Scan(&finishes); err != nil || finishes != 2 {
 		t.Fatal(finishes, err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(DISTINCT value) FROM model_requests,json_each(delivered_events_json)").Scan(&acknowledged); err != nil || acknowledged < 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(DISTINCT value) FROM model_requests,json_each(delivered_events_json)").Scan(&acknowledged); err != nil || acknowledged < 2 {
 		t.Fatal("child completion acknowledgments", acknowledged, err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM model_requests WHERE json_extract(input_json,'$.version')=1 AND json_extract(input_json,'$.message_count')>0 AND event_cutoff>0").Scan(&requestsStored); err != nil || requestsStored != 9 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM model_requests WHERE json_extract(input_json,'$.version')=1 AND json_extract(input_json,'$.message_count')>0 AND event_cutoff>0").Scan(&requestsStored); err != nil || requestsStored != 9 {
 		t.Fatal(requestsStored, err)
 	}
 	usage := r.UsageSnapshot().Totals

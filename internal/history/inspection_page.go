@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	"ttc/internal/render"
 )
 
 // InspectionPageChars is the maximum Unicode characters returned per page;
@@ -59,18 +57,11 @@ func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (I
  SELECT actor,kind,role,type,path,title,body IS NOT NULL,coalesce(length(body),0),coalesce(substr(body,?+1,?),''),coalesce(json_valid(body),0),large_envelope FROM source`
 	var kind, role, typ, path string
 	var supported, encoded bool
-	if err := s.DB.QueryRowContext(ctx, query, id, offset, limit).Scan(&page.Actor, &kind, &role, &typ, &path, &page.Title, &supported, &page.Total, &page.Text, &encoded, &page.LargeEnvelope); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, id, offset, limit).Scan(&page.Actor, &kind, &role, &typ, &path, &page.Title, &supported, &page.Total, &page.Text, &encoded, &page.LargeEnvelope); err != nil {
 		return page, err
 	}
-	page.Supported = supported
 	page.Kind, page.Type = kind, typ
-	page.System = role == "system" || role == "developer" || typ == "system_prompt"
-	page.JSON = encoded || kind == "tool_call"
-	page.Markdown = !page.System
-	page.Title = strings.Join(strings.Fields(render.Clean(page.Title)), " ")
-	if typ == "system_prompt" {
-		page.Title = "System prompt"
-	}
+	page = projectInspectionPage(page, role, supported, encoded)
 	if typ == "system_prompt" {
 		text, total, err := instructionPage(ctx, path, offset, limit)
 		if err != nil {

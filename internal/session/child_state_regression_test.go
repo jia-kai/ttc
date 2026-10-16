@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/jobs"
@@ -58,7 +59,7 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	// Restrict the failure to this retained actor's next attempted turn, leaving
 	// parent/tool persistence untouched. Drop it before retrying the assignment.
 	trigger := fmt.Sprintf(`CREATE TRIGGER reject_retained_turn BEFORE INSERT ON turns WHEN NEW.actor_id='%s' BEGIN SELECT RAISE(ABORT,'synthetic retained admission failure'); END`, strings.ReplaceAll(id, "'", "''"))
-	if _, err := r.Store.DB.Exec(trigger); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(trigger); err != nil {
 		t.Fatal(err)
 	}
 	args, err := json.Marshal(map[string]any{"persistent": true, "prompt": "rejected followup", "child_id": id, "variant": "alternate"})
@@ -92,7 +93,7 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	if view, err := r.Jobs.View("main", owned); err != nil || view.Status != "running" {
 		t.Fatal("failed admission stopped retained owned job", view, err)
 	}
-	if _, err := r.Store.DB.Exec(`DROP TRIGGER reject_retained_turn`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`DROP TRIGGER reject_retained_turn`); err != nil {
 		t.Fatal(err)
 	}
 	args, err = json.Marshal(map[string]any{"persistent": true, "prompt": "resume", "child_id": id})

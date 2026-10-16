@@ -27,10 +27,10 @@ func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {
 	appendMessage("main", "message", false, llm.Message{Type: llm.TypeUserInput, Content: "internal naming input"})
 	copyID := appendMessage("main", "message", true, llm.Message{Type: llm.TypeUserInput, Content: "hello"})
 	var original int64
-	if err := s.DB.QueryRow("SELECT min(id) FROM entries WHERE session_id=?", first.ID).Scan(&original); err != nil {
+	if err := s.db.QueryRow("SELECT min(id) FROM entries WHERE session_id=?", first.ID).Scan(&original); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("UPDATE entries SET source_id=? WHERE id=?", original, copyID); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET source_id=? WHERE id=?", original, copyID); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.FinishTurn(turn, "completed"); err != nil {

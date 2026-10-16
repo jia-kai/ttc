@@ -54,15 +54,14 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 	for i, id := range ids {
 		// Call IDs are globally unique. A continuation may archive rather than copy
 		// this intent; its historical entry is still inspectable while the call runs.
-		var modelJSON string
-		if err := r.Store.DB.QueryRow("SELECT e.id,c.request_id,m.model_json FROM entries e JOIN tool_calls c ON c.id=json_extract(e.content_json,'$.call_id') JOIN model_requests m ON m.id=c.request_id WHERE e.kind='tool_call' AND c.id=? ORDER BY e.id DESC LIMIT 1", id).Scan(&entryIDs[i], &requestIDs[i], &modelJSON); err != nil {
+		// Even a canceled stream must settle every admitted call. Metadata reads
+		// therefore outlive execution cancellation, like the result commits below.
+		metadata, err := r.Store.ToolExecution(context.WithoutCancel(ctx), id)
+		if err != nil {
 			return nil, err
 		}
-		var selection llm.Selection
-		if err := json.Unmarshal([]byte(modelJSON), &selection); err != nil {
-			return nil, err
-		}
-		binaryFiles[i] = selection.Model.BinaryFileTypes()
+		entryIDs[i], requestIDs[i] = metadata.EntryID, metadata.RequestID
+		binaryFiles[i] = metadata.Selection.Model.BinaryFileTypes()
 	}
 	run := func(i int) {
 		call := calls[i]

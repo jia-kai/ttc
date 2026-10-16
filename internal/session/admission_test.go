@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/capture"
 	"ttc/internal/jobs"
@@ -37,7 +38,7 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	}
 	before := append([]llm.Message(nil), r.notifications...)
 	cursor := r.mainContext
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err == nil {
@@ -46,7 +47,7 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	if !reflect.DeepEqual(before, r.notifications) || !reflect.DeepEqual(cursor, r.mainContext) {
 		t.Fatal("failed admission consumed events/cursor")
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER fail_admission"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_admission"); err != nil {
 		t.Fatal(err)
 	}
 	small := r.selection
@@ -90,7 +91,7 @@ func TestTimerCoalescingAndExactRequestAcknowledgment(t *testing.T) {
 		t.Fatal(view)
 	}
 	var ack string
-	if err := r.Store.DB.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&ack); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", admitted.RequestID).Scan(&ack); err != nil {
 		t.Fatal(err)
 	}
 	var delivered []int64
@@ -187,7 +188,7 @@ func TestCommittedNoticeRejectsCopiedSourceAndDuplicatePending(t *testing.T) {
 	if err := r.queueCommittedNotification("invalid JSON", id); err == nil {
 		t.Fatal("invalid JSON queued")
 	}
-	copy, err := r.Store.DB.Exec(`INSERT INTO entries(session_id,parent_id,source_id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms) SELECT session_id,id,id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms FROM entries WHERE id=?`, id)
+	copy, err := historytest.DB(t, r.Store).Exec(`INSERT INTO entries(session_id,parent_id,source_id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms) SELECT session_id,id,id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms FROM entries WHERE id=?`, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,10 +210,10 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Recovered"}})
 	seedRuntime(t, r, "First human instruction")
 	var before string
-	if err := r.Store.DB.QueryRow("SELECT metadata_json FROM sessions WHERE id=?", r.Current()).Scan(&before); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT metadata_json FROM sessions WHERE id=?", r.Current()).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_human BEFORE INSERT ON entries WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'forced user append failure'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_human BEFORE INSERT ON entries WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'forced user append failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Rejected instruction"}); err == nil {
@@ -220,16 +221,16 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	}
 	var after string
 	var running int
-	if err := r.Store.DB.QueryRow("SELECT metadata_json FROM sessions WHERE id=?", r.Current()).Scan(&after); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT metadata_json FROM sessions WHERE id=?", r.Current()).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE session_id=? AND actor_id='main' AND status='running'", r.Current()).Scan(&running); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE session_id=? AND actor_id='main' AND status='running'", r.Current()).Scan(&running); err != nil {
 		t.Fatal(err)
 	}
 	if before != after || running != 0 {
 		t.Fatal("rejected user checkpoint changed turn/undo ownership", before, after, running)
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER fail_human"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_human"); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Retry instruction"}); err != nil {
@@ -278,7 +279,7 @@ func TestAdmissionUsesPublishedJobStateAtItsCutoff(t *testing.T) {
 		t.Fatal("request observed an uncommitted exit", view)
 	}
 	var lastStatus string
-	if err := r.Store.DB.QueryRow(`SELECT json_extract(content_json,'$.job.status') FROM entries WHERE id<=? AND json_extract(content_json,'$.type')='job_state' AND json_extract(content_json,'$.job.job_id')=? ORDER BY id DESC LIMIT 1`, admitted.Cutoff, id).Scan(&lastStatus); err != nil || lastStatus != "running" {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT json_extract(content_json,'$.job.status') FROM entries WHERE id<=? AND json_extract(content_json,'$.type')='job_state' AND json_extract(content_json,'$.job.job_id')=? ORDER BY id DESC LIMIT 1`, admitted.Cutoff, id).Scan(&lastStatus); err != nil || lastStatus != "running" {
 		t.Fatal(lastStatus, err)
 	}
 	unblock()

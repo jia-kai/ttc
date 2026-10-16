@@ -37,7 +37,7 @@ type BranchTree struct {
 // It rejects corrupt parent links and checks pending main tools for each branch.
 // Inspection remains available for read-only history and before an undo boundary.
 func (s *Store) HistoryTree(ctx context.Context, session string) (BranchTree, error) {
-	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return BranchTree{}, err
 	}
@@ -154,7 +154,7 @@ func (s *Store) BranchSelectionTarget(session string, id int64) (RestoreTarget, 
 		return RestoreTarget{}, err
 	}
 	var floor int64
-	if err = s.DB.QueryRow("SELECT coalesce(undo_floor_id,0) FROM sessions WHERE id=?", session).Scan(&floor); err != nil {
+	if err = s.db.QueryRow("SELECT coalesce(undo_floor_id,0) FROM sessions WHERE id=?", session).Scan(&floor); err != nil {
 		return RestoreTarget{}, err
 	}
 	floorFound := floor == 0
@@ -172,7 +172,7 @@ func (s *Store) BranchSelectionTarget(session string, id int64) (RestoreTarget, 
 				return RestoreTarget{}, err
 			}
 			var providerID string
-			if err = s.DB.QueryRow("SELECT provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&providerID); err != nil {
+			if err = s.db.QueryRow("SELECT provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&providerID); err != nil {
 				return RestoreTarget{}, err
 			}
 			if !pending[providerID] {

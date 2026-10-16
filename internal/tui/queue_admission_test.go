@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
@@ -49,7 +50,7 @@ func assertNoQueuedInputHistory(t *testing.T, u *questionTestUI) {
 		"SELECT count(*) FROM model_requests",
 	} {
 		var count int
-		if err := u.runtime.Store.DB.QueryRow(query).Scan(&count); err != nil || count != 0 {
+		if err := historytest.DB(t, u.runtime.Store).QueryRow(query).Scan(&count); err != nil || count != 0 {
 			t.Fatal("cancelled initial input left history", query, count, err)
 		}
 	}
@@ -148,7 +149,7 @@ func TestCancelQueueDoesNotInterruptAdmittedInput(t *testing.T) {
 	u.wait(t, "Active turn completed.")
 	u.wait(t, "Turn complete")
 	var status string
-	if err := u.runtime.Store.DB.QueryRow("SELECT status FROM turns").Scan(&status); err != nil || status != "completed" {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT status FROM turns").Scan(&status); err != nil || status != "completed" {
 		t.Fatal("queue cancellation interrupted admitted turn", status, err)
 	}
 }

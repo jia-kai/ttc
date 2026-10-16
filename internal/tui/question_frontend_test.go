@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 	"ttc/internal/tool"
 
 	"github.com/gdamore/tcell/v3"
@@ -446,7 +447,7 @@ func TestQuestionFrontendDismissReopenAndCtrlCExitsForm(t *testing.T) {
 		t.Fatal("pending form survived exit")
 	}
 	var raw string
-	if err := u.runtime.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE name='question'").Scan(&raw); err != nil || !strings.Contains(raw, "cancelled") {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT result_json FROM tool_calls WHERE name='question'").Scan(&raw); err != nil || !strings.Contains(raw, "cancelled") {
 		t.Fatal(raw, err)
 	}
 }

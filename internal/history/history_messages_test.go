@@ -72,7 +72,7 @@ func TestHistoryPersistenceMessages(t *testing.T) {
 	requireHistoryMessage(t, err, "instruction snapshot exceeds 1 MiB")
 	_, err = s.Artifact(v.ID, "../details", nil)
 	requireHistoryMessage(t, err, "invalid artifact category")
-	if _, err := s.DB.Exec("UPDATE sessions SET read_only=1 WHERE id=?", v.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET read_only=1 WHERE id=?", v.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, err = s.StartRequest(v.ID, turn, "main/child", "compaction", v.Model)
@@ -232,9 +232,10 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 		"events.go":     {"AdmitRequest", "BeginChildTurn", "InvalidateContext"},
 		"export.go":     {"writeTranscriptEntries", "exportTextWith", "ArchiveActorTranscript", "writeTranscriptJSONLEntries"},
 		"transcript.go": {"validateTranscriptTip", "recordActorBoundary", "selectedActorEntries", "WriteActorTranscript", "ActorCompactionTip"},
-		"history.go":    {"appendTx", "Append", "Messages", "messagesWith", "StartRequest", "FinishRequest", "CallIntent", "CallResult", "Artifact", "RecordSystemPrompt", "Assistant", "Inspect"},
+		"history.go":    {"appendTx", "Append", "Messages", "messagesWith", "StartRequest", "FinishRequest", "CallIntent", "CallResult", "Artifact", "RecordSystemPrompt", "Assistant"},
 		"inputs.go":     {"inputMetadataWith", "enrichInput"},
 		"inspect.go":    {"RequestMessage"},
+		"projection.go": {"projectInspectionText", "projectExportText"},
 		"mutations.go":  {"CommitChange"},
 	}
 	// Keep exemptions tied to exact diagnostics and their owning methods: these

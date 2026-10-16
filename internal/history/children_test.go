@@ -1,6 +1,7 @@
 package history
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -59,7 +60,7 @@ func TestFinishChildTurnStateInvariants(t *testing.T) {
 							t.Fatal("accepted invalid completion", finish)
 						}
 						var saved string
-						if err := s.DB.QueryRow("SELECT status FROM turns WHERE id=?", turn).Scan(&saved); err != nil || saved != "running" {
+						if err := s.db.QueryRow("SELECT status FROM turns WHERE id=?", turn).Scan(&saved); err != nil || saved != "running" {
 							t.Fatal("invalid write changed turn", saved, err)
 						}
 						return
@@ -155,9 +156,9 @@ func TestChildRecoveryPreservesCanonicalBodyAndOriginalEvidence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				entry, _ := s.Entry(eventID)
-				if label := s.Label(entry); !strings.Contains(label, "stored-turn") || !strings.Contains(label, "done") {
-					t.Fatal("inspection label", label)
+				view, err := s.ReadEntryView(context.Background(), eventID)
+				if err != nil || !strings.Contains(view.Label, "stored-turn") || !strings.Contains(view.Label, "done") {
+					t.Fatal("inspection label", view.Label, err)
 				}
 			}
 			messageID, err := s.Append(source.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeRuntimeNotification, Content: evidence})
@@ -197,7 +198,7 @@ func TestChildRecoveryPreservesCanonicalBodyAndOriginalEvidence(t *testing.T) {
 					t.Fatal("changed canonical recovery body", string(notices[0].Body))
 				}
 				var copiedMessage string
-				if err := s.DB.QueryRow("SELECT content_json FROM entries WHERE session_id=? AND source_id=?", loaded.ID, messageID).Scan(&copiedMessage); err != nil || !strings.Contains(copiedMessage, `\"status\":\"completed\"`) || strings.Contains(copiedMessage, "assignment_status") {
+				if err := s.db.QueryRow("SELECT content_json FROM entries WHERE session_id=? AND source_id=?", loaded.ID, messageID).Scan(&copiedMessage); err != nil || !strings.Contains(copiedMessage, `\"status\":\"completed\"`) || strings.Contains(copiedMessage, "assignment_status") {
 					t.Fatal("rewrote copied message evidence", copiedMessage, err)
 				}
 				current = loaded
@@ -206,7 +207,7 @@ func TestChildRecoveryPreservesCanonicalBodyAndOriginalEvidence(t *testing.T) {
 				t.Fatal("rewrote original entries, turns or model requests")
 			}
 			var result string
-			if err := s.DB.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", calls[0]).Scan(&result); err != nil || result != evidence {
+			if err := s.db.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", calls[0]).Scan(&result); err != nil || result != evidence {
 				t.Fatal("rewrote original tool result", result, err)
 			}
 			archiveAfter, err := os.ReadFile(archive + ".jsonl")

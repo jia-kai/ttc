@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -403,16 +404,16 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 					t.Fatal("aside scope lost during compaction")
 				}
 				var replyEntry int64
-				if err := r.Store.DB.QueryRow(`SELECT id FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='request_message' AND json_extract(content_json,'$.purpose')='compaction' AND json_extract(content_json,'$.role')='assistant' ORDER BY id DESC LIMIT 1`, actor).Scan(&replyEntry); err != nil {
+				if err := historytest.DB(t, r.Store).QueryRow(`SELECT id FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='request_message' AND json_extract(content_json,'$.purpose')='compaction' AND json_extract(content_json,'$.role')='assistant' ORDER BY id DESC LIMIT 1`, actor).Scan(&replyEntry); err != nil {
 					t.Fatal("compaction reply lost actor/purpose", err)
 				}
 				replyRecord, err := r.Store.Entry(replyEntry)
 				if err != nil {
 					t.Fatal(err)
 				}
-				inspected, err := r.Store.Inspect(replyRecord)
-				if err != nil || inspected != "Useful child handoff." {
-					t.Fatal("compaction reply is not Markdown", inspected, err)
+				inspected, err := r.Store.ReadInspection(context.Background(), replyRecord.ID)
+				if err != nil || inspected.Text != "Useful child handoff." {
+					t.Fatal("compaction reply is not Markdown", inspected.Text, err)
 				}
 			}
 			originalNow, _ := json.Marshal(messages)
@@ -468,7 +469,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 func TestFatalCompactionGuardSurvivesFailedInvalidationWrite(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Inspectable context")
-	_, err := r.Store.DB.Exec(`CREATE TRIGGER fail_invalidation BEFORE UPDATE OF metadata_json ON sessions BEGIN SELECT RAISE(ABORT,'fixture invalidation write failure'); END`)
+	_, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_invalidation BEFORE UPDATE OF metadata_json ON sessions BEGIN SELECT RAISE(ABORT,'fixture invalidation write failure'); END`)
 	if err != nil {
 		t.Fatal(err)
 	}

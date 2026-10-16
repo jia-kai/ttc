@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"ttc/internal/history"
+	"ttc/internal/historytest"
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/workspace"
@@ -47,7 +48,7 @@ func toolFixture(t *testing.T) (*Registry, *workspace.Manager, Execution, int64)
 func invoke(t *testing.T, r *Registry, w *workspace.Manager, x Execution, req int64, name, args string) Record {
 	t.Helper()
 	var turn string
-	if e := w.Store.DB.QueryRow("SELECT coalesce(turn_id,'') FROM model_requests WHERE id=?", req).Scan(&turn); e != nil {
+	if e := historytest.DB(t, w.Store).QueryRow("SELECT coalesce(turn_id,'') FROM model_requests WHERE id=?", req).Scan(&turn); e != nil {
 		t.Fatal(e)
 	}
 	id, e := w.Store.CallIntent(x.SessionID, turn, x.Actor, req, llm.ToolCall{ID: history.NewID("p"), Name: name, Arguments: []byte(args)})

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -119,7 +120,7 @@ func TestModelSwitchAtToolBoundaryPreservesPerRequestState(t *testing.T) {
 		t.Fatal("lost original A reasoning", kept)
 	}
 	var count int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='model_switch'").Scan(&count); err != nil || count != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='model_switch'").Scan(&count); err != nil || count != 2 {
 		t.Fatal(count, err)
 	}
 	stored, err := r.Store.Session(r.Current())
@@ -131,7 +132,11 @@ func TestModelSwitchAtToolBoundaryPreservesPerRequestState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if strings.Contains(string(entry.Content), `"type":"model_switch"`) && !strings.Contains(r.Store.Label(entry), "Model switched") {
+		view, err := r.Store.ReadView(context.Background(), entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(entry.Content), `"type":"model_switch"`) && !strings.Contains(view.Label, "Model switched") {
 			t.Fatal("switch not replayable", entry)
 		}
 	}
@@ -149,11 +154,11 @@ func TestSwitchStorageFailureAndNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries").Scan(&count); err != nil || count != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries").Scan(&count); err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
 	seedRuntime(t, r, "Existing conversation for model switch")
-	if _, err := r.Store.DB.Exec("CREATE TRIGGER reject_model BEFORE UPDATE OF model_json ON sessions BEGIN SELECT RAISE(ABORT,'model blocked'); END"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("CREATE TRIGGER reject_model BEFORE UPDATE OF model_json ON sessions BEGIN SELECT RAISE(ABORT,'model blocked'); END"); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.RequestModel(b); err != nil {
@@ -166,7 +171,7 @@ func TestSwitchStorageFailureAndNoOp(t *testing.T) {
 	if err != nil || stored.Model.Model.ID != a.Model.ID || r.CurrentSelection().Model.ID != a.Model.ID {
 		t.Fatal(stored, r.CurrentSelection(), err)
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER reject_model"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER reject_model"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.ApplyModel(""); err != nil {
@@ -265,8 +270,12 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 		t.Fatal(loaded, r.CurrentSelection(), err)
 	}
 	entries, err := r.Store.Branch(r.Current(), 0)
-	if err != nil || len(entries) < 2 || !strings.Contains(r.Store.Label(entries[len(entries)-1]), "Model switched") {
+	if err != nil || len(entries) < 2 {
 		t.Fatal(entries, err)
+	}
+	view, err := r.Store.ReadView(context.Background(), entries[len(entries)-1])
+	if err != nil || !strings.Contains(view.Label, "Model switched") {
+		t.Fatal(view, err)
 	}
 }
 
@@ -283,7 +292,7 @@ func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
 	if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.DB.Exec("CREATE TRIGGER reject_load_model BEFORE UPDATE OF model_json ON sessions BEGIN SELECT RAISE(ABORT,'load model blocked'); END"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("CREATE TRIGGER reject_load_model BEFORE UPDATE OF model_json ON sessions BEGIN SELECT RAISE(ABORT,'load model blocked'); END"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Command("/load " + target); err == nil {
@@ -296,7 +305,7 @@ func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result string
-	if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE provider_call_id='after-failed-load'").Scan(&result); err != nil || !strings.Contains(result, "still-working") || !strings.Contains(result, `"ok":true`) {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE provider_call_id='after-failed-load'").Scan(&result); err != nil || !strings.Contains(result, "still-working") || !strings.Contains(result, `"ok":true`) {
 		t.Fatal(result, err)
 	}
 }

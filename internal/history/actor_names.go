@@ -8,7 +8,7 @@ import (
 // SubagentNames reads immutable display names, including closed children and
 // compaction predecessors. Names never restore live contexts or job handles.
 func (s *Store) SubagentNames(ctx context.Context, session string) (map[string]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT e.actor_id,json_extract(e.content_json,'$.child.label')
+	rows, err := s.db.QueryContext(ctx, `SELECT e.actor_id,json_extract(e.content_json,'$.child.label')
 		FROM entries e JOIN sessions h ON h.id=e.session_id
 		WHERE h.lineage_id=(SELECT lineage_id FROM sessions WHERE id=?) AND e.kind='status'
 		AND json_extract(e.content_json,'$.type')='child_state'

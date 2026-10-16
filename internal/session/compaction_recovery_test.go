@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -108,10 +109,10 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 					t.Fatal("unexpected recovery", summaries, coding, delivered)
 				}
 				var acknowledged sql.NullInt64
-				if err := r.Store.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&acknowledged); err != nil || acknowledged.Valid {
+				if err := historytest.DB(t, r.Store).QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&acknowledged); err != nil || acknowledged.Valid {
 					t.Fatal("recovery changed source acknowledgment", acknowledged, err)
 				}
-				if err := r.Store.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", delivered).Scan(&acknowledged); err != nil || !acknowledged.Valid {
+				if err := historytest.DB(t, r.Store).QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", delivered).Scan(&acknowledged); err != nil || !acknowledged.Valid {
 					t.Fatal("recovery did not acknowledge its fresh event", acknowledged, err)
 				}
 				if _, err := r.Command("/load " + r.Current()); err != nil || r.HasNotifications() {
@@ -145,7 +146,7 @@ func TestLoadCompactionBoundaryBeforeSummaryAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM model_requests WHERE session_id=? AND purpose='compaction'", source).Scan(&count); err != nil || count != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM model_requests WHERE session_id=? AND purpose='compaction'", source).Scan(&count); err != nil || count != 0 {
 		t.Fatal("fixture admitted summary inference", count, err)
 	}
 	// This fixture has no naming worker; avoid waiting on an unowned channel

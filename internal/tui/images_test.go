@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
@@ -171,7 +172,7 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 	u.wait(t, "Turn complete")
 	u.wait(t, "click pending")
 	var entry int64
-	if err = u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&entry); err != nil {
+	if err = historytest.DB(t, u.runtime.Store).QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&entry); err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{strings.Repeat("old research result ", 3000), "Continue the pending image interaction."} {
@@ -523,7 +524,7 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 	u.wait(t, "Turn complete")
 	u.wait(t, "click pending")
 	var id int64
-	if err = u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&id); err != nil {
+	if err = historytest.DB(t, u.runtime.Store).QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", id))
@@ -536,7 +537,7 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 	u.screen.EventQ() <- tcell.NewEventMouse(50, 14, tcell.Button1, 0)
 	u.wait(t, "pixel (")
 	var count int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests WHERE purpose='coding'").Scan(&count); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests WHERE purpose='coding'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 2 {
@@ -593,7 +594,7 @@ func TestPastePreservesImagePreviewWithDismissedQuestion(t *testing.T) {
 	u.wait(t, "Choose a method?")
 	u.key(tcell.KeyEscape)
 	var entry int64
-	if err = u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&entry); err != nil {
+	if err = historytest.DB(t, u.runtime.Store).QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&entry); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", entry))

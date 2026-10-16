@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -37,7 +38,7 @@ func TestCommandPalettePreservesDraftUntilSelection(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "> /quit")
 	var count int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM turns").Scan(&count); err != nil || count != 0 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM turns").Scan(&count); err != nil || count != 0 {
 		t.Fatal("palette submitted input", count, err)
 	}
 	u.key(tcell.KeyEnter)

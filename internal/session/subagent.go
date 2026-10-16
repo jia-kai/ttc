@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -62,12 +61,8 @@ func (r *Runtime) addSubagentTool() {
 		if err := r.checkContext(); err != nil {
 			return nil, err
 		}
-		var modelJSON string
-		if err := r.Store.DB.QueryRow("SELECT q.model_json FROM tool_calls c JOIN model_requests q ON q.id=c.request_id WHERE c.id=?", x.CallID).Scan(&modelJSON); err != nil {
-			return nil, err
-		}
-		var selection llm.Selection
-		if err := json.Unmarshal([]byte(modelJSON), &selection); err != nil {
+		selection, err := r.Store.ToolSelection(ctx, x.CallID)
+		if err != nil {
 			return nil, err
 		}
 		r.childStartMu.Lock()

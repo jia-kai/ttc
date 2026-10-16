@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -103,7 +104,7 @@ func TestSubagentUnsupportedVariantDoesNotCreateChild(t *testing.T) {
 				t.Fatalf("missing supported-choice guidance: %s", encoded)
 			}
 			var childTurns int
-			if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE actor_id!='main'").Scan(&childTurns); err != nil || childTurns != 0 {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE actor_id!='main'").Scan(&childTurns); err != nil || childTurns != 0 {
 				t.Fatal("invalid variant admitted a child turn", childTurns, err)
 			}
 		})
@@ -132,7 +133,7 @@ func TestSubagentExplicitCreationVariant(t *testing.T) {
 				t.Fatalf("creation changed model/provider or ignored explicit variant: %+v", got)
 			}
 			var recorded string
-			if err := r.Store.DB.QueryRow("SELECT json_extract(model_json,'$.variant') FROM model_requests WHERE actor_id=?", result["child_id"]).Scan(&recorded); err != nil || recorded != variant {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(model_json,'$.variant') FROM model_requests WHERE actor_id=?", result["child_id"]).Scan(&recorded); err != nil || recorded != variant {
 				t.Fatal("child request metadata lost selected variant", recorded, err)
 			}
 		})

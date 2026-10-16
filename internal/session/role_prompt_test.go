@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -123,15 +124,15 @@ func assertPersistedReceivedSystem(t *testing.T, r *Runtime, req llm.Request) {
 	if actor == r.Current() {
 		actor = "main"
 	}
-	if err := r.Store.DB.QueryRow(`SELECT id FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='system_prompt' ORDER BY id DESC LIMIT 1`, actor).Scan(&entryID); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT id FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='system_prompt' ORDER BY id DESC LIMIT 1`, actor).Scan(&entryID); err != nil {
 		t.Fatal(err)
 	}
 	entry, err := r.Store.Entry(entryID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := r.Store.Inspect(entry)
-	if err != nil || saved != req.System {
+	saved, err := r.Store.ReadInspection(context.Background(), entry.ID)
+	if err != nil || saved.Text != req.System {
 		t.Fatal("persisted inspector differs from received system", err)
 	}
 }

@@ -147,7 +147,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	}
 	for _, id := range []string{firstTurn, turn} {
 		var owner string
-		if err := s.DB.QueryRow("SELECT session_id FROM turns WHERE id=?", id).Scan(&owner); err != nil || owner != source.ID {
+		if err := s.db.QueryRow("SELECT session_id FROM turns WHERE id=?", id).Scan(&owner); err != nil || owner != source.ID {
 			t.Fatal("loaded compaction stole source turn", owner, err)
 		}
 	}
@@ -199,11 +199,11 @@ func TestUndoRejectsForeignOrUnselectedCheckpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			if fault == "foreign owner" {
-				if _, err := s.DB.Exec("UPDATE turns SET session_id=? WHERE id=?", loaded.ID, turn); err != nil {
+				if _, err := s.db.Exec("UPDATE turns SET session_id=? WHERE id=?", loaded.ID, turn); err != nil {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := s.DB.Exec("UPDATE turns SET start_entry_id=? WHERE id=?", loaded.EntryTip, turn); err != nil {
+				if _, err := s.db.Exec("UPDATE turns SET start_entry_id=? WHERE id=?", loaded.EntryTip, turn); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -423,7 +423,7 @@ func TestMessagesRejectMalformedRetentionMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.retained_at_ms',?) WHERE id=?", at, id); err != nil {
+			if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.retained_at_ms',?) WHERE id=?", at, id); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := s.Messages(session.ID); err == nil {
@@ -515,7 +515,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 		start int64
 	}{{firstTurn, continued.UndoFloor}, {secondTurn, continued.UndoFloor}, {steer.TurnID, copied[second]}} {
 		var start, tip int64
-		if err := s.DB.QueryRow("SELECT start_entry_id,coalesce(start_file_tip_id,0) FROM turns WHERE id=?", checkpoint.turn).Scan(&start, &tip); err != nil || start != checkpoint.start || tip != baseline {
+		if err := s.db.QueryRow("SELECT start_entry_id,coalesce(start_file_tip_id,0) FROM turns WHERE id=?", checkpoint.turn).Scan(&start, &tip); err != nil || start != checkpoint.start || tip != baseline {
 			t.Fatal("checkpoint not rebased to copied input baseline", checkpoint, start, tip, baseline, err)
 		}
 	}

@@ -52,7 +52,11 @@ func TestRuntimeInstructionEventsCarryCanonicalIdentity(t *testing.T) {
 		if err := json.Unmarshal(entry.Content, &message); err != nil {
 			t.Fatal(err)
 		}
-		if message.Type != event.MessageType || r.Store.Label(entry) != "Runtime instructions · inspect" {
+		view, err := r.Store.ReadView(context.Background(), entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if message.Type != event.MessageType || view.Label != "Runtime instructions · inspect" {
 			t.Fatalf("live identity differs from replay: %+v / %+v", event, message)
 		}
 	}

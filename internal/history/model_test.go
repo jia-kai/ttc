@@ -48,7 +48,7 @@ func TestModelPreferencesRestartIsolationAndNoSessions(t *testing.T) {
 	assertSelection(b)
 	assertSelection(script)
 	var rows int
-	if err := s.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&rows); err != nil || rows != 0 {
+	if err := s.db.QueryRow("SELECT count(*) FROM sessions").Scan(&rows); err != nil || rows != 0 {
 		t.Fatal("saving a model created sessions", rows, err)
 	}
 	info, err := os.Stat(filepath.Join(root, "model-choices.json"))
@@ -234,7 +234,7 @@ func TestSwitchModelDatabaseRollbackDoesNotChangePreference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("CREATE TRIGGER reject_switch BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'switch blocked'); END"); err != nil {
+	if _, err := s.db.Exec("CREATE TRIGGER reject_switch BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'switch blocked'); END"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SwitchModel(id, "", previous, next, "switch"); err == nil {
@@ -252,7 +252,7 @@ func TestSwitchModelDatabaseRollbackDoesNotChangePreference(t *testing.T) {
 	if err != nil || choice == nil || choice.Model.ID != next.Model.ID {
 		t.Fatal("database failure rewrote explicit preference", choice, err)
 	}
-	if _, err := s.DB.Exec("DROP TRIGGER reject_switch"); err != nil {
+	if _, err := s.db.Exec("DROP TRIGGER reject_switch"); err != nil {
 		t.Fatal(err)
 	}
 	applied := previous

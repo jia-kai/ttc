@@ -29,7 +29,7 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 		return 0, err
 	}
 	cutoff := now.Add(-lineageRetention).UnixMilli()
-	rows, err := s.DB.QueryContext(ctx, "SELECT lineage_id FROM sessions GROUP BY lineage_id HAVING max(last_activity_ms)<=? ORDER BY lineage_id", cutoff)
+	rows, err := s.db.QueryContext(ctx, "SELECT lineage_id FROM sessions GROUP BY lineage_id HAVING max(last_activity_ms)<=? ORDER BY lineage_id", cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -60,7 +60,7 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 		return 0, err
 	}
 	defer assets.Close()
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -116,7 +116,7 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 }
 
 func (s *Store) refreshLoadedActivity(ctx context.Context, now time.Time, protectedSession string) error {
-	_, err := s.DB.ExecContext(ctx, "UPDATE sessions SET last_activity_ms=max(last_activity_ms,?) WHERE id=?", now.UnixMilli(), protectedSession)
+	_, err := s.db.ExecContext(ctx, "UPDATE sessions SET last_activity_ms=max(last_activity_ms,?) WHERE id=?", now.UnixMilli(), protectedSession)
 	if err != nil {
 		return fmt.Errorf("refresh loaded history activity: %w", err)
 	}

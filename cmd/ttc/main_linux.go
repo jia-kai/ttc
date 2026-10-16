@@ -269,7 +269,7 @@ func runWithModules(modules []providers.Module) error {
 		saved, e = store.Session(*load)
 		if e == nil {
 			var path string
-			e = store.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", saved.WorkspaceID).Scan(&path)
+			path, e = store.WorkspacePath(context.Background(), saved.WorkspaceID)
 			if e == nil && path != w.Root {
 				return fmt.Errorf("session belongs to another workspace")
 			}

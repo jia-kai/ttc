@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/capture"
 	contextbuild "ttc/internal/context"
@@ -221,10 +222,10 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 	}
 	continuation := r.Current()
 	var sourcePrompt, prefixTip int64
-	if err := r.Store.DB.QueryRow(`SELECT id FROM entries WHERE session_id=? AND role='user' AND model_visible=1 ORDER BY id LIMIT 1`, before).Scan(&sourcePrompt); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT id FROM entries WHERE session_id=? AND role='user' AND model_visible=1 ORDER BY id LIMIT 1`, before).Scan(&sourcePrompt); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow(`SELECT id FROM file_changes WHERE session_id=? ORDER BY id LIMIT 1`, before).Scan(&prefixTip); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT id FROM file_changes WHERE session_id=? ORDER BY id LIMIT 1`, before).Scan(&prefixTip); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := r.Store.Branch(continuation, 0)
@@ -356,7 +357,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 					r.Interrupt()
 					return ctx.Err()
 				case "commit":
-					_, err := r.Store.DB.Exec(`CREATE TRIGGER fail_continuation BEFORE INSERT ON sessions WHEN NEW.predecessor_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END`)
+					_, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_continuation BEFORE INSERT ON sessions WHEN NEW.predecessor_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'fixture commit failure'); END`)
 					if err != nil {
 						t.Fatal(err)
 					}

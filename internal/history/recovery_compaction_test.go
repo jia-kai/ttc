@@ -36,12 +36,12 @@ func TestContinuationPendingRecoveryWarningIsAtomicAndDeduplicated(t *testing.T)
 			}
 			if mode == "rollback" {
 				trigger := fmt.Sprintf(`CREATE TRIGGER reject_warning BEFORE INSERT ON entries WHEN NEW.session_id != '%s' AND json_extract(NEW.content_json,'$.request_id')=%d BEGIN SELECT RAISE(ABORT, 'warning persistence rejected'); END`, session.ID, request)
-				if _, err := s.DB.Exec(trigger); err != nil {
+				if _, err := s.db.Exec(trigger); err != nil {
 					t.Fatal(err)
 				}
 			}
 			var before int
-			if err := s.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&before); err != nil {
+			if err := s.db.QueryRow("SELECT count(*) FROM sessions").Scan(&before); err != nil {
 				t.Fatal(err)
 			}
 			next, err := s.Continue(session.ID, "Handoff summary", cut.EntryTip, boundary, nil, time.Now(), &warning)
@@ -51,7 +51,7 @@ func TestContinuationPendingRecoveryWarningIsAtomicAndDeduplicated(t *testing.T)
 				}
 				old, readErr := s.Session(session.ID)
 				var after int
-				countErr := s.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&after)
+				countErr := s.db.QueryRow("SELECT count(*) FROM sessions").Scan(&after)
 				if readErr != nil || countErr != nil || old.ReadOnly || before != after {
 					t.Fatal("failed warning commit left partial continuation", old, before, after, readErr, countErr)
 				}

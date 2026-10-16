@@ -136,6 +136,25 @@ One Go module uses direct construction and small interfaces at their consumers:
   read-only asides. Child context cuts follow
   [compaction](compaction.md#handoff) without moving main history or undo state.
 
+## History and frontend boundaries
+
+- `history.Store` owns SQLite, schema knowledge and persistence transactions.
+  Callers use typed operations rather than SQL or database handles. Request
+  admission, compaction and file-tip changes remain atomic storage operations.
+- Durable history values and canonical `llm.Message` values are independent of
+  SQL. Typed history reads assemble replay and inspection data; pure projections
+  format loaded data without database or filesystem access. Large supported TUI
+  inspectors retain bounded SQL slices and streamed instruction snapshots rather
+  than loading complete records. Plain inspection uses complete records.
+- The frontend controller owns mutable UI state on one event loop. Lifecycle,
+  input, runtime events, replay, inspection and drawing have separate handlers;
+  workers return results to the loop rather than mutate that state.
+  Cancellation, worker joins and generation checks remain explicit. The TUI
+  consumes a small history-reader interface and does not decode storage
+  envelopes.
+- Tests that assert physical persistence or inject database faults use the
+  test-only history helper, not a production database escape hatch.
+
 ## Rail layering
 
 Rail's Linux implementation uses concrete intermediate representations, not a

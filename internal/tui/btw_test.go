@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -56,7 +57,7 @@ func TestBTWPopupWaitsForFullscreenAndPreservesMain(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		var completions int
-		if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='job_completion'").Scan(&completions); err != nil {
+		if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='job_completion'").Scan(&completions); err != nil {
 			t.Fatal(err)
 		}
 		if completions > 0 {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/jobs"
@@ -40,7 +41,7 @@ func TestFailedHistoryLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := r.Store.DB.Exec("UPDATE entries SET created_ms=? WHERE id=?", time.Now().Add(-2*time.Hour).UnixMilli(), prompt); err != nil {
+			if _, err := historytest.DB(t, r.Store).Exec("UPDATE entries SET created_ms=? WHERE id=?", time.Now().Add(-2*time.Hour).UnixMilli(), prompt); err != nil {
 				t.Fatal(err)
 			}
 			// Invalid durable tool exchanges must still reject the load before

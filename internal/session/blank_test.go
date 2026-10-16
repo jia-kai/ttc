@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 )
@@ -13,7 +14,7 @@ import (
 func assertStoredSessions(t *testing.T, r *Runtime, want int) {
 	t.Helper()
 	var count int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != want {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != want {
 		t.Fatal("stored sessions", count, want, err)
 	}
 }
@@ -91,7 +92,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var users int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND kind='message' AND role='user'", r.Current()).Scan(&users); err != nil || users != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND kind='message' AND role='user'", r.Current()).Scan(&users); err != nil || users != 2 {
 		t.Fatal("first message duplicated", users, err)
 	}
 }
@@ -107,7 +108,7 @@ func TestBlankFirstSaveFailurePreservesIdentityAndCanRetry(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "saved"})
 	}}
 	id := r.Current()
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_first BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'injected first save failure'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_first BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'injected first save failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	message := &llm.Message{Type: llm.TypeUserInput, Content: "Keep this first submission"}
@@ -118,7 +119,7 @@ func TestBlankFirstSaveFailurePreservesIdentityAndCanRetry(t *testing.T) {
 	if called != 0 || r.Current() != id || r.persisted {
 		t.Fatal("failed save started inference or changed draft", called, r.Current())
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER reject_first"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER reject_first"); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Run(message); err != nil || called != 1 || r.Current() != id {

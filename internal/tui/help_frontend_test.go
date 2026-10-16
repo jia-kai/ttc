@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
@@ -133,7 +134,7 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 	helpTestRequest(t, p, "steer instruction")
 	helpTestRequest(t, p, "queued instruction")
 	var requests, turns int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*), count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&requests, &turns); err != nil || requests != 3 || turns != 2 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*), count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&requests, &turns); err != nil || requests != 3 || turns != 2 {
 		t.Fatal("help changed inference or turn admission", requests, turns, err)
 	}
 	messages, err := u.runtime.Store.Messages(u.runtime.Current())
@@ -167,7 +168,7 @@ func TestIdleHelpPreservesUnpersistedStatusWithoutInference(t *testing.T) {
 	default:
 	}
 	var sessions int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&sessions); err != nil || sessions != 0 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM sessions").Scan(&sessions); err != nil || sessions != 0 {
 		t.Fatal("help persisted the blank session", sessions, err)
 	}
 }

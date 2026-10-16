@@ -18,7 +18,7 @@ const MaxPromptHistoryBytes = 8 << 20
 // compaction entries. The newest 1,000 entries are read with an 8 MiB text budget;
 // prompts are never truncated. Commands are not persisted conversation messages.
 func (s *Store) PromptHistory(ctx context.Context) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT substr(coalesce(json_extract(e.content_json,'$.user_text'),
+	rows, err := s.db.QueryContext(ctx, `SELECT substr(coalesce(json_extract(e.content_json,'$.user_text'),
 		json_extract(e.content_json,'$.content'),''),1,?)
 		FROM entries e JOIN turns t ON t.id=e.turn_id
 		WHERE e.kind='message' AND e.role='user' AND e.actor_id='main'

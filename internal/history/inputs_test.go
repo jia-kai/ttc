@@ -59,7 +59,7 @@ func TestHumanProvenanceQueryCountIsConstant(t *testing.T) {
 				}
 				return messages
 			}
-			outside := check(s.DB)
+			outside := check(s.db)
 			if err := s.transact(func(tx *sql.Tx) error {
 				if inside := check(tx); !reflect.DeepEqual(inside, outside) {
 					t.Fatal("transaction projection differs from database projection")
@@ -137,7 +137,7 @@ func TestBatchedHumanProvenanceUsesOriginalNotCopyMetadata(t *testing.T) {
 	if err != nil || copy.EventSeq() != original.ID {
 		t.Fatal("copy lost original entry identity", copy, err)
 	}
-	if _, err := s.DB.Exec(`UPDATE entries SET content_json=json_set(content_json,'$.input_source','invalid original source') WHERE id=?`, original.ID); err != nil {
+	if _, err := s.db.Exec(`UPDATE entries SET content_json=json_set(content_json,'$.input_source','invalid original source') WHERE id=?`, original.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Messages(session.ID); err == nil || !strings.Contains(err.Error(), "invalid source") {

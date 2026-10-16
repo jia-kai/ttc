@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -196,7 +197,7 @@ func TestCompactionUsageCountsOnlyAttemptedInferenceDespitePersistenceFailure(t 
 				u := lifetimeUsage()
 				return emit(llm.StreamEvent{Kind: "completed", Usage: &u})
 			}}
-			if _, err := r.Store.DB.Exec(test.trigger); err != nil {
+			if _, err := historytest.DB(t, r.Store).Exec(test.trigger); err != nil {
 				t.Fatal(err)
 			}
 			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)

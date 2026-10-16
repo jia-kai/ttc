@@ -59,7 +59,7 @@ func TestCurrentStartupDoesNotAcquireDatabaseWriterLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	tx, err := first.DB.Begin() // _txlock=immediate holds the SQLite writer lock.
+	tx, err := first.db.Begin() // _txlock=immediate holds the SQLite writer lock.
 	if err != nil {
 		t.Fatal(err)
 	}

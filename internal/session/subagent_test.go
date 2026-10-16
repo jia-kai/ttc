@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -92,9 +93,9 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 			if err != nil || entry.Kind != "tool_result" || entry.Visible || entry.Actor == "main" {
 				t.Fatal(entry, err)
 			}
-			text, err := r.Store.Inspect(entry)
-			if err != nil || !strings.Contains(text, "child.txt") {
-				t.Fatal(text, err)
+			text, err := r.Store.ReadInspection(context.Background(), entry.ID)
+			if err != nil || !strings.Contains(text.Text, "child.txt") {
+				t.Fatal(text.Text, err)
 			}
 			childTool = true
 		}
@@ -204,7 +205,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	gate, finish := make(chan struct{}), make(chan struct{})
 	mutation := make(chan error, 1)
 	var callID string
-	if err := r.Store.DB.QueryRow("SELECT id FROM tool_calls WHERE name='subagent'").Scan(&callID); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT id FROM tool_calls WHERE name='subagent'").Scan(&callID); err != nil {
 		t.Fatal(err)
 	}
 	go func() {
@@ -244,11 +245,11 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 		t.Fatal(v, err)
 	}
 	var routed string
-	if err := r.Store.DB.QueryRow("SELECT session_id FROM entries WHERE json_extract(content_json,'$.type')='model_retry' AND actor_id != 'main'").Scan(&routed); err != nil || routed != r.Current() {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT session_id FROM entries WHERE json_extract(content_json,'$.type')='model_retry' AND actor_id != 'main'").Scan(&routed); err != nil || routed != r.Current() {
 		t.Fatal("child retry did not follow continuation", routed, err)
 	}
 	var purpose string
-	if err := r.Store.DB.QueryRow("SELECT q.purpose FROM entries e JOIN model_requests q ON q.id=json_extract(e.content_json,'$.request_id') WHERE json_extract(e.content_json,'$.type')='model_retry' AND e.actor_id='main' LIMIT 1").Scan(&purpose); err != nil || purpose != "compaction" {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT q.purpose FROM entries e JOIN model_requests q ON q.id=json_extract(e.content_json,'$.request_id') WHERE json_extract(e.content_json,'$.type')='model_retry' AND e.actor_id='main' LIMIT 1").Scan(&purpose); err != nil || purpose != "compaction" {
 		t.Fatal("compaction retry missing", purpose, err)
 	}
 	data, err := os.ReadFile(filepath.Join(r.Workspace.Root, "child-after-compact.txt"))
@@ -256,7 +257,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 		t.Fatal(string(data), err)
 	}
 	var raw string
-	if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE name='write'").Scan(&raw); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE name='write'").Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	var result struct {

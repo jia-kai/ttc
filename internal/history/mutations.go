@@ -62,7 +62,7 @@ func (s *Store) Changes(tip int64) ([]Change, error) {
 	for tip != 0 {
 		var c Change
 		var data string
-		if e := s.DB.QueryRow("SELECT id,coalesce(previous_id,0),reversible,paths_json FROM file_changes WHERE id=?", tip).Scan(&c.ID, &c.Previous, &c.Reversible, &data); e != nil {
+		if e := s.db.QueryRow("SELECT id,coalesce(previous_id,0),reversible,paths_json FROM file_changes WHERE id=?", tip).Scan(&c.ID, &c.Previous, &c.Reversible, &data); e != nil {
 			return nil, e
 		}
 		c.Paths = json.RawMessage(data)
@@ -100,7 +100,7 @@ func (s *Store) UndoTarget(session string) (RestoreTarget, error) {
 		if x.Kind == "message" && x.Actor == "main" && x.Role == "user" && x.TurnID != "" {
 			var start, tip sql.NullInt64
 			var trigger string
-			if e = s.DB.QueryRow("SELECT start_entry_id,start_file_tip_id,trigger FROM turns WHERE id=? AND session_id=?", x.TurnID, session).Scan(&start, &tip, &trigger); e != nil {
+			if e = s.db.QueryRow("SELECT start_entry_id,start_file_tip_id,trigger FROM turns WHERE id=? AND session_id=?", x.TurnID, session).Scan(&start, &tip, &trigger); e != nil {
 				return RestoreTarget{}, fmt.Errorf("undo checkpoint ownership: %w", e)
 			}
 			if trigger != "user" && trigger != "steer" {
@@ -138,7 +138,7 @@ func (s *Store) BranchTarget(session string, id int64) (RestoreTarget, error) {
 		return RestoreTarget{}, nil
 	}
 	var tip int64
-	if e = s.DB.QueryRow("SELECT coalesce(file_tip_id,0) FROM entries WHERE id=? AND session_id=?", id, session).Scan(&tip); e != nil {
+	if e = s.db.QueryRow("SELECT coalesce(file_tip_id,0) FROM entries WHERE id=? AND session_id=?", id, session).Scan(&tip); e != nil {
 		return RestoreTarget{}, fmt.Errorf("branch target: %w", e)
 	}
 	return RestoreTarget{id, tip, 0}, nil

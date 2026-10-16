@@ -95,7 +95,7 @@ func TestBranchSelectionHonorsFloorAncestryAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.Exec("UPDATE sessions SET undo_floor_id=? WHERE id=?", a, saved.ID); err != nil {
+	if _, err = s.db.Exec("UPDATE sessions SET undo_floor_id=? WHERE id=?", a, saved.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.BranchSelectionTarget(saved.ID, b); err == nil || !strings.Contains(err.Error(), "undo boundary") {
@@ -113,7 +113,7 @@ func TestBranchSelectionHonorsFloorAncestryAndReadOnly(t *testing.T) {
 			t.Fatal(node)
 		}
 	}
-	if _, err = s.DB.Exec("UPDATE sessions SET read_only=1 WHERE id=?", saved.ID); err != nil {
+	if _, err = s.db.Exec("UPDATE sessions SET read_only=1 WHERE id=?", saved.ID); err != nil {
 		t.Fatal(err)
 	}
 	tree, err = s.HistoryTree(context.Background(), saved.ID)

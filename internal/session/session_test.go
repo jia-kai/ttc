@@ -12,6 +12,7 @@ import (
 	"time"
 	"ttc/internal/capture"
 	"ttc/internal/history"
+	"ttc/internal/historytest"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
@@ -93,9 +94,9 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			text, e := r.Store.Inspect(entry)
-			if e != nil || !strings.Contains(text, "You are TTC") {
-				t.Fatal(text, e)
+			text, e := r.Store.ReadInspection(context.Background(), entry.ID)
+			if e != nil || !strings.Contains(text.Text, "You are TTC") {
+				t.Fatal(text.Text, e)
 			}
 		}
 	}
@@ -192,7 +193,7 @@ func TestPartialFailureLeavesUndoableAndWellFormedHistory(t *testing.T) {
 		t.Fatal("failed turn edit was not undoable")
 	}
 	var statuses []string
-	rows, e := r.Store.DB.Query("SELECT status FROM turns")
+	rows, e := historytest.DB(t, r.Store).Query("SELECT status FROM turns")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -244,7 +245,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 		t.Fatal(e)
 	}
 	var firstTurn string
-	if e := r.Store.DB.QueryRow("SELECT json_extract(metadata_json,'$.naming_turn_id') FROM sessions WHERE id=?", r.Current()).Scan(&firstTurn); e != nil || firstTurn == "" {
+	if e := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(metadata_json,'$.naming_turn_id') FROM sessions WHERE id=?", r.Current()).Scan(&firstTurn); e != nil || firstTurn == "" {
 		t.Fatal(firstTurn, e)
 	}
 	select {
@@ -302,9 +303,9 @@ func TestBackgroundWithoutWakeStillPersistsOutput(t *testing.T) {
 	found := false
 	for _, v := range entries {
 		if strings.Contains(string(v.Content), "retained-output") {
-			text, e := r.Store.Inspect(v)
-			if e != nil || !strings.Contains(text, "retained-output") {
-				t.Fatal(text, e)
+			text, e := r.Store.ReadInspection(context.Background(), v.ID)
+			if e != nil || !strings.Contains(text.Text, "retained-output") {
+				t.Fatal(text.Text, e)
 			}
 			found = true
 		}
@@ -363,10 +364,10 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 		t.Fatal("wake disabled still notified model")
 	}
 	var completionID, resultID int64
-	if err := r.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='job_completion'").Scan(&completionID); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='job_completion'").Scan(&completionID); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT entry_id FROM tool_records").Scan(&resultID); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT entry_id FROM tool_records").Scan(&resultID); err != nil {
 		t.Fatal(err)
 	}
 	if completionID >= resultID {
@@ -376,15 +377,19 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if label := r.Store.Label(entry); !strings.Contains(label, "done") || !strings.Contains(label, "printf output") || strings.Contains(label, "line-01") || !strings.Contains(label, "line-20") {
+	view, err := r.Store.ReadView(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label := view.Label; !strings.Contains(label, "done") || !strings.Contains(label, "printf output") || strings.Contains(label, "line-01") || !strings.Contains(label, "line-20") {
 		t.Fatal(label)
 	}
-	detail, err := r.Store.Inspect(entry)
-	if err != nil || !strings.Contains(detail, "line-01") {
-		t.Fatal(detail, err)
+	detail, err := r.Store.ReadInspection(context.Background(), entry.ID)
+	if err != nil || !strings.Contains(detail.Text, "line-01") {
+		t.Fatal(detail.Text, err)
 	}
 	var result string
-	if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE provider_call_id='early'").Scan(&result); err != nil || !strings.Contains(result, `"status":"running"`) {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE provider_call_id='early'").Scan(&result); err != nil || !strings.Contains(result, `"status":"running"`) {
 		t.Fatal(result, err)
 	}
 }

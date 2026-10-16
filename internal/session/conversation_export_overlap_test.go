@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
@@ -181,7 +182,7 @@ func TestConversationExportChildCompactionOverlapsMainHandoff(t *testing.T) {
 		t.Fatal("main handoff did not overlap the blocked child summary")
 	}
 	var mainTip int64
-	if err := r.Store.DB.QueryRow("SELECT source_tip_id FROM compactions WHERE continuation_id=?", r.Current()).Scan(&mainTip); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT source_tip_id FROM compactions WHERE continuation_id=?", r.Current()).Scan(&mainTip); err != nil {
 		t.Fatal(err)
 	}
 	if mainTip <= frozenTip {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -54,7 +55,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 	}
 	original := r.Current()
 	var baseline int64
-	if err := r.Store.DB.QueryRow("SELECT id FROM file_changes WHERE session_id=? ORDER BY id LIMIT 1 OFFSET 1", original).Scan(&baseline); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT id FROM file_changes WHERE session_id=? ORDER BY id LIMIT 1 OFFSET 1", original).Scan(&baseline); err != nil {
 		t.Fatal(err)
 	}
 	originals := map[string]int64{}

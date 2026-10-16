@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -111,7 +112,7 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		got, readErr := s.LastSelection("openai")
 		for _, table := range []string{"workspaces", "sessions", "turns", "entries"} {
 			var count int
-			if err := s.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			if err := historytest.DB(t, s).QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 				s.Close()
 				t.Fatalf("empty CLI startup/model choice wrote %s: %d, %v", table, count, err)
 			}
@@ -182,7 +183,7 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(data, "model-choices.json"), []byte("invalid JSON"), 0600); err != nil {
 					t.Fatal(err)
 				}
-			} else if _, err := s.DB.Exec("CREATE TRIGGER reject_startup_switch BEFORE UPDATE OF model_json ON sessions BEGIN SELECT RAISE(ABORT,'startup switch blocked'); END"); err != nil {
+			} else if _, err := historytest.DB(t, s).Exec("CREATE TRIGGER reject_startup_switch BEFORE UPDATE OF model_json ON sessions BEGIN SELECT RAISE(ABORT,'startup switch blocked'); END"); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.Close(); err != nil {

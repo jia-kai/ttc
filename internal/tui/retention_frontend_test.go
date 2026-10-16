@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
@@ -31,7 +32,7 @@ func TestStartupHistoryStatsVisibleInTUIWithoutInferenceOrPersistence(t *testing
 	}
 	for _, table := range []string{"sessions", "entries", "model_requests"} {
 		var count int
-		if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+		if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("startup status persisted %s: count=%d err=%v", table, count, err)
 		}
 	}

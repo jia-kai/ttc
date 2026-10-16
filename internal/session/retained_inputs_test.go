@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -85,7 +86,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 			ready := make(chan struct{})
 			hold := func() {
 				var err error
-				held, err = r.Store.DB.Begin()
+				held, err = historytest.DB(t, r.Store).Begin()
 				if err != nil {
 					t.Error(err)
 				}
@@ -101,7 +102,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 			}
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				var committed int64
-				if err := r.Store.DB.QueryRow("SELECT created_ms FROM entries WHERE actor_id=? AND role='user' ORDER BY id LIMIT 1", task.actor).Scan(&committed); err != nil {
+				if err := historytest.DB(t, r.Store).QueryRow("SELECT created_ms FROM entries WHERE actor_id=? AND role='user' ORDER BY id LIMIT 1", task.actor).Scan(&committed); err != nil {
 					return err
 				}
 				found := 0

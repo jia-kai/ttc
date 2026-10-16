@@ -18,20 +18,6 @@ import (
 	"ttc/internal/prompts"
 )
 
-// contextHistoryReader keeps the small shared SQL reader interface while making
-// export selection and rendering queries cancellable within one read snapshot.
-type contextHistoryReader struct {
-	ctx context.Context
-	tx  *sql.Tx
-}
-
-func (q contextHistoryReader) Query(query string, args ...any) (*sql.Rows, error) {
-	return q.tx.QueryContext(q.ctx, query, args...)
-}
-func (q contextHistoryReader) QueryRow(query string, args ...any) *sql.Row {
-	return q.tx.QueryRowContext(q.ctx, query, args...)
-}
-
 // transcriptSnapshot owns a separate read-only WAL connection, so a slow output
 // writer cannot occupy the Store's serialized commit connection. Its independent
 // shared lifetime lock fences schema upgrades and VACUUM while the reader lives.

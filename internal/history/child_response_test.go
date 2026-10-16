@@ -16,7 +16,7 @@ func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 	}
 	foreign, _ := startHistorySession(t, s, t.TempDir(), session.Model, "foreign")
 	// Isolate workspace rejection from lineage rejection.
-	if _, err := s.DB.Exec("UPDATE sessions SET lineage_id=? WHERE id=?", session.LineageID, foreign.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET lineage_id=? WHERE id=?", session.LineageID, foreign.ID); err != nil {
 		t.Fatal(err)
 	}
 	foreignSource, err := s.Append(foreign.ID, "", "main/child_test", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: "foreign response"})
@@ -24,7 +24,7 @@ func TestChildResponseRequiresRuntimeProvenanceAndMatchingSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	var root string
-	if err := s.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", session.WorkspaceID).Scan(&root); err != nil {
+	if err := s.db.QueryRow("SELECT path FROM workspaces WHERE id=?", session.WorkspaceID).Scan(&root); err != nil {
 		t.Fatal(err)
 	}
 	sameWorkspace, _ := startHistorySession(t, s, root, session.Model, "different lineage")
@@ -123,7 +123,7 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 						t.Fatal("not an independent same-lineage load", loaded)
 					}
 					current = loaded
-					if err := s.DB.QueryRow("SELECT id FROM entries WHERE session_id=? AND source_id=?", current.ID, envelope).Scan(&entryID); err != nil {
+					if err := s.db.QueryRow("SELECT id FROM entries WHERE session_id=? AND source_id=?", current.ID, envelope).Scan(&entryID); err != nil {
 						t.Fatal(err)
 					}
 				}

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -155,7 +156,7 @@ func TestToolBatchOverlapsReadsShellsAndOrderedWrites(t *testing.T) {
 			t.Fatal("result association lost", i, record)
 		}
 		var stored string
-		if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", ids[i]).Scan(&stored); err != nil || stored != string(record.Result) {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE id=?", ids[i]).Scan(&stored); err != nil || stored != string(record.Result) {
 			t.Fatal(stored, record, err)
 		}
 	}
@@ -194,7 +195,7 @@ func TestToolBatchCancellationSkipsQueuedWritesAndJoins(t *testing.T) {
 	}
 	for _, id := range ids {
 		var result string
-		if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", id).Scan(&result); err != nil || !strings.Contains(result, "cancelled") {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE id=?", id).Scan(&result); err != nil || !strings.Contains(result, "cancelled") {
 			t.Fatal(result, err)
 		}
 	}
@@ -239,7 +240,7 @@ func TestToolBatchStorageFailureCancelsSiblingsAndQueuedWrites(t *testing.T) {
 	})
 	calls := []llm.ToolCall{{ID: "first", Name: "write", Arguments: []byte(`{}`)}, {ID: "second", Name: "write", Arguments: []byte(`{}`)}, {ID: "sibling", Name: "shell", Arguments: []byte(`{}`)}}
 	turn, ids := batchIntents(t, r, "main", calls)
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_first_result BEFORE UPDATE OF result_json ON tool_calls WHEN OLD.provider_call_id='first' BEGIN SELECT RAISE(ABORT,'injected storage failure'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_first_result BEFORE UPDATE OF result_json ON tool_calls WHEN OLD.provider_call_id='first' BEGIN SELECT RAISE(ABORT,'injected storage failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -255,7 +256,7 @@ func TestToolBatchStorageFailureCancelsSiblingsAndQueuedWrites(t *testing.T) {
 	}
 	for _, id := range ids[1:] {
 		var result string
-		if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", id).Scan(&result); err != nil || !strings.Contains(result, "cancelled") {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE id=?", id).Scan(&result); err != nil || !strings.Contains(result, "cancelled") {
 			t.Fatal(result, err)
 		}
 	}
@@ -282,7 +283,7 @@ func TestTurnsContinueBeyond64Cycles(t *testing.T) {
 				t.Fatal(err)
 			}
 			var count int
-			if err := r.Store.DB.QueryRow("SELECT count(*) FROM tool_calls WHERE name='wakeup_list' AND result_json IS NOT NULL").Scan(&count); err != nil || count != 70 {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM tool_calls WHERE name='wakeup_list' AND result_json IS NOT NULL").Scan(&count); err != nil || count != 70 {
 				t.Fatal(count, err)
 			}
 		})
@@ -426,7 +427,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 			return
 		}
 		var result string
-		if err := r.Store.DB.QueryRow("SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=?", e.EntryID).Scan(&result); err != nil {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=?", e.EntryID).Scan(&result); err != nil {
 			t.Error(err)
 			return
 		}
@@ -462,7 +463,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	if contextUpdates != 1 {
 		t.Fatal("unchanged child snapshot generated UI updates", contextUpdates)
 	}
-	rows, err := r.Store.DB.Query("SELECT c.provider_call_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id ORDER BY r.entry_id")
+	rows, err := historytest.DB(t, r.Store).Query("SELECT c.provider_call_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id ORDER BY r.entry_id")
 	if err != nil {
 		t.Fatal(err)
 	}

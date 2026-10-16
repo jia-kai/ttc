@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/history"
 	"ttc/internal/llm"
@@ -91,7 +92,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			r.Close()
 			// Reconstruct the schema-7 compaction boundary, not just its version.
 			// Schema 9 removed these columns and added a summary identity index.
-			if _, err := r.Store.DB.Exec(`DROP INDEX compaction_summary;
+			if _, err := historytest.DB(t, r.Store).Exec(`DROP INDEX compaction_summary;
 				ALTER TABLE compactions ADD COLUMN archive_path TEXT NOT NULL DEFAULT '';
 				ALTER TABLE compactions ADD COLUMN archive_sha256 TEXT NOT NULL DEFAULT '';
 				ALTER TABLE compactions ADD COLUMN archive_exact_sha256 TEXT NOT NULL DEFAULT '';
@@ -107,7 +108,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			}
 			t.Cleanup(func() { store.Close() })
 			var version int
-			if err := store.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 9 {
+			if err := historytest.DB(t, store).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 9 {
 				t.Fatalf("automatic migration version=%d: %v", version, err)
 			}
 			state := tc.state
@@ -225,7 +226,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			}
 			for _, id := range []int64{original, finish, event.EventSeq} {
 				var delivered sql.NullInt64
-				if err := store.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", id).Scan(&delivered); err != nil || delivered.Valid != (id == event.EventSeq) {
+				if err := historytest.DB(t, store).QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", id).Scan(&delivered); err != nil || delivered.Valid != (id == event.EventSeq) {
 					t.Fatal("delivery changed source ownership", id, delivered, err)
 				}
 			}

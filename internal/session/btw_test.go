@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 )
@@ -128,9 +129,9 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			detail, err := r.Store.Inspect(entry)
-			if err != nil || !strings.Contains(detail, "## Aside answer") {
-				t.Fatal(detail, err)
+			detail, err := r.Store.ReadInspection(context.Background(), entry.ID)
+			if err != nil || !strings.Contains(detail.Text, "## Aside answer") {
+				t.Fatal(detail.Text, err)
 			}
 			goto inspected
 		case <-ctx.Done():
@@ -227,13 +228,13 @@ func TestUsageTotalsAccumulateAndSnapshotDoesNotAlias(t *testing.T) {
 func TestBTWRejectsReadOnlyAndPendingRedo(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "question context")
-	if _, err := r.Store.DB.Exec("UPDATE sessions SET read_only=1 WHERE id=?", r.Current()); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET read_only=1 WHERE id=?", r.Current()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.StartBTW("question"); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.DB.Exec("UPDATE sessions SET read_only=0 WHERE id=?", r.Current()); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET read_only=0 WHERE id=?", r.Current()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Command("/undo"); err != nil {

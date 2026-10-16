@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -118,7 +119,7 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 					return fmt.Errorf("invalid grouped coding payload: %s (%v)", grouped.Content, err)
 				}
 				var committed int64
-				if err := r.Store.DB.QueryRow("SELECT created_ms FROM entries WHERE actor_id=? AND role='user' AND json_extract(content_json,'$.content')=? ORDER BY id LIMIT 1", task.actor, task.prompt).Scan(&committed); err != nil {
+				if err := historytest.DB(t, r.Store).QueryRow("SELECT created_ms FROM entries WHERE actor_id=? AND role='user' AND json_extract(content_json,'$.content')=? ORDER BY id LIMIT 1", task.actor, task.prompt).Scan(&committed); err != nil {
 					return err
 				}
 				lastSource := "task"

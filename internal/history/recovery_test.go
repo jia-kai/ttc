@@ -69,7 +69,7 @@ func sourceRecoveryState(t *testing.T, s *Store, session string) string {
 		if table == "sessions" {
 			key = "id"
 		}
-		rows, err := s.DB.Query("SELECT * FROM "+table+" WHERE "+key+"=? ORDER BY id", session)
+		rows, err := s.db.Query("SELECT * FROM "+table+" WHERE "+key+"=? ORDER BY id", session)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,7 +197,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 				t.Fatal("admission changed source")
 			}
 			var ack string
-			if err := s.DB.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", fresh.RequestID).Scan(&ack); err != nil {
+			if err := s.db.QueryRow("SELECT delivered_events_json FROM model_requests WHERE id=?", fresh.RequestID).Scan(&ack); err != nil {
 				t.Fatal(err)
 			}
 			if strings.Contains(ack, fmt.Sprintf("[%d,", child)) {
@@ -211,7 +211,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 				t.Fatal("replayed after admission", got)
 			}
 			var originalDelivery int64
-			if err := s.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", delivered).Scan(&originalDelivery); err != nil || originalDelivery != admitted.RequestID {
+			if err := s.db.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", delivered).Scan(&originalDelivery); err != nil || originalDelivery != admitted.RequestID {
 				t.Fatal(originalDelivery, err)
 			}
 		})
@@ -234,7 +234,7 @@ func TestLoadRecoverySelectedBranchAndBoundaryOnly(t *testing.T) {
 			case "abandoned_compaction":
 				_, err = s.StartRequest(source.ID, turn, "main", "compaction", source.Model)
 				if err == nil {
-					_, err = s.DB.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", selected.EntryTip, source.ID)
+					_, err = s.db.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", selected.EntryTip, source.ID)
 				}
 			case "abandoned_event":
 				_, err = s.StartRequest(source.ID, turn, "main", "compaction", source.Model)
@@ -243,7 +243,7 @@ func TestLoadRecoverySelectedBranchAndBoundaryOnly(t *testing.T) {
 				}
 				boundary, _ := s.Session(source.ID)
 				appendRecoveryRuntime(t, s, source.ID, `{"type":"job_exit","job_id":"abandoned"}`)
-				_, err = s.DB.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", boundary.EntryTip, source.ID)
+				_, err = s.db.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", boundary.EntryTip, source.ID)
 				expect = 1
 			case "coding_after_compaction":
 				_, err = s.StartRequest(source.ID, turn, "main", "compaction", source.Model)
@@ -258,7 +258,7 @@ func TestLoadRecoverySelectedBranchAndBoundaryOnly(t *testing.T) {
 			case "readonly":
 				_, err = s.StartRequest(source.ID, turn, "main", "compaction", source.Model)
 				if err == nil {
-					_, err = s.DB.Exec("UPDATE sessions SET read_only=1 WHERE id=?", source.ID)
+					_, err = s.db.Exec("UPDATE sessions SET read_only=1 WHERE id=?", source.ID)
 				}
 			}
 			if err != nil {
@@ -307,7 +307,7 @@ func TestLoadRecoverySkipsChildFinishCarriedByVisibleTool(t *testing.T) {
 		t.Fatal("duplicated tool context", got)
 	}
 	var ack sql.NullInt64
-	if err := s.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&ack); err != nil || ack.Valid {
+	if err := s.db.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", finish).Scan(&ack); err != nil || ack.Valid {
 		t.Fatal("mutated source ack", ack, err)
 	}
 }
@@ -379,14 +379,14 @@ func TestLoadRecoveryRejectsCorruptBodiesAtomically(t *testing.T) {
 				t.Fatal(err)
 			}
 			var before int
-			if err := s.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&before); err != nil {
+			if err := s.db.QueryRow("SELECT count(*) FROM sessions").Scan(&before); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := s.Load(source.ID); err == nil {
 				t.Fatal("accepted damaged recovery body")
 			}
 			var after int
-			if err := s.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&after); err != nil || before != after {
+			if err := s.db.QueryRow("SELECT count(*) FROM sessions").Scan(&after); err != nil || before != after {
 				t.Fatal(before, after, err)
 			}
 		})

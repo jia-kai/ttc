@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
@@ -145,7 +146,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		t.Fatal("post-handoff cancellation did not restore the composer", frame)
 	}
 	var queuedEntries int
-	if err := u.runtime.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE model_visible=1 AND role='user' AND json_extract(content_json,'$.content') LIKE 'Queued %'`).Scan(&queuedEntries); err != nil || queuedEntries != 0 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT count(*) FROM entries WHERE model_visible=1 AND role='user' AND json_extract(content_json,'$.content') LIKE 'Queued %'`).Scan(&queuedEntries); err != nil || queuedEntries != 0 {
 		t.Fatal("queued or cancelled input entered history before admission", queuedEntries, err)
 	}
 	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModAlt)
@@ -220,10 +221,10 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		t.Fatal("pending inputs were not persisted exactly once", humans)
 	}
 	var steerCheckpoints, userTurns int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&steerCheckpoints); err != nil || steerCheckpoints != 2 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&steerCheckpoints); err != nil || steerCheckpoints != 2 {
 		t.Fatal("wrong steering checkpoint count", steerCheckpoints, err)
 	}
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='user'").Scan(&userTurns); err != nil || userTurns != 4 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='user'").Scan(&userTurns); err != nil || userTurns != 4 {
 		t.Fatal("queue cancellation created a turn or queued input was not admitted once", userTurns, err)
 	}
 }

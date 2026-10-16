@@ -2,6 +2,7 @@ package tui
 
 import (
 	"testing"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -17,7 +18,7 @@ func TestBlankSessionPickerDoesNotCreateWorkspaceOrSession(t *testing.T) {
 	u.wait(t, "Unsent research draft")
 	for _, table := range []string{"workspaces", "sessions", "entries", "turns"} {
 		var count int
-		if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+		if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatal(table, count, err)
 		}
 	}

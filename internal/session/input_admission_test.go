@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -73,7 +74,7 @@ func assertInputHistoryCounts(t *testing.T, r *Runtime, want int) {
 		"SELECT count(*) FROM model_requests",
 	} {
 		var got int
-		if err := r.Store.DB.QueryRow(query).Scan(&got); err != nil {
+		if err := historytest.DB(t, r.Store).QueryRow(query).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
@@ -144,7 +145,7 @@ func TestInputCancellationAfterInitialAdmissionDoesNotInterruptTurn(t *testing.T
 	finishInputRun(t, done)
 	assertInputHistoryCounts(t, r, 1)
 	var status string
-	if err := r.Store.DB.QueryRow("SELECT status FROM turns").Scan(&status); err != nil || status != "completed" {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT status FROM turns").Scan(&status); err != nil || status != "completed" {
 		t.Fatal("losing cancellation interrupted the turn", status, err)
 	}
 }
@@ -195,11 +196,11 @@ func TestInputCancellationDoesNotInterruptNotificationTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var status string
-	if err := r.Store.DB.QueryRow("SELECT status FROM turns WHERE trigger='async'").Scan(&status); err != nil || status != "completed" {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT status FROM turns WHERE trigger='async'").Scan(&status); err != nil || status != "completed" {
 		t.Fatal("human input cancellation interrupted notification turn", status, err)
 	}
 	var humans int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='user' AND model_visible=1").Scan(&humans); err != nil || humans != 1 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE role='user' AND model_visible=1").Scan(&humans); err != nil || humans != 1 {
 		t.Fatal("cancelled input was admitted with notification", humans, err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/jobs"
@@ -31,10 +32,10 @@ func TestUnchangedRuntimeAdmissionsKeepContextBounded(t *testing.T) {
 		}
 	}
 	var requests, distinctInput, snapshots, metadataBytes int
-	if err := r.Store.DB.QueryRow("SELECT count(*),count(DISTINCT input_json),max(length(input_json)) FROM model_requests").Scan(&requests, &distinctInput, &metadataBytes); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*),count(DISTINCT input_json),max(length(input_json)) FROM model_requests").Scan(&requests, &distinctInput, &metadataBytes); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='developer'").Scan(&snapshots); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE role='developer'").Scan(&snapshots); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 100 || distinctInput != 1 || snapshots != 1 || metadataBytes > 128 {
@@ -55,7 +56,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 	source := r.notifications[0].EventSeq
 	r.steers = []contextbuild.Input{{Text: "Also inspect units."}}
 	cursor := r.mainContext
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, cm, err := r.admitMain(context.Background(), turn, r.selection); err == nil || cm != nil {
@@ -64,7 +65,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 	if !reflect.DeepEqual(r.mainContext, cursor) || len(r.notifications) != 1 || len(r.steers) != 1 {
 		t.Fatal("failed admission consumed input")
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER fail_admission"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_admission"); err != nil {
 		t.Fatal(err)
 	}
 	admitted, cm, err := r.admitMain(context.Background(), turn, r.selection)
@@ -79,7 +80,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 		t.Fatal("steering not delivered", last)
 	}
 	var delivered int64
-	if err := r.Store.DB.QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", source).Scan(&delivered); err != nil || delivered != admitted.RequestID {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT delivered_request_id FROM entries WHERE id=?", source).Scan(&delivered); err != nil || delivered != admitted.RequestID {
 		t.Fatal("notice not acknowledged", delivered, err)
 	}
 }
@@ -256,7 +257,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	var snapshots int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='developer' AND source_id IS NULL").Scan(&snapshots); err != nil || snapshots != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE role='developer' AND source_id IS NULL").Scan(&snapshots); err != nil || snapshots != 2 {
 		t.Fatal("reload did not force fresh context", snapshots, err)
 	}
 	messages, err := r.Store.Messages(r.Current())

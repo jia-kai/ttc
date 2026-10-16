@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -77,10 +78,10 @@ func TestChildMessagesFIFOContinueSameAssignment(t *testing.T) {
 		t.Fatal(requests.Load())
 	}
 	var delivered, childRows int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&delivered); err != nil || delivered != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&delivered); err != nil || delivered != 2 {
 		t.Fatal(delivered, err)
 	}
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE actor_id=? AND kind='message' AND json_extract(content_json,'$.event_seq') IS NOT NULL`, first["child_id"]).Scan(&childRows); err != nil || childRows != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE actor_id=? AND kind='message' AND json_extract(content_json,'$.event_seq') IS NOT NULL`, first["child_id"]).Scan(&childRows); err != nil || childRows != 2 {
 		t.Fatal(childRows, err)
 	}
 	if result := sendChildMessage(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "too late"}); result["ok"] == true {
@@ -108,11 +109,11 @@ func TestChildMessageCancellationReportsUndelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	var undelivered int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 1 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 1 {
 		t.Fatal(undelivered, err)
 	}
 	var acknowledged int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&acknowledged); err != nil || acknowledged != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&acknowledged); err != nil || acknowledged != 0 {
 		t.Fatal(acknowledged, err)
 	}
 }
@@ -234,7 +235,7 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 				t.Fatal("repeated compaction", summaries.Load())
 			}
 			var delivered int
-			if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&delivered); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&delivered); err != nil {
 				t.Fatal(err)
 			}
 			if oversized {
@@ -242,7 +243,7 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 					t.Fatal(coding.Load(), delivered, view)
 				}
 				var undelivered int
-				if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 0 {
+				if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 0 {
 					t.Fatal(undelivered, err)
 				}
 			} else if coding.Load() != 2 || delivered != 1 || view.Status != "completed" {
@@ -272,10 +273,10 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment}
 	input := []llm.Message{{Type: llm.TypeUserInput, Content: "task", InputSource: "task"}}
 	var before int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_child_message_report BEFORE INSERT ON entries
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_child_message_report BEFORE INSERT ON entries
 WHEN json_extract(NEW.content_json,'$.body.type')='child_message_delivered'
 BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err != nil {
 		t.Fatal(err)
@@ -288,16 +289,16 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 		t.Fatal("failed admission consumed or published queue")
 	}
 	var after, delivered, messages int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&after); err != nil || after != before {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&after); err != nil || after != before {
 		t.Fatal(before, after, err)
 	}
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&delivered); err != nil || delivered != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message' AND delivered_request_id IS NOT NULL`).Scan(&delivered); err != nil || delivered != 0 {
 		t.Fatal(delivered, err)
 	}
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE actor_id=? AND kind='message'`, actor).Scan(&messages); err != nil || messages != 0 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE actor_id=? AND kind='message'`, actor).Scan(&messages); err != nil || messages != 0 {
 		t.Fatal(messages, err)
 	}
-	if _, err := r.Store.DB.Exec(`DROP TRIGGER reject_child_message_report`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`DROP TRIGGER reject_child_message_report`); err != nil {
 		t.Fatal(err)
 	}
 	admitted, _, err = r.admitChild(context.Background(), task, input, contextCursor{})
@@ -326,7 +327,7 @@ func TestChildMessageCumulativeQueueCapacity(t *testing.T) {
 		t.Fatal(second, assignment)
 	}
 	var evidence int
-	if err := r.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message'`).Scan(&evidence); err != nil || evidence != 1 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_message'`).Scan(&evidence); err != nil || evidence != 1 {
 		t.Fatal(evidence, err)
 	}
 }

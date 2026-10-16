@@ -31,7 +31,7 @@ func assertLifetimeShared(t *testing.T, s *Store) {
 
 func TestMaintainDefersCompactionUntilOtherStoreCloses(t *testing.T) {
 	s, old, _, _ := historyFixture(t)
-	if _, err := s.DB.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?)", strings.Repeat("old payload", 100000)); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET content_json=json_set(content_json,'$.content',?)", strings.Repeat("old payload", 100000)); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

@@ -41,7 +41,7 @@ func TestGeneratedIDsAreCompactOpaqueAndURLSafe(t *testing.T) {
 
 func TestSessionsFiltersWorkspaceBeforeLimit(t *testing.T) {
 	s, local, _, _ := historyFixture(t)
-	if _, err := s.DB.Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", local.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=1 WHERE id=?", local.ID); err != nil {
 		t.Fatal(err)
 	}
 	foreignRoot := t.TempDir()
@@ -49,7 +49,7 @@ func TestSessionsFiltersWorkspaceBeforeLimit(t *testing.T) {
 		startHistorySession(t, s, foreignRoot, local.Model, "foreign message")
 	}
 	var localRoot string
-	if err := s.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", local.WorkspaceID).Scan(&localRoot); err != nil {
+	if err := s.db.QueryRow("SELECT path FROM workspaces WHERE id=?", local.WorkspaceID).Scan(&localRoot); err != nil {
 		t.Fatal(err)
 	}
 	list, err := s.Sessions(localRoot)
@@ -118,7 +118,11 @@ func TestChildToolLabelKeepsActorSeparateFromMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	label, err := render.TerminalBriefing(s.Label(entry), 120, false)
+	view, err := s.ReadView(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label, err := render.TerminalBriefing(view.Label, 120, false)
 	if err != nil || strings.Contains(label, actor) || entry.Actor != actor || !strings.Contains(label, "read") {
 		t.Fatal(label, err)
 	}
@@ -162,7 +166,7 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { s.Close() })
-			if _, err := s.DB.Exec("CREATE TRIGGER reject_first BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT,'injected first-save failure'); END"); err != nil {
+			if _, err := s.db.Exec("CREATE TRIGGER reject_first BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT,'injected first-save failure'); END"); err != nil {
 				t.Fatal(err)
 			}
 			id, path := NewID("session"), t.TempDir()
@@ -172,11 +176,11 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 			}
 			for _, table := range []string{"workspaces", "sessions", "turns", "entries"} {
 				var count int
-				if err := s.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+				if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 					t.Fatal("partial first save", table, count, err)
 				}
 			}
-			if _, err := s.DB.Exec("DROP TRIGGER reject_first"); err != nil {
+			if _, err := s.db.Exec("DROP TRIGGER reject_first"); err != nil {
 				t.Fatal(err)
 			}
 			turn, entry, err := s.StartSession(id, path, model, llm.Message{Type: llm.TypeUserInput, Content: "first message"})
@@ -188,7 +192,7 @@ func TestStartSessionRollsBackFirstTurnAndMessageFailures(t *testing.T) {
 				t.Fatal(saved, err)
 			}
 			var start, tip sql.NullInt64
-			if err := s.DB.QueryRow("SELECT start_entry_id,start_file_tip_id FROM turns WHERE id=?", turn).Scan(&start, &tip); err != nil || start.Valid || tip.Valid {
+			if err := s.db.QueryRow("SELECT start_entry_id,start_file_tip_id FROM turns WHERE id=?", turn).Scan(&start, &tip); err != nil || start.Valid || tip.Valid {
 				t.Fatal("first turn lost empty undo boundary", start, tip, err)
 			}
 		})
@@ -217,12 +221,16 @@ func TestHistoryImmutableResultsBranchAndSystemInspection(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if strings.Contains(s.Label(entry), "exact system") {
+	view, e := s.ReadView(context.Background(), entry)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(view.Label, "exact system") {
 		t.Fatal("prompt exposed in placeholder")
 	}
-	text, e := s.Inspect(entry)
-	if e != nil || text != "exact system instruction" {
-		t.Fatal(text, e)
+	inspection, e := s.ReadInspection(context.Background(), promptID)
+	if e != nil || inspection.Text != "exact system instruction" {
+		t.Fatal(inspection.Text, e)
 	}
 	messages, e := s.Messages(v.ID)
 	if e != nil {

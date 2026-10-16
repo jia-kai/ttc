@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -102,10 +103,10 @@ func TestCancelSteerRestoresNewestOriginalInput(t *testing.T) {
 		t.Fatal("empty cancellation succeeded")
 	}
 	var checkpoints, human int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE role='user' AND model_visible=1").Scan(&human); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE role='user' AND model_visible=1").Scan(&human); err != nil {
 		t.Fatal(err)
 	}
 	if checkpoints != 0 || human != 1 {

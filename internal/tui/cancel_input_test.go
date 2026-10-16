@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
@@ -208,7 +209,7 @@ func originalInputCommitTime(t *testing.T, u *questionTestUI, content string) in
 	t.Helper()
 	var count int
 	var committed int64
-	if err := u.runtime.Store.DB.QueryRow(`SELECT count(*),coalesce(min(created_ms),0) FROM entries
+	if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT count(*),coalesce(min(created_ms),0) FROM entries
 		WHERE kind='message' AND role='user' AND model_visible=1 AND source_id IS NULL
 		AND json_extract(content_json,'$.content')=?`, content).Scan(&count, &committed); err != nil || count != 1 || committed <= 0 {
 		t.Fatal("expected one original committed input", count, committed, err)
@@ -288,7 +289,7 @@ func TestCancelPendingInputLIFOLeavesNoHistoryOrCheckpoints(t *testing.T) {
 				"SELECT count(*) FROM entries WHERE role='user' AND model_visible=1": &human,
 				"SELECT count(*) FROM turns":                                         &checkpoints,
 			} {
-				if err := u.runtime.Store.DB.QueryRow(query).Scan(result); err != nil {
+				if err := historytest.DB(t, u.runtime.Store).QueryRow(query).Scan(result); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -316,7 +317,7 @@ func TestCancelCommandsDoNotSettleDismissedQuestions(t *testing.T) {
 		}
 	}
 	var requests int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 1 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 1 {
 		t.Fatal("cancellation resumed the model", requests, err)
 	}
 }
@@ -349,7 +350,7 @@ func TestCancelRestoredInputDoesNotSettleDismissedQuestions(t *testing.T) {
 				"SELECT count(*) FROM entries WHERE role='user' AND model_visible=1": &human,
 				"SELECT count(*) FROM turns":                                         &checkpoints,
 			} {
-				if err := u.runtime.Store.DB.QueryRow(query).Scan(result); err != nil {
+				if err := historytest.DB(t, u.runtime.Store).QueryRow(query).Scan(result); err != nil {
 					t.Fatal(err)
 				}
 			}

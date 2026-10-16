@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -263,7 +264,7 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 				}
 				assertPersistedReceivedSystem(t, r, req)
 				if coding == 1 {
-					if err := r.Store.DB.QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
+					if err := historytest.DB(t, r.Store).QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
 						return err
 					}
 					if err := partialRetryText(emit, strings.Repeat("Oversized partial research output. ", 400)); err != nil {

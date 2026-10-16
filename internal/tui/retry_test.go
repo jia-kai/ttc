@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -25,7 +26,7 @@ func TestRetrySystemMessageOpensInspector(t *testing.T) {
 	u.wait(t, "Retrying · attempt 5/5 in 1.5s · HTTP 429")
 	u.wait(t, "Turn complete")
 	var id int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='model_retry'").Scan(&id); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='model_retry'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", id))

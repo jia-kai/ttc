@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 	"unicode/utf8"
 
 	"ttc/internal/history"
@@ -48,7 +49,7 @@ func assertChildFailureHandoff(t *testing.T, r *Runtime, result map[string]any, 
 		t.Fatal("failed child remained reusable")
 	}
 	var savedStatus string
-	if err := r.Store.DB.QueryRow("SELECT status FROM turns WHERE id=?", result["child_turn_id"]).Scan(&savedStatus); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT status FROM turns WHERE id=?", result["child_turn_id"]).Scan(&savedStatus); err != nil {
 		t.Fatal(err)
 	}
 	wantSaved := status
@@ -231,7 +232,7 @@ func TestChildFailureHandoffExportFailureIsExplicit(t *testing.T) {
 func TestChildFailureHandoffLocalStorageFailureExportsUncommittedFullText(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_child_request_finish BEFORE UPDATE OF status ON model_requests
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_child_request_finish BEFORE UPDATE OF status ON model_requests
 WHEN NEW.actor_id != 'main' AND NEW.status != 'running'
 BEGIN SELECT RAISE(ABORT,'injected local request finish failure'); END`); err != nil {
 		t.Fatal(err)
@@ -362,7 +363,7 @@ func TestChildFailureHandoffLocalLaunchFailureForegroundAndBackground(t *testing
 func TestChildFailureHandoffCompletionStorageFailureStillWarnsAndExports(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_child_completion BEFORE INSERT ON entries
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_child_completion BEFORE INSERT ON entries
 WHEN json_extract(NEW.content_json,'$.type')='child_turn_finished'
 BEGIN SELECT RAISE(ABORT,'injected child completion failure'); END`); err != nil {
 		t.Fatal(err)

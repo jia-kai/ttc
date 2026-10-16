@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -208,7 +209,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 				t.Fatal("rejected child call left a form or blocked worker")
 			}
 			var result string
-			if err := r.Store.DB.QueryRow("SELECT result_json FROM tool_calls WHERE name='question'").Scan(&result); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE name='question'").Scan(&result); err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(result, "unknown_tool") {

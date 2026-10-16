@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,13 +138,12 @@ func (r *Runtime) PendingImages() ([]ImageCard, error) {
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
 	var cards []ImageCard
 	for _, v := range views {
-		var id sql.NullInt64
-		err := r.Store.DB.QueryRow("SELECT coalesce((SELECT entry_id FROM tool_records WHERE call_id=?),(SELECT id FROM entries WHERE kind='tool_call' AND json_extract(content_json,'$.call_id')=? ORDER BY id DESC LIMIT 1))", v.ID, v.ID).Scan(&id)
+		id, found, err := r.Store.ToolInspectionEntry(r.ctx, v.ID)
 		if err != nil {
 			return nil, err
 		}
-		if id.Valid {
-			cards = append(cards, ImageCard{v, id.Int64})
+		if found {
+			cards = append(cards, ImageCard{v, id})
 		}
 	}
 	return cards, nil

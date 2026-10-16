@@ -42,7 +42,7 @@ func (s *Store) transcriptEntries(name string, entries []Entry) ([]byte, error) 
 
 func (s *Store) transcriptEntriesContext(ctx context.Context, name string, entries []Entry) ([]byte, error) {
 	var out bytes.Buffer
-	if err := s.writeTranscriptEntries(ctx, s.DB, &out, name, entries); err != nil {
+	if err := s.writeTranscriptEntries(ctx, s.db, &out, name, entries); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
@@ -104,80 +104,86 @@ func (s *Store) writeTranscriptEntries(ctx context.Context, q historyReader, out
 // System instructions have no export presentation. Tool records may override
 // their inspector presentation with a compact export body.
 func (s *Store) ExportText(entry Entry) (string, error) {
-	return s.exportTextWith(context.Background(), s.DB, entry)
+	return s.exportTextWith(context.Background(), s.db, entry)
 }
 
 func (s *Store) exportTextWith(ctx context.Context, q historyReader, entry Entry) (string, error) {
-	if entry.InternalEvent() {
-		return "", nil
+	data, err := loadExportPresentation(ctx, q, entry)
+	if err != nil {
+		return "", err
 	}
-	if entry.Kind == "status" {
-		// Payload fields vary by status type; only decode the discriminator here.
-		var status struct{ Type string }
-		if err := json.Unmarshal(entry.Content, &status); err != nil {
-			return "", err
-		}
-		if status.Type == "system_prompt" {
-			return "", nil
-		}
-		if status.Type == "request_message" {
-			return render.Clean(s.Label(entry)), nil
-		}
+	return projectExportText(data)
+}
+
+// loadExportPresentation acquires optional filesystem metadata and related SQL
+// through the caller's reader. It must never escape a transcript's frozen q.
+func loadExportPresentation(ctx context.Context, q historyReader, entry Entry) (entryPresentation, error) {
+	if err := ctx.Err(); err != nil {
+		return entryPresentation{}, err
+	}
+	if entry.InternalEvent() {
+		return entryPresentation{Entry: entry}, nil
+	}
+	data, err := decodePresentation(entry)
+	if err != nil {
+		return data, err
+	}
+	if data.Status.Type == "system_prompt" || data.Status.Type == "request_message" {
+		return data, nil
 	}
 	if entry.Kind == "message" || entry.Kind == "summary" {
-		var message llm.Message
-		if err := json.Unmarshal(entry.Content, &message); err != nil {
-			return "", err
-		}
-		if json.Valid([]byte(message.Content)) {
-			message.Content = render.Fence(message.Content, "json")
-		}
-		text := render.Clean(message.Content)
-		for _, snapshot := range message.Files {
-			path := strings.ReplaceAll(render.Clean(snapshot.Path), ">", "\\>")
-			link := fmt.Sprintf("Binary file: [snapshot](<%s>)", path)
-			// Dimensions are optional presentation metadata; the durable path and
-			// exact reference remain available even if image decoding is unavailable.
-			if f, err := os.OpenFile(snapshot.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
-				if info, err := f.Stat(); err == nil && info.Mode().IsRegular() {
-					if config, _, err := image.DecodeConfig(io.LimitReader(f, 1<<20)); err == nil {
-						link += fmt.Sprintf(" · %d×%d", config.Width, config.Height)
-					}
-				}
-				f.Close()
+		data.Dimensions = make([]imageDimensions, len(data.Message.Files))
+		for i, snapshot := range data.Message.Files {
+			if err := ctx.Err(); err != nil {
+				return data, err
 			}
-			if text != "" {
-				text += "\n\n"
-			}
-			text += link
+			data.Dimensions[i] = snapshotDimensions(snapshot.Path)
 		}
-		return text, nil
+		return data, ctx.Err()
 	}
 	if entry.Kind == "tool_call" {
 		var ref struct {
 			CallID string `json:"call_id"`
 		}
 		if err := json.Unmarshal(entry.Content, &ref); err != nil {
-			return "", err
+			return data, err
 		}
 		var call, name string
 		if err := q.QueryRow("SELECT name,call_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &call); err != nil {
-			return "", err
+			return data, err
 		}
-		return "Pending call:\n\n" + render.Tool(name, json.RawMessage(call), nil).Detail, nil
+		data.Call = &callPresentation{Name: name, Arguments: json.RawMessage(call)}
+		return data, nil
 	}
 	if entry.Kind == "tool_result" {
-		var raw string
-		if err := q.QueryRow("SELECT markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&raw); err != nil {
-			return "", err
+		md, err := toolMarkdownWith(q, entry.ID)
+		if err != nil {
+			return data, err
 		}
-		var md render.Markdown
-		if err := json.Unmarshal([]byte(raw), &md); err != nil {
-			return "", err
-		}
-		return md.ExportText(), nil
+		data.Markdown = md
 	}
-	return s.Inspect(entry)
+	if entry.Kind == "status" {
+		return decodeInspectionBody(data)
+	}
+	return data, ctx.Err()
+}
+
+// Image dimensions are optional: missing, unsupported or invalid snapshots keep
+// their durable link without decoration. Reads are regular-file-only and bounded.
+func snapshotDimensions(path string) imageDimensions {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return imageDimensions{}
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return imageDimensions{}
+	}
+	config, _, err := image.DecodeConfig(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return imageDimensions{}
+	}
+	return imageDimensions{config.Width, config.Height}
 }
 
 // TranscriptJSONL saves original entry envelopes and exact related tool records,
@@ -197,7 +203,7 @@ func (s *Store) transcriptJSONLEntries(entries []Entry) ([]byte, error) {
 
 func (s *Store) transcriptJSONLEntriesContext(ctx context.Context, entries []Entry) ([]byte, error) {
 	var out bytes.Buffer
-	if err := s.writeTranscriptJSONLEntries(ctx, s.DB, &out, entries); err != nil {
+	if err := s.writeTranscriptJSONLEntries(ctx, s.db, &out, entries); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
@@ -268,7 +274,7 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 	if err != nil {
 		return "", err
 	}
-	entries, err := selectedActorEntries(context.Background(), s.DB, session, actor, v.EntryTip)
+	entries, err := selectedActorEntries(context.Background(), s.db, session, actor, v.EntryTip)
 	if err != nil {
 		return "", err
 	}

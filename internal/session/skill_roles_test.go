@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/skills"
@@ -379,7 +380,7 @@ func TestSkillCatalogFailedAdmissionRetries(t *testing.T) {
 	seedRuntime(t, r, "Review skill catalog")
 	turn := admissionTurn(t, r)
 	before := r.mainContext
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER fail_skill_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_skill_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err == nil {
@@ -388,7 +389,7 @@ func TestSkillCatalogFailedAdmissionRetries(t *testing.T) {
 	if !reflect.DeepEqual(before, r.mainContext) {
 		t.Fatal("failed admission advanced catalog cursor")
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER fail_skill_admission"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_skill_admission"); err != nil {
 		t.Fatal(err)
 	}
 	_, message, err := r.admitMain(context.Background(), turn, r.selection)

@@ -40,30 +40,10 @@ const schemaVersion = migrate.CurrentVersion
 
 // Store serializes commits; callers must close it after stopping runtime workers.
 type Store struct {
-	DB      *sql.DB
+	db      *sql.DB
 	Root    string
 	mu      sync.Mutex
 	useLock *os.File // Shared until Close; startup migration holds it exclusively.
-}
-
-// Session identifies the selected history/file tips. Zero tips mean an empty tree.
-type Session struct {
-	CompactionError                       string // Nonempty permanently disables inference in this context; history remains inspectable.
-	ID, WorkspaceID, LineageID, Name      string
-	ReadOnly                              bool
-	EntryTip, FileTip, RedoTip, UndoFloor int64
-	Model                                 llm.Selection
-	LastActivityMS                        int64 // Unix milliseconds; date grouping uses the frontend local timezone.
-}
-
-// Entry is one immutable node in chronological history.
-type Entry struct {
-	MainTurnID, UndoOwnerTurnID          string // Chronological inference attribution and most recent human undo checkpoint.
-	ID, Parent, Source, FileTip          int64
-	SessionID, TurnID, Actor, Kind, Role string
-	Visible                              bool
-	Content                              json.RawMessage
-	CreatedMS                            int64
 }
 
 // NewID returns a readable prefix and 16 URL-safe characters encoding 96 random bits.
@@ -128,7 +108,7 @@ func OpenWithProgress(root string, report func(migrate.Progress)) (*Store, error
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{DB: db, Root: root}
+	s := &Store{db: db, Root: root}
 	var version int
 	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		db.Close()
@@ -235,7 +215,7 @@ func openDatabase(root string) (*sql.DB, error) {
 // It must not run concurrently with any Store operation, including reclamation
 // that temporarily converts the lifetime lock to exclusive use.
 func (s *Store) Close() error {
-	err := s.DB.Close()
+	err := s.db.Close()
 	if s.useLock != nil {
 		err = errors.Join(err, s.useLock.Close())
 		s.useLock = nil
@@ -257,7 +237,7 @@ func textOrNil(v string) any {
 func (s *Store) transact(fn func(*sql.Tx) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, e := s.DB.Begin()
+	tx, e := s.db.Begin()
 	if e != nil {
 		return e
 	}
@@ -335,7 +315,7 @@ func (s *Store) RenameSession(id, name string) error {
 func (s *Store) Session(id string) (Session, error) {
 	var v Session
 	var model string
-	e := s.DB.QueryRow(`SELECT id,workspace_id,lineage_id,name,read_only,coalesce(active_entry_id,0),coalesce(file_tip_id,0),coalesce(redo_entry_id,0),coalesce(undo_floor_id,0),model_json,last_activity_ms,coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?`, id).Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &model, &v.LastActivityMS, &v.CompactionError)
+	e := s.db.QueryRow(`SELECT id,workspace_id,lineage_id,name,read_only,coalesce(active_entry_id,0),coalesce(file_tip_id,0),coalesce(redo_entry_id,0),coalesce(undo_floor_id,0),model_json,last_activity_ms,coalesce(json_extract(metadata_json,'$.compaction_error'),'') FROM sessions WHERE id=?`, id).Scan(&v.ID, &v.WorkspaceID, &v.LineageID, &v.Name, &v.ReadOnly, &v.EntryTip, &v.FileTip, &v.RedoTip, &v.UndoFloor, &model, &v.LastActivityMS, &v.CompactionError)
 	if e != nil {
 		return v, e
 	}
@@ -350,7 +330,7 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("session listing requires an absolute workspace path")
 	}
-	rows, err := s.DB.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
+	rows, err := s.db.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +481,7 @@ func (s *Store) Append(session, turn, actor, kind, role string, visible bool, da
 
 // Branch returns selected ancestry through tip (zero means the session's tip).
 func (s *Store) Branch(session string, tip int64) ([]Entry, error) {
-	return branchWith(s.DB, session, tip)
+	return branchWith(s.db, session, tip)
 }
 func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 	if tip == 0 {
@@ -537,7 +517,7 @@ func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 // Main human inputs carry their original admission timestamp and source, including
 // across continuations; runtime notices and immutable stored entries are unchanged.
 func (s *Store) Messages(session string) ([]llm.Message, error) {
-	return messagesWith(s.DB, session)
+	return messagesWith(s.db, session)
 }
 func messagesWith(q historyReader, session string) ([]llm.Message, error) {
 	entries, e := branchWith(q, session, 0)
@@ -751,7 +731,7 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 }
 
 // Ping validates storage availability with cancellation.
-func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
 // RecordSystemPrompt stores the exact instruction snapshot as an inspectable UI
 // entry without clearing redo: an instruction refresh is not a user action.
@@ -783,87 +763,6 @@ func (s *Store) RecordSystemPrompt(session, turn, actor string, request int64, p
 		return e
 	})
 	return id, e
-}
-
-// Inspect renders one history node, including system prompt placeholders, in the shared window.
-func (s *Store) Inspect(entry Entry) (string, error) {
-	if entry.Kind == "tool_call" || entry.Kind == "tool_result" {
-		if entry.Kind == "tool_result" {
-			var mdJSON string
-			if e := s.DB.QueryRow("SELECT markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&mdJSON); e == nil {
-				var md render.Markdown
-				if e = json.Unmarshal([]byte(mdJSON), &md); e != nil {
-					return "", e
-				}
-				return md.Detail, nil
-			} else if e != sql.ErrNoRows {
-				return "", e
-			}
-		}
-
-		var ref struct {
-			CallID string `json:"call_id"`
-		}
-		if e := json.Unmarshal(entry.Content, &ref); e != nil {
-			return "", e
-		}
-		var args, name string
-		var result sql.NullString
-		if e := s.DB.QueryRow("SELECT name,call_json,result_json FROM tool_calls WHERE id=?", ref.CallID).Scan(&name, &args, &result); e != nil {
-			return "", e
-		}
-		return render.Tool(name, json.RawMessage(args), json.RawMessage(result.String)).Detail, nil
-	}
-	if entry.Kind == "status" {
-		var job struct {
-			Type     string
-			Markdown render.Markdown
-		}
-		if json.Unmarshal(entry.Content, &job) == nil && job.Type == "job_completion" {
-			if job.Markdown.Revision != 1 || job.Markdown.Summary == "" {
-				return "", errors.New(prompts.HistoryJobCompletionPresentation)
-			}
-			return job.Markdown.Detail, nil
-		}
-		var internal struct {
-			Type, Purpose string
-			Message       llm.Message
-		}
-		if json.Unmarshal(entry.Content, &internal) == nil && internal.Type == "request_message" {
-			if internal.Purpose == "compaction" && internal.Message.Type == llm.TypeAssistant {
-				return render.Clean(internal.Message.Content), nil
-			}
-			b, e := json.MarshalIndent(internal.Message, "", "  ")
-			return render.Fence(string(b), "json"), e
-		}
-
-		var status struct{ Type, Path string }
-		if e := json.Unmarshal(entry.Content, &status); e != nil {
-			return "", e
-		}
-		if status.Type == "system_prompt" {
-			b, e := readArtifact(status.Path, instructionSnapshotBytes)
-			return string(b), e
-		}
-	}
-	var m llm.Message
-	if entry.Visible {
-		if e := json.Unmarshal(entry.Content, &m); e != nil {
-			return "", e
-		}
-		m.State = nil
-		var content string
-		if json.Valid([]byte(m.Content)) {
-			content = render.Fence(m.Content, "json")
-		} else {
-			content = render.Fence(m.Content, "text")
-		}
-		// Show content once, rather than again as a giant escaped metadata string.
-		m.Content = ""
-		b, e := json.Marshal(m)
-		return content + "\n\nMessage metadata:\n" + render.Fence(string(b), "json"), e
-	}
-	return render.Fence(string(entry.Content), "json"), nil
 }
 
 // Assistant commits a response and all call intents in the same transaction.

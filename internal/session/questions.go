@@ -95,8 +95,8 @@ func (r *Runtime) addQuestionTool() {
 			return nil, errors.New(prompts.QuestionMainOnly)
 		}
 		id := history.NewID("form")
-		var entry int64
-		if err := r.Store.DB.QueryRowContext(ctx, "SELECT id FROM entries WHERE kind='tool_call' AND json_extract(content_json,'$.call_id')=? ORDER BY id DESC LIMIT 1", x.CallID).Scan(&entry); err != nil {
+		entry, err := r.Store.ToolIntentEntry(ctx, x.CallID)
+		if err != nil {
 			return nil, fmt.Errorf(prompts.QuestionIntent, err)
 		}
 		view := QuestionForm{ID: id, Questions: a.Questions, EntryID: entry}

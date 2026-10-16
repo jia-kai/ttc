@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 	"ttc/internal/tool"
 
 	"ttc/internal/llm"
@@ -49,9 +50,9 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 		if err != nil || entry.Visible || entry.SessionID != event.SessionID {
 			t.Fatal(entry, err)
 		}
-		inspected, err := r.Store.Inspect(entry)
-		if err != nil || !strings.Contains(inspected, "model_retry") || !strings.Contains(inspected, "1250") {
-			t.Fatal(inspected, err)
+		inspected, err := r.Store.ReadInspection(context.Background(), entry.ID)
+		if err != nil || !strings.Contains(inspected.Text, "model_retry") || !strings.Contains(inspected.Text, "1250") {
+			t.Fatal(inspected.Text, err)
 		}
 		var payload struct {
 			RequestID int64 `json:"request_id"`
@@ -60,7 +61,7 @@ func TestMainAndChildRetryMessagesAreInspectableAndNotModelVisible(t *testing.T)
 			t.Fatal(err)
 		}
 		var actor string
-		if err := r.Store.DB.QueryRow("SELECT actor_id FROM model_requests WHERE id=?", payload.RequestID).Scan(&actor); err != nil || actor != entry.Actor {
+		if err := historytest.DB(t, r.Store).QueryRow("SELECT actor_id FROM model_requests WHERE id=?", payload.RequestID).Scan(&actor); err != nil || actor != entry.Actor {
 			t.Fatal(actor, entry.Actor, err)
 		}
 	}
@@ -116,10 +117,10 @@ func TestMainFailureDetailsPersistWithoutBecomingModelInput(t *testing.T) {
 				t.Fatal("lost original failure", err)
 			}
 			var requestError, turnError string
-			if err := r.Store.DB.QueryRow("SELECT json_extract(attempts_json,'$[0].error') FROM model_requests WHERE session_id=? AND purpose='coding'", r.Current()).Scan(&requestError); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(attempts_json,'$[0].error') FROM model_requests WHERE session_id=? AND purpose='coding'", r.Current()).Scan(&requestError); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.Store.DB.QueryRow("SELECT json_extract(content_json,'$.error') FROM entries WHERE session_id=? AND json_extract(content_json,'$.type')='turn_end' AND model_visible=0", r.Current()).Scan(&turnError); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(content_json,'$.error') FROM entries WHERE session_id=? AND json_extract(content_json,'$.type')='turn_end' AND model_visible=0", r.Current()).Scan(&turnError); err != nil {
 				t.Fatal(err)
 			}
 			if requestError != failure.Error() || turnError != failure.Error() {

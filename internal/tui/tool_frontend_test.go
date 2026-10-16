@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v3"
@@ -55,7 +56,7 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 			u.wait(t, "Page captured.")
 			frame := u.wait(t, "Turn complete")
 			var result int64
-			if err := u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read'").Scan(&result); err != nil {
+			if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read'").Scan(&result); err != nil {
 				t.Fatal(err)
 			}
 			click := func(frame string) {
@@ -128,7 +129,7 @@ func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "first preview")
 	var intent int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE kind='tool_call' ORDER BY id DESC LIMIT 1").Scan(&intent); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE kind='tool_call' ORDER BY id DESC LIMIT 1").Scan(&intent); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", intent))
@@ -142,7 +143,7 @@ func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	var count int
 	for time.Now().Before(deadline) {
-		if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM tool_records").Scan(&count); err != nil {
+		if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM tool_records").Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count == 1 {
@@ -156,7 +157,7 @@ func TestLiveToolCardInspectorRefreshesAndBecomesDurable(t *testing.T) {
 	u.key(tcell.KeyEscape)
 	u.wait(t, "Turn complete")
 	var final int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT entry_id FROM tool_records").Scan(&final); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT entry_id FROM tool_records").Scan(&final); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", final))
@@ -171,7 +172,7 @@ func TestRealShellInspectorUpdatesExpandedCaptureAndInterrupts(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "running")
 	var intent int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE kind='tool_call' ORDER BY id DESC LIMIT 1").Scan(&intent); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE kind='tool_call' ORDER BY id DESC LIMIT 1").Scan(&intent); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", intent))
@@ -193,7 +194,7 @@ func TestRealShellInspectorUpdatesExpandedCaptureAndInterrupts(t *testing.T) {
 		t.Fatal(jobs)
 	}
 	var final int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT entry_id FROM tool_records").Scan(&final); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT entry_id FROM tool_records").Scan(&final); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", final))

@@ -32,7 +32,7 @@ func (s *Store) storageStatsLocked(ctx context.Context) (StorageStats, error) {
 		return stats, err
 	}
 	var oldest sql.NullInt64
-	if err := s.DB.QueryRowContext(ctx, "SELECT count(*),min(created_ms) FROM entries").Scan(&stats.Entries, &oldest); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*),min(created_ms) FROM entries").Scan(&stats.Entries, &oldest); err != nil {
 		return stats, fmt.Errorf("read history entry statistics: %w", err)
 	}
 	if oldest.Valid {

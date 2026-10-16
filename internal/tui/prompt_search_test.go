@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v3"
@@ -117,10 +118,10 @@ func TestPromptRecallAndSearchSavedSessionInNewFrontend(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "> older saved α prompt")
 	var requests, sessions int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
 		t.Fatal("recall submitted a prompt", requests, err)
 	}
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM sessions").Scan(&sessions); err != nil || sessions != 2 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM sessions").Scan(&sessions); err != nil || sessions != 2 {
 		t.Fatal("recall persisted an empty session", sessions, err)
 	}
 }

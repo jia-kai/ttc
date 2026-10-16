@@ -16,15 +16,6 @@ type historyReader interface {
 	QueryRow(string, ...any) *sql.Row
 }
 
-// EventSeq returns the immutable semantic commit identity. Continuation copies
-// preserve their original source; physical row IDs remain separate.
-func (e Entry) EventSeq() int64 {
-	if e.Source != 0 {
-		return e.Source
-	}
-	return e.ID
-}
-
 // Admission contains one immutable committed coding request and its input.
 // Cutoff bounds source events; ContextEntry is zero when no snapshot was added.
 // NoticeEntries are presentation-only delivery rows.

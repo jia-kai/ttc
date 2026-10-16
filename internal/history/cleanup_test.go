@@ -17,7 +17,7 @@ import (
 
 func ageLineage(t *testing.T, s *Store, lineage string, at time.Time) {
 	t.Helper()
-	if _, err := s.DB.Exec("UPDATE sessions SET last_activity_ms=? WHERE lineage_id=?", at.UnixMilli(), lineage); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=? WHERE lineage_id=?", at.UnixMilli(), lineage); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -89,13 +89,13 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	}
 	for _, table := range []string{"tool_records", "file_changes", "tool_calls", "compactions"} {
 		var count int
-		if err := s.DB.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+		if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatal(table, count, err)
 		}
 	}
 	for _, table := range []string{"entries", "turns", "model_requests"} {
 		var count int
-		if err := s.DB.QueryRow("SELECT count(*) FROM "+table+" WHERE session_id IN (?,?)", v.ID, next.ID).Scan(&count); err != nil || count != 0 {
+		if err := s.db.QueryRow("SELECT count(*) FROM "+table+" WHERE session_id IN (?,?)", v.ID, next.ID).Scan(&count); err != nil || count != 0 {
 			t.Fatal(table, count, err)
 		}
 	}
@@ -109,10 +109,10 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 		t.Fatal("model preferences removed", choice, err)
 	}
 	var workspace string
-	if err := s.DB.QueryRow("SELECT path FROM workspaces WHERE id=?", v.WorkspaceID).Scan(&workspace); err != nil {
+	if err := s.db.QueryRow("SELECT path FROM workspaces WHERE id=?", v.WorkspaceID).Scan(&workspace); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.DB.Query("PRAGMA foreign_key_check")
+	rows, err := s.db.Query("PRAGMA foreign_key_check")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestCleanupUsesLatestActivityAcrossContinuations(t *testing.T) {
 	next := retainedContinuation(t, s, v)
 	now := time.Now()
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if _, err := s.DB.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", now.Add(-29*24*time.Hour).UnixMilli(), next.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", now.Add(-29*24*time.Hour).UnixMilli(), next.ID); err != nil {
 		t.Fatal(err)
 	}
 	if removed, err := s.maintain(context.Background(), now, "", 1); err != nil || removed.RemovedLineages != 0 {
@@ -159,7 +159,7 @@ func TestCleanupSQLRollbackAndRecentActivityProtection(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
 	now := time.Now()
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if _, err := s.DB.Exec("CREATE TRIGGER reject_cleanup BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'controlled cleanup failure'); END"); err != nil {
+	if _, err := s.db.Exec("CREATE TRIGGER reject_cleanup BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'controlled cleanup failure'); END"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.maintain(context.Background(), now, "", 1); err == nil || !strings.Contains(err.Error(), "controlled cleanup failure") {
@@ -168,7 +168,7 @@ func TestCleanupSQLRollbackAndRecentActivityProtection(t *testing.T) {
 	if _, err := s.Session(v.ID); err != nil {
 		t.Fatal("failed transaction lost history", err)
 	}
-	if _, err := s.DB.Exec("DROP TRIGGER reject_cleanup"); err != nil {
+	if _, err := s.db.Exec("DROP TRIGGER reject_cleanup"); err != nil {
 		t.Fatal(err)
 	}
 	ageLineage(t, s, v.LineageID, now)
@@ -238,14 +238,14 @@ func TestCleanupHonorsCancellation(t *testing.T) {
 func TestCleanupRejectsLineagePathTraversal(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
 	now := time.Now()
-	if _, err := s.DB.Exec("UPDATE sessions SET lineage_id='../outside',last_activity_ms=? WHERE id=?", now.Add(-31*24*time.Hour).UnixMilli(), v.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET lineage_id='../outside',last_activity_ms=? WHERE id=?", now.Add(-31*24*time.Hour).UnixMilli(), v.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.maintain(context.Background(), now, "", 1); err == nil || !strings.Contains(err.Error(), "invalid retention lineage") {
 		t.Fatal("unsafe lineage path accepted", err)
 	}
 	var count int
-	if err := s.DB.QueryRow("SELECT count(*) FROM sessions WHERE id=?", v.ID).Scan(&count); err != nil || count != 1 {
+	if err := s.db.QueryRow("SELECT count(*) FROM sessions WHERE id=?", v.ID).Scan(&count); err != nil || count != 1 {
 		t.Fatal("unsafe lineage altered SQL history", count, err)
 	}
 }

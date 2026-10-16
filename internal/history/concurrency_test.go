@@ -94,13 +94,13 @@ func TestOpeningSharedHistoryDoesNotSettleLiveOrCrashedWork(t *testing.T) {
 	defer other.Close()
 	var status string
 	var result sql.NullString
-	if err := other.DB.QueryRow("SELECT status FROM turns WHERE id=?", turn).Scan(&status); err != nil || status != "running" {
+	if err := other.db.QueryRow("SELECT status FROM turns WHERE id=?", turn).Scan(&status); err != nil || status != "running" {
 		t.Fatal(status, err)
 	}
-	if err := other.DB.QueryRow("SELECT status FROM model_requests WHERE id=?", request).Scan(&status); err != nil || status != "running" {
+	if err := other.db.QueryRow("SELECT status FROM model_requests WHERE id=?", request).Scan(&status); err != nil || status != "running" {
 		t.Fatal(status, err)
 	}
-	if err := other.DB.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", call).Scan(&result); err != nil || result.Valid {
+	if err := other.db.QueryRow("SELECT result_json FROM tool_calls WHERE id=?", call).Scan(&result); err != nil || result.Valid {
 		t.Fatal(result, err)
 	}
 }
@@ -157,8 +157,11 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, entry := range entries {
-			if entry.Kind == "tool_result" && s.Label(entry) != md.Summary {
-				t.Fatal("copy lost its presentation", entry)
+			if entry.Kind == "tool_result" {
+				view, err := s.ReadView(context.Background(), entry)
+				if err != nil || view.Label != md.Summary {
+					t.Fatal("copy lost its presentation", entry, err)
+				}
 			}
 		}
 	}
@@ -185,7 +188,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 		t.Fatal("loading changed source", before, after, err)
 	}
 	var owner string
-	if err := s.DB.QueryRow("SELECT session_id FROM turns WHERE id=?", turn).Scan(&owner); err != nil || owner != source.ID {
+	if err := s.db.QueryRow("SELECT session_id FROM turns WHERE id=?", turn).Scan(&owner); err != nil || owner != source.ID {
 		t.Fatal("copy compaction moved source turn", owner, err)
 	}
 	bMessages, err := s.Messages(b.ID)

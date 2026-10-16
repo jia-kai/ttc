@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -55,7 +56,7 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.wait(t, "> prefix A↵⇥Bsuffix")
 	var requests int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
 		t.Fatal("paste triggered a request", requests, err)
 	}
 	u.key(tcell.KeyEnter)
@@ -70,7 +71,7 @@ func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
 	u.typeText("second")
 	u.wait(t, "> first↵second")
 	var requests int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
 		t.Fatal("newline submitted the draft", requests, err)
 	}
 	u.key(tcell.KeyEnter)

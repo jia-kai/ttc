@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,17 +26,12 @@ func httpClient() *http.Client { return &http.Client{Timeout: 120 * time.Second}
 // or completed response without tools. The running coding turn remains usable.
 func (r *Runtime) startNaming(turn string, selection llm.Selection, user, assistant llm.Message) {
 	sessionID := r.Current()
-	claim, err := r.Store.DB.Exec("UPDATE sessions SET naming_claimed=1,metadata_json=json_set(metadata_json,'$.naming_turn_id',?) WHERE id=? AND naming_claimed=0 AND name_source='default'", turn, sessionID)
+	claimed, err := r.Store.ClaimSessionNaming(r.namingCtx, sessionID, turn)
 	if err != nil {
 		r.namingFailure(r.namingCtx, sessionID, turn, "claim: "+err.Error())
 		return
 	}
-	n, err := claim.RowsAffected()
-	if err != nil {
-		r.namingFailure(r.namingCtx, sessionID, turn, "claim: "+err.Error())
-		return
-	}
-	if n == 0 {
+	if !claimed {
 		return
 	}
 	done := make(chan struct{})
@@ -139,16 +133,12 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 	v := strings.Trim(title.String(), " \n\t\"'`*#")
 	words := strings.Fields(v)
 	if e == nil && len(words) >= 3 && len(words) <= 6 && utf8.RuneCountInString(v) <= 60 && strings.IndexFunc(v, unicode.IsControl) < 0 {
-		var result sql.Result
-		result, e = r.Store.DB.Exec("UPDATE sessions SET name=?,name_source='auto' WHERE id=? AND name_source='default'", v, sessionID)
+		var updated bool
+		updated, e = r.Store.SetAutomaticSessionName(ctx, sessionID, v)
 		if e == nil {
-			var updated int64
-			updated, e = result.RowsAffected()
-			if e == nil {
-				status = "completed"
-				if updated > 0 {
-					r.emit(Event{Kind: "session_name", Text: v, SessionID: sessionID})
-				}
+			status = "completed"
+			if updated {
+				r.emit(Event{Kind: "session_name", Text: v, SessionID: sessionID})
 			}
 		}
 	}

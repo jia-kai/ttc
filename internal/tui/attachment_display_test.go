@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -36,16 +37,12 @@ func TestAttachmentPayloadIsInspectableWithoutConversationExpansion(t *testing.T
 		t.Fatal("attachment expanded in the conversation", frame)
 	}
 	var id int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE role='user' AND model_visible=1 ORDER BY id LIMIT 1").Scan(&id); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE role='user' AND model_visible=1 ORDER BY id LIMIT 1").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := u.runtime.Store.Entry(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	detail, err := u.runtime.Store.Inspect(entry)
-	if err != nil || !strings.Contains(detail, snapshot) {
-		t.Fatal("original attachment disappeared from inspection", detail, err)
+	inspection, err := u.runtime.Store.ReadInspection(context.Background(), id)
+	if err != nil || !strings.Contains(inspection.Text, snapshot) {
+		t.Fatal("original attachment disappeared from inspection", inspection.Text, err)
 	}
 	page, err := u.runtime.Store.InspectPage(context.Background(), id, 0, 16384)
 	if err != nil || !strings.Contains(page.Text, snapshot) {
@@ -66,7 +63,7 @@ func TestAttachmentPayloadIsInspectableWithoutConversationExpansion(t *testing.T
 	generation := u.runtime.Generation()
 	// A unique name appears only when replay loads session metadata; earlier
 	// inspector frames already contained the user label.
-	if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name=? WHERE id=?", "Reloaded attachment fixture", u.runtime.Current()); err != nil {
+	if _, err := historytest.DB(t, u.runtime.Store).Exec("UPDATE sessions SET name=? WHERE id=?", "Reloaded attachment fixture", u.runtime.Current()); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText("/load " + u.runtime.Current())

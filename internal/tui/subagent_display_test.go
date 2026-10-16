@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v3"
@@ -133,7 +134,7 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 			}
 			u.key(tcell.KeyEscape)
 			var id int64
-			if err := u.runtime.Store.DB.QueryRow(`SELECT id FROM entries WHERE actor_id LIKE 'main/child_%' AND role='assistant' AND kind='message' ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
+			if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT id FROM entries WHERE actor_id LIKE 'main/child_%' AND role='assistant' AND kind='message' ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
 				t.Fatal(err)
 			}
 			entry, err := u.runtime.Store.Entry(id)
@@ -146,7 +147,7 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 			}
 			if !background {
 				var result string
-				if err := u.runtime.Store.DB.QueryRow(`SELECT result_json FROM tool_calls WHERE name='subagent'`).Scan(&result); err != nil {
+				if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT result_json FROM tool_calls WHERE name='subagent'`).Scan(&result); err != nil {
 					t.Fatal(err)
 				}
 				var payload struct {
@@ -328,7 +329,7 @@ func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "[Sub one two three four] awaiting read (1seg/4bytes) ...")
 	var id int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", id))
@@ -390,7 +391,7 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	}
 	u.wait(t, "Turn complete")
 	var id int64
-	if err := u.runtime.Store.DB.QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='write'").Scan(&id); err != nil {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='write'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText("/inspect " + strconv.FormatInt(id, 10))

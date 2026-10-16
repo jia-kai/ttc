@@ -76,7 +76,7 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 			err = errors.Join(err, s.reclaimHistory(ctx, true))
 		} else if err == nil {
 			var freePages int64
-			if err = s.DB.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
+			if err = s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
 				err = fmt.Errorf("inspect reclaimable history pages: %w", err)
 			} else {
 				// Deletion may have committed in an earlier invocation whose
@@ -111,7 +111,7 @@ func (s *Store) reclaimHistory(ctx context.Context, compact bool) error {
 		// VACUUM preserves explicit INTEGER PRIMARY KEY identities and all logical
 		// rows. In WAL mode its compacted pages must then be checkpointed to shrink
 		// the physical files measured by StorageStats.
-		if _, err := s.DB.ExecContext(ctx, "VACUUM"); err != nil {
+		if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
 			return fmt.Errorf("compact history after purge: %w", err)
 		}
 		return s.checkpointHistory(ctx)
@@ -158,7 +158,7 @@ func (s *Store) withExclusiveHistoryUse(ctx context.Context, run func() error) (
 
 func (s *Store) checkpointHistory(ctx context.Context) error {
 	var busy, frames, checkpointed int
-	if err := s.DB.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &frames, &checkpointed); err != nil {
+	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &frames, &checkpointed); err != nil {
 		return fmt.Errorf("checkpoint history during reclamation: %w", err)
 	}
 	if busy != 0 {

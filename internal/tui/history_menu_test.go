@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v3"
@@ -189,7 +190,7 @@ func TestHistoryPickerInspectionPreservesDraft(t *testing.T) {
 	u.key(tcell.KeyEscape)
 	u.wait(t, "> Retained draft")
 	var count int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM turns").Scan(&count); err != nil || count != 1 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM turns").Scan(&count); err != nil || count != 1 {
 		t.Fatal("inspection submitted the draft", count, err)
 	}
 }
@@ -283,7 +284,7 @@ func TestHistoryPickerRestoresUserCheckpointAndRedoFiles(t *testing.T) {
 	// A generation change alone can race a queued frame from the previous view.
 	setReplayName := func(name string) {
 		t.Helper()
-		if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name=? WHERE id=?", name, u.runtime.Current()); err != nil {
+		if _, err := historytest.DB(t, u.runtime.Store).Exec("UPDATE sessions SET name=? WHERE id=?", name, u.runtime.Current()); err != nil {
 			t.Fatal(err)
 		}
 	}

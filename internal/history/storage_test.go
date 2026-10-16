@@ -26,7 +26,7 @@ func physicalHistoryBytes(t *testing.T, s *Store) int64 {
 
 func TestStorageStatsIncludesWALAndAllEntryKinds(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
-	if _, err := s.DB.Exec(`INSERT INTO entries(session_id,actor_id,kind,model_visible,content_json,created_ms) VALUES(?,'main','status',0,'{}',-123)`, v.ID); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO entries(session_id,actor_id,kind,model_visible,content_json,created_ms) VALUES(?,'main','status',0,'{}',-123)`, v.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"export.md", "openai-auth.json", "history.sqlite-shm-extra"} {
@@ -43,7 +43,7 @@ func TestStorageStatsIncludesWALAndAllEntryKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int64
-	if err := s.DB.QueryRow("SELECT count(*) FROM entries").Scan(&count); err != nil {
+	if err := s.db.QueryRow("SELECT count(*) FROM entries").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if stats.Bytes != physicalHistoryBytes(t, s) || stats.Entries != count || stats.OldestMS != -123 {
@@ -63,7 +63,7 @@ func TestStorageStatsEmptyVersusEpoch(t *testing.T) {
 	}
 	model := testSelection()
 	v, _ := startHistorySession(t, s, t.TempDir(), model, "epoch")
-	if _, err := s.DB.Exec("UPDATE entries SET created_ms=0 WHERE session_id=?", v.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE entries SET created_ms=0 WHERE session_id=?", v.ID); err != nil {
 		t.Fatal(err)
 	}
 	stats, err = s.StorageStats(context.Background())

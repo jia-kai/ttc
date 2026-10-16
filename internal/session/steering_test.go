@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -54,10 +55,10 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 		t.Fatal(requests, count)
 	}
 	var human, steer int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='user'").Scan(&human); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='user'").Scan(&human); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&steer); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&steer); err != nil {
 		t.Fatal(err)
 	}
 	if human != 1 || steer != 1 {
@@ -89,20 +90,20 @@ func TestSteeringRejectedAdmissionRetainsInputAndCheckpoint(t *testing.T) {
 	if err := r.Steer(contextbuild.Input{Text: "Queued human steer"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Store.DB.Exec(`CREATE TRIGGER reject_steer_request BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'rejected request'); END`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_steer_request BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'rejected request'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := r.admitMain(context.Background(), "", r.selection); err == nil {
 		t.Fatal("rejected request accepted")
 	}
 	var checkpoints int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM turns WHERE trigger='steer'").Scan(&checkpoints); err != nil {
 		t.Fatal(err)
 	}
 	if count, _ := r.SteeringPreview(0); checkpoints != 0 || count != 1 {
 		t.Fatal("admission failure consumed steering", checkpoints, count)
 	}
-	if _, err := r.Store.DB.Exec("DROP TRIGGER reject_steer_request"); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER reject_steer_request"); err != nil {
 		t.Fatal(err)
 	}
 	admitted, _, err := r.admitMain(context.Background(), "", r.selection)

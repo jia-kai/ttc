@@ -19,7 +19,7 @@ func TestIncompatibleSchemaIsRejectedWithoutDeletingData(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.DB.Exec(fmt.Sprintf("PRAGMA user_version=%d", version)); err != nil {
+			if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", version)); err != nil {
 				t.Fatal(err)
 			}
 			s.Close()
@@ -85,7 +85,7 @@ func TestHistoryDatabaseSymlinkDoesNotModifyOutsideDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.Exec("PRAGMA user_version=99"); err != nil {
+	if _, err = s.db.Exec("PRAGMA user_version=99"); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {

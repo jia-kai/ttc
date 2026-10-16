@@ -1,7 +1,7 @@
 package session
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -186,18 +186,16 @@ func (r *Runtime) LiveTimers() []TimerView {
 
 // ImageForEntry reads a durable image_show result without restoring interactions.
 func (r *Runtime) ImageForEntry(id int64) (*ImageSnapshot, error) {
-	var callID, name string
-	var result sql.NullString
-	err := r.Store.DB.QueryRow("SELECT id,name,result_json FROM tool_calls WHERE id=coalesce((SELECT call_id FROM tool_records WHERE entry_id=?),(SELECT json_extract(content_json,'$.call_id') FROM entries WHERE id=? AND kind='tool_call'))", id, id).Scan(&callID, &name, &result)
+	outcome, err := r.Store.ToolOutcomeForEntry(context.Background(), id)
 	if err != nil {
 		return nil, err
 	}
-	if name != "image_show" {
+	if outcome.Name != "image_show" {
 		return nil, nil
 	}
-	if !result.Valid {
+	if outcome.Result == nil {
 		r.images.mu.Lock()
-		p, ok := r.images.pending[callID]
+		p, ok := r.images.pending[outcome.CallID]
 		r.images.mu.Unlock()
 		if ok {
 			return &p.view, nil
@@ -205,7 +203,7 @@ func (r *Runtime) ImageForEntry(id int64) (*ImageSnapshot, error) {
 		return nil, nil
 	}
 	var v ImageSnapshot
-	if err = json.Unmarshal([]byte(result.String), &v); err != nil {
+	if err = json.Unmarshal(outcome.Result, &v); err != nil {
 		return nil, err
 	}
 	if v.Snapshot == "" {

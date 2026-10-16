@@ -99,7 +99,7 @@ func TestInstructionReadsRejectUnsafeAndOversizedSnapshots(t *testing.T) {
 			}
 			corruptArtifact(t, status.Path, kind, instructionSnapshotBytes)
 			for name, call := range map[string]func() error{
-				"inspect": func() error { _, err := s.Inspect(entry); return err },
+				"inspect": func() error { _, err := s.ReadInspection(context.Background(), id); return err },
 				"page":    func() error { _, err := s.InspectPage(context.Background(), id, 0, 100); return err },
 				"jsonl":   func() error { _, err := s.TranscriptJSONL(session.ID, 0); return err },
 				"export":  func() error { return s.Export(session.ID, filepath.Join(t.TempDir(), "transcript.md")) },

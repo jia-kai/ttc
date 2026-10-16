@@ -243,7 +243,7 @@ type PendingNotification struct {
 // boundary-recovery load. It never writes, projects, or acknowledges events.
 // Ordinary sessions, read-only predecessors and fatal contexts return no notices.
 func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string) ([]PendingNotification, error) {
-	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}

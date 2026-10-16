@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/history"
@@ -26,7 +27,7 @@ func TestSessionPickerReloadPreservesEditedDraft(t *testing.T) {
 	u.typeText("Start research")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
-	if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name='Original research' WHERE id=?", first); err != nil {
+	if _, err := historytest.DB(t, u.runtime.Store).Exec("UPDATE sessions SET name='Original research' WHERE id=?", first); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText("/new")
@@ -55,7 +56,7 @@ func TestSessionPickerReloadPreservesEditedDraft(t *testing.T) {
 		t.Fatal("picker did not create an independent session")
 	}
 	var turns int
-	if err := u.runtime.Store.DB.QueryRow("SELECT count(*) FROM turns").Scan(&turns); err != nil || turns != 1 {
+	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM turns").Scan(&turns); err != nil || turns != 1 {
 		t.Fatal("draft was submitted", turns, err)
 	}
 }
@@ -94,7 +95,7 @@ func TestSessionPickerLoadsSelectedSession(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "First session evidence")
 	u.wait(t, "Turn complete")
-	if _, err := u.runtime.Store.DB.Exec("UPDATE sessions SET name='Original research' WHERE id=?", first); err != nil {
+	if _, err := historytest.DB(t, u.runtime.Store).Exec("UPDATE sessions SET name='Original research' WHERE id=?", first); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText("/new")

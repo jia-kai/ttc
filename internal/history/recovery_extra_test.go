@@ -72,7 +72,7 @@ func TestPendingRecoveryNotificationsCancellation(t *testing.T) {
 	}
 	// The store has one connection. Waiting for it must honor the caller's
 	// deadline rather than blocking startup behind another transaction.
-	conn, err := s.DB.Conn(context.Background())
+	conn, err := s.db.Conn(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestPendingRecoveryNotificationsSelectedTipOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", entry.Parent, loaded.ID); err != nil {
+	if _, err := s.db.Exec("UPDATE sessions SET active_entry_id=? WHERE id=?", entry.Parent, loaded.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := recoveryNotices(t, s, loaded.ID); len(got) != 0 {

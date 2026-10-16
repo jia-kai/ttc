@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
@@ -173,10 +174,10 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 		t.Fatal(step, executions.Load())
 	}
 	var turns, distinctTurns, completed, failedRequests int
-	if err := r.Store.DB.QueryRow("SELECT count(*),sum(status='completed') FROM turns WHERE actor_id='main'").Scan(&turns, &completed); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*),sum(status='completed') FROM turns WHERE actor_id='main'").Scan(&turns, &completed); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Store.DB.QueryRow("SELECT count(DISTINCT turn_id),sum(status='failed') FROM model_requests WHERE purpose='coding'").Scan(&distinctTurns, &failedRequests); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(DISTINCT turn_id),sum(status='failed') FROM model_requests WHERE purpose='coding'").Scan(&distinctTurns, &failedRequests); err != nil {
 		t.Fatal(err)
 	}
 	if turns != 1 || completed != 1 || distinctTurns != 1 || failedRequests != 1 {
@@ -184,7 +185,7 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 	}
 	var recorded llm.Message
 	var raw string
-	if err := r.Store.DB.QueryRow("SELECT content_json FROM entries WHERE role='developer' AND json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&raw); err != nil {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT content_json FROM entries WHERE role='developer' AND json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal([]byte(raw), &recorded); err != nil || !reflect.DeepEqual(recorded, warning) {
@@ -297,7 +298,7 @@ func TestPartialRetryChildIsolationRetainedAndClosedContexts(t *testing.T) {
 				t.Fatal("closed child accepted follow-up", second, step)
 			}
 			var writes int
-			if err := r.Store.DB.QueryRow("SELECT count(*) FROM file_changes").Scan(&writes); err != nil || writes != 0 {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM file_changes").Scan(&writes); err != nil || writes != 0 {
 				t.Fatal("interrupted child write executed", writes, err)
 			}
 			if err := r.Store.FinishTurn(turn, "completed"); err != nil {
@@ -384,10 +385,10 @@ func TestPartialRetryCallStartDoesNotInventToolOutcome(t *testing.T) {
 				t.Fatal(err)
 			}
 			var calls, outcomes int
-			if err := r.Store.DB.QueryRow("SELECT count(*) FROM tool_calls").Scan(&calls); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM tool_calls").Scan(&calls); err != nil {
 				t.Fatal(err)
 			}
-			if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE kind='tool_result'").Scan(&outcomes); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE kind='tool_result'").Scan(&outcomes); err != nil {
 				t.Fatal(err)
 			}
 			if step != 2 || calls != 0 || outcomes != 0 {
@@ -426,7 +427,7 @@ func TestPartialRetryCancellationDuringWaitStopsNewRequest(t *testing.T) {
 		t.Fatal("cancellation submitted a new request", requests.Load())
 	}
 	var status string
-	if err := r.Store.DB.QueryRow("SELECT status FROM turns WHERE actor_id='main'").Scan(&status); err != nil || status != "interrupted" {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT status FROM turns WHERE actor_id='main'").Scan(&status); err != nil || status != "interrupted" {
 		t.Fatal(status, err)
 	}
 }
@@ -449,7 +450,7 @@ func TestPartialRetryUnclassifiedFailuresRemainFinal(t *testing.T) {
 					t.Fatal("lost original final error", err)
 				}
 				var warnings int
-				if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&warnings); err != nil {
+				if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&warnings); err != nil {
 					t.Fatal(err)
 				}
 				if requests != 1 || warnings != 0 {
@@ -496,7 +497,7 @@ func TestPartialRetryCallbackErrorsCannotAuthorizeRecovery(t *testing.T) {
 				t.Fatal("callback error lost", callbackErr, err)
 			}
 			var warnings int
-			if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&warnings); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.content')=?", prompts.Recovery).Scan(&warnings); err != nil {
 				t.Fatal(err)
 			}
 			if requests != 1 || warnings != 0 {
@@ -555,7 +556,7 @@ func TestPartialRetryCompactionPreservesExactDeveloperWarning(t *testing.T) {
 					if req.PriorAttempts != 0 {
 						t.Error("initial compaction test request has prior attempts")
 					}
-					if err := r.Store.DB.QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
+					if err := historytest.DB(t, r.Store).QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
 						return err
 					}
 					if err := partialRetryText(emit, strings.Repeat("Oversized partial research output. ", 400)); err != nil {

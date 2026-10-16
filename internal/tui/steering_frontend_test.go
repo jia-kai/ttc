@@ -3,6 +3,7 @@ package tui
 import (
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -44,14 +45,14 @@ func TestEnterSteersAndAltEnterQueues(t *testing.T) {
 				t.Fatal("Enter did not steer exclusively", count)
 			}
 			var pendingEntries int
-			if err := u.runtime.Store.DB.QueryRow(`SELECT count(*) FROM entries WHERE role='user' AND json_extract(content_json,'$.content') IN ('next turn','change direction')`).Scan(&pendingEntries); err != nil || pendingEntries != 0 {
+			if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT count(*) FROM entries WHERE role='user' AND json_extract(content_json,'$.content') IN ('next turn','change direction')`).Scan(&pendingEntries); err != nil || pendingEntries != 0 {
 				t.Fatal("pending inputs entered history before admission", pendingEntries, err)
 			}
 			close(p.release)
 			u.wait(t, "Queued turn accepted")
 			u.wait(t, "Turn complete")
 			var requests, codingTurns int
-			if err := u.runtime.Store.DB.QueryRow("SELECT count(*), count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&requests, &codingTurns); err != nil || requests != 3 || codingTurns != 2 {
+			if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*), count(DISTINCT turn_id) FROM model_requests WHERE purpose='coding'").Scan(&requests, &codingTurns); err != nil || requests != 3 || codingTurns != 2 {
 				t.Fatal("steer or queue used the wrong coding turn", requests, codingTurns, err)
 			}
 			messages, err := u.runtime.Store.Messages(u.runtime.Current())

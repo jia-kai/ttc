@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 )
@@ -55,7 +56,7 @@ func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 				t.Fatalf("unexpected turn error: %v", err)
 			}
 			var raw []byte
-			if err := r.Store.DB.QueryRow("SELECT content_json FROM entries WHERE json_extract(content_json,'$.type')='turn_end'").Scan(&raw); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT content_json FROM entries WHERE json_extract(content_json,'$.type')='turn_end'").Scan(&raw); err != nil {
 				t.Fatal(err)
 			}
 			var end struct {
@@ -84,7 +85,7 @@ func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 				t.Fatalf("emitted status %q differs from persisted status %q", emitted, end.Text)
 			}
 			var storedStatus string
-			if err := r.Store.DB.QueryRow("SELECT status FROM turns WHERE actor_id='main'").Scan(&storedStatus); err != nil || storedStatus != status {
+			if err := historytest.DB(t, r.Store).QueryRow("SELECT status FROM turns WHERE actor_id='main'").Scan(&storedStatus); err != nil || storedStatus != status {
 				t.Fatalf("internal status changed: %q, %v", storedStatus, err)
 			}
 		})

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/historytest"
 
 	"ttc/internal/llm"
 	"ttc/internal/tool"
@@ -93,7 +94,7 @@ func TestChildIdleFollowupRetainsContextAndDistinctAssignments(t *testing.T) {
 	}
 	requireChildLifecycle(t, views[0], "completed", "idle")
 	var finished int
-	if err := r.Store.DB.QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_turn_finished'").Scan(&finished); err != nil || finished != 2 {
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE json_extract(content_json,'$.type')='child_turn_finished'").Scan(&finished); err != nil || finished != 2 {
 		t.Fatal(finished, err)
 	}
 	closed, err := r.StopChild(context.Background(), "main", childID)
