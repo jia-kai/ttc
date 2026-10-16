@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"ttc/internal/assets"
 	"ttc/internal/auth"
 	"ttc/internal/binaryinput"
 	"ttc/internal/catalog"
@@ -86,7 +85,6 @@ func runWithModules(modules []providers.Module) error {
 	cwd := flag.String("workdir", ".", "workspace directory")
 	plain := flag.Bool("plain", false, "plain terminal output")
 	login := flag.Bool("login", false, "run device-code login then exit")
-	installMath := flag.Bool("install-math", false, "install pinned MathJax in the user cache then exit")
 	model := flag.String("model", "", "optional model ID override (otherwise use last choice)")
 	variant := flag.String("variant", "", "optional reasoning preset override")
 	script := flag.String("offline-script", "", "JSON response script for deterministic offline integration")
@@ -114,8 +112,8 @@ func runWithModules(modules []providers.Module) error {
 				conflict = f.Name
 			}
 		})
-		if *login || *installMath || *script != "" || conflict != "" {
-			return errors.New("--setup-exa cannot be combined with --login, --install-math, --offline-script or provider-specific options")
+		if *login || *script != "" || conflict != "" {
+			return errors.New("--setup-exa cannot be combined with --login, --offline-script or provider-specific options")
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
@@ -138,16 +136,6 @@ func runWithModules(modules []providers.Module) error {
 	}
 	if e = applySSHAuthSockPolicy(); e != nil {
 		return e
-	}
-	if *installMath {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		path, err := assets.InstallMath(ctx)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stdout, "MathJax ready:", path)
-		return nil
 	}
 	if e = dataDefaultError(flag.CommandLine, dataDefaultErr); e != nil {
 		return e

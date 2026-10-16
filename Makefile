@@ -1,16 +1,16 @@
 .DEFAULT_GOAL := build
 
-.PHONY: prompts build test check format format-check integration rail-integration demo kitty-test ci-test full-test
+.PHONY: prompts build test check format format-check integration rail-integration demo math-test kitty-test ci-test full-test
 # Share build prerequisites, but never run suites concurrently, even with -j.
 .NOTPARALLEL: ci-test full-test
 prompts:
 	go run ./cmd/embed-prompts
 
 format:
-	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.8.1 --write
+	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.9.10 --write
 
 format-check:
-	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.8.1 --check
+	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.9.10 --check
 
 build: prompts
 	go build -o ttc ./cmd/ttc
@@ -44,14 +44,17 @@ rail-integration: build
 kitty-test: build
 	python3 tests/kitty_visual.py
 
-ci-test: test check integration rail-integration
-	python3 -m unittest discover -s tests -p 'test_*.py'
+math-test: build
 	python3 tests/pty_math.py
 	python3 tests/pty_math.py --tmux
 	python3 tests/pty_math.py --disable-color
 	python3 tests/pty_math.py --disable-color no-color
 	python3 tests/pty_math.py --tmux --disable-color
 	python3 tests/pty_math.py --tmux --disable-color no-color
+
+# Prepare MathJax through startup before real-renderer unit/race tests run.
+ci-test: math-test test check integration rail-integration
+	python3 -m unittest discover -s tests -p 'test_*.py'
 
 full-test: ci-test kitty-test
 	python3 tests/kitty_visual.py --tmux

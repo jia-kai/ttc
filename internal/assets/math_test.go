@@ -24,6 +24,80 @@ func requireMathPrograms(t testing.TB) {
 	}
 }
 
+func TestMathRendererStartupInstallsAndReusesPinnedCacheWithoutNPM(t *testing.T) {
+	fakeMathInstall(t)
+	root, err := mathRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatal("fixture cache was not fresh", err)
+	}
+	r, err := NewMathRenderer(context.Background())
+	if err != nil {
+		t.Fatal("automatic startup install failed", err)
+	}
+	r.Close()
+	if r.root != root || !readyMath(context.Background(), root) {
+		t.Fatal("startup did not publish the pinned cache", r.root)
+	}
+	// Ready-cache startup must work even when npm is no longer installed.
+	bin := filepath.SplitList(os.Getenv("PATH"))[0]
+	if err := os.Remove(filepath.Join(bin, "npm")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	r, err = NewMathRenderer(context.Background())
+	if err != nil {
+		t.Fatal("ready-cache startup required npm", err)
+	}
+	defer r.Close()
+	if _, err := r.Render(context.Background(), "x^2", 16); err != nil {
+		t.Fatal("reused renderer failed", err)
+	}
+	if calls, err := os.ReadFile(os.Getenv("TTC_MATH_TEST_NPM_CALLS")); err != nil || string(calls) != "npm\n" {
+		t.Fatal("ready-cache startup invoked npm", string(calls), err)
+	}
+}
+
+func TestMathRendererStartupSelectsCurrentPinOverStaleCaches(t *testing.T) {
+	for _, staleName := range []string{"0.0.0-" + mathPackageKey[:12], mathjaxVersion + "-stale-lock"} {
+		t.Run(staleName, func(t *testing.T) {
+			fakeMathInstall(t)
+			r, err := NewMathRenderer(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := r.root
+			r.Close()
+			// Model an existing cache from a previous bundle version or lock.
+			// Keep complete metadata so selection cannot rely on missing files.
+			stale := filepath.Join(filepath.Dir(root), staleName)
+			if err := os.Rename(root, stale); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(stale, ".ready")
+			if err := os.WriteFile(marker, []byte("previous-bundle-pin"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			r, err = NewMathRenderer(context.Background())
+			if err != nil {
+				t.Fatal("startup did not install the current bundle pin", err)
+			}
+			defer r.Close()
+			if r.root != root || !readyMath(context.Background(), root) {
+				t.Fatal("startup selected a stale dependency cache", r.root)
+			}
+			if calls, err := os.ReadFile(os.Getenv("TTC_MATH_TEST_NPM_CALLS")); err != nil || string(calls) != "npm\nnpm\n" {
+				t.Fatal("startup did not install exactly once per pin", string(calls), err)
+			}
+			if data, err := os.ReadFile(marker); err != nil || string(data) != "previous-bundle-pin" {
+				t.Fatal("startup mutated the stale cache", string(data), err)
+			}
+		})
+	}
+}
+
 func TestMathCacheConcurrentInstallAndReuse(t *testing.T) {
 	fakeMathInstall(t)
 	var wg sync.WaitGroup
@@ -31,7 +105,7 @@ func TestMathCacheConcurrentInstallAndReuse(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			root, err := InstallMath(context.Background())
+			root, err := ensureMath(context.Background())
 			if err != nil || !strings.Contains(root, mathjaxVersion+"-"+mathPackageKey[:12]) {
 				t.Errorf("root = %q, error = %v", root, err)
 			}
@@ -64,7 +138,7 @@ func TestMathCacheConcurrentInstallAndReuse(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := InstallMath(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := ensureMath(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled setup did not preserve cancellation", err)
 	}
 	if !readyMath(context.Background(), root) {
@@ -209,7 +283,7 @@ func TestMathCacheLocationAndMissingHostPrograms(t *testing.T) {
 	}
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
-	if _, err = InstallMath(context.Background()); err == nil || !strings.Contains(err.Error(), "node is required") {
+	if _, err = ensureMath(context.Background()); err == nil || !strings.Contains(err.Error(), "node is required") {
 		t.Fatal("missing host program not disclosed", err)
 	}
 }

@@ -24,7 +24,7 @@ func isolatedMathCache(t testing.TB) {
 	requireMathPrograms(t)
 	source, err := mathRoot()
 	if err != nil || !readyMath(context.Background(), source) {
-		t.Skip("optional MathJax cache unavailable; run ttc --install-math for real renderer tests")
+		t.Skip("optional MathJax cache unavailable; start TTC in a graphics-capable terminal to prepare real renderer tests")
 	}
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	root, err := mathRoot()

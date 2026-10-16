@@ -22,13 +22,10 @@ var mathLock string
 
 var mathPackageKey = Key(mathPackage, mathLock)
 
-// InstallMath installs the pinned MathJax packages in the user cache if needed.
+// ensureMath publishes a validated immutable npm installation.
 // npm verifies lockfile SHA-512 integrity values; scripts are disabled. Setup is
 // staged, validated and serialized, with bounded output and a two-minute deadline.
 // It returns the published cache path; no npm invocation occurs for a ready cache.
-func InstallMath(ctx context.Context) (string, error) { return ensureMath(ctx) }
-
-// ensureMath publishes a validated immutable npm installation.
 func ensureMath(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

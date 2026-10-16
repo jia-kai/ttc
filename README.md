@@ -122,11 +122,10 @@ through tmux, enable graphics passthrough in your tmux configuration:
 set -g allow-passthrough on
 ```
 
-For math rendering, install Node, npm, and `rsvg-convert` (run
-`sudo pacman -S nodejs npm librsvg` on Arch). Run `./ttc --install-math` to
-prepare MathJax without login. Rendering reuses a persistent Node process;
-ordinary images need none of these dependencies. See
-[math setup](docs/mathjax.md).
+For math rendering, install Node 20 or 22+, npm, and `rsvg-convert` (run
+`sudo pacman -S nodejs npm librsvg` on Arch). Graphics-capable TUI startup
+automatically installs or upgrades TTC's pinned MathJax packages in the
+background. See [math setup](docs/mathjax.md).
 
 ## Usage
 
@@ -265,8 +264,9 @@ images are not pinned.
 
 ## Testing
 
-Markdown and YAML formatting uses Prettier 3.8.1 with the repository's 80-column
-configuration. CI checks tracked files. To format them locally:
+Markdown and YAML formatting uses the Makefile-pinned Prettier with the
+repository's 80-column configuration. CI checks tracked files. To format them
+locally:
 
 ```sh
 make format

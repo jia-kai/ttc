@@ -1,7 +1,8 @@
 # Local demonstration
 
 Requirements: Linux, Go 1.26.5+, Python 3, and ripgrep (`rg`). No OpenAI login,
-network service, subscription usage, or Python packages are needed. The mock
+network service, subscription usage, or Python packages are needed. Math-enabled
+TUI startup may download pinned npm packages if its cache is not ready. The mock
 OpenAI server listens only on loopback and uses synthetic credentials. It checks
 requests and sends a predefined Responses/SSE conversation.
 
@@ -106,16 +107,17 @@ make check                        # race tests and vet
 make rail-integration             # real filesystem sandbox and tmux lifecycle
 ```
 
-`make ci-test` runs Go tests/race/vet, PTY and rail regressions, Python unit
-tests, and math protocol tests with both explicit color-disable settings. GitHub
-Actions runs this target without Kitty or Xvfb dependencies. `make full-test`
-depends on `ci-test` and adds all direct/tmux and mock/offline Kitty modes,
-including PNG captures. Suites run sequentially even with `-j`; the first
-failure stops the run. Manual demos and benchmarks are excluded. Run it outside
-rail if `./ttc` is read-only. Install the rail and graphics/math dependencies
-listed below and prepare MathJax with `make build` followed by
-`./ttc --install-math` first; the target does not install dependencies or
-silently omit unavailable suites.
+`make ci-test` first runs math protocol tests (including both explicit
+color-disable settings), preparing MathJax before real-renderer unit/race tests.
+It then runs Go tests/race/vet, PTY and rail regressions, and Python unit tests.
+GitHub Actions runs this target without Kitty or Xvfb dependencies.
+`make full-test` depends on `ci-test` and adds all direct/tmux and mock/offline
+Kitty modes, including PNG captures. Suites run sequentially even with `-j`; the
+first failure stops the run. Manual demos and benchmarks are excluded. Run it
+outside rail if `./ttc` is read-only. Install the rail and graphics/math
+dependencies listed below first. Math-enabled TUI startup installs the pinned
+MathJax packages automatically; a cold cache needs npm and network access. The
+target does not install host dependencies or silently omit unavailable suites.
 
 Rail integration additionally needs `bubblewrap`, `tmux`, and permission to
 create unprivileged user/PID/UTS namespaces. It checks mounts, denies, shared
@@ -155,7 +157,6 @@ For actual Kitty screenshots on headless Arch Linux:
 
 ```sh
 sudo pacman -S --needed kitty xorg-server-xvfb xorg-xauth mesa noto-fonts noto-fonts-cjk nodejs npm librsvg python-pillow
-./ttc --install-math               # optional math setup; pinned npm dependencies
 make kitty-test                    # builds and captures real Kitty under Xvfb
 python3 tests/kitty_visual.py      # reuse the current ./ttc binary
 python3 tests/kitty_visual.py --tmux # private tmux; Kitty identity cleared
@@ -190,8 +191,8 @@ hostile Node configuration disabled. Streaming-message growth and shrink
 preserve later reading anchors and cache indices. Installer/worker unit tests
 use self-contained executable fixtures without network access. Real math
 tests/benchmarks run only when a validated optional MathJax cache exists; run
-`./ttc --install-math` first to enable them. Benchmark warm typesetting plus PNG
-conversion with
+`make build` and `python3 tests/pty_math.py` first to prepare it through
+automatic startup. Benchmark warm typesetting plus PNG conversion with
 `go test ./internal/assets -run '^$' -bench BenchmarkMathJax -benchtime=10x`.
 
 The `kitty_visual.py --tmux` mode enables passthrough and RGB in a private tmux,
@@ -202,13 +203,13 @@ screenshot modes need local display/control sockets. Restricted sandboxes may
 prohibit these and the HTTP mock's loopback listener; saved exceptions and logs
 identify the environment limitation. Unit provider tests use in-process HTTP
 handlers; the separate mock-server tests exercise real transport. `pty_math.py`
-needs the built binary and prepared MathJax, Node and librsvg; it needs no
-Kitty, Xvfb, display or socket. Its `--tmux` option simulates DCS passthrough
-without starting tmux, and checks graphics without `COLORTERM`. The full demo
-also checks stable instructions, immutable input prefixes and reported
-cached/reasoning counters. Unit regressions distinguish unavailable counters
-from zero, preserve model provenance, and avoid double-counting native replay in
-estimates.
+needs the built binary, Node and librsvg, plus npm/network for a cold MathJax
+cache; it prepares MathJax automatically and needs no Kitty, Xvfb, display or
+socket. Its `--tmux` option simulates DCS passthrough without starting tmux, and
+checks graphics without `COLORTERM`. The full demo also checks stable
+instructions, immutable input prefixes and reported cached/reasoning counters.
+Unit regressions distinguish unavailable counters from zero, preserve model
+provenance, and avoid double-counting native replay in estimates.
 
 Regression tests round-trip native tool arguments through SQLite, including
 formatted JSON, HTML text and large integers. Schema tests reject incompatible

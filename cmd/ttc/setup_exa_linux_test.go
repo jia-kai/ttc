@@ -208,7 +208,7 @@ func TestSetupExaCLIStandalone(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(root, "ttc", "web-search.json")); !os.IsNotExist(err) {
 		t.Fatal("default target was used")
 	}
-	for _, conflict := range []string{"--login", "--install-math", "--offline-script=missing", "--import-codex-auth=missing"} {
+	for _, conflict := range []string{"--login", "--offline-script=missing", "--import-codex-auth=missing"} {
 		os.Args = []string{"ttc", "--setup-exa", conflict}
 		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		if err = run(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {

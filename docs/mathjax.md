@@ -9,19 +9,20 @@
   The lock pins 17 packages by version/URL/SHA-512;
   [npm ci](https://docs.npmjs.com/cli/v11/commands/npm-ci/) verifies downloads
   without changing metadata. Disable scripts/audit/funding.
-- Install host Node and `rsvg-convert`; npm is needed only for setup. On Arch:
-  `sudo pacman -S nodejs npm librsvg`. Use 0700 version/lock-addressed roots and
-  npm cache under `$XDG_CACHE_HOME/ttc/mathjax` (default
-  `~/.cache/ttc/mathjax`). Ready roots need no npm/network.
+- Install host Node 20 or 22+ and `rsvg-convert`; npm is needed only for setup.
+  On Arch: `sudo pacman -S nodejs npm librsvg`. Use 0700 version/lock-addressed
+  roots and npm cache under `$XDG_CACHE_HOME/ttc/mathjax` (default
+  `~/.cache/ttc/mathjax`).
 - A cancelable lock and two-minute deadline bound staging, validation render and
   publication. Stage/validate before replacing the cache; damaged metadata
   triggers rebuild. Unsafe permissions/symlinks fail explicitly.
-- Prepare without login/UI:
-
-```sh
-make build
-./ttc --install-math
-```
+- Graphics-capable TUI startup prepares the pinned packages in the background,
+  without waiting for a formula. A changed bundled version or lockfile selects a
+  new cache automatically; TTC never resolves arbitrary latest versions at
+  runtime. First setup needs network access. Ready caches need neither npm nor
+  network. Plain output and terminals without graphics do not install math
+  packages. Missing prerequisites or setup failures warn and leave formulas as
+  literal TeX.
 
 ## Rendering
 
@@ -60,8 +61,9 @@ make build
 ## Updating and measuring
 
 - Update manifest and Go version constant; regenerate the lockfile with npm in
-  private cache and review URL/integrity changes. Prepare cache, then run unit,
-  real-math and Kitty checks. Runtime never resolves unpinned latest.
+  private cache and review URL/integrity changes. Run `make build` and
+  `python3 tests/pty_math.py` to exercise automatic setup, then run unit,
+  real-math and Kitty checks.
 - Benchmark warm rendering plus PNG conversion, excluding downloads:
 
 ```sh

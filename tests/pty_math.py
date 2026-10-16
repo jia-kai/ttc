@@ -4,7 +4,8 @@
 The driver acknowledges direct Kitty queries and checks PNG uploads/placeholders.
 Tmux mode supplies detected client metadata and never sends a graphics reply.
 It is a protocol test; use kitty_visual.py for actual terminal screenshots.
-Prepare the optional dependencies with ./ttc --install-math first.
+Install host Node and librsvg first; startup prepares pinned MathJax automatically.
+A cold cache also requires npm and network access.
 """
 import argparse
 import fcntl
@@ -68,7 +69,8 @@ Formula fixture done.
     output = bytearray()
     answered = submitted = False
     try:
-        deadline = time.monotonic() + 20
+        # Cold startup may use the installer's two-minute setup budget.
+        deadline = time.monotonic() + (20 if args.disable_color else 150)
         while time.monotonic() < deadline:
             if select.select([fd], [], [], 0.05)[0]:
                 chunk = os.read(fd, 65536)

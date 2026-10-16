@@ -22,6 +22,20 @@ type catalogTransport func(*http.Request) (*http.Response, error)
 
 func (f catalogTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+func TestRemovedInstallMathFlagIsRejected(t *testing.T) {
+	args, flags := os.Args, flag.CommandLine
+	t.Cleanup(func() { os.Args, flag.CommandLine = args, flags })
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, extra := range [][]string{nil, {"--setup-exa"}, {"--plain"}} {
+		os.Args = append([]string{"ttc", "--install-math"}, extra...)
+		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
+		flag.CommandLine.SetOutput(io.Discard)
+		if err := run(); err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -install-math") {
+			t.Fatalf("args %v: expected unknown flag, got %v", os.Args, err)
+		}
+	}
+}
+
 func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 	if data := os.Getenv("TTC_TEST_MODEL_DATA"); data != "" {
 		// Run the real CLI with an in-process HTTP transport: no sockets or auth.
