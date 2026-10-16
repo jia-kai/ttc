@@ -13,6 +13,16 @@ These are TTC's complete target contracts. Current code:
   otherwise. Text is UTF-8; integer bounds are inclusive. Page sizes, limits and
   byte caps are positive; offsets use each tool's documented base. Read pages
   are capped at 40,000 bytes; mutation files at 8 MiB.
+- Out-of-range numeric budgets, page sizes, timeouts and reminder durations are
+  clipped to their supported inclusive bounds before validation and execution.
+  Results include `warnings` with `code:"input_clipped"`, `parameter`,
+  `requested`, `effective`, `minimum`, `maximum` and an explanatory `message`.
+  Omitted values keep their defaults; background shell timeout zero and update
+  repeat zero retain their documented meanings. Scheduling repeat zero clips to
+  one second, not a one-shot reminder. Exact requested arguments stay in saved
+  records; execution uses corrected values. Recovery does not retry execution or
+  suppress semantic validation or execution errors. Malformed values, integers
+  outside Go's `int` range, offsets and source coordinates are not corrected.
 - Result is one JSON object: success adds `"ok":true`; failure returns
   `{"ok":false,"error":{"code":"snake_case_code","message":"actionable detail"}}`.
   Include `error.details` only for structured recovery. Empty search results and

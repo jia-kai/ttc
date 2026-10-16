@@ -45,7 +45,6 @@ WakeupNameActive:
   choose another name
 WakeupTimeRequired: exactly one of at or delay_seconds required
 WakeupDelayRange: delay_seconds must be 0–31536000
-WakeupRepeatRange: repeat_seconds must be 1–31536000 (omit for a one-shot timer)
 WakeupInvalidTimestamp:
   "at must be RFC3339 with a timezone, such as 2026-10-02T15:04:05Z; use
   delay_seconds instead for a relative time: %w"

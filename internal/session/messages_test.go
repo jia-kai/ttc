@@ -29,8 +29,6 @@ func TestSessionToolMessageAssets(t *testing.T) {
 		{"recommendation", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","recommended_option_id":"a"}]}`, "invalid_input", prompts.QuestionRecommendation},
 		{"child question", "question", "main/child_fixture", `{"questions":[{"id":"q","prompt":"Q?"}]}`, "execution_failed", prompts.QuestionMainOnly},
 		{"wakeup time", "wakeup_schedule", "main", `{"name":"audit","message":"check"}`, "invalid_input", prompts.WakeupTimeRequired},
-		{"wakeup delay", "wakeup_schedule", "main", `{"name":"audit","message":"check","delay_seconds":-1}`, "invalid_input", prompts.WakeupDelayRange},
-		{"wakeup repeat", "wakeup_schedule", "main", `{"name":"audit","message":"check","delay_seconds":1,"repeat_seconds":0}`, "invalid_input", prompts.WakeupRepeatRange},
 		{"wakeup cancel identity", "wakeup_cancel", "main", `{}`, "invalid_input", prompts.WakeupCancelIdentity},
 		{"wakeup not found", "wakeup_cancel", "main", `{"name":"missing"}`, "not_found", prompts.WakeupCancelNotFound},
 		{"unsupported clicks", "image_show", "main", `{"path":"missing.png","request_click":true}`, "unsupported_interaction", prompts.ImageClicksUnsupported},

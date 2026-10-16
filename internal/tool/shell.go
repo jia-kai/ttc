@@ -43,24 +43,15 @@ type ChildController interface {
 // AddShell exposes managed commands and owner-scoped live handles. A nil child
 // controller leaves standalone shell registries without reusable child contexts.
 func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
-	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": Property("integer")}, []string{"command"}, func(a shellArgs) error {
+	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": IntegerRange(1, capture.MaxOutputBytes)}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
-		}
-		if a.Timeout != nil && (*a.Timeout < 0 || *a.Timeout > 86400000) {
-			return errors.New(prompts.ToolShellTimeoutRange)
-		}
-		if !a.Background && a.Timeout != nil && *a.Timeout == 0 {
-			return errors.New(prompts.ToolShellForegroundTimeout)
 		}
 		if a.Protocol != "" && a.Protocol != "lsp" {
 			return errors.New(prompts.ToolShellProtocol)
 		}
 		if a.Protocol == "lsp" && !a.Background {
 			return errors.New(prompts.ToolLSPBackgroundRequired)
-		}
-		if e := rangeInt("output_bytes", a.OutputBytes, 1, capture.MaxOutputBytes); e != nil {
-			return e
 		}
 		_, e := (capture.OutputOptions{Mode: a.OutputMode}).Normalize()
 		return e
@@ -99,6 +90,15 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 			}
 		})
 		return v, jobToolError(err)
+	}, func(a *shellArgs) []InputWarning {
+		if a.Timeout == nil {
+			return nil
+		}
+		minimum := 1
+		if a.Background {
+			minimum = 0
+		}
+		return ClipInteger("timeout_ms", a.Timeout, minimum, 86400000)
 	})
 	type list struct {
 		State   string `json:"state,omitempty"`
@@ -131,11 +131,11 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
 		Limit         *int   `json:"limit_bytes,omitempty"`
 	}
-	Register(r, "job_read", prompts.ToolDescription("job_read"), map[string]any{"job_id": Property("string"), "cursor": Property("string"), "stream": Property("string", "stdout", "stderr"), "grep": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit_bytes": Property("integer")}, []string{"job_id"}, func(a read) error {
+	Register(r, "job_read", prompts.ToolDescription("job_read"), map[string]any{"job_id": Property("string"), "cursor": Property("string"), "stream": Property("string", "stdout", "stderr"), "grep": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit_bytes": IntegerRange(1, 65536)}, []string{"job_id"}, func(a read) error {
 		if e := Required("job_id", a.ID); e != nil {
 			return e
 		}
-		return rangeInt("limit_bytes", a.Limit, 1, 65536)
+		return nil
 	}, func(ctx context.Context, x Execution, a read) (any, error) {
 		v, e := m.Read(ctx, x.Actor, a.ID, jobs.ReadOptions{Stream: a.Stream, Cursor: a.Cursor, Limit: intDefault(a.Limit, 16384), Grep: a.Grep, Literal: a.Literal, IgnoreCase: a.CaseSensitive != nil && !*a.CaseSensitive})
 		if e != nil {

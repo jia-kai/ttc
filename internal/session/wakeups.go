@@ -14,6 +14,8 @@ import (
 	"ttc/internal/tool"
 )
 
+const maxWakeupSeconds = 365 * 24 * 60 * 60
+
 type wakeupSchedule struct {
 	Name    string  `json:"name"`
 	Message string  `json:"message"`
@@ -205,7 +207,7 @@ func (w *wakeups) close() {
 }
 func (r *Runtime) addWakeupTools() {
 	r.addWakeupUpdateTool()
-	tool.Register(r.Tools, "wakeup_schedule", prompts.ToolDescription("wakeup_schedule"), map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer")}, []string{"name", "message"}, func(a wakeupSchedule) error {
+	tool.Register(r.Tools, "wakeup_schedule", prompts.ToolDescription("wakeup_schedule"), map[string]any{"name": tool.Property("string"), "message": tool.Property("string"), "at": tool.Property("string"), "delay_seconds": tool.IntegerRange(0, maxWakeupSeconds), "repeat_seconds": tool.IntegerRange(1, maxWakeupSeconds)}, []string{"name", "message"}, func(a wakeupSchedule) error {
 		if e := tool.Required("name", a.Name); e != nil {
 			return e
 		}
@@ -214,12 +216,6 @@ func (r *Runtime) addWakeupTools() {
 		}
 		if (a.At == nil) == (a.Delay == nil) {
 			return errors.New(prompts.WakeupTimeRequired)
-		}
-		if a.Delay != nil && (*a.Delay < 0 || *a.Delay > 31536000) {
-			return errors.New(prompts.WakeupDelayRange)
-		}
-		if a.Repeat != nil && (*a.Repeat < 1 || *a.Repeat > 31536000) {
-			return errors.New(prompts.WakeupRepeatRange)
 		}
 		if a.At != nil {
 			if _, e := time.Parse(time.RFC3339, *a.At); e != nil {

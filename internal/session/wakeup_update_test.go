@@ -93,7 +93,10 @@ func TestWakeupUpdateInvalidIsAtomic(t *testing.T) {
 		{ID: &initial.ID, Name: updatePtr("check"), Message: updatePtr("new")},
 		{ID: &initial.ID, At: updatePtr("bad"), Message: updatePtr("new")},
 		{ID: &initial.ID, At: updatePtr(time.Now().Format(time.RFC3339)), Delay: updatePtr(1)},
+		{ID: &initial.ID, Delay: updatePtr(-1), Message: updatePtr("new")},
+		{ID: &initial.ID, Delay: updatePtr(31536001), Message: updatePtr("new")},
 		{ID: &initial.ID, Repeat: updatePtr(-1), Message: updatePtr("new")},
+		{ID: &initial.ID, Repeat: updatePtr(31536001), Message: updatePtr("new")},
 		{ID: &initial.ID, Message: updatePtr("")},
 	}
 	for _, a := range cases {
@@ -123,7 +126,7 @@ func TestWakeupUpdateInvalidIsAtomic(t *testing.T) {
 
 func TestWakeupUpdateToolValidation(t *testing.T) {
 	r, _ := timerInspectionFixture(t)
-	for _, args := range []string{`{}`, `{"name":"missing","repeat_seconds":0}`, `{"name":"x","delay_seconds":-1}`, `{"name":"x","repeat_seconds":31536001}`, `{"name":"x","message":"a","unknown":1}`} {
+	for _, args := range []string{`{}`, `{"name":"missing","repeat_seconds":0}`, `{"name":"x","delay_seconds":1.5}`, `{"name":"x","repeat_seconds":"60"}`, `{"name":"x","message":"a","unknown":1}`} {
 		record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main"}, "wakeup_update", []byte(args))
 		var result map[string]any
 		if err := json.Unmarshal(record.Result, &result); err != nil {

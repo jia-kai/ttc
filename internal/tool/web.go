@@ -110,7 +110,7 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 		}
 		return nil
 	}
-	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": Property("integer"), "max_chars": Property("integer"), "pattern": Property("string"), "context_lines": Property("integer"), "timeout_ms": Property("integer")}, nil, func(a webArgs) error {
+	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": Property("integer"), "max_chars": IntegerRange(1, 64000), "pattern": Property("string"), "context_lines": IntegerRange(0, 10), "timeout_ms": IntegerRange(1, 120000)}, nil, func(a webArgs) error {
 		if (a.URL == "") == (a.DocumentID == "") {
 			return errors.New(prompts.ToolWebSourceIdentifier)
 		}
@@ -127,15 +127,6 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 		}
 		if a.Offset != nil && *a.Offset < 0 {
 			return errors.New(prompts.ToolWebOffset)
-		}
-		if err := rangeInt("max_chars", a.Max, 1, 64000); err != nil {
-			return err
-		}
-		if err := rangeInt("timeout_ms", a.Timeout, 1, 120000); err != nil {
-			return err
-		}
-		if err := rangeInt("context_lines", a.Context, 0, 10); err != nil {
-			return err
 		}
 		if a.Context != nil && a.Pattern == "" {
 			return errors.New(prompts.ToolWebContextPattern)

@@ -22,11 +22,11 @@ import (
 const searchTextLimit = 40000
 
 func addSearch(r *Registry, w *workspace.Manager) {
-	Register(r, "glob", prompts.ToolDescription("glob"), map[string]any{"pattern": Property("string"), "path": Property("string"), "hidden": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a globArgs) error {
+	Register(r, "glob", prompts.ToolDescription("glob"), map[string]any{"pattern": Property("string"), "path": Property("string"), "hidden": Property("boolean"), "limit": IntegerRange(1, 500)}, []string{"pattern"}, func(a globArgs) error {
 		if err := Required("pattern", a.Pattern); err != nil {
 			return err
 		}
-		return rangeInt("limit", a.Limit, 1, 500)
+		return nil
 	}, func(ctx context.Context, x Execution, a globArgs) (any, error) {
 		root := w.Root
 		if a.Path != "" {
@@ -54,11 +54,11 @@ func addSearch(r *Registry, w *workspace.Manager) {
 		sort.Strings(paths)
 		return map[string]any{"root": root, "paths": paths, "truncated": truncated}, nil
 	})
-	Register(r, "grep", prompts.ToolDescription("grep"), map[string]any{"pattern": Property("string"), "path": Property("string"), "include": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit": Property("integer")}, []string{"pattern"}, func(a grepArgs) error {
+	Register(r, "grep", prompts.ToolDescription("grep"), map[string]any{"pattern": Property("string"), "path": Property("string"), "include": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit": IntegerRange(1, 500)}, []string{"pattern"}, func(a grepArgs) error {
 		if a.Pattern == "" {
 			return errors.New(prompts.ToolPatternRequired)
 		}
-		return rangeInt("limit", a.Limit, 1, 500)
+		return nil
 	}, func(ctx context.Context, x Execution, a grepArgs) (any, error) {
 		root := w.Root
 		if a.Path != "" {

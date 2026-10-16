@@ -56,12 +56,6 @@ func intDefault(p *int, def int) int {
 	}
 	return *p
 }
-func rangeInt(name string, p *int, min, max int) error {
-	if p != nil && (*p < min || *p > max) {
-		return fmt.Errorf(prompts.ToolIntegerRange, name, min, max)
-	}
-	return nil
-}
 func validText(s string) error {
 	if !utf8.ValidString(s) || strings.ContainsRune(s, 0) {
 		return Fail("unsupported_content", prompts.ToolExpectedUTF8)
@@ -71,14 +65,14 @@ func validText(s string) error {
 
 // AddFiles registers read/search tools and serialized file mutations.
 func AddFiles(r *Registry, w *workspace.Manager) {
-	Register(r, "read", prompts.ToolDescription("read"), map[string]any{"path": Property("string"), "offset": Property("integer"), "limit": Property("integer")}, []string{"path"}, func(a readArgs) error {
+	Register(r, "read", prompts.ToolDescription("read"), map[string]any{"path": Property("string"), "offset": Property("integer"), "limit": IntegerRange(1, 2000)}, []string{"path"}, func(a readArgs) error {
 		if e := Required("path", a.Path); e != nil {
 			return e
 		}
 		if a.Offset != nil && *a.Offset < 1 {
 			return errors.New(prompts.ToolPositiveOffset)
 		}
-		return rangeInt("limit", a.Limit, 1, 2000)
+		return nil
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
 		path := w.Path(a.Path)
 		page, err := readPage(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200), x.BinaryFiles)

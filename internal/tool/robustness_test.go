@@ -143,7 +143,6 @@ func TestRecoverableParameterErrorsIdentifyAdjustment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, test := range []struct{ name, args, guidance string }{
-		{"read", `{"path":"text","limit":0}`, "limit must be 1"},
 		{"edit", `{"path":"text","old_text":"missing","new_text":"new"}`, "read current contents"},
 		{"edit", `{"path":"text","old_text":"same","new_text":"new"}`, "replace_all=true"},
 	} {

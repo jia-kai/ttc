@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -54,10 +55,13 @@ type Record struct {
 // Encode serializes the historical record at version one.
 func (r Record) Encode() (int, []byte, error) { b, e := json.Marshal(r); return 1, b, e }
 
-// Call is a validated serializable input with no live resources.
+// Call is a decoded serializable input with no live resources. It may be run only
+// after DecodeCall succeeds; a validation failure can still return warning metadata.
 type Call interface {
 	Encode() (int, []byte, error)
 	Run(context.Context, Execution) (any, error)
+	// InputWarnings reports adjustments made while decoding, including on validation failure.
+	InputWarnings() []InputWarning
 }
 
 // Tool owns strict codecs and its stable definition.
@@ -88,13 +92,45 @@ func Strict(data []byte, v any) error {
 }
 
 type typed[A any] struct {
-	def      llm.ToolDefinition
-	validate func(A) error
-	run      func(context.Context, Execution, A) (any, error)
+	def       llm.ToolDefinition
+	validate  func(A) error
+	run       func(context.Context, Execution, A) (any, error)
+	normalize func(*A) []InputWarning
+	bounds    []integerBound
 }
 type typedCall[A any] struct {
-	args A
-	run  func(context.Context, Execution, A) (any, error)
+	args     A
+	run      func(context.Context, Execution, A) (any, error)
+	warnings []InputWarning
+}
+
+// InputWarning describes a decoded argument clipped to inclusive bounds.
+type InputWarning struct {
+	Code      string `json:"code"`
+	Parameter string `json:"parameter"`
+	Requested int    `json:"requested"`
+	Effective int    `json:"effective"`
+	Minimum   int    `json:"minimum"`
+	Maximum   int    `json:"maximum"`
+	Message   string `json:"message"`
+}
+
+func (c typedCall[A]) InputWarnings() []InputWarning { return c.warnings }
+
+// ClipInteger clips value to the inclusive bounds and reports any change.
+// The caller must provide a non-nil value and minimum <= maximum.
+// An unchanged value produces no warning.
+func ClipInteger(parameter string, value *int, minimum, maximum int) []InputWarning {
+	requested := *value
+	*value = max(minimum, min(maximum, requested))
+	if requested == *value {
+		return nil
+	}
+	return []InputWarning{{
+		Code: "input_clipped", Parameter: parameter, Requested: requested,
+		Effective: *value, Minimum: minimum, Maximum: maximum,
+		Message: fmt.Sprintf(prompts.ToolInputClipped, parameter, requested, *value, minimum, maximum),
+	}}
 }
 
 func (c typedCall[A]) Encode() (int, []byte, error) { b, e := json.Marshal(c.args); return 1, b, e }
@@ -110,11 +146,87 @@ func (t typed[A]) DecodeCall(version int, b []byte) (Call, error) {
 	if e := Strict(b, &a); e != nil {
 		return nil, e
 	}
-	if e := t.validate(a); e != nil {
-		return nil, e
+	var warnings []InputWarning
+	if len(t.bounds) > 0 {
+		value := reflect.ValueOf(&a).Elem()
+		for _, bound := range t.bounds {
+			field := value.FieldByIndex(bound.index)
+			if field.IsNil() {
+				continue
+			}
+			field = field.Elem()
+			effective := int(field.Int())
+			warnings = append(warnings, ClipInteger(bound.name, &effective, bound.minimum, bound.maximum)...)
+			field.SetInt(int64(effective))
+		}
 	}
-	return typedCall[A]{a, t.run}, nil
+	if t.normalize != nil {
+		warnings = append(warnings, t.normalize(&a)...)
+	}
+	call := typedCall[A]{args: a, run: t.run, warnings: warnings}
+	if e := t.validate(a); e != nil {
+		return call, e
+	}
+	return call, nil
 }
+
+type integerBound struct {
+	name             string
+	minimum, maximum int
+	index            []int
+}
+
+// integerBounds compiles schema bounds to top-level *int fields once.
+// Unsupported bounded fields are registration errors, not input errors.
+func integerBounds[A any](schema []byte) []integerBound {
+	var definition struct {
+		Properties map[string]struct {
+			Type    string `json:"type"`
+			Minimum *int   `json:"minimum"`
+			Maximum *int   `json:"maximum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &definition); err != nil {
+		panic(fmt.Sprintf("invalid tool schema: %v", err))
+	}
+	var bounds []integerBound
+	for name, property := range definition.Properties {
+		if property.Type == "integer" && property.Minimum != nil && property.Maximum != nil {
+			if *property.Minimum > *property.Maximum {
+				panic("invalid integer bounds for " + name)
+			}
+			argsType := reflect.TypeFor[A]()
+			if argsType.Kind() != reflect.Struct {
+				panic("integer bounds require struct arguments")
+			}
+			var index []int
+			for i := 0; i < argsType.NumField(); i++ {
+				field := argsType.Field(i)
+				jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+				if jsonName == "-" {
+					continue
+				}
+				if jsonName == "" {
+					jsonName = field.Name
+				}
+				if jsonName != name {
+					continue
+				}
+				if index != nil || !field.IsExported() || field.Anonymous || field.Type != reflect.TypeFor[*int]() {
+					panic("unsupported integer bound field " + name)
+				}
+				index = field.Index
+			}
+			if index == nil {
+				panic("missing top-level integer bound field " + name)
+			}
+			bounds = append(bounds, integerBound{name: name, minimum: *property.Minimum, maximum: *property.Maximum, index: index})
+		}
+	}
+	sort.Slice(bounds, func(i, j int) bool { return bounds[i].name < bounds[j].name })
+	return bounds
+}
+
 func (t typed[A]) DecodeRecord(version int, b []byte) (Record, error) {
 	var r Record
 	if version != 1 {
@@ -138,10 +250,19 @@ type Registry struct {
 // NewRegistry constructs an empty registry.
 func NewRegistry() *Registry { return &Registry{tools: map[string]Tool{}} }
 
-// Register adds a typed tool; duplicate names are programmer errors.
-func Register[A any](r *Registry, name, description string, properties map[string]any, required []string, validate func(A) error, run func(context.Context, Execution, A) (any, error)) {
+// Register adds a typed tool; duplicate names are programmer errors. Optional
+// normalizer runs after schema clipping and before the single validation pass.
+// More than one normalizer or an unsupported bounded field is a programmer error.
+func Register[A any](r *Registry, name, description string, properties map[string]any, required []string, validate func(A) error, run func(context.Context, Execution, A) (any, error), normalize ...func(*A) []InputWarning) {
 	if _, ok := r.tools[name]; ok {
 		panic("duplicate tool " + name)
+	}
+	if len(normalize) > 1 {
+		panic("multiple tool input normalizers")
+	}
+	var normalizer func(*A) []InputWarning
+	if len(normalize) == 1 {
+		normalizer = normalize[0]
 	}
 	if properties == nil {
 		properties = map[string]any{}
@@ -149,8 +270,11 @@ func Register[A any](r *Registry, name, description string, properties map[strin
 	if required == nil {
 		required = []string{}
 	}
-	schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
-	r.tools[name] = typed[A]{llm.ToolDefinition{Name: name, Description: description, Parameters: schema}, validate, run}
+	schema, err := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
+	if err != nil {
+		panic(fmt.Sprintf("invalid tool schema: %v", err))
+	}
+	r.tools[name] = typed[A]{def: llm.ToolDefinition{Name: name, Description: description, Parameters: schema}, validate: validate, run: run, normalize: normalizer, bounds: integerBounds[A](schema)}
 }
 
 // Property constructs a JSON Schema property, with optional enum values.
@@ -160,6 +284,14 @@ func Property(kind string, enum ...string) map[string]any {
 		p["enum"] = enum
 	}
 	return p
+}
+
+// IntegerRange constructs an integer JSON Schema property with inclusive bounds.
+// Decoded integer fields outside these bounds are clipped before validation.
+// The corresponding argument field must be a top-level *int so omitted and null
+// inputs remain unset rather than being clipped from a scalar zero value.
+func IntegerRange(min, max int) map[string]any {
+	return map[string]any{"type": "integer", "minimum": min, "maximum": max}
 }
 
 // Definitions returns sorted, stable schemas for cache reuse.
@@ -196,12 +328,16 @@ func (r *Registry) Filter(allow func(string) bool) *Registry {
 func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args json.RawMessage) Record {
 	var value any
 	var err error
+	var warnings []InputWarning
 	t, ok := r.tools[name]
 	if !ok {
 		err = Fail("unknown_tool", fmt.Sprintf(prompts.ToolUnknown, name))
 	} else {
 		var call Call
 		call, err = t.DecodeCall(1, args)
+		if call != nil {
+			warnings = call.InputWarnings()
+		}
 		if err != nil {
 			err = Fail("invalid_input", err.Error())
 		} else {
@@ -246,9 +382,18 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 			files = nil
 		}
 	}
-	b, e := json.Marshal(result)
+	marshalResult := func(result map[string]any) ([]byte, error) {
+		if len(warnings) > 0 {
+			if result == nil {
+				result = map[string]any{}
+			}
+			result["warnings"] = warnings
+		}
+		return json.Marshal(result)
+	}
+	b, e := marshalResult(result)
 	if e != nil {
-		b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("execution_failed", prompts.ToolResultEncodingFailed)})
+		b, _ = marshalResult(map[string]any{"ok": false, "error": Fail("execution_failed", prompts.ToolResultEncodingFailed)})
 		files = nil
 	}
 	md := render.Tool(name, args, b)
@@ -263,9 +408,9 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 			path, e = r.Detail(x, b)
 		}
 		if path == "" || e != nil {
-			b, _ = json.Marshal(map[string]any{"ok": false, "error": Fail("result_too_large", prompts.ToolResultTooLarge)})
+			b, _ = marshalResult(map[string]any{"ok": false, "error": Fail("result_too_large", prompts.ToolResultTooLarge)})
 		} else {
-			b, _ = json.Marshal(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", prompts.ToolResultRetained)})
+			b, _ = marshalResult(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", prompts.ToolResultRetained)})
 		}
 		md.Summary = render.Inline(name + prompts.ToolSummaryResultTooLarge)
 	}

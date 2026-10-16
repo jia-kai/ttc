@@ -77,6 +77,11 @@ func TestWebFetchRetainedPagingAndSearch(t *testing.T) {
 	if second["content"] != "γ\n" || downloads != 1 {
 		t.Fatal(second, downloads)
 	}
+	args, _ = json.Marshal(map[string]any{"document_id": id, "max_chars": 0})
+	clipped := call(string(args))
+	if clipped["content"] != "α" || len(clipped["warnings"].([]any)) != 1 || downloads != 1 {
+		t.Fatal(clipped, downloads)
+	}
 	args, _ = json.Marshal(map[string]any{"document_id": id, "pattern": "^match", "max_chars": 12})
 	matched := call(string(args))
 	if len(matched["matches"].([]any)) != 1 || matched["next_offset"] != float64(1) {
@@ -87,7 +92,7 @@ func TestWebFetchRetainedPagingAndSearch(t *testing.T) {
 	if !strings.Contains(next["matches"].([]any)[0].(map[string]any)["content"].(string), "second") {
 		t.Fatal(next)
 	}
-	for _, args := range []string{`{}`, `{"url":"file:///tmp/a"}`, `{"url":"https://u:p@example.test"}`, `{"document_id":"missing"}`, `{"url":"https://example.test","pattern":"["}`, `{"url":"https://example.test","max_chars":0}`} {
+	for _, args := range []string{`{}`, `{"url":"file:///tmp/a"}`, `{"url":"https://u:p@example.test"}`, `{"document_id":"missing"}`, `{"url":"https://example.test","pattern":"["}`} {
 		record := invoke(t, r, w, x, request, "web_fetch", args)
 		var v struct{ OK bool }
 		json.Unmarshal(record.Result, &v)

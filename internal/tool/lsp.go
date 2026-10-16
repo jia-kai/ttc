@@ -64,10 +64,7 @@ func validateLSP(a lspArgs) error {
 	if a.Offset != nil && *a.Offset < 0 {
 		return errors.New(prompts.ToolNonnegativeOffset)
 	}
-	if err := rangeInt("limit", a.Limit, 1, 500); err != nil {
-		return err
-	}
-	return rangeInt("timeout_ms", a.Timeout, 1, 120000)
+	return nil
 }
 
 func jobToolError(err error) error {
@@ -83,7 +80,7 @@ func jobToolError(err error) error {
 
 func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 	Register(r, "lsp_query", prompts.ToolDescription("lsp_query"), map[string]any{
-		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": Property("integer"), "limit": Property("integer"), "timeout_ms": Property("integer"),
+		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": Property("integer"), "limit": IntegerRange(1, 500), "timeout_ms": IntegerRange(1, 120000),
 	}, []string{"job_id", "operation"}, validateLSP, func(ctx context.Context, x Execution, a lspArgs) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30000))*time.Millisecond)
 		defer cancel()

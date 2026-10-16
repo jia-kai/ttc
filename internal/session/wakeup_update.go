@@ -49,10 +49,10 @@ func validateWakeupUpdate(a wakeupUpdate) error {
 			return fmt.Errorf(prompts.WakeupInvalidTimestamp, err)
 		}
 	}
-	if a.Delay != nil && (*a.Delay < 0 || *a.Delay > 31536000) {
+	if a.Delay != nil && (*a.Delay < 0 || *a.Delay > maxWakeupSeconds) {
 		return errors.New(prompts.WakeupDelayRange)
 	}
-	if a.Repeat != nil && (*a.Repeat < 0 || *a.Repeat > 31536000) {
+	if a.Repeat != nil && (*a.Repeat < 0 || *a.Repeat > maxWakeupSeconds) {
 		return errors.New(prompts.WakeupUpdateRepeat)
 	}
 	return nil
@@ -106,7 +106,7 @@ func (w *wakeups) update(a wakeupUpdate, actor string) (wakeup, error) {
 func (r *Runtime) addWakeupUpdateTool() {
 	tool.Register(r.Tools, "wakeup_update", prompts.ToolDescription("wakeup_update"), map[string]any{
 		"wakeup_id": tool.Property("string"), "name": tool.Property("string"), "message": tool.Property("string"),
-		"at": tool.Property("string"), "delay_seconds": tool.Property("integer"), "repeat_seconds": tool.Property("integer"),
+		"at": tool.Property("string"), "delay_seconds": tool.IntegerRange(0, maxWakeupSeconds), "repeat_seconds": tool.IntegerRange(0, maxWakeupSeconds),
 	}, nil, validateWakeupUpdate, func(ctx context.Context, x tool.Execution, a wakeupUpdate) (any, error) {
 		v, err := r.timers.update(a, x.Actor)
 		if err != nil {

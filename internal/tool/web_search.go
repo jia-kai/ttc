@@ -52,14 +52,11 @@ func (c WebSearchConfig) Validate() error {
 // addWebSearch calls Exa's headless MCP endpoint with operator-owned settings.
 // No general MCP connection/session layer or implicit backend fallback is needed.
 func addWebSearch(r *Registry, client *http.Client, cache *webCache, config WebSearchConfig) {
-	Register(r, "web_search", prompts.ToolDescription("web_search"), map[string]any{"query": Property("string"), "num_results": Property("integer"), "max_chars": Property("integer")}, []string{"query"}, func(a webSearchArgs) error {
+	Register(r, "web_search", prompts.ToolDescription("web_search"), map[string]any{"query": Property("string"), "num_results": IntegerRange(1, 10), "max_chars": IntegerRange(1, 64000)}, []string{"query"}, func(a webSearchArgs) error {
 		if strings.TrimSpace(a.Query) == "" || len(a.Query) > 4096 {
 			return errors.New(prompts.ToolSearchQueryRange)
 		}
-		if err := rangeInt("num_results", a.NumResults, 1, 10); err != nil {
-			return err
-		}
-		return rangeInt("max_chars", a.Max, 1, 64000)
+		return nil
 	}, func(ctx context.Context, x Execution, a webSearchArgs) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()

@@ -18,15 +18,15 @@ func TestShellOutputArgumentsAndSelection(t *testing.T) {
 	shell, _ := r.Get("shell")
 	for _, args := range []string{
 		`{"command":"true","output_mode":"all"}`,
-		`{"command":"true","output_bytes":0}`,
-		`{"command":"true","output_bytes":-1}`,
-		`{"command":"true","output_bytes":8193}`,
 	} {
 		if _, err := shell.DecodeCall(1, []byte(args)); err == nil {
 			t.Fatal("accepted", args)
 		}
 	}
 	for _, args := range []string{
+		`{"command":"true","output_bytes":0}`,
+		`{"command":"true","output_bytes":-1}`,
+		`{"command":"true","output_bytes":8193}`,
 		`{"command":"true","output_mode":"head"}`,
 		`{"command":"true","output_mode":"tail","output_bytes":1}`,
 		`{"command":"true","output_mode":"head_tail","output_bytes":8192}`,

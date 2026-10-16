@@ -32,6 +32,7 @@ ToolHTMLStructureLimit: "HTML structure exceeds conversion limit"
 ToolHTMLTableLimit:
   "converted table exceeds 4 MiB; retry with format=text or a narrower URL"
 ToolInputTooLarge: "input exceeds 16 MiB"
+ToolInputClipped: "%s was clipped from %d to %d (accepted range %d-%d)."
 ToolIntegerRange: "%s must be %d–%d"
 ToolJobListState: "state must be running or all; omit it to list running jobs"
 ToolJobStopIdentifier: "supply exactly one of job_id or child_id"
@@ -128,12 +129,8 @@ ToolSearchResponseTooLarge:
   "search response exceeds 2 MiB; retry with fewer num_results or a more
   specific query"
 ToolSearchStreamNoResult: "search stream contains no matching result"
-ToolShellForegroundTimeout:
-  "foreground timeout_ms must be 1–86400000; use background=true for commands
-  without a timeout"
 ToolShellProtocol:
   "protocol must be lsp for a language server; omit it for an ordinary command"
-ToolShellTimeoutRange: "timeout_ms must be 0–86400000"
 ToolSkillUnavailable:
   "%s; use an exact catalog name from runtime context; if its source is
   unreadable, report that limitation"
