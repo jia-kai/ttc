@@ -470,13 +470,18 @@ Input: `{path, format?, scope?}`.
 - `job_read` pages captured stdout/stderr; `job_list` shows the watcher and
   `job_stop` cancels observation. Session changes and TTC exit also stop only
   observation, never signal the external wrapper/workload. A new runtime can
-  watch the same saved run, including one already completed.
+  watch the same saved run, including one already completed. Observers are
+  independent and never modify the shared records.
 - An observed command exit is `completed`, including nonzero exits and signal
   termination, unless cancellation or supervision failure determines the status.
   Stopping observation returns `cancelled`; wrapper/logging/observation failures
   return `failed`. Wrapper disappearance without a matching completion record
   reports an unknown outcome, never success. Boot ID, PID and process start
   ticks identify the wrapper and avoid PID reuse.
+- Observation uses Linux inotify and pidfd notifications with a 10-second backup
+  poll. Unavailable or restricted APIs fall back to polling; remote filesystem
+  changes may not generate events. Notifications trigger a rescan of durable
+  records, not a separate source of completion status.
 - Wrapper artifacts are durable externally owned files, not TTC process adoption
   or a durable scheduler. Logs are unbounded on disk; watcher capture uses the
   ordinary bounded job rings. See

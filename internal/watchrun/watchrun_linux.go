@@ -322,6 +322,10 @@ func (r contextReader) Read(p []byte) (int, error) {
 // Missing, stale, or zombie wrappers without completion have unknown outcomes,
 // never success.
 func Observe(ctx context.Context, dir string, id Identity, stdout, stderr io.Writer) (Completion, error) {
+	return observe(ctx, dir, id, stdout, stderr, observationBackup, true)
+}
+
+func observe(ctx context.Context, dir string, id Identity, stdout, stderr io.Writer, backup time.Duration, events bool) (Completion, error) {
 	files := []string{"stdout", "stderr"}
 	writers := []io.Writer{stdout, stderr}
 	offsets := []int64{0, 0}
@@ -409,8 +413,10 @@ func Observe(ctx context.Context, dir string, id Identity, stdout, stderr io.Wri
 		return Completion{}, err
 	}
 	bootID := strings.TrimSpace(string(boot))
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	// Arm both event sources before the initial scan. Publication or output
+	// between that scan and wait remains queued, closing the lost-wakeup race.
+	waiter := newEventWaiter(ctx, dir, id, bootID, backup, events)
+	defer waiter.close()
 	for {
 		if err := ctx.Err(); err != nil {
 			return Completion{}, err
@@ -450,10 +456,8 @@ func Observe(ctx context.Context, dir string, id Identity, stdout, stderr io.Wri
 		if !caughtUp {
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return c, ctx.Err()
-		case <-ticker.C:
+		if err := waiter.wait(ctx); err != nil {
+			return c, err
 		}
 	}
 }
