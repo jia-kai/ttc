@@ -72,7 +72,6 @@ type Runtime struct {
 	publishedJobs     map[string]jobs.Snapshot
 	publishedTimers   map[string]wakeup
 	publishedChildren map[string]tool.ChildView
-	retentionStop     func()
 	activityStop      func()
 	children          map[string]*codingChild // Owned by childStartMu; live handles never restored.
 	childStartMu      sync.Mutex              // Serializes child capacity checks and admission, never child execution.
@@ -110,6 +109,10 @@ func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Infe
 	persisted := session != ""
 	var notices []llm.Message
 	if persisted {
+		if err := store.RefreshLoadedActivity(ctx, time.Now(), session); err != nil {
+			cancel()
+			return nil, err
+		}
 		pending, err := store.PendingRecoveryNotifications(ctx, session)
 		if err == nil {
 			notices, err = recoveredNotificationMessages(pending)
@@ -125,7 +128,6 @@ func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Infe
 	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: session, persisted: persisted, AutoName: true}
 	r.resetTransient()
 	r.notifications = notices
-	r.retentionStop = r.startRetention()
 	r.activityStop = r.startActivityRefresh()
 	return r, nil
 }
@@ -249,10 +251,6 @@ func (r *Runtime) Interrupt() {
 // Close stops the runtime and joins background naming, process groups and timers.
 // Call it after Run and Command return; Interrupt cancels active foreground work.
 func (r *Runtime) Close() {
-	if r.retentionStop != nil {
-		r.retentionStop()
-		r.retentionStop = nil
-	}
 	if r.activityStop != nil {
 		r.activityStop()
 		r.activityStop = nil
@@ -608,10 +606,6 @@ func (r *Runtime) Command(text string) (string, error) {
 	parts := strings.SplitN(text, " ", 2)
 	switch parts[0] {
 	case "/new", "/clear", "/load", "/undo", "/redo", "/branch":
-		if r.retentionStop != nil {
-			r.retentionStop()
-			r.retentionStop = nil
-		}
 		defer func() { r.refreshLoadedActivity(r.ctx, time.Now()) }()
 	}
 	switch parts[0] {

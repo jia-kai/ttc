@@ -33,7 +33,7 @@ func TestMaintainThresholdBoundaries(t *testing.T) {
 			now := time.Now()
 			ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 			size := physicalHistoryBytes(t, s)
-			result, err := s.maintain(context.Background(), now, "", size+delta)
+			result, err := s.maintain(context.Background(), now, "", size+delta, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,9 +57,10 @@ func TestMaintainBelowProductionThresholdRefreshesLoadedFamily(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
 	now := time.Now()
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	result, err := s.Maintain(context.Background(), now, v.ID)
-	if err != nil || result.RemovedLineages != 0 || result.Stats.Bytes >= historyMaintenanceThreshold {
-		t.Fatal(result, err)
+	reports := 0
+	result, err := s.Maintain(context.Background(), now, v.ID, func(MaintenanceProgress) { reports++ })
+	if err != nil || result.RemovedLineages != 0 || result.Stats.Bytes >= historyMaintenanceThreshold || reports != 0 {
+		t.Fatal(result, err, "progress reports", reports)
 	}
 	saved, err := s.Session(v.ID)
 	if err != nil || saved.LastActivityMS != now.UnixMilli() {
@@ -70,7 +71,7 @@ func TestMaintainBelowProductionThresholdRefreshesLoadedFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if removed, err := other.maintain(context.Background(), now, "", 1); err != nil || removed.RemovedLineages != 0 {
+	if removed, err := other.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("another instance deleted the loaded family", removed, err)
 	}
 }
@@ -116,12 +117,15 @@ func TestMaintainPurgesOnlyOldUnprotectedWholeFamilies(t *testing.T) {
 	}
 	recentNext := retainedContinuation(t, s, recent)
 	now := time.Now()
+	cutoff := now.Add(-lineageRetention)
 	for _, v := range []Session{old, protected, recent} {
-		ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
+		ageLineage(t, s, v.LineageID, cutoff.Add(-time.Millisecond))
 	}
-	// One recent descendant protects the whole recent family.
-	if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", now.Add(-29*24*time.Hour).UnixMilli(), recentNext.ID); err != nil {
-		t.Fatal(err)
+	// Exact cutoff expires; one millisecond newer protects the whole family.
+	for id, activity := range map[string]time.Time{oldNext.ID: cutoff, recentNext.ID: cutoff.Add(time.Millisecond)} {
+		if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", activity.UnixMilli(), id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, name := range []string{"user-export.md", "openai-auth.json"} {
 		if err := os.WriteFile(filepath.Join(s.Root, name), []byte("keep bytes"), 0600); err != nil {
@@ -133,7 +137,7 @@ func TestMaintainPurgesOnlyOldUnprotectedWholeFamilies(t *testing.T) {
 	if err := s.db.QueryRow(survivingEntries, protected.ID, protectedNext.ID, recent.ID, recentNext.ID).Scan(&beforeEntries); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.maintain(context.Background(), now, protected.ID, 1)
+	result, err := s.maintain(context.Background(), now, protected.ID, 1, nil)
 	if err != nil || result.RemovedLineages != 1 || result.Stats.Bytes <= 1 {
 		t.Fatal("purge must stop even while still over threshold", result, err)
 	}
@@ -171,7 +175,7 @@ func TestMaintainNoEligibleOrFreePagesDoesNotVacuum(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA freelist_count").Scan(&freePages); err != nil || freePages != 0 {
 		t.Fatal("active fixture unexpectedly has free pages", freePages, err)
 	}
-	result, err := s.maintain(context.Background(), time.Now(), "", 1)
+	result, err := s.maintain(context.Background(), time.Now(), "", 1, nil)
 	if err != nil || result.RemovedLineages != 0 || result.Stats.Bytes <= 1 {
 		t.Fatal(result, err)
 	}
@@ -198,7 +202,7 @@ func TestMaintainReclaimsDiskAndPreservesIdentityHighWater(t *testing.T) {
 	now := time.Now()
 	ageLineage(t, s, old.LineageID, now.Add(-31*24*time.Hour))
 	before := physicalHistoryBytes(t, s)
-	result, err := s.maintain(context.Background(), now, keep.ID, 1)
+	result, err := s.maintain(context.Background(), now, keep.ID, 1, nil)
 	if err != nil || result.RemovedLineages != 1 || result.Stats.Bytes >= before/2 {
 		t.Fatal("disk was not reclaimed", before, result, err)
 	}
@@ -226,9 +230,17 @@ func TestMaintainSQLFailureRollsBackAllFamiliesAndIndexes(t *testing.T) {
 	if err := s.db.QueryRow("SELECT count(*) FROM entries").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.maintain(context.Background(), now, "", 1)
-	if err == nil || !strings.Contains(err.Error(), "maintenance failure") || result.RemovedLineages != 0 {
-		t.Fatal(result, err)
+	attempted := false
+	result, err := s.maintain(context.Background(), now, "", 1, func(p MaintenanceProgress) {
+		if p.Phase == "candidates" && p.Completed == 1 {
+			attempted = true
+		}
+		if p.Phase != "discovery" && p.Phase != "indexes" && p.Phase != "candidates" {
+			t.Errorf("failed sweep advanced beyond candidate processing: %+v", p)
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "maintenance failure") || result.RemovedLineages != 0 || !attempted {
+		t.Fatal(result, err, "attempted earlier deletion", attempted)
 	}
 	for _, v := range []Session{first, second} {
 		if _, err := s.Session(v.ID); err != nil {
@@ -249,14 +261,14 @@ func TestMaintainCancellation(t *testing.T) {
 	ageLineage(t, s, v.LineageID, old)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.maintain(ctx, now, v.ID, 1); !errors.Is(err, context.Canceled) {
+	if _, err := s.maintain(ctx, now, v.ID, 1, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	saved, err := s.Session(v.ID)
 	if err != nil || saved.LastActivityMS != old.UnixMilli() {
 		t.Fatal("cancelled maintenance changed history", saved.LastActivityMS, err)
 	}
-	if err := s.reclaimHistory(ctx, true); !errors.Is(err, context.Canceled) {
+	if err := s.reclaimHistory(ctx, true, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal("reclamation ignored cancellation", err)
 	}
 }
@@ -286,7 +298,7 @@ func TestMaintainRetriesReclamationAfterBusyCheckpoint(t *testing.T) {
 	if !rows.Next() {
 		t.Fatal("fixture has no read snapshot")
 	}
-	result, err := s.maintain(context.Background(), now, "", 1)
+	result, err := s.maintain(context.Background(), now, "", 1, nil)
 	if err == nil || !strings.Contains(err.Error(), "database busy") || result.RemovedLineages != 1 {
 		t.Fatal("expected committed purge followed by busy checkpoint", result, err)
 	}
@@ -294,7 +306,7 @@ func TestMaintainRetriesReclamationAfterBusyCheckpoint(t *testing.T) {
 	rows.Close()
 	// No eligible SQL rows remain, but free pages still identify the unfinished
 	// reclamation. The next invocation must retry rather than leave a bloated DB.
-	result, err = s.maintain(context.Background(), now, "", 1)
+	result, err = s.maintain(context.Background(), now, "", 1, nil)
 	if err != nil || result.RemovedLineages != 0 || result.Stats.Bytes >= afterFailure/2 || result.Stats.Entries != 0 {
 		t.Fatal("reclamation was not retried after reader release", afterFailure, result, err)
 	}
@@ -328,12 +340,12 @@ func TestMaintainRetriesWALOnlyCheckpointWithoutVacuum(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA freelist_count").Scan(&freePages); err != nil || freePages != 0 {
 		t.Fatal("fixture must have WAL residue but no free pages", freePages, err)
 	}
-	result, err := s.maintain(context.Background(), time.Now(), "", 1)
+	result, err := s.maintain(context.Background(), time.Now(), "", 1, nil)
 	if err == nil || !strings.Contains(err.Error(), "database busy") || result.RemovedLineages != 0 {
 		t.Fatal("expected busy checkpoint without deletion", result, err)
 	}
 	rows.Close()
-	result, err = s.maintain(context.Background(), time.Now(), "", 1)
+	result, err = s.maintain(context.Background(), time.Now(), "", 1, nil)
 	if err != nil || result.RemovedLineages != 0 || result.Stats.Entries == 0 {
 		t.Fatal("WAL-only retry failed", result, err)
 	}
@@ -420,7 +432,7 @@ func TestMaintainContinuesAssetsAndReclaimsAfterAssetFailure(t *testing.T) {
 		ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	}
 	before := physicalHistoryBytes(t, s)
-	result, err := s.maintain(context.Background(), now, "", 1)
+	result, err := s.maintain(context.Background(), now, "", 1, nil)
 	if err == nil || !strings.Contains(err.Error(), "mode 0700") || result.RemovedLineages != 2 {
 		t.Fatal("asset failure or committed deletion count lost", result, err)
 	}

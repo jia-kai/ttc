@@ -13,18 +13,24 @@ const MaxPromptHistoryEntries = 1000
 // MaxPromptHistoryBytes bounds retained authored prompt text in UTF-8 bytes.
 const MaxPromptHistoryBytes = 8 << 20
 
-// PromptHistory returns recent authored main-agent prompts from all sessions,
-// oldest first. It excludes runtime messages, attachment snapshots and copied
-// compaction entries. The newest 1,000 entries are read with an 8 MiB text budget;
-// prompts are never truncated. Commands are not persisted conversation messages.
-func (s *Store) PromptHistory(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT substr(coalesce(json_extract(e.content_json,'$.user_text'),
+// Keep the entry predicates aligned with the entry_prompt_recall partial index.
+// Turns are checked only after seeking indexed authored-prompt candidates.
+const promptHistoryQuery = `SELECT substr(coalesce(json_extract(e.content_json,'$.user_text'),
 		json_extract(e.content_json,'$.content'),''),1,?)
 		FROM entries e JOIN turns t ON t.id=e.turn_id
 		WHERE e.kind='message' AND e.role='user' AND e.actor_id='main'
 		AND e.model_visible=1 AND e.source_id IS NULL AND t.trigger IN ('user','steer')
 		AND json_extract(e.content_json,'$.type')='user_input'
-		ORDER BY e.id DESC LIMIT ?`, MaxPromptHistoryBytes+1, MaxPromptHistoryEntries)
+		ORDER BY e.id DESC LIMIT ?`
+
+// PromptHistory returns recent authored main-agent prompts from all sessions,
+// oldest first. It excludes runtime messages, attachment snapshots and copied
+// compaction entries. The newest 1,000 entries are read with an 8 MiB text budget;
+// prompts are never truncated. Commands are not persisted conversation messages.
+// The partial index excludes unrelated entries, but candidate prompts whose turns
+// fail the user/steer trigger check can still require additional index visits.
+func (s *Store) PromptHistory(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, promptHistoryQuery, MaxPromptHistoryBytes+1, MaxPromptHistoryEntries)
 	if err != nil {
 		return nil, fmt.Errorf("read prompt history: %w", err)
 	}

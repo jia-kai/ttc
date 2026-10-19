@@ -12,6 +12,7 @@ import (
 
 func resetSchema7(t *testing.T, db *sql.DB) {
 	t.Helper()
+	resetSchema9(t, db)
 	for _, column := range []string{"archive_path", "archive_sha256", "archive_exact_sha256"} {
 		exec(t, db, "ALTER TABLE compactions ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''")
 	}
@@ -136,7 +137,7 @@ func TestSchema7CompletionFormsAndEvidence(t *testing.T) {
 	if got := scalar(t, reopened, "SELECT json_group_array(json_array(id,content_json)) FROM entries"); got != before {
 		t.Fatal("reopen changed entries")
 	}
-	if got := scalar(t, reopened, "PRAGMA user_version"); got != "9" {
+	if got := scalar(t, reopened, "PRAGMA user_version"); got != "10" {
 		t.Fatal(got)
 	}
 }
@@ -298,7 +299,13 @@ func TestSchema7ProgressAndBoundedBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkProgress(t, events, 7)
-	if len(events) != 6 || events[0].Phase != "convert_child_completions" || events[0].Total != count+1 || events[1].Completed != messageTypeBatchSize || events[2].Completed != 2*messageTypeBatchSize {
+	var completionEvents []Progress
+	for _, event := range events {
+		if event.FromVersion == 7 {
+			completionEvents = append(completionEvents, event)
+		}
+	}
+	if len(completionEvents) != 4 || completionEvents[0].Phase != "convert_child_completions" || completionEvents[0].Total != count+1 || completionEvents[1].Completed != messageTypeBatchSize || completionEvents[2].Completed != 2*messageTypeBatchSize {
 		t.Fatalf("incorrect completion progress: %+v", events)
 	}
 	if got := scalarTx(t, tx, "SELECT count(*) FROM entries WHERE json_extract(content_json,'$.outcome')='completed'"); got != fmt.Sprint(count) {

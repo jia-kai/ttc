@@ -7,8 +7,11 @@ package migrate
 // ToVersion is always FromVersion+1. Current schemas produce the phases
 // read_entries, validate_retention, rewrite_retention, update_cursors,
 // convert_messages, rebuild_entries, convert_child_completions,
-// remove_archive_metadata, and complete;
-// phases can be skipped when there is no corresponding work.
+// remove_archive_metadata, index_entry_created, index_prompt_recall,
+// index_workspace_sessions, remove_global_session_index, update_schema_version,
+// and complete. Index phases report completed SQL operations, not row counts or
+// elapsed-time estimates; duration within each operation is unknown.
+// Phases can be skipped when there is no corresponding work.
 type Progress struct {
 	FromVersion int
 	ToVersion   int

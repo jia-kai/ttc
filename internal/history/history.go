@@ -323,6 +323,8 @@ func (s *Store) Session(id string) (Session, error) {
 	return v, e
 }
 
+const sessionListQuery = "SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100"
+
 // Sessions returns up to 100 sessions belonging to the absolute workspace path, newest activity
 // first, without scanning transcripts. Filtering before the limit keeps other
 // workspaces from hiding sessions.
@@ -330,7 +332,7 @@ func (s *Store) Sessions(path string) ([]Session, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("session listing requires an absolute workspace path")
 	}
-	rows, err := s.db.Query("SELECT s.id,s.workspace_id,s.lineage_id,s.name,s.read_only,coalesce(s.active_entry_id,0),coalesce(s.file_tip_id,0),coalesce(s.redo_entry_id,0),coalesce(s.undo_floor_id,0),s.model_json,s.last_activity_ms,coalesce(json_extract(s.metadata_json,'$.compaction_error'),'') FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.path=? ORDER BY s.last_activity_ms DESC,s.id LIMIT 100", path)
+	rows, err := s.db.Query(sessionListQuery, path)
 	if err != nil {
 		return nil, err
 	}

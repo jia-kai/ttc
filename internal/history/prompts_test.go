@@ -98,3 +98,30 @@ func TestPromptHistoryNewestCountAndByteBudget(t *testing.T) {
 		t.Fatal("byte budget truncated or retained excess text", len(got), err)
 	}
 }
+
+func TestPromptHistorySparseEligibleTurns(t *testing.T) {
+	s, v, turn, _ := historyFixture(t)
+	if err := s.FinishTurn(turn, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	async, err := s.BeginTurn(v.ID, "async", v.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// More than the result limit match the partial index but not the joined
+	// turn filter. Recall must still find the older authored prompt, rather
+	// than incorrectly limiting candidates before validating their turns.
+	for _, turnID := range []any{nil, async} {
+		if _, err := s.db.Exec(`WITH RECURSIVE n(i) AS (
+			SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?
+		) INSERT INTO entries(session_id,turn_id,actor_id,kind,role,model_visible,content_json,created_ms)
+		SELECT ?,?,'main','message','user',1,'{"type":"user_input","content":"excluded"}',0 FROM n`,
+			MaxPromptHistoryEntries+1, v.ID, turnID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.PromptHistory(context.Background())
+	if err != nil || !reflect.DeepEqual(got, []string{"hello"}) {
+		t.Fatalf("sparse turn filtering: got %v, err %v", got, err)
+	}
+}

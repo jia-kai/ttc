@@ -72,6 +72,50 @@ func TestStorageStatsEmptyVersusEpoch(t *testing.T) {
 	}
 }
 
+func TestStorageStatsSurvivingIDSpanAndOldestTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		entries [][2]int64 // ID and creation time in Unix milliseconds.
+		remove  []int64
+		span    int64
+		oldest  int64
+	}{
+		{name: "single high ID", entries: [][2]int64{{50, 123}}, span: 1, oldest: 123},
+		{name: "backdated middle ID", entries: [][2]int64{{50, 100}, {51, -123}, {52, 200}}, span: 3, oldest: -123},
+		{name: "interior gap", entries: [][2]int64{{50, 100}, {51, -123}, {52, 200}}, remove: []int64{51}, span: 3, oldest: 100},
+		{name: "deleted endpoints", entries: [][2]int64{{50, -300}, {51, 100}, {52, 200}, {53, -200}}, remove: []int64{50, 53}, span: 2, oldest: 100},
+		{name: "all deleted", entries: [][2]int64{{50, 0}}, remove: []int64{50}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Open(filepath.Join(t.TempDir(), "data"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if _, err := s.db.Exec(`INSERT INTO workspaces(id,path) VALUES('w','/fixture');
+				INSERT INTO sessions(id,workspace_id,lineage_id,name,name_source,model_json,last_activity_ms,metadata_json)
+				VALUES('s','w','s','fixture','default','{}',0,'{}')`); err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range tc.entries {
+				if _, err := s.db.Exec(`INSERT INTO entries(id,session_id,actor_id,kind,model_visible,content_json,created_ms)
+					VALUES(?,'s','main','status',0,'{}',?)`, entry[0], entry[1]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, id := range tc.remove {
+				if _, err := s.db.Exec("DELETE FROM entries WHERE id=?", id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stats, err := s.StorageStats(context.Background())
+			if err != nil || stats.Entries != tc.span || stats.OldestMS != tc.oldest {
+				t.Fatalf("stats=%+v, err=%v; want span=%d oldest=%d", stats, err, tc.span, tc.oldest)
+			}
+		})
+	}
+}
+
 func TestStorageBytesMissingWALAndInvalidFiles(t *testing.T) {
 	s := &Store{Root: t.TempDir()}
 	main := filepath.Join(s.Root, "history.sqlite")

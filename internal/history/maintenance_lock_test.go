@@ -41,7 +41,7 @@ func TestMaintainDefersCompactionUntilOtherStoreCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	result, err := s.maintain(context.Background(), now, "", 1)
+	result, err := s.maintain(context.Background(), now, "", 1, nil)
 	if err == nil || !strings.Contains(err.Error(), "compaction deferred") || result.RemovedLineages != 1 {
 		t.Fatal("expected purge with deferred compaction", result, err)
 	}
@@ -60,7 +60,7 @@ func TestMaintainDefersCompactionUntilOtherStoreCloses(t *testing.T) {
 		t.Fatal("failed conversion blocked an ordinary opener", err)
 	}
 	opener.Close()
-	result, err = s.maintain(context.Background(), now, active.ID, 1)
+	result, err = s.maintain(context.Background(), now, active.ID, 1, nil)
 	if err != nil || result.RemovedLineages != 0 || result.Stats.Bytes >= beforeRetry/2 || result.Stats.Entries == 0 {
 		t.Fatal("deferred compaction did not retry without further eviction", beforeRetry, result, err)
 	}
@@ -113,7 +113,7 @@ func TestCompactionInitLockWaitHonorsContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	s.mu.Lock()
-	err = s.reclaimHistory(ctx, true)
+	err = s.reclaimHistory(ctx, true, nil)
 	s.mu.Unlock()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("compaction ignored initialization-lock wait deadline", err)

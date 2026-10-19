@@ -78,7 +78,7 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if err := s.SaveSelection(v.Model); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := s.maintain(context.Background(), now, other.ID, 1)
+	removed, err := s.maintain(context.Background(), now, other.ID, 1, nil)
 	if err != nil || removed.RemovedLineages != 1 {
 		t.Fatal(removed, err)
 	}
@@ -130,11 +130,11 @@ func TestCleanupProtectsLoadedLineage(t *testing.T) {
 	retainedContinuation(t, s, v)
 	now := time.Now()
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if removed, err := s.maintain(context.Background(), now, v.ID, 1); err != nil || removed.RemovedLineages != 0 {
+	if removed, err := s.maintain(context.Background(), now, v.ID, 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("loaded predecessor did not protect descendants", removed, err)
 	}
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if removed, err := s.maintain(context.Background(), now, "unsaved-session", 1); err != nil || removed.RemovedLineages != 1 {
+	if removed, err := s.maintain(context.Background(), now, "unsaved-session", 1, nil); err != nil || removed.RemovedLineages != 1 {
 		t.Fatal(removed, err)
 	}
 }
@@ -150,7 +150,7 @@ func TestCleanupUsesLatestActivityAcrossContinuations(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE sessions SET last_activity_ms=? WHERE id=?", now.Add(-29*24*time.Hour).UnixMilli(), next.ID); err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := s.maintain(context.Background(), now, "", 1); err != nil || removed.RemovedLineages != 0 {
+	if removed, err := s.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("recent continuation lost its predecessor", removed, err)
 	}
 }
@@ -162,7 +162,7 @@ func TestCleanupSQLRollbackAndRecentActivityProtection(t *testing.T) {
 	if _, err := s.db.Exec("CREATE TRIGGER reject_cleanup BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT,'controlled cleanup failure'); END"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.maintain(context.Background(), now, "", 1); err == nil || !strings.Contains(err.Error(), "controlled cleanup failure") {
+	if _, err := s.maintain(context.Background(), now, "", 1, nil); err == nil || !strings.Contains(err.Error(), "controlled cleanup failure") {
 		t.Fatal("SQL deletion failure hidden", err)
 	}
 	if _, err := s.Session(v.ID); err != nil {
@@ -172,11 +172,11 @@ func TestCleanupSQLRollbackAndRecentActivityProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	ageLineage(t, s, v.LineageID, now)
-	if removed, err := s.maintain(context.Background(), now, "", 1); err != nil || removed.RemovedLineages != 0 {
+	if removed, err := s.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("cleanup deleted recently used history", removed, err)
 	}
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-	if removed, err := s.maintain(context.Background(), now, "", 1); err != nil || removed.RemovedLineages != 1 {
+	if removed, err := s.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 1 {
 		t.Fatal(removed, err)
 	}
 }
@@ -208,7 +208,7 @@ func TestCleanupNeverFollowsManagedSymlinks(t *testing.T) {
 			}
 			now := time.Now()
 			ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
-			removed, err := s.maintain(context.Background(), now, "", 1)
+			removed, err := s.maintain(context.Background(), now, "", 1, nil)
 			if location == "lineages" {
 				if err == nil || removed.RemovedLineages != 0 {
 					t.Fatal("followed managed parent symlink", removed, err)
@@ -227,7 +227,7 @@ func TestCleanupHonorsCancellation(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.maintain(ctx, time.Now(), "", 1); !errors.Is(err, context.Canceled) {
+	if _, err := s.maintain(ctx, time.Now(), "", 1, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := s.Session(v.ID); err != nil {
@@ -241,7 +241,7 @@ func TestCleanupRejectsLineagePathTraversal(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE sessions SET lineage_id='../outside',last_activity_ms=? WHERE id=?", now.Add(-31*24*time.Hour).UnixMilli(), v.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.maintain(context.Background(), now, "", 1); err == nil || !strings.Contains(err.Error(), "invalid retention lineage") {
+	if _, err := s.maintain(context.Background(), now, "", 1, nil); err == nil || !strings.Contains(err.Error(), "invalid retention lineage") {
 		t.Fatal("unsafe lineage path accepted", err)
 	}
 	var count int

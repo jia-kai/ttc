@@ -178,8 +178,8 @@
   When SQLite database plus WAL storage is at least 2 GiB, expire entire
   lineages after 30 inactive days; copies share retention. Sweep once and
   reclaim space without deleting newer history to meet a size target. Show
-  database size, entry count and oldest-entry age in days in the startup
-  conversation pane.
+  database size, estimated entry count and oldest-entry age in days in the
+  startup conversation pane.
 - Delete history, tools, requests, snapshots, attachments and archives together;
   keep predecessor data required by retained continuations. Private managed
   files belong to one lineage, without cross-lineage blobs. Asset deletion is

@@ -18,16 +18,17 @@ import (
 	"ttc/internal/workspace"
 )
 
-func TestStartupHistoryStatsVisibleInTUIWithoutInferenceOrPersistence(t *testing.T) {
+const startupStatus = "Startup status ready"
+
+func TestPrequeuedStartupStatusVisibleInTUIWithoutInferenceOrPersistence(t *testing.T) {
 	p := &helpTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "First answer."}}}, requests: make(chan llm.Request, 8), release: make(chan struct{})}
-	u := newQuestionTestUI(t, p)
-	frame := u.wait(t, "History database:")
-	if !strings.Contains(frame, "0 entries") || !strings.Contains(frame, "oldest n/a") {
-		t.Fatal("history pane omitted storage details", frame)
-	}
+	u := newQuestionTestUIWithSetup(t, p, nil, func(r *session.Runtime) {
+		r.Emit(session.Event{Kind: "status", Text: startupStatus, Generation: r.Generation()})
+	})
+	u.wait(t, startupStatus)
 	select {
 	case <-p.requests:
-		t.Fatal("startup storage status invoked inference")
+		t.Fatal("startup status invoked inference")
 	default:
 	}
 	for _, table := range []string{"sessions", "entries", "model_requests"} {
@@ -42,8 +43,8 @@ func TestStartupHistoryStatsVisibleInTUIWithoutInferenceOrPersistence(t *testing
 	select {
 	case request := <-p.requests:
 		for _, message := range request.Messages {
-			if strings.Contains(message.Content, "History database:") {
-				t.Fatal("startup storage status entered model input")
+			if strings.Contains(message.Content, startupStatus) {
+				t.Fatal("startup status entered model input")
 			}
 		}
 	case <-time.After(3 * time.Second):
@@ -52,7 +53,7 @@ func TestStartupHistoryStatsVisibleInTUIWithoutInferenceOrPersistence(t *testing
 	close(p.release)
 }
 
-func TestStartupHistoryStatsPrequeuedBeforePlainReplay(t *testing.T) {
+func TestPrequeuedStartupStatusVisibleAfterPlainReplay(t *testing.T) {
 	store, err := history.Open(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,15 +81,7 @@ func TestStartupHistoryStatsPrequeuedBeforePlainReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	select {
-	case event := <-events:
-		if !strings.HasPrefix(event.Text, "History database:") {
-			t.Fatal("missing startup stats", event)
-		}
-		events <- event // Exercise an event emitted before initial history replay.
-	case <-time.After(3 * time.Second):
-		t.Fatal("startup stats were not emitted")
-	}
+	events <- session.Event{Kind: "status", Text: startupStatus, Generation: r.Generation()}
 	input, writer := io.Pipe()
 	defer input.Close()
 	defer writer.Close()
@@ -108,14 +101,11 @@ func TestStartupHistoryStatsPrequeuedBeforePlainReplay(t *testing.T) {
 	for {
 		select {
 		case text := <-output:
-			if strings.Contains(text, "History database:") {
-				if !strings.Contains(text, "0 entries · oldest n/a (empty history)") {
-					t.Fatal("plain history output omitted storage details", text)
-				}
+			if strings.Contains(text, startupStatus) {
 				return
 			}
 		case <-deadline:
-			t.Fatal("initial replay lost prequeued startup storage status")
+			t.Fatal("initial replay lost prequeued startup status")
 		}
 	}
 }

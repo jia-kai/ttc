@@ -23,6 +23,20 @@ type MaintenanceResult struct {
 	RemovedLineages int
 }
 
+// MaintenanceProgress describes one sweep phase. Total zero means the amount
+// of work is unknown. Counts describe processed candidates, not committed
+// deletions; activity rechecks can retain candidates and SQL can still roll back.
+type MaintenanceProgress struct {
+	Phase            string
+	Completed, Total int64
+}
+
+func reportMaintenance(report func(MaintenanceProgress), phase string, completed, total int64) {
+	if report != nil {
+		report(MaintenanceProgress{Phase: phase, Completed: completed, Total: total})
+	}
+}
+
 // Maintain refreshes the loaded session's activity and, only when the initial
 // database plus WAL lengths total at least 2 GiB, purges families inactive for
 // thirty days. The protected session's entire family survives. It performs one
@@ -40,8 +54,10 @@ type MaintenanceResult struct {
 // waiting for this Store's mutex is checked once the current operation releases
 // it. On error, RemovedLineages still counts committed deletions; Stats is valid
 // only on success.
-func (s *Store) Maintain(ctx context.Context, now time.Time, protectedSession string) (MaintenanceResult, error) {
-	return s.maintain(ctx, now, protectedSession, historyMaintenanceThreshold)
+// The optional report callback runs synchronously under the Store mutex and
+// must not call Store methods. No cleanup progress is emitted below the threshold.
+func (s *Store) Maintain(ctx context.Context, now time.Time, protectedSession string, report func(MaintenanceProgress)) (MaintenanceResult, error) {
+	return s.maintain(ctx, now, protectedSession, historyMaintenanceThreshold, report)
 }
 
 // RefreshLoadedActivity protects the loaded session's whole family from other
@@ -57,7 +73,7 @@ func (s *Store) RefreshLoadedActivity(ctx context.Context, now time.Time, sessio
 }
 
 // maintain keeps the production threshold fixed while allowing small fixtures.
-func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession string, threshold int64) (MaintenanceResult, error) {
+func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession string, threshold int64, report func(MaintenanceProgress)) (MaintenanceResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var result MaintenanceResult
@@ -66,14 +82,14 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 		return result, fmt.Errorf("measure history before maintenance: %w", err)
 	}
 	if size >= threshold {
-		result.RemovedLineages, err = s.cleanupLocked(ctx, now, protectedSession)
+		result.RemovedLineages, err = s.cleanupLocked(ctx, now, protectedSession, report)
 		if err != nil {
 			err = fmt.Errorf("purge inactive history: %w", err)
 		}
 		if result.RemovedLineages > 0 {
 			// Asset errors cannot undo committed SQL deletion. Still attempt disk
 			// reclamation, and preserve both errors for the caller when it fails.
-			err = errors.Join(err, s.reclaimHistory(ctx, true))
+			err = errors.Join(err, s.reclaimHistory(ctx, true, report))
 		} else if err == nil {
 			var freePages int64
 			if err = s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freePages); err != nil {
@@ -82,7 +98,7 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 				// Deletion may have committed in an earlier invocation whose
 				// reclamation failed. SQLite's own free-page/WAL state is enough
 				// to retry, without a repair journal or another forced eviction.
-				err = s.reclaimHistory(ctx, freePages > 0)
+				err = s.reclaimHistory(ctx, freePages > 0, report)
 			}
 		}
 		if err != nil {
@@ -91,29 +107,37 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 	} else if err := s.refreshLoadedActivity(ctx, now, protectedSession); err != nil {
 		return result, err
 	}
+	if size >= threshold {
+		reportMaintenance(report, "statistics", 0, 0)
+	}
 	result.Stats, err = s.storageStatsLocked(ctx)
 	return result, err
 }
 
-func (s *Store) reclaimHistory(ctx context.Context, compact bool) error {
+func (s *Store) reclaimHistory(ctx context.Context, compact bool, report func(MaintenanceProgress)) error {
 	ctx, cancel := context.WithTimeout(ctx, historyReclaimTimeout)
 	defer cancel()
 	if !compact {
+		reportMaintenance(report, "checkpoint", 0, 0)
 		return s.checkpointHistory(ctx)
 	}
+	reportMaintenance(report, "reclamation", 0, 0)
 	return s.withExclusiveHistoryUse(ctx, func() error {
 		// First release the sweep's potentially large WAL before allocating VACUUM's
 		// compacted copy. Readers in other processes can prevent truncation, so fail
 		// explicitly instead of repeatedly retrying or evicting newer history.
+		reportMaintenance(report, "checkpoint", 0, 0)
 		if err := s.checkpointHistory(ctx); err != nil {
 			return err
 		}
 		// VACUUM preserves explicit INTEGER PRIMARY KEY identities and all logical
 		// rows. In WAL mode its compacted pages must then be checkpointed to shrink
 		// the physical files measured by StorageStats.
+		reportMaintenance(report, "vacuum", 0, 0)
 		if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
 			return fmt.Errorf("compact history after purge: %w", err)
 		}
+		reportMaintenance(report, "checkpoint", 0, 0)
 		return s.checkpointHistory(ctx)
 	})
 }

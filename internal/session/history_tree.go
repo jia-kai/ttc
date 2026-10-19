@@ -19,8 +19,8 @@ func (r *Runtime) History() (history.BranchTree, error) {
 }
 
 // RestoreBranch selects a complete main-tool boundary and restores saved
-// files without reexecuting tools. Command owns foreground exclusion and pauses
-// retention; this method cancels and joins live work before changing the cursor.
+// files without reexecuting tools. Command owns foreground exclusion; this
+// method cancels and joins live work before changing the cursor.
 // Redo can restore the previously selected branch without rerunning tools.
 func (r *Runtime) RestoreBranch(entryID int64) error {
 	r.mu.Lock()

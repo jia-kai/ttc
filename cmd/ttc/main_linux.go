@@ -158,9 +158,9 @@ func runWithModules(modules []providers.Module) error {
 	if _, e = scratch.Verify(); e != nil {
 		return e
 	}
-	progress := newMigrationProgress(os.Stderr)
-	store, e := history.OpenWithProgress(*data, progress.report)
-	progress.finish(e)
+	progress := newStartupProgress(os.Stderr)
+	store, e := history.OpenWithProgress(*data, progress.migration)
+	progress.finish("History migration", e)
 	if e != nil {
 		return e
 	}
@@ -280,6 +280,12 @@ func runWithModules(modules []providers.Module) error {
 			return e
 		}
 	}
+	// Maintenance owns the database before any runtime or frontend interaction.
+	// Its synchronous callbacks write startup stderr, never runtime events.
+	notices, e := maintainHistory(ctx, store, saved.ID, progress)
+	if e != nil {
+		return e
+	}
 	home, e := os.UserHomeDir()
 	if e != nil {
 		return e
@@ -299,6 +305,9 @@ func runWithModules(modules []providers.Module) error {
 		return e
 	}
 	runtime.AutoName = *autoName
+	for _, notice := range notices {
+		events <- session.Event{Kind: "status", Text: notice, Generation: runtime.Generation(), SessionID: runtime.Current()}
+	}
 	defer func() {
 		// Stop UI delivery before joining callbacks after the frontend has exited.
 		cancel()

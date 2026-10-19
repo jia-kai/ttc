@@ -90,9 +90,13 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			// This is exclusively the fixture's temporary database. Stop workers
 			// before changing its version, then release the lifetime migration lock.
 			r.Close()
-			// Reconstruct the schema-7 compaction boundary, not just its version.
-			// Schema 9 removed these columns and added a summary identity index.
+			// Reconstruct the schema-7 index and compaction boundaries, not just
+			// its version, so later migrations build their indexes from scratch.
 			if _, err := historytest.DB(t, r.Store).Exec(`DROP INDEX compaction_summary;
+				DROP INDEX entry_created;
+				DROP INDEX entry_prompt_recall;
+				DROP INDEX session_list_workspace;
+				CREATE INDEX session_list ON sessions(last_activity_ms DESC,id);
 				ALTER TABLE compactions ADD COLUMN archive_path TEXT NOT NULL DEFAULT '';
 				ALTER TABLE compactions ADD COLUMN archive_sha256 TEXT NOT NULL DEFAULT '';
 				ALTER TABLE compactions ADD COLUMN archive_exact_sha256 TEXT NOT NULL DEFAULT '';
@@ -108,7 +112,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			}
 			t.Cleanup(func() { store.Close() })
 			var version int
-			if err := historytest.DB(t, store).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 9 {
+			if err := historytest.DB(t, store).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 10 {
 				t.Fatalf("automatic migration version=%d: %v", version, err)
 			}
 			state := tc.state

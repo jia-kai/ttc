@@ -45,6 +45,9 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	}
 	r.AutoName = false
 	defer r.Close()
+	// Keep a normal startup notice ahead of the turn while exercising
+	// placeholder inspection and keyboard navigation.
+	events <- session.Event{Kind: "status", Text: "Ready for input", Generation: r.Generation()}
 	screen := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -78,7 +81,7 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	wait("/help")
 	screen.SetSize(100, 30)
 	screen.EventQ() <- tcell.NewEventResize(100, 30)
-	wait("History database:")
+	wait("Ready for input")
 	for _, ch := range "hello" {
 		screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(ch), 0)
 	}

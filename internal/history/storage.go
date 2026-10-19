@@ -13,11 +13,13 @@ import (
 // database between collecting file lengths and entry statistics.
 type StorageStats struct {
 	Bytes    int64 // Physical file lengths of history.sqlite and history.sqlite-wal.
-	Entries  int64 // All canonical entry rows, including invisible/status entries.
+	Entries  int64 // Estimated canonical entries: surviving max ID - min ID + 1; zero when empty.
 	OldestMS int64 // Minimum entry created_ms (Unix milliseconds); zero when empty.
 }
 
-// StorageStats returns physical database/WAL lengths and canonical entry counts.
+// StorageStats returns physical database/WAL lengths and estimated canonical entries.
+// The estimate includes invisible/status entries and gaps between surviving IDs,
+// so deletion can make it substantially exceed the actual number of rows.
 // An epoch timestamp and empty history both have OldestMS zero; Entries
 // distinguishes them. This call serializes with writes from this Store only.
 func (s *Store) StorageStats(ctx context.Context) (StorageStats, error) {
@@ -26,13 +28,20 @@ func (s *Store) StorageStats(ctx context.Context) (StorageStats, error) {
 	return s.storageStatsLocked(ctx)
 }
 
+// Separate scalar subqueries allow SQLite's indexed MIN/MAX optimization for
+// each endpoint. One statement keeps the ID span and oldest timestamp in the
+// same read snapshot, even when another process changes history.
+const storageEntryStatsQuery = `SELECT
+	coalesce((SELECT max(id) FROM entries) - (SELECT min(id) FROM entries) + 1, 0),
+	(SELECT min(created_ms) FROM entries)`
+
 func (s *Store) storageStatsLocked(ctx context.Context) (StorageStats, error) {
 	var stats StorageStats
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
 	var oldest sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*),min(created_ms) FROM entries").Scan(&stats.Entries, &oldest); err != nil {
+	if err := s.db.QueryRowContext(ctx, storageEntryStatsQuery).Scan(&stats.Entries, &oldest); err != nil {
 		return stats, fmt.Errorf("read history entry statistics: %w", err)
 	}
 	if oldest.Valid {

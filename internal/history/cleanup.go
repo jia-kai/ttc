@@ -20,7 +20,8 @@ const lineageRetention = 30 * 24 * time.Hour
 // conversation protects its whole family. SQL deletion is atomic and rechecks
 // activity under the write transaction; asset deletion is best effort, without
 // deletion journals or restart repair. The result counts committed deletions.
-func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSession string) (int, error) {
+func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSession string, report func(MaintenanceProgress)) (int, error) {
+	reportMaintenance(report, "discovery", 0, 0)
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -71,27 +72,33 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 		return 0, err
 	}
 	var deletedIDs []string
-	for _, id := range ids {
+	reportMaintenance(report, "candidates", 0, int64(len(ids)))
+	for i, id := range ids {
 		var activity sql.NullInt64
 		if err := tx.QueryRowContext(ctx, "SELECT max(last_activity_ms) FROM sessions WHERE lineage_id=?", id).Scan(&activity); err != nil {
 			return 0, err
 		}
 		if !activity.Valid || activity.Int64 > cutoff {
+			reportMaintenance(report, "candidates", int64(i+1), int64(len(ids)))
 			continue
 		}
 		if len(deletedIDs) == 0 {
+			reportMaintenance(report, "indexes", 0, 0)
 			if err := indexCleanupReferences(ctx, tx); err != nil {
 				return 0, err
 			}
+			reportMaintenance(report, "candidates", int64(i), int64(len(ids)))
 		}
 		if err := deleteLineage(ctx, tx, id); err != nil {
 			return 0, fmt.Errorf("delete lineage %s history: %w", id, err)
 		}
 		deletedIDs = append(deletedIDs, id)
+		reportMaintenance(report, "candidates", int64(i+1), int64(len(ids)))
 	}
 	if len(deletedIDs) == 0 {
 		return 0, nil
 	}
+	reportMaintenance(report, "commit", 0, 0)
 	for _, index := range cleanupReferenceIndexes {
 		if _, err := tx.ExecContext(ctx, "DROP INDEX "+index.name); err != nil {
 			return 0, fmt.Errorf("drop cleanup reference index: %w", err)
@@ -101,6 +108,7 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 		return 0, fmt.Errorf("commit history cleanup: %w", err)
 	}
 	var assetErrors error
+	reportMaintenance(report, "assets", 0, 0)
 	for _, id := range deletedIDs {
 		if err := ctx.Err(); err != nil {
 			return len(deletedIDs), errors.Join(assetErrors, err)

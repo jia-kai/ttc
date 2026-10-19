@@ -195,7 +195,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(bMessages, want) {
 		t.Fatal("sibling changed", bMessages, err)
 	}
-	if _, err := s.maintain(context.Background(), time.Now(), next.ID, 1); err != nil {
+	if _, err := s.maintain(context.Background(), time.Now(), next.ID, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 }

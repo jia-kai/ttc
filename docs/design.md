@@ -526,13 +526,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 9;
-  startup supports schemas 5–9 and runs ordered, adjacent upgrades (5 → 6 → 7 →
-  8 → 9) in one transaction, validating before commit. Each step reports its own
-  progress; completion of a step is not a committed upgrade. Rebuilding entries
-  temporarily indexes all incoming foreign-key lookups to avoid per-entry table
-  scans. Schemas below 5, nonempty unversioned databases and unknown newer
-  versions fail explicitly; no automatic resets or credential deletion.
+- Empty databases initialize in one immediate transaction. Current schema is 10;
+  startup supports schemas 5–10 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9 → 10) in one transaction, validating before commit. Each step reports
+  its own progress; completion of a step is not a committed upgrade. Rebuilding
+  entries temporarily indexes all incoming foreign-key lookups to avoid
+  per-entry table scans. Schemas below 5, nonempty unversioned databases and
+  unknown newer versions fail explicitly; no automatic resets or credential
+  deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
   instances sharing that directory before upgrading: pre-lock binaries cannot be
@@ -557,7 +558,9 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   `actor_compacted` or `actor_context_prefix` rows: historical child/aside cuts
   are unavailable to `before_compaction`, and historical aside exports contain
   only their own recorded entries, without reconstructing the frozen main
-  prefix. Historical main cuts remain available in `compactions`.
+  prefix. Historical main cuts remain available in `compactions`. The 9 → 10
+  step adds oldest-entry and authored-prompt indexes and prefixes the session
+  listing index with workspace identity.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting
@@ -598,19 +601,29 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   deduplicate only within the lineage. No global durable blob table or durable
   job/timer/inbox table. Enforce the
   [retention policy](requirement.md#data-retention) with an atomic activity
-  recheck before lineage deletion. Startup-only maintenance gates the 30-day
-  inactive-lineage sweep on database-plus-WAL size of at least 2 GiB, without
-  forcing the database below the threshold. After deletions, attempt SQLite
-  compaction and WAL truncation with a two-minute limit. Compaction requires
-  exclusive lifetime use, coordinated under the initialization lock; other open
-  stores defer it rather than blocking their ordinary writes with VACUUM. Later
-  startups retry SQLite free pages/WAL residue without another forced eviction.
+  recheck before lineage deletion. The CLI runs maintenance synchronously before
+  runtime/frontend construction and gates the 30-day inactive-lineage sweep on
+  database-plus-WAL size of at least 2 GiB, without forcing the database below
+  the threshold. After deletions, attempt SQLite compaction and WAL truncation
+  with a two-minute limit. Compaction requires exclusive lifetime use,
+  coordinated under the initialization lock; other open stores defer it rather
+  than blocking their ordinary writes with VACUUM. Later startups above the
+  threshold retry SQLite free pages/WAL residue without another forced eviction.
   An hourly activity-only heartbeat protects idle loaded sessions from other
   instances' startup sweeps; lifecycle commands also refresh loaded activity.
   Failures appear as UI-only warnings and may occur after history deletions have
   committed. Copies protect shared ancestry/assets. Startup statistics (physical
-  database plus WAL bytes, entry count, oldest-entry age) are UI-only status,
-  not model input or a new persisted conversation entry.
+  database plus WAL bytes, estimated entry count, oldest-entry age) are UI-only
+  status, not model input or a new persisted conversation entry. The estimate is
+  the surviving maximum entry ID minus minimum ID plus one (zero when empty), so
+  deletion gaps can inflate it. Separate indexed endpoint and timestamp lookups
+  avoid full-history aggregates. Prompt recall uses a partial authored-input
+  index; session lists seek by workspace and activity. Migration and maintenance
+  report progress on startup stderr; candidate counts are tentative until
+  commit, and phases without known work totals show no percentage. Final
+  warnings and statistics use ordinary frontend status events. Signals cancel
+  maintenance, but initialization and schema migration do not observe the signal
+  context.
 
 ## Validation
 

@@ -1,4 +1,4 @@
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -21,7 +21,7 @@ CREATE TABLE sessions (
     last_activity_ms INTEGER NOT NULL,
     metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
 );
-CREATE INDEX session_list ON sessions(last_activity_ms DESC, id);
+CREATE INDEX session_list_workspace ON sessions(workspace_id, last_activity_ms DESC, id);
 CREATE INDEX session_lineage ON sessions(lineage_id);
 CREATE TABLE turns (
     id TEXT PRIMARY KEY NOT NULL,
@@ -56,6 +56,11 @@ CREATE TABLE entries (
     CHECK (model_visible = 0 OR role IS NOT NULL)
 );
 CREATE INDEX entry_session ON entries(session_id, id);
+CREATE INDEX entry_created ON entries(created_ms);
+CREATE INDEX entry_prompt_recall ON entries(id DESC)
+    WHERE kind='message' AND role='user' AND actor_id='main'
+    AND model_visible=1 AND source_id IS NULL
+    AND json_extract(content_json,'$.type')='user_input';
 CREATE INDEX entry_parent ON entries(parent_id);
 CREATE INDEX entry_source ON entries(session_id, source_id);
 CREATE TABLE model_requests (
