@@ -10,6 +10,17 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 	if !ev.Pressed() {
 		return next
 	}
+	if c.paste.active {
+		normalized := normalizeFrontendKey(ev)
+		if !isCtrl(normalized, "c") {
+			c.collectPasteKey(normalized)
+			if !c.batchingEvents {
+				c.flushPaste()
+			}
+			return next
+		}
+		c.flushPaste() // Ctrl+C observes the partially pasted draft, just like typing.
+	}
 	if c.modal.window != nil && c.modal.window.completionEntry != 0 && ev.Key() == tcell.KeyRune && (ev.Str() == "d" || ev.Str() == "D") && ev.Modifiers() == 0 {
 		c.inspectSaved(c.modal.window.completionEntry)
 		return next
@@ -35,13 +46,6 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 				c.recallInput(text)
 				c.recall.index, c.recall.draft = len(c.recall.entries), ""
 			}
-		}
-		return next
-	}
-	if c.draft.pasting && (c.pasteQuestion == nil || c.modal.question != c.pasteQuestion) {
-		if c.pasteIntoComposer {
-			c.modal.clear()
-			c.draft.pasteKey(ev)
 		}
 		return next
 	}
@@ -131,6 +135,9 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 }
 
 func (c *frontendController) handleScreenEvent(ev tcell.Event) (next frontendSubmission) {
+	if _, key := ev.(*tcell.EventKey); !key {
+		c.flushPaste()
+	}
 	switch ev := ev.(type) {
 	case *tcell.EventPaste:
 		c.handlePaste(ev)
@@ -231,6 +238,12 @@ func (c *frontendController) handlePickerKey(ev *tcell.EventKey) (next frontendS
 }
 
 func (c *frontendController) handleCompletionKey(ev *tcell.EventKey) bool {
+	if ev.Key() == tcell.KeyEnter && ev.Modifiers()&tcell.ModShift != 0 {
+		return false // Shift+Enter always inserts a newline, never a completion.
+	}
+	if (ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyDown) && ev.Modifiers() != tcell.ModShift {
+		return false // Plain arrows recall history; Alt arrows retain view focus.
+	}
 	if c.draft.completion != nil && len(c.completion.result.items) > 0 {
 		switch ev.Key() {
 		case tcell.KeyUp:
@@ -270,6 +283,14 @@ func (c *frontendController) handleComposerKey(ev *tcell.EventKey) (next fronten
 			}
 			return next
 		}
+	}
+	if isCtrl(ev, "j") || isCtrl(ev, "k") {
+		delta := 1
+		if isCtrl(ev, "k") {
+			delta = -1
+		}
+		c.scrollInput(delta)
+		return next
 	}
 	if c.draft.key(ev) {
 		c.modal.clear()
@@ -356,7 +377,7 @@ func normalizeFrontendKey(ev *tcell.EventKey) *tcell.EventKey {
 func (c *frontendController) handleQuestionKey(ev *tcell.EventKey) {
 	c.esc = false
 	c.viewChord = false
-	if !c.modal.question.pasting && c.modal.question.textEntry() && isCtrl(ev, "x") {
+	if c.modal.question.textEntry() && isCtrl(ev, "x") {
 		c.viewChord = true
 		return
 	}
@@ -525,28 +546,27 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 }
 
 func (c *frontendController) handlePaste(ev *tcell.EventPaste) {
-	if c.modal.prompts != nil {
-		c.modal.prompts.query.pasting = ev.Start()
+	c.flushPaste()
+	c.paste = pasteBatch{active: ev.Start()}
+	c.draft.pasting = ev.Start()
+	if !ev.Start() {
 		return
 	}
-	c.draft.pasting = ev.Start()
-	if ev.Start() {
-		c.esc, c.viewChord = false, false
-		c.pasteQuestion = c.modal.question
-		c.pasteIntoComposer = c.pasteQuestion == nil && c.modal.menu == nil && c.modal.commands == nil && c.modal.preview == nil
-	}
-	if c.pasteQuestion != nil {
-		c.esc = false
-		c.pasteQuestion.pasting = ev.Start()
-		if ev.Start() && c.pasteQuestion.tab < len(c.pasteQuestion.answers) {
-			c.pasteQuestion.manualScroll = false
-			a := &c.pasteQuestion.answers[c.pasteQuestion.tab]
-			a.choice = len(c.pasteQuestion.form.Questions[c.pasteQuestion.tab].Options)
+	c.esc, c.viewChord = false, false
+	switch {
+	case c.modal.prompts != nil:
+		c.paste.search = c.modal.prompts
+	case c.modal.question != nil:
+		d := c.modal.question
+		c.paste.question, c.paste.tab = d, d.tab
+		if d.tab < len(d.answers) {
+			d.manualScroll = false
+			a := &d.answers[d.tab]
+			a.choice = len(d.form.Questions[d.tab].Options)
 			a.useCustom, a.editing = true, true
-			c.pasteQuestion.update()
+			d.update()
 		}
-	}
-	if !ev.Start() {
-		c.pasteQuestion, c.pasteIntoComposer = nil, false
+	case c.modal.menu == nil && c.modal.commands == nil && c.modal.preview == nil:
+		c.paste.composer = true
 	}
 }

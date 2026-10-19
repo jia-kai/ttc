@@ -133,10 +133,9 @@ func (c *frontendController) drawFrame() error {
 		if c.fullscreen {
 			drawFocus = c.copyFocused
 		}
-		previewLimit := max(0, height-4)
-		if c.fullscreen {
-			previewLimit = 0
-		}
+		paneWidth := c.sidebar.bounds(width, height, c.fullscreen)
+		geometry := layoutInput(&c.draft, paneWidth, height, c.fullscreen, height)
+		previewLimit := geometry.queuedRows
 		steerCount, steers := c.frontend.Runtime.SteeringPreview(previewLimit)
 		indicator := ""
 		if c.busy {

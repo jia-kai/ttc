@@ -33,12 +33,23 @@ func TestComposerLegacyAndAdvancedCtrlReports(t *testing.T) {
 			}
 			var draft composer
 			draft.insert("alpha beta")
-			for _, letter := range []string{"w", "y", "a", "k", "y", "j"} {
+			for _, letter := range []string{"w", "y", "a"} {
 				if !draft.key(key(letter)) {
 					t.Fatalf("Ctrl-%s was not handled", letter)
 				}
 			}
-			if draft.text != "alpha beta\n" {
+			if !draft.key(tcell.NewEventKey(tcell.KeyRune, "d", tcell.ModAlt)) || !draft.key(key("y")) {
+				t.Fatal("word kill/yank was not handled")
+			}
+			for _, letter := range []string{"j", "k"} {
+				if draft.key(key(letter)) || draft.text != "alpha beta" || draft.cursor != 5 {
+					t.Fatalf("Ctrl-%s edited the draft: %q at %d", letter, draft.text, draft.cursor)
+				}
+			}
+			if !draft.key(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)) {
+				t.Fatal("Shift-Enter was not handled")
+			}
+			if draft.text != "alpha\n beta" {
 				t.Fatalf("draft = %q", draft.text)
 			}
 			before := draft.text
@@ -91,13 +102,16 @@ func TestFrontendAdvancedControlAliases(t *testing.T) {
 	}
 	ui.typeText("goodX")
 	ctrl("h") // Backspace, not literal h.
-	ctrl("j") // Insert a logical newline without submission.
+	ctrl("j") // Scroll input, without inserting a newline.
+	ctrl("k") // Scroll input, without killing the draft.
+	ui.screen.EventQ() <- tcell.NewEventKeyEx(tcell.KeyEnter, "", tcell.ModShift, true, 0, 1)
 	ui.typeText("line")
 	ctrl("i") // Tab completion has no candidate here and must not insert i.
 	ui.typeText("!")
 	ctrl("m") // Enter submits the retained draft.
 	ui.wait(t, "Control aliases verified.")
 	ui.wait(t, "Turn complete")
+	assertComposerSubmission(t, ui, "good\nline!")
 }
 
 func TestFrontendAdvancedCtrlShiftITabsBackward(t *testing.T) {

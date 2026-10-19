@@ -39,11 +39,15 @@ func TestPromptSearchNewestFirstEditingAndExactSelection(t *testing.T) {
 	if len(m.matches) != 4 {
 		t.Fatal("editing failed to refilter")
 	}
-	m.query.pasting = true
+	c := pasteTestController()
+	c.modal.prompts, c.modal.window = m, &m.Window
+	c.handleScreenEvent(tcell.NewEventPaste(true))
 	for range 400 {
-		m.key(tcell.NewEventKey(tcell.KeyRune, "x", 0), 10)
+		if next := c.handleScreenEvent(tcell.NewEventKey(tcell.KeyRune, "x", 0)); next.ready || c.modal.prompts != m {
+			t.Fatal("pasted search text escaped the query", next)
+		}
 	}
-	m.query.pasting = false
+	c.handleScreenEvent(tcell.NewEventPaste(false))
 	if utf8.RuneCountInString(m.query.text) != 256 {
 		t.Fatal("unbounded query")
 	}

@@ -762,16 +762,21 @@ The concrete boundaries above are TTC decisions, informed by:
 
 ### Composer and session windows
 
-- Up/Down recalls original main user/steer messages across saved sessions,
-  capped at 1000 entries/8 MiB. Exclude file snapshots, runtime notices and
-  continuation copies. Current submissions, including commands, share the caps.
-  Ctrl-R searches whitespace-separated case-insensitive substrings with AND
-  semantics, in any order, newest first. Queries have at most 256 characters;
-  render at most 128 visible result rows with 512-byte previews. Fold full
-  prompts once on opening; filter with deduplicated terms, longest first and
-  early rejection. Highlight all occurrences in sanitized previews, merging
-  overlaps and preserving Unicode positions. Enter recalls the exact prompt; Esc
-  preserves draft.
+- The composer soft-wraps without changing text, grows to six rows subject to
+  terminal height, and scrolls beyond that cap. Ctrl-J/K scroll its viewport
+  down/up without moving the cursor; editing or cursor movement reveals it. Only
+  Shift-Enter inserts a hard newline, requiring a distinct terminal key report;
+  pasted and external-editor newlines remain intact.
+- Up/Down always recalls original main user/steer messages across saved
+  sessions, capped at 1000 entries/8 MiB. Exclude file snapshots, runtime
+  notices and continuation copies. Current submissions, including commands,
+  share the caps. Ctrl-R searches whitespace-separated case-insensitive
+  substrings with AND semantics, in any order, newest first. Queries have at
+  most 256 characters; render at most 128 visible result rows with 512-byte
+  previews. Fold full prompts once on opening; filter with deduplicated terms,
+  longest first and early rejection. Highlight all occurrences in sanitized
+  previews, merging overlaps and preserving Unicode positions. Enter recalls the
+  exact prompt; Esc preserves draft.
 - Slash completion is local. One joined/debounced path worker recursively scans
   at most 10,000 entries below the current or typed directory, without following
   symlink directories; skip unreadable or disappeared descendants. Share

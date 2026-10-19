@@ -278,7 +278,8 @@
 | ------------------------ | ----------------------------- |
 | Send idle / steer busy   | Enter                         |
 | Send idle / queue busy   | Alt+Enter                     |
-| Newline                  | Shift+Enter or Ctrl+J         |
+| Newline                  | Shift+Enter                   |
+| Scroll input down / up   | Ctrl+J / Ctrl+K               |
 | External editor          | Ctrl+X E or `/editor`         |
 | Command palette          | Ctrl+P                        |
 | Scroll conversation      | Ctrl+U / Ctrl+D               |

@@ -13,7 +13,7 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 - **Foreground shells** — Delay steer delivery until they finish or move to the background.
 - **/cancel-queue** — Cancel the newest queued prompt, including while waiting for turn admission, and restore its text and attachment snapshots to the composer.
 - **/cancel-steer** — Do the same for the newest unadmitted steer. Both commands preserve older inputs, work busy or idle, and report empty lists.
-- **Ctrl+J / Shift+Enter** — Insert a newline.
+- **Shift+Enter** — Insert a newline if the terminal reports it distinctly from Enter; otherwise paste multiline text or use the external editor.
 - **Paste** — Insert text without sending it.
 - **Esc, Esc in the composer** — Interrupt the current turn after closing any open view.
 - **Ctrl+C (any view)** — Clear the main prompt if it contains text; otherwise exit TTC and cancel live work.
@@ -39,6 +39,9 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 
 ## Edit input
 
+The composer soft-wraps without changing text and grows to six rows, limited by terminal height. Editing or cursor movement reveals the cursor after manual scrolling.
+
+- **Ctrl+J / Ctrl+K** — Scroll the input viewport down/up without moving the cursor.
 - **Left** or **Ctrl+B without foreground shells** — Move the cursor left.
 - **Right / Ctrl+F** — Move the cursor right.
 - **Alt+B** — Move back one word.
@@ -47,7 +50,6 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 - **Ctrl+E / End** — Move to the end of the line.
 - **Ctrl+W / Alt+Backspace** — Delete the previous word.
 - **Alt+D** — Delete the next word.
-- **Ctrl+K** — Cut text through the end of the line.
 - **Ctrl+Y** — Paste the last cut text.
 - **Ctrl+X E** or **/editor** — Edit the draft using VISUAL, EDITOR, or vi.
 - **Ctrl+P** — Open the command menu.
@@ -55,6 +57,7 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 - **/** — Show command suggestions at the start of input.
 - **@** — Show file attachment suggestions.
 - **Tab in suggestions** — Accept the selected suggestion.
+- **Shift+Up / Shift+Down in suggestions** — Select a suggestion; plain Up/Down still recalls prompts.
 - **/attach PATH** — Snapshot text, directories, or supported native images/documents.
 
 ## Sessions and history
@@ -89,7 +92,7 @@ These commands require an idle turn.
 - **Ctrl+X T** or **/timers** — Inspect timers.
 - **/btw QUESTION** — Ask a parallel read-only agent; its answer opens in a popup.
 - **Free-form question answers** — Use the cursor, word and line editing keys above, including Ctrl+X E for the editor. Tab/Shift+Tab switches question tabs; Left/Right moves the cursor while editing and switches tabs otherwise.
-- **Enter in a question** — Select an option or finish text and advance; only Enter on Submit sends answers. Shift+Enter/Ctrl+J inserts a newline.
+- **Enter in a question** — Select an option or finish text and advance; only Enter on Submit sends answers. Shift+Enter inserts a newline when the terminal reports it distinctly.
 - **Esc in a question** — Leave text editing, then dismiss without answering. The next message redirects the turn; local commands leave the question pending.
 - **Ctrl+X ?** or **/questions [FORM_ID]** — Reopen the pending round with its drafts.
 - **/answer FORM_ID JSON_ARRAY** — Submit question answers in plain mode.

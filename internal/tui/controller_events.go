@@ -395,15 +395,77 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 	return nil
 }
 
+const (
+	frontendBatchEvents = 2048
+	frontendBatchTime   = 4 * time.Millisecond
+)
+
+// receive waits for one event, then coalesces ready terminal/runtime work only
+// during bracketed paste. Ordinary keys retain a prepare/draw between events
+// (notably completion and modal updates). Other sources return to the full
+// select after at most one bounded batch, even under continuous paste input.
 func (c *frontendController) receive() (next frontendSubmission, stop bool, err error) {
+	c.batchingEvents = true
+	defer func() {
+		c.flushPaste()
+		c.batchingEvents = false
+	}()
+	next, stop, err = c.receiveOne()
+	if stop || err != nil || next.ready {
+		return next, stop, err
+	}
+	if !c.paste.active {
+		return next, false, nil
+	}
+	// A short bounded window also coalesces decoder bursts separated by tiny
+	// scheduling gaps, rather than drawing once per drained terminal buffer.
+	deadline := time.Now().Add(frontendBatchTime)
+	timer := time.NewTimer(frontendBatchTime)
+	defer timer.Stop()
+	for count := 1; c.paste.active && count < frontendBatchEvents && time.Now().Before(deadline); count++ {
+		select {
+		case <-c.ctx.Done():
+			return c.receiveCanceled()
+		case ev, ok := <-c.keys:
+			next = c.receiveScreenEvent(ev, ok)
+		case event := <-c.frontend.Events:
+			c.flushPaste()
+			err = c.handleRuntimeEvent(event)
+		case <-timer.C:
+			return next, false, nil
+		}
+		if err != nil || next.ready {
+			return next, false, err
+		}
+	}
+	return next, false, nil
+}
+
+func (c *frontendController) receiveCanceled() (frontendSubmission, bool, error) {
+	c.frontend.Runtime.Interrupt()
+	if c.busy {
+		waitForTurn(c.done, c.frontend.Events)
+		c.busy = false
+	}
+	return frontendSubmission{}, true, c.ctx.Err()
+}
+
+func (c *frontendController) receiveScreenEvent(ev tcell.Event, ok bool) frontendSubmission {
+	if !ok {
+		c.keys = nil
+		return frontendSubmission{}
+	}
+	if c.editing {
+		return frontendSubmission{}
+	}
+	c.dirty = true
+	return c.handleScreenEvent(ev)
+}
+
+func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, err error) {
 	select {
 	case <-c.ctx.Done():
-		c.frontend.Runtime.Interrupt()
-		if c.busy {
-			waitForTurn(c.done, c.frontend.Events)
-			c.busy = false
-		}
-		return next, true, c.ctx.Err()
+		return c.receiveCanceled()
 	case _, ok := <-c.graphicsActivation:
 		if !ok {
 			c.graphicsActivation = nil
@@ -456,15 +518,7 @@ func (c *frontendController) receive() (next frontendSubmission, stop bool, err 
 		next.text = v.text
 		next.ready = true
 	case ev, ok := <-c.keys:
-		if !ok {
-			c.keys = nil
-			return next, false, nil
-		}
-		if c.editing {
-			return next, false, nil
-		}
-		c.dirty = true
-		return c.handleScreenEvent(ev), false, nil
+		return c.receiveScreenEvent(ev, ok), false, nil
 	case v := <-c.workspaceUpdates:
 		c.sidebar.workspace = v
 	case <-c.ticker.C:

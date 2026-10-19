@@ -90,9 +90,11 @@ func TestLeaderNewQuestionAndExit(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	u.wait(t, "> Retained draft")
-	u.key(tcell.KeyCtrlA)
-	u.key(tcell.KeyCtrlK)
+	frame := u.wait(t, "New session ·")
+	if !strings.Contains(frame, "> Retained draft") {
+		t.Fatal("new session lost the draft", frame)
+	}
+	u.key(tcell.KeyCtrlC)
 	u.typeText("Ask")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")

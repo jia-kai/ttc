@@ -20,14 +20,14 @@ type questionAnswer struct {
 // questionDialog owns a round's editable answers. Only the final tab submits;
 // its shared Window supplies a fixed tab header and scrollable question body.
 type questionDialog struct {
-	Window                Window
-	form                  session.QuestionForm
-	tab                   int
-	answers               []questionAnswer
-	errorText             string
-	focusRow              int
-	rows                  []string
-	manualScroll, pasting bool
+	Window       Window
+	form         session.QuestionForm
+	tab          int
+	answers      []questionAnswer
+	errorText    string
+	focusRow     int
+	rows         []string
+	manualScroll bool
 }
 
 func newQuestionDialog(form session.QuestionForm) *questionDialog {
@@ -51,13 +51,6 @@ func newQuestionDialog(form session.QuestionForm) *questionDialog {
 // Esc outside text entry. Switching tabs never loses draft text or selections.
 func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.Answer, dismissed bool) {
 	d.errorText = ""
-	if d.pasting {
-		if d.tab < len(d.answers) {
-			d.editText(ev)
-		}
-		d.update()
-		return nil, false
-	}
 	if d.textEntry() {
 		a := &d.answers[d.tab]
 		handled := true
@@ -151,16 +144,11 @@ func (d *questionDialog) textEntry() bool {
 	return d.tab < len(d.answers) && d.answers[d.tab].editing
 }
 
-// editText applies the shared editing or paste handler transactionally so a
-// rejected insertion cannot change the answer's cursor or kill buffer.
+// editText applies shared editing transactionally so a rejected insertion
+// cannot change the answer's cursor or kill buffer.
 func (d *questionDialog) editText(ev *tcell.EventKey) bool {
 	next := d.answers[d.tab].custom
-	handled := true
-	if d.pasting {
-		next.pasteKey(ev)
-	} else {
-		handled = next.key(ev)
-	}
+	handled := next.key(ev)
 	if err := d.acceptText(d.tab, next); err != nil {
 		d.errorText = err.Error()
 	}
@@ -168,13 +156,22 @@ func (d *questionDialog) editText(ev *tcell.EventKey) bool {
 }
 
 func (d *questionDialog) acceptText(tab int, next composer) error {
-	if len(next.text) > session.MaxAnswerBytes {
-		return fmt.Errorf("Text is limited to %d bytes.", session.MaxAnswerBytes)
-	}
-	if !utf8.ValidString(next.text) {
-		return fmt.Errorf("Text must be valid UTF-8.")
+	if err := validateQuestionText(len(next.text), utf8.ValidString(next.text)); err != nil {
+		return err
 	}
 	d.answers[tab].custom = next
+	return nil
+}
+
+// validateQuestionText also validates pending paste chunks without rebuilding
+// the entire accepted draft for each decoded event.
+func validateQuestionText(bytes int, validUTF8 bool) error {
+	if bytes > session.MaxAnswerBytes {
+		return fmt.Errorf("Text is limited to %d bytes.", session.MaxAnswerBytes)
+	}
+	if !validUTF8 {
+		return fmt.Errorf("Text must be valid UTF-8.")
+	}
 	return nil
 }
 
@@ -273,7 +270,7 @@ func (d *questionDialog) update() {
 		}
 		rows = append(rows, "")
 		if a.editing {
-			rows = append(rows, "Enter advances · Shift+Enter/Ctrl+J newline · Esc leaves text entry", "←/→ cursor · Tab/Shift+Tab tabs · Ctrl+X E editor")
+			rows = append(rows, "Enter advances · Shift+Enter newline · Esc leaves text entry", "←/→ cursor · Tab/Shift+Tab tabs · Ctrl+X E editor")
 		} else {
 			rows = append(rows, "Up/Down choose · Enter selects and advances · Space selects", "←/→ tabs · Esc dismisses")
 		}

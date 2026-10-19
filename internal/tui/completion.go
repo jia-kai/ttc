@@ -59,10 +59,10 @@ var slashCommands = []completionItem{
 // completionAt only recognizes commands at the beginning and @ at a word
 // boundary, avoiding email addresses. Offsets are rune indices into the draft.
 func completionAt(c composer, root string, generation uint64) (completionQuery, bool) {
-	r := []rune(c.text)
 	if c.pasting || c.cursor < 1 {
 		return completionQuery{}, false
 	}
+	r := []rune(c.text)
 	start := -1
 	quoted := false
 	for i := 0; i < c.cursor; i++ {
@@ -323,8 +323,7 @@ func (p *pathCompleter) query(q completionQuery) {
 }
 func (p *pathCompleter) close() { p.cancel(); <-p.done }
 
-func (m *completionMenu) draw(s tcell.Screen, inputY int) {
-	w, _ := s.Size()
+func (m *completionMenu) draw(s tcell.Screen, inputY, w int) {
 	count := min(7, min(len(m.result.items), max(0, inputY-1)))
 	if count == 0 {
 		return
@@ -361,6 +360,8 @@ func (m *completionMenu) accept(c *composer) (path string, accepted bool) {
 	}
 	c.text = string(r[:q.start]) + value + string(r[q.end:])
 	c.cursor = q.start + len([]rune(value))
+	c.layout = nil
+	c.manualScroll = false
 	if item.directory && strings.HasSuffix(value, "\"") {
 		c.cursor--
 	}

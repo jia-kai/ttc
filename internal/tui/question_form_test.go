@@ -125,15 +125,13 @@ func TestQuestionUsesComposerEditing(t *testing.T) {
 func TestQuestionTextLimitPreservesDraft(t *testing.T) {
 	key := func(k tcell.Key) *tcell.EventKey { return tcell.NewEventKey(k, "", 0) }
 	for _, tt := range []struct {
-		name    string
-		event   *tcell.EventKey
-		pasting bool
+		name  string
+		event *tcell.EventKey
 	}{
-		{"rune", tcell.NewEventKey(tcell.KeyRune, "界", 0), false},
-		{"yank", key(tcell.KeyCtrlY), false},
-		{"newline", key(tcell.KeyCtrlJ), false},
-		{"shift enter", tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift), false},
-		{"paste", key(tcell.KeyEnter), true},
+		{"rune", tcell.NewEventKey(tcell.KeyRune, "界", 0)},
+		{"yank", key(tcell.KeyCtrlY)},
+		{"shift enter", tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)},
+		{"advanced shift enter", tcell.NewEventKeyEx(tcell.KeyEnter, "", tcell.ModShift, true, 0, 1)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
@@ -141,16 +139,14 @@ func TestQuestionTextLimitPreservesDraft(t *testing.T) {
 			d.answers[0].custom.cursor = 10
 			d.answers[0].custom.killed = "界"
 			before := d.answers[0].custom
-			d.pasting = tt.pasting
 			if answers, dismissed := d.key(tt.event, 8); answers != nil || dismissed || d.tab != 0 {
 				t.Fatal("oversize edit navigated or submitted")
 			}
 			if after := d.answers[0].custom; !reflect.DeepEqual(before, after) || !strings.Contains(d.errorText, "limited") {
 				t.Fatal("rejected edit changed the draft", after.cursor, d.errorText)
 			}
-			d.pasting = false
 			d.key(key(tcell.KeyBackspace), 8)
-			d.key(key(tcell.KeyCtrlJ), 8)
+			d.key(tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift), 8)
 			if len(d.answers[0].custom.text) != session.MaxAnswerBytes || d.errorText != "" {
 				t.Fatal("could not edit at the byte limit", d.errorText)
 			}
@@ -241,10 +237,12 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 
 func TestQuestionPasteDoesNotNavigateOrSubmit(t *testing.T) {
 	d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
-	d.pasting = true
+	c := pasteTestController()
+	c.modal.question, c.modal.window = d, &d.Window
+	c.handleScreenEvent(tcell.NewEventPaste(true))
 	for _, event := range []*tcell.EventKey{tcell.NewEventKey(tcell.KeyRune, "a", 0), tcell.NewEventKey(tcell.KeyTab, "", 0), tcell.NewEventKey(tcell.KeyEnter, "", 0), tcell.NewEventKey(tcell.KeyRune, "b", 0), tcell.NewEventKey(tcell.KeyRight, "", 0), tcell.NewEventKey(tcell.KeyEscape, "", 0)} {
-		if values, dismissed := d.key(event, 8); values != nil || dismissed || d.tab != 0 {
-			t.Fatal("paste triggered navigation", values, dismissed, d.tab)
+		if next := c.handleScreenEvent(event); next.ready || c.modal.question != d || d.tab != 0 {
+			t.Fatal("paste triggered navigation", next, d.tab)
 		}
 	}
 	if text := d.answers[0].custom.text; text != "a\t\nb" {

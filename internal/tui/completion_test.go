@@ -82,6 +82,53 @@ func TestCompletionTokensAndCursorReplacement(t *testing.T) {
 	}
 }
 
+func TestCompletionModifiedNavigationAndNewline(t *testing.T) {
+	for _, text := range []string{"/he", "draft @fi"} {
+		t.Run(text, func(t *testing.T) {
+			draft := newComposer(text)
+			q, ok := completionAt(draft, t.TempDir(), 1)
+			if !ok {
+				t.Fatal("missing completion query")
+			}
+			menu := &completionMenu{result: completionResult{query: q, items: []completionItem{{value: "first"}, {value: "second"}}}}
+			c := frontendController{draft: draft, completion: menu}
+			c.draft.completion = menu
+			for _, key := range []tcell.Key{tcell.KeyUp, tcell.KeyDown} {
+				if c.handleCompletionKey(tcell.NewEventKey(key, "", 0)) || menu.selected != 0 || c.draft.text != text {
+					t.Fatal("plain arrow intercepted by suggestions", key, menu.selected, c.draft.text)
+				}
+			}
+			if !c.handleCompletionKey(tcell.NewEventKey(tcell.KeyDown, "", tcell.ModShift)) || menu.selected != 1 {
+				t.Fatal("Shift-Down did not select next suggestion", menu.selected)
+			}
+			if !c.handleCompletionKey(tcell.NewEventKey(tcell.KeyUp, "", tcell.ModShift)) || menu.selected != 0 {
+				t.Fatal("Shift-Up did not select previous suggestion", menu.selected)
+			}
+			newline := tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)
+			if c.handleCompletionKey(newline) || !c.draft.key(newline) || c.draft.text != text+"\n" {
+				t.Fatal("Shift-Enter accepted a suggestion instead of inserting newline", c.draft.text)
+			}
+		})
+	}
+}
+
+func TestCompletionDoesNotInterceptHistoryOrShiftEnter(t *testing.T) {
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Remembered."}}})
+	u.typeText("remember")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn complete")
+	u.typeText("/he")
+	u.wait(t, "Keyboard and command guide")
+	u.key(tcell.KeyUp)
+	u.wait(t, "> remember")
+	u.key(tcell.KeyDown)
+	u.wait(t, "> /he")
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)
+	u.typeText("tail")
+	waitComposerRows(t, u, "> /he", "  tail")
+	assertComposerSubmission(t, u, "remember")
+}
+
 func TestPathCompletionBoundAndWorkerShutdown(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"alpha.txt", "beta.txt", "a dir"} {

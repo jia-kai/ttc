@@ -21,6 +21,7 @@ import traceback
 
 from scratch import private_scratch
 from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
+from kitty_composer import check_composer, configure_editor
 
 def get_version() -> str:
     """an ad-hoc parser of go source to get the version string"""
@@ -39,7 +40,10 @@ def main():
     parser.add_argument('--binary', default='./ttc')
     parser.add_argument('--tmux', action='store_true', help='Test auto-detection through a private tmux with Kitty identity cleared')
     parser.add_argument('--offline', action='store_true', help='Use a short scripted palette/image/math fixture without a TCP server')
+    parser.add_argument('--composer-only', action='store_true', help='Run only offline multiline composer checks and screenshots')
     args = parser.parse_args()
+    if args.composer_only:
+        args.offline = True
     scratch = private_scratch()
     root = Path(tempfile.mkdtemp(prefix='kitty-visual-', dir=scratch))
     sock = root / 'control.sock'
@@ -51,6 +55,7 @@ def main():
     env.pop('TERM_PROGRAM', None)
     env.pop('TERM_PROGRAM_VERSION', None)
     env.pop('NO_COLOR', None)  # Capture the normal colored UI, independent of CI preferences.
+    configure_editor(env, root)
     read_fd, write_fd = os.pipe()
     xvfb_log = (root / 'xvfb.log').open('wb')
     kitty_log = (root / 'kitty.log').open('wb')
@@ -197,6 +202,13 @@ def main():
             assert difference.getbbox() is None, 'image changed after tmux window return: ' + name
 
         wait('/help')
+        check_composer(remote, wait, send, key, capture, root)
+        if args.composer_only:
+            key('ctrl+c')
+            terminal.wait(timeout=10)
+            assert terminal.returncode == 0
+            print(f'PASS: real Kitty multiline composer; tmux={args.tmux}: {root}')
+            return
         version = get_version()
         header = wait(f'TTC {version}').splitlines()[0]
         assert header.rstrip().endswith(f'TTC {version}'), (

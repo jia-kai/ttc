@@ -267,8 +267,7 @@ func TestCancelPendingInputLIFOLeavesNoHistoryOrCheckpoints(t *testing.T) {
 				u.wait(t, "> "+text)
 				// Replace the restored draft with the next local command. It must
 				// never become queued input merely because another command runs.
-				u.key(tcell.KeyCtrlA)
-				u.key(tcell.KeyCtrlK)
+				u.key(tcell.KeyCtrlC)
 			}
 			u.typeText(command)
 			u.key(tcell.KeyEnter)

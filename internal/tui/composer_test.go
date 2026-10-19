@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 	"unicode/utf8"
 
@@ -29,13 +30,10 @@ func composerEditingCases() []composerEditingCase {
 		{"backspace", "λ界x", 2, []*tcell.EventKey{key(tcell.KeyBackspace)}, "λx", 1},
 		{"logical line home", "one\ntwo\nthree", 6, []*tcell.EventKey{key(tcell.KeyCtrlA)}, "one\ntwo\nthree", 4},
 		{"logical line end", "one\ntwo\nthree", 4, []*tcell.EventKey{key(tcell.KeyEnd)}, "one\ntwo\nthree", 7},
-		{"kill line remainder", "one\ntwo\nthree", 4, []*tcell.EventKey{key(tcell.KeyCtrlK)}, "one\n\nthree", 4},
-		{"kill newline", "one\ntwo\nthree", 7, []*tcell.EventKey{key(tcell.KeyCtrlK)}, "one\ntwothree", 7},
 		{"unicode word", "αβ 界字 tail", 5, []*tcell.EventKey{key(tcell.KeyCtrlW)}, "αβ  tail", 3},
 		{"character movement", "αβ", 0, []*tcell.EventKey{key(tcell.KeyCtrlF), key(tcell.KeyRight), key(tcell.KeyCtrlB), key(tcell.KeyLeft), key(tcell.KeyLeft)}, "αβ", 0},
-		{"empty edges", "", 0, []*tcell.EventKey{key(tcell.KeyDelete), key(tcell.KeyBackspace), key(tcell.KeyCtrlW), alt('b'), alt('f'), key(tcell.KeyCtrlK)}, "", 0},
+		{"empty edges", "", 0, []*tcell.EventKey{key(tcell.KeyDelete), key(tcell.KeyBackspace), key(tcell.KeyCtrlW), alt('b'), alt('f')}, "", 0},
 		{"shift enter", "ab", 1, []*tcell.EventKey{tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)}, "a\nb", 2},
-		{"ctrl j", "ab", 1, []*tcell.EventKey{key(tcell.KeyCtrlJ)}, "a\nb", 2},
 	}
 }
 
@@ -64,7 +62,7 @@ func TestComposerKeepsKillBufferAndLeavesReservedKeys(t *testing.T) {
 	if c.text != "new word" {
 		t.Fatal(c.text)
 	}
-	for _, key := range []tcell.Key{tcell.KeyCtrlC, tcell.KeyCtrlD, tcell.KeyCtrlU, tcell.KeyUp, tcell.KeyDown, tcell.KeyEnter, tcell.KeyTab} {
+	for _, key := range []tcell.Key{tcell.KeyCtrlC, tcell.KeyCtrlD, tcell.KeyCtrlU, tcell.KeyCtrlJ, tcell.KeyCtrlK, tcell.KeyUp, tcell.KeyDown, tcell.KeyEnter, tcell.KeyTab} {
 		if c.key(tcell.NewEventKey(key, "", 0)) {
 			t.Fatalf("composer consumed reserved key %v", key)
 		}
@@ -73,21 +71,27 @@ func TestComposerKeepsKillBufferAndLeavesReservedKeys(t *testing.T) {
 
 func TestComposerViewport(t *testing.T) {
 	for _, tt := range []struct {
-		text, want       string
-		cursor, width, x int
+		text                string
+		want                []string
+		cursor, width, x, y int
 	}{
-		{"abcdef", "def", 6, 4, 3},
-		{"abcdef", "abcd", 2, 4, 2},
-		{"α界abc", "abc", 5, 4, 3},
-		{"é界x", "é界x", 2, 10, 1},
-		{"a\n\tb\x1b", "a↵⇥b�", 5, 10, 5},
-		{"界", "", 1, 1, 0},
-		{"x", "", 1, 0, 0},
+		{"abcdef", []string{"abcd", "ef"}, 6, 4, 2, 1},
+		{"abcdef", []string{"abcd", "ef"}, 2, 4, 2, 0},
+		{"α界abc", []string{"α界a", "bc"}, 5, 4, 2, 1},
+		{"é界x", []string{"é界x"}, 2, 10, 1, 0},
+		{"a\n\tb\x1b", []string{"a", "⇥b�"}, 5, 10, 3, 1},
+		{"界", []string{"�", ""}, 1, 1, 0, 1},
+		{"x", []string{"x", ""}, 1, 0, 0, -1},
 	} {
 		c := newComposer(tt.text)
 		c.cursor = tt.cursor
-		if text, x := c.viewport(tt.width); text != tt.want || x != tt.x {
-			t.Fatalf("viewport for %q: %q at %d, want %q at %d", tt.text, text, x, tt.want, tt.x)
+		view := c.viewport(tt.width, 6)
+		var rows []string
+		for _, row := range view.rows {
+			rows = append(rows, row.text)
+		}
+		if !reflect.DeepEqual(rows, tt.want) || view.cursorX != tt.x || view.cursorY != tt.y {
+			t.Fatalf("viewport for %q: %q at (%d,%d), want %q at (%d,%d)", tt.text, rows, view.cursorX, view.cursorY, tt.want, tt.x, tt.y)
 		}
 	}
 }

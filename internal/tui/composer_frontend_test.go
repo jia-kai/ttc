@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 	"ttc/internal/historytest"
@@ -54,7 +55,7 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 	u.key(tcell.KeyTab)
 	u.typeText("B")
 	u.screen.EventQ() <- tcell.NewEventPaste(false)
-	u.wait(t, "> prefix A↵⇥Bsuffix")
+	waitComposerRows(t, u, "> prefix A", "  ⇥Bsuffix")
 	var requests int
 	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
 		t.Fatal("paste triggered a request", requests, err)
@@ -64,12 +65,15 @@ func TestComposerFrontendPasteInMiddleDoesNotSubmit(t *testing.T) {
 	assertComposerSubmission(t, u, "prefix A\n\tBsuffix")
 }
 
-func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
+func TestComposerShiftEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
 	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Multiline accepted."}}})
 	u.typeText("first")
 	u.key(tcell.KeyCtrlJ)
+	u.key(tcell.KeyCtrlK)
+	u.wait(t, "> first")
+	u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)
 	u.typeText("second")
-	u.wait(t, "> first↵second")
+	waitComposerRows(t, u, "> first", "  second")
 	var requests int
 	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM model_requests").Scan(&requests); err != nil || requests != 0 {
 		t.Fatal("newline submitted the draft", requests, err)
@@ -77,6 +81,12 @@ func TestComposerCtrlJInsertsNewlineWithoutSubmitting(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
 	assertComposerSubmission(t, u, "first\nsecond")
+	u.typeText("unfinished")
+	u.key(tcell.KeyUp)
+	waitComposerRows(t, u, "> first", "  second")
+	u.key(tcell.KeyDown)
+	u.typeText("!")
+	u.wait(t, "> unfinished!")
 }
 
 func TestComposerPasteResetsModelChord(t *testing.T) {
@@ -87,6 +97,28 @@ func TestComposerPasteResetsModelChord(t *testing.T) {
 	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.typeText("m")
 	u.wait(t, "> xm")
+}
+
+func TestComposerFrontendScrollPreservesDraftAndMovementRevealsCursor(t *testing.T) {
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Scrolled draft accepted."}}})
+	for i, text := range []string{"zero", "one", "two", "three", "four", "five", "six", "seven"} {
+		if i > 0 {
+			u.screen.EventQ() <- tcell.NewEventKey(tcell.KeyEnter, "", tcell.ModShift)
+		}
+		u.typeText(text)
+	}
+	waitComposerRows(t, u, "> two", "  three", "  four", "  five", "  six", "  seven")
+	u.key(tcell.KeyCtrlK)
+	u.key(tcell.KeyCtrlK)
+	waitComposerRows(t, u, "> zero", "  one", "  two", "  three", "  four", "  five")
+	u.key(tcell.KeyCtrlJ)
+	waitComposerRows(t, u, "> one", "  two", "  three", "  four", "  five", "  six")
+	u.key(tcell.KeyLeft)
+	u.typeText("!")
+	waitComposerRows(t, u, "> two", "  three", "  four", "  five", "  six", "  seve!n")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn complete")
+	assertComposerSubmission(t, u, "zero\none\ntwo\nthree\nfour\nfive\nsix\nseve!n")
 }
 
 func gatedComposerUI(t *testing.T, responses []llm.ScriptResponse) (*questionTestUI, *questionTestProvider) {
@@ -125,11 +157,11 @@ func TestComposerPasteDefersQuestionOpening(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.key(tcell.KeyTab)
 	u.typeText("B")
-	u.wait(t, "> A↵⇥B")
+	waitComposerRows(t, u, "> A", "  ⇥B")
 	u.screen.EventQ() <- tcell.NewEventPaste(false)
 	u.wait(t, "Choose a method?")
 	u.key(tcell.KeyEscape)
-	u.wait(t, "> A↵⇥B")
+	waitComposerRows(t, u, "> A", "  ⇥B")
 	if u.runtime.PendingQuestion() == nil {
 		t.Fatal("paste answered pending question")
 	}
@@ -196,6 +228,27 @@ func assertComposerSubmission(t *testing.T, u *questionTestUI, want string) {
 	}
 }
 
+// Match adjacent screen rows, ignoring only terminal right-padding.
+func waitComposerRows(t *testing.T, u *questionTestUI, rows ...string) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	var frame string
+	for {
+		select {
+		case frame = <-u.screen.frames:
+			lines := strings.Split(frame, "\n")
+			for i := range lines {
+				lines[i] = strings.TrimRight(lines[i], " ")
+			}
+			if strings.Contains(strings.Join(lines, "\n"), strings.Join(rows, "\n")+"\n") {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("missing adjacent composer rows %q: %s", rows, frame)
+		}
+	}
+}
+
 func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
@@ -220,7 +273,44 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	}
 	x, y, visible = s.cursorX, s.cursorY, s.cursorVisible
 	r, _, _ = s.Get(2, 8)
-	if !visible || x != 5 || y != 8 || r != "d" {
+	if !visible || x != 4 || y != 8 || r != "e" {
 		t.Fatal("narrow input viewport", x, y, visible, r)
+	}
+	rows := strings.Split(screenText(s), "\n")
+	if strings.TrimRight(rows[7], " ") != "> abcd" || strings.TrimRight(rows[8], " ") != "  ef" {
+		t.Fatal("wrapped input rows", rows[7:9])
+	}
+	c.cursor = 2
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.cursorVisible || s.cursorX != 4 || s.cursorY != 7 {
+		t.Fatal("cursor before wrap", s.cursorX, s.cursorY, s.cursorVisible)
+	}
+	s.SetSize(10, 10)
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.cursorVisible || s.cursorX != 4 || s.cursorY != 8 {
+		t.Fatal("cursor after resize", s.cursorX, s.cursorY, s.cursorVisible)
+	}
+	if got := strings.TrimSpace(strings.Split(screenText(s), "\n")[8]); got != "> abcdef" {
+		t.Fatal("unwrapped row after resize", got)
+	}
+	c.set("0\n1\n2\n3\n4\n5\n6\n7")
+	c.manualScroll, c.scrollTop = true, 0
+	before := c.cursor
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+		t.Fatal(err)
+	}
+	if s.cursorVisible || c.cursor != before {
+		t.Fatal("manual scrolling did not hide the stationary cursor", s.cursorVisible, c.cursor)
+	}
+	c.key(tcell.NewEventKey(tcell.KeyLeft, "", 0))
+	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.cursorVisible || s.cursorX != 2 || s.cursorY != 8 {
+		t.Fatal("movement did not reveal cursor after scrolling", s.cursorX, s.cursorY, s.cursorVisible)
 	}
 }

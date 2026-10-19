@@ -77,41 +77,41 @@ func (m *promptSearch) update() {
 
 func (m *promptSearch) key(ev *tcell.EventKey, height int) (text string, closed bool) {
 	before := m.query.text
-	if m.query.pasting {
-		m.query.pasteKey(ev)
-	} else {
-		switch {
-		case ev.Key() == tcell.KeyEscape:
-			return "", true
-		case ev.Key() == tcell.KeyEnter:
-			if len(m.matches) > 0 {
-				return m.entries[m.matches[m.selected]], true
-			}
-			return "", false
-		case ev.Key() == tcell.KeyUp:
-			m.selected--
-		case ev.Key() == tcell.KeyDown || isCtrl(ev, "r"):
-			m.selected++
-		case ev.Key() == tcell.KeyPgUp:
-			m.selected -= max(1, height/2)
-		case ev.Key() == tcell.KeyPgDn:
-			m.selected += max(1, height/2)
-		case isCtrl(ev, "u"):
-			m.query.set("")
-		default:
-			m.query.key(ev)
+	switch {
+	case ev.Key() == tcell.KeyEscape:
+		return "", true
+	case ev.Key() == tcell.KeyEnter:
+		if len(m.matches) > 0 {
+			return m.entries[m.matches[m.selected]], true
 		}
+		return "", false
+	case ev.Key() == tcell.KeyUp:
+		m.selected--
+	case ev.Key() == tcell.KeyDown || isCtrl(ev, "r"):
+		m.selected++
+	case ev.Key() == tcell.KeyPgUp:
+		m.selected -= max(1, height/2)
+	case ev.Key() == tcell.KeyPgDn:
+		m.selected += max(1, height/2)
+	case isCtrl(ev, "u"):
+		m.query.set("")
+	default:
+		m.query.key(ev)
 	}
-	// Bound pasted search text too; this affects only the query, never recalled prompts.
-	if utf8.RuneCountInString(m.query.text) > 256 {
-		m.query.set(string([]rune(m.query.text)[:256]))
-	}
+	m.limitQuery()
 	if m.query.text != before {
 		m.filter()
 	} else {
 		m.update()
 	}
 	return "", false
+}
+
+// limitQuery bounds only the editable query, never the exact recalled prompt.
+func (m *promptSearch) limitQuery() {
+	if utf8.RuneCountInString(m.query.text) > 256 {
+		m.query.set(string([]rune(m.query.text)[:256]))
+	}
 }
 
 func (m *promptSearch) reveal(width, height int) {

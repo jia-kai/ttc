@@ -716,11 +716,12 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   but unselected. Custom text and selected options are mutually exclusive
   answers; drafts survive switching tabs and answer type. Free-form answers use
   the main input's cursor, word/line and kill/yank keys, plus Ctrl+X E for the
-  external editor. Left/Right moves the text caret; Shift+Enter/Ctrl+J inserts a
-  newline. Each answer has its own draft and kill buffer. Edited text must
-  remain valid UTF-8 and within 16 KiB; rejected edits preserve text, cursor and
-  kill buffer. Only Enter on Submit sends the round. Missing answers return
-  focus to the first unanswered question.
+  external editor. Left/Right moves the text caret; Shift+Enter inserts a
+  newline when the terminal reports it distinctly. Each answer has its own draft
+  and kill buffer. Edited text must remain valid UTF-8 and within 16 KiB;
+  rejected edits preserve text, cursor and kill buffer. Only Enter on Submit
+  sends the round. Missing answers return focus to the first unanswered
+  question.
 - Esc leaves custom editing first, then dismisses without answering.
   `/questions` reopens the pending round with its drafts; an optional `FORM_ID`
   must match it. The next normal user message settles a dismissed call and

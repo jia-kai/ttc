@@ -60,17 +60,17 @@ type frontendController struct {
 	activity           turnActivity
 	eof                bool
 
-	draft             composer
-	recall            promptHistory
-	attachments       []contextbuild.Attachment
-	completer         *pathCompleter
-	completion        *completionMenu
-	lastQuery         completionQuery
-	hadQuery          bool
-	esc               bool
-	viewChord         bool
-	pasteQuestion     *questionDialog
-	pasteIntoComposer bool
+	draft          composer
+	recall         promptHistory
+	attachments    []contextbuild.Attachment
+	completer      *pathCompleter
+	completion     *completionMenu
+	lastQuery      completionQuery
+	hadQuery       bool
+	esc            bool
+	viewChord      bool
+	paste          pasteBatch
+	batchingEvents bool // Paste edits flush once per bounded receive batch.
 
 	editorDone        chan operationResult
 	editing           bool

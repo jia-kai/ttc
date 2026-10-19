@@ -222,11 +222,17 @@ agents. After dismissing a question, the next message redirects the current turn
 instead.
 
 Use `/help` for the keyboard and command guide. Up/Down recall prompts across
-sessions and restarts. Ctrl-C clears a nonempty prompt; with an empty prompt, it
-exits TTC and cancels live work. Ctrl-R searches the most recent 1000 prompts
-(at most 8 MiB), newest matches first. Every whitespace-separated term must
-match a case-insensitive substring, in any order; matches are highlighted. Enter
-fills the input and Esc cancels.
+sessions and restarts, even in multiline input. The composer soft-wraps without
+changing the text and grows to six rows, limited by terminal height. Ctrl+J/K
+scroll its viewport down/up without moving the cursor; editing or cursor
+movement reveals the cursor again. Shift+Enter inserts a newline when the
+terminal reports it distinctly from Enter; otherwise paste multiline text or use
+Ctrl+X E for the external editor. Pasted and editor newlines are preserved.
+Ctrl-C clears a nonempty prompt; with an empty prompt, it exits TTC and cancels
+live work. Ctrl-R searches the most recent 1000 prompts (at most 8 MiB), newest
+matches first. Every whitespace-separated term must match a case-insensitive
+substring, in any order; matches are highlighted. Enter fills the input and Esc
+cancels.
 
 Multiple TTC instances can share the default data directory and the same
 workspace. Each starts an independent conversation; workspace conflicts are your

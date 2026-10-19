@@ -1,23 +1,24 @@
 package tui
 
 import (
-	"strings"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v3"
 )
 
 // composer owns a draft, a rune-offset cursor and the last killed text. Editing
-// is by rune; display clipping preserves graphemes. A new draft keeps the kill
+// is by rune; display wrapping preserves graphemes. A new draft keeps the kill
 // buffer, while history recall places the cursor at the recalled draft's end.
 type composer struct {
-	text       string
-	cursor     int
-	killed     string
-	completion *completionMenu // UI-owned dropdown; independent of editable text.
-	pasting    bool
+	text         string
+	cursor       int
+	killed       string
+	completion   *completionMenu // UI-owned dropdown; independent of editable text.
+	pasting      bool
+	layout       *composerLayout // Immutable wrapped rows; safe across transactional copies.
+	scrollTop    int
+	manualScroll bool
 }
 
 func newComposer(text string) composer {
@@ -28,12 +29,31 @@ func newComposer(text string) composer {
 
 func (c *composer) set(text string) {
 	c.text, c.cursor = text, utf8.RuneCountInString(text)
+	c.layout = nil
+	c.manualScroll = false
 }
 
 func (c *composer) insert(text string) {
-	runes := []rune(c.text)
-	c.text = string(runes[:c.cursor]) + text + string(runes[c.cursor:])
+	if text == "" {
+		return
+	}
+	// Slice the original UTF-8 instead of decoding and re-encoding the draft.
+	// ASCII end insertion needs no scan; other positions only locate a boundary.
+	at := len(c.text)
+	if c.cursor != len(c.text) {
+		runeAt := 0
+		for byteAt := range c.text {
+			if runeAt == c.cursor {
+				at = byteAt
+				break
+			}
+			runeAt++
+		}
+	}
+	c.text = c.text[:at] + text + c.text[at:]
 	c.cursor += utf8.RuneCountInString(text)
+	c.layout = nil
+	c.manualScroll = false
 }
 
 func (c *composer) erase(start, end int, kill bool) {
@@ -45,6 +65,8 @@ func (c *composer) erase(start, end int, kill bool) {
 		c.killed = string(runes[start:end])
 	}
 	c.text, c.cursor = string(runes[:start])+string(runes[end:]), start
+	c.layout = nil
+	c.manualScroll = false
 }
 
 func wordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
@@ -99,6 +121,7 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 		default:
 			return false
 		}
+		c.manualScroll = false
 		return true
 	}
 	switch {
@@ -127,19 +150,8 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 			start--
 		}
 		c.erase(start, c.cursor, true)
-	case isCtrl(ev, "k"):
-		end := c.cursor
-		for end < len(runes) && runes[end] != '\n' {
-			end++
-		}
-		if end == c.cursor && end < len(runes) {
-			end++ // Kill the newline when already at the end of a logical line.
-		}
-		c.erase(c.cursor, end, true)
 	case isCtrl(ev, "y"):
 		c.insert(c.killed)
-	case isCtrl(ev, "j"):
-		c.insert("\n")
 	case ev.Key() == tcell.KeyEnter:
 		if ev.Modifiers()&tcell.ModShift == 0 {
 			return false
@@ -153,47 +165,6 @@ func (c *composer) key(ev *tcell.EventKey) bool {
 	default:
 		return false
 	}
+	c.manualScroll = false
 	return true
-}
-
-// pasteKey inserts decoded bracketed-paste text without interpreting it as a
-// command, menu key or submission. Other control keys are ignored.
-func (c *composer) pasteKey(ev *tcell.EventKey) {
-	switch {
-	case ev.Key() == tcell.KeyEnter || isCtrl(ev, "j"):
-		c.insert("\n")
-	case ev.Key() == tcell.KeyTab:
-		c.insert("\t")
-	case ev.Key() == tcell.KeyRune && ev.Modifiers()&tcell.ModCtrl == 0:
-		c.insert(ev.Str())
-	}
-}
-
-// viewport returns one safe input row and its cursor column, in terminal cells.
-// The view follows the cursor; newline/tab markers preserve the submitted text.
-func (c composer) viewport(width int) (string, int) {
-	if width <= 0 {
-		return "", 0
-	}
-	visible := func(text string) string {
-		return strings.Map(func(r rune) rune {
-			switch r {
-			case '\n':
-				return '↵'
-			case '\t':
-				return '⇥'
-			}
-			if unicode.IsControl(r) {
-				return '�'
-			}
-			return r
-		}, text)
-	}
-	text := visible(c.text)
-	x := ansi.StringWidth(visible(string([]rune(c.text)[:c.cursor])))
-	for x >= width && text != "" {
-		cluster, cells := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
-		text, x = text[len(cluster):], x-cells
-	}
-	return ansi.Truncate(text, width, ""), max(0, x)
 }

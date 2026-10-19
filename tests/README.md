@@ -92,7 +92,7 @@ make ci-test                      # all automated suites except real Kitty tests
 make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
-python3 tests/pty_input.py          # offline editor/completion/export, Ctrl+J and /rename
+python3 tests/pty_input.py          # offline editor, input scrolling, Shift+Enter/paste, export
 python3 tests/pty_control_strings.py # offline control-string idle timeout and fragmented APC
 python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
 python3 tests/pty_parallel.py       # shared data/workspace, independent loads, no recovery
@@ -226,11 +226,16 @@ Ctrl-R recall. Search benchmarks use bounded synthetic prompts by default; set
 The offline `python3 tests/pty_input.py` regression also runs a reproducible
 file/shell fixture, launches `/btw explain result.py` while its foreground shell
 waits, checks the Markdown popup and diff inspector, and verifies strict-shell
-exit and blank-tail previews. It uses no credentials or inference. All fixture
-files, scripts, SQLite history and complete terminal/failure logs are saved in
-the printed scratch directory. To inspect visually, `make demo` shows the real
-tool cards, diff inspectors and Markdown; in a live session run `/btw QUESTION`
-while a turn is working and dismiss its result with Esc.
+exit and blank-tail previews. It checks exact saved text after Ctrl+J/K (no
+newline or deletion), CSI-u Shift+Enter, bracketed multiline paste and external
+editing, without depending on composer row coordinates. A PTY injects encoded
+keys; use `make demo` in the actual terminal client to check that Shift+Enter is
+reported distinctly and to inspect six-row growth, soft wrapping and viewport
+scrolling. It uses no credentials or inference. All fixture files, scripts,
+SQLite history and complete terminal/failure logs are saved in the printed
+scratch directory. To inspect visually, `make demo` shows the real tool cards,
+diff inspectors and Markdown; in a live session run `/btw QUESTION` while a turn
+is working and dismiss its result with Esc.
 
 When local socket creation is restricted, the socket-free integration still uses
 an actual mock HTTP server and OpenAI adapter, covering the twenty demo-selected

@@ -30,15 +30,8 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	paneWidth := sidebar.bounds(w, h, fullscreen)
 	w = paneWidth
 	style := tcell.StyleDefault.Foreground(tcell.GetColor(render.TextColor))
-	queuedLines := min(len(queue)+len(steers), max(0, h-4))
-	height := max(0, h-3-queuedLines)
-	if fullscreen {
-		queuedLines = 0
-		height = max(0, h-1)
-		if draft.text != "" {
-			height = max(0, h-2)
-		}
-	}
+	geometry := layoutInput(&draft, w, h, fullscreen, len(queue)+len(steers))
+	queuedLines, height := geometry.queuedRows, geometry.transcriptHeight
 	columns := max(1, w-1)
 	if fullscreen {
 		columns = max(1, w)
@@ -88,7 +81,6 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 			put(s, 0, y, columns, all[i].text, st)
 		}
 	}
-	inputText, inputCursor := draft.viewport(max(0, w-2))
 	if !fullscreen {
 		drawScrollBar(s, w-1, 0, height, view.total, start, style.Foreground(tcell.GetColor(render.MutedColor)))
 	}
@@ -97,7 +89,9 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 		status = indicator
 	}
 	if !fullscreen {
-		put(s, 0, height, w, status, style.Foreground(tcell.GetColor(render.CyanColor)))
+		if h >= 3 {
+			put(s, 0, height, w, status, style.Foreground(tcell.GetColor(render.CyanColor)))
+		}
 		for i := range queuedLines {
 			label := "Queued · "
 			var source string
@@ -112,9 +106,11 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 			putStyled(s, 0, height+1+i, w, text, style.Background(tcell.GetColor(render.HumanColor)))
 		}
 	}
-	if !fullscreen || draft.text != "" {
-		put(s, 0, h-2, w, "> ", style)
-		putStyled(s, 2, h-2, max(0, w-2), inputText, style)
+	for i, row := range geometry.input.rows {
+		if i == 0 {
+			put(s, 0, geometry.inputY+i, w, "> ", style)
+		}
+		put(s, 2, geometry.inputY+i, max(0, w-2), row.text, style)
 	}
 	progress := scrollIndicator(view.total, height, start, w)
 	if len(view.blocks) > len(view.recent) {
@@ -130,7 +126,7 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	put(s, max(0, w-runewidth.StringWidth(progress)), h-1, w, progress, style.Foreground(tcell.GetColor(render.MutedColor)))
 	sidebar.draw(s)
 	if window == nil && preview == nil && draft.completion != nil {
-		draft.completion.draw(s, h-2)
+		draft.completion.draw(s, geometry.inputY, w)
 	}
 	if preview != nil && renderer != nil {
 		s.HideCursor()
@@ -140,8 +136,8 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	} else if window != nil {
 		s.HideCursor()
 		drawWindow(s, window)
-	} else if w > 0 && h >= 2 && (!fullscreen || draft.text != "") {
-		s.ShowCursor(min(2+inputCursor, w-1), h-2)
+	} else if w > 0 && geometry.input.cursorY >= 0 {
+		s.ShowCursor(min(2+geometry.input.cursorX, w-1), geometry.inputY+geometry.input.cursorY)
 	} else {
 		s.HideCursor()
 	}

@@ -36,7 +36,9 @@ def main():
     script.write_text(json.dumps([
         {'prefix': 'user: Edited in external editor.\nsecond line', 'text': 'Editor round completed.'},
         {'prefix': 'user: look @', 'text': 'Attachment round completed.'},
-        {'prefix': 'user: first line\nsecond line', 'text': 'Ctrl+J round completed.'},
+        {'prefix': 'user: first linesecond line', 'text': 'Input scroll round completed.'},
+        {'prefix': 'user: first line\nsecond line', 'text': 'Shift+Enter round completed.'},
+        {'prefix': 'user: pasted first line\npasted second line', 'text': 'Multiline paste round completed.'},
         {'prefix': 'user: exercise tools', 'text': 'Waiting for the fixture gate.', 'calls': [
             {'id': 'write', 'name': 'write', 'arguments': {'path': 'result.py', 'content': 'print("evidence")\n'}},
             {'id': 'gate', 'name': 'shell', 'arguments': {'command': f"printf 'ready\\n'; while [ ! -e release-main ]; do sleep 0.02; done; printf 'done\\n'; i=0; while [ $i -lt {capture_padding} ]; do printf '\\n'; i=$((i+1)); done; printf 'capture-tail\\n'"}},
@@ -132,7 +134,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         expect('Turn complete')
         send(b'fail draft\x18e')
         expect('Editor failed:')
-        send(b'\x01\x0b')  # Failed editing preserves the input; remove it explicitly.
+        send(b'\x03')  # Failed editing preserves the input; clear the nonempty draft.
         send(b'look @fix')
         expect('fixture file.txt')
         send(b'\t')
@@ -141,12 +143,28 @@ path.write_text('Edited in external editor.\\nsecond line')
         send(b'\r')
         expect('Attachment round completed.')
         expect('Turn complete')
-        send(b'first line\x0asecond line')  # Ctrl+J inserts LF without submitting.
+        # Ctrl+K at the start must not cut; Ctrl+J at the end must not insert LF.
+        send(b'first line\x01\x0b\x05\x0asecond line')
         read_for(0.2)
         with sqlite3.connect(data / 'history.sqlite') as db:
             assert db.execute("SELECT count(*) FROM turns WHERE trigger='user'").fetchone()[0] == 2
         send(b'\r')
-        expect('Ctrl+J round completed.')
+        expect('Input scroll round completed.')
+        expect('Turn complete')
+        # CSI-u modified Enter is supported by tcell; a literal LF is Ctrl+J.
+        send(b'first line\x1b[13;2usecond line')
+        read_for(0.2)
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            assert db.execute("SELECT count(*) FROM turns WHERE trigger='user'").fetchone()[0] == 3
+        send(b'\r')
+        expect('Shift+Enter round completed.')
+        expect('Turn complete')
+        send(b'\x1b[200~pasted first line\npasted second line\x1b[201~')
+        read_for(0.2)
+        with sqlite3.connect(data / 'history.sqlite') as db:
+            assert db.execute("SELECT count(*) FROM turns WHERE trigger='user'").fetchone()[0] == 4
+        send(b'\r')
+        expect('Multiline paste round completed.')
         expect('Turn complete')
         send(b'/rename Fixture inspection\r')
         deadline = time.monotonic() + 5
@@ -221,7 +239,9 @@ path.write_text('Edited in external editor.\\nsecond line')
                 "SELECT content_json FROM entries WHERE kind='message' AND role='user' ORDER BY id")]
         assert messages[0] == 'Edited in external editor.\nsecond line', messages
         assert 'attachment snapshot evidence' in messages[1] and 'changed after snapshot' not in messages[1], messages
-        assert messages[2] == 'first line\nsecond line', messages
+        assert messages[2] == 'first linesecond line', messages
+        assert messages[3] == 'first line\nsecond line', messages
+        assert messages[4] == 'pasted first line\npasted second line', messages
         # Inspect a human input without submitting the draft, then select its
         # pre-input checkpoint and restore the immutable tip without rerunning tools.
         with sqlite3.connect(data / 'history.sqlite') as db:
@@ -234,7 +254,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         read_for(0.2)
         send(b'\x1b')
         read_for(0.2)  # Incremental terminal paints may keep the unchanged draft.
-        send(b'\x01\x0b\x18g')
+        send(b'\x03\x18g')  # Clear the nonempty draft before opening history.
         expect('User inputs')
         send(b'\x1b[H\r')  # Restore the checkpoint before the first human input.
         deadline = time.monotonic() + 5
@@ -283,7 +303,7 @@ path.write_text('Edited in external editor.\\nsecond line')
         _, status = os.waitpid(pid, 0)
         finished = True
         assert os.waitstatus_to_exitcode(status) == 0, status
-        print('PASS: PTY editor/completion/export, history tree inspect/restore, steering/shell promotion, read-only btw popup, diff inspector and strict shell; artifacts:', root)
+        print('PASS: PTY editor/completion/export, input scrolling, Shift+Enter/multiline paste, history tree inspect/restore, steering/shell promotion, read-only btw popup, diff inspector and strict shell; artifacts:', root)
     except BaseException:
         save()
         (root / 'failure.txt').write_text(traceback.format_exc())
