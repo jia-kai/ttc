@@ -379,7 +379,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 	default:
 		item := line{text: event.Text, id: event.EntryID, actor: event.Actor}
 		if event.Kind == "message" {
-			item = messageLine(item, llm.Message{Type: event.MessageType, Content: event.Text})
+			item = messageLine(item, llm.Message{Type: event.MessageType, Content: event.Text, InputSource: event.InputSource, InputTimeMS: event.InputTimeMS})
 		}
 		item = c.attribute(item, item.actor)
 		c.view.append(item)

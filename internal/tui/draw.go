@@ -62,7 +62,10 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	}
 	for y, i := 0, 0; y < height && i < len(all); y, i = y+1, i+1 {
 		st := style
-		if all[i].human {
+		if all[i].boundary {
+			st = st.Foreground(tcell.GetColor(render.BorderColor))
+		}
+		if all[i].human && !all[i].boundary {
 			st = st.Background(tcell.GetColor(render.HumanColor))
 			put(s, 0, y, columns, strings.Repeat(" ", columns), st)
 		}

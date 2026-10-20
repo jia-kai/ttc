@@ -497,6 +497,16 @@ func (t *transcript) measure(i int) {
 		b.rows[0].text = ansi.Truncate(badge+" "+b.rows[0].text, max(1, t.width), "…")
 		b.rows[0].styled = true
 	}
+	if v.turnTime != "" {
+		if first {
+			label := ansi.Truncate("── You · "+v.turnTime+" ", t.width, "")
+			divider := label + strings.Repeat("─", max(0, t.width-ansi.StringWidth(label)))
+			b.rows = append([]displayRow{{boundary: true}, {text: divider, boundary: true}}, b.rows...)
+		}
+		if i+1 == len(t.blocks) || t.blocks[i+1].owner != b.owner {
+			b.rows = append(b.rows, displayRow{source: len(b.text), boundary: true})
+		}
+	}
 	t.measured(i)
 }
 
@@ -584,6 +594,7 @@ func (t *transcript) viewport(width, height int) []line {
 			v.text = t.blocks[i].rows[j].text
 			v.styled = t.blocks[i].rows[j].styled
 			v.assets = t.blocks[i].rows[j].assets
+			v.boundary = t.blocks[i].rows[j].boundary
 			t.visible = append(t.visible, v)
 		}
 		row = 0

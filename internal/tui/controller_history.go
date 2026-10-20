@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"ttc/internal/history"
+	"ttc/internal/llm"
 	"ttc/internal/render"
 )
 
@@ -248,7 +249,13 @@ func (c *frontendController) replay() {
 			item.markdown, item.brief, item.system = true, true, false
 		}
 		if (v.Kind == "message" || v.Kind == "summary") && entryView.Message != nil {
-			item = messageLine(item, *entryView.Message)
+			message := *entryView.Message
+			if v.Kind == "message" && message.Type == llm.TypeUserInput {
+				// Original inputs take their commit time from the entry, not
+				// caller-supplied message metadata.
+				message.InputTimeMS = v.CreatedMS
+			}
+			item = messageLine(item, message)
 			item = c.attribute(item, item.actor)
 		}
 		if v.Kind == "tool_result" && c.renderer != nil {

@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"ttc/internal/llm"
 	"ttc/internal/render"
@@ -14,10 +15,14 @@ import (
 func messageLine(item line, message llm.Message) line {
 	item.text = message.DisplayText()
 	item.human, item.system, item.markdown, item.brief = false, false, false, false
+	item.turnTime = ""
 	switch message.Type.Presentation() {
 	case llm.PresentationUser:
 		item.text = "user · " + item.text
 		item.human = true
+		if (message.InputSource == "" || message.InputSource == "normal") && message.InputTimeMS > 0 {
+			item.turnTime = time.UnixMilli(message.InputTimeMS).Local().Format("15:04")
+		}
 	case llm.PresentationAssistant:
 		item.speaker, item.markdown, item.complete = "assistant", true, true
 		item.requestID = message.RequestID

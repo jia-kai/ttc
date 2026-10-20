@@ -9,6 +9,8 @@ type line struct {
 	requestID           int64  // Stable assistant-block identity, including replayed completions.
 	id                  int64
 	human               bool
+	turnTime            string // Local HH:MM for an idle-submitted user input; empty for in-turn inputs.
+	boundary            bool   // Synthetic divider/spacing row, not part of the highlighted input.
 	system              bool
 	styled              bool // Generated ANSI row (such as a streaming speaker label), independent of Markdown source.
 	markdown            bool

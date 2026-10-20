@@ -22,10 +22,11 @@ import (
 
 // displayRow shares the exact rendered cells and assets between draw/hit testing.
 type displayRow struct {
-	styled bool // Already-rendered ANSI decorations, independent of source markup.
-	text   string
-	assets []placedImage
-	source int
+	boundary bool // Turn divider or spacing, outside the human-input background.
+	styled   bool // Already-rendered ANSI decorations, independent of source markup.
+	text     string
+	assets   []placedImage
+	source   int
 }
 type placedImage struct {
 	key, path, tex string

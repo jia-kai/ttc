@@ -14,7 +14,7 @@ import (
 )
 
 func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
+	r, events := runtimeFixture(t, nil)
 	requests := 0
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests++
@@ -63,6 +63,24 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 	}
 	if human != 1 || steer != 1 {
 		t.Fatal("steering ended/replaced main turn", human, steer)
+	}
+	steerEvents := 0
+	for len(events) > 0 {
+		event := <-events
+		if event.MessageType != llm.TypeUserInput || event.InputSource != "steer" {
+			continue
+		}
+		steerEvents++
+		entry, err := r.Store.Entry(event.EntryID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Text != "Steer: revise after first write" || event.InputTimeMS <= 0 || event.InputTimeMS != entry.CreatedMS {
+			t.Fatalf("steer event does not match committed input: %+v", event)
+		}
+	}
+	if steerEvents != 1 {
+		t.Fatalf("got %d steer events, want 1", steerEvents)
 	}
 	if _, err := r.Command("/undo"); err != nil {
 		t.Fatal(err)

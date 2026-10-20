@@ -34,6 +34,8 @@ type Event struct {
 	JobID       string          // Optional live job for bounded inspector polling; never revived from history.
 	Detail      string          // Bounded detail for a transient tool update; final detail is loaded from history.
 	MessageType llm.MessageType // Canonical semantics for message events; zero for transient events.
+	InputSource string          // Human input source (normal, queue or steer); empty for non-input events.
+	InputTimeMS int64           // Original human-input commit time in Unix milliseconds; zero for non-input events.
 	Image       *ImageSnapshot  // Immutable image_show snapshot, not a live interaction handle.
 	Question    *QuestionForm   // Snapshot for question lifecycle events; never persisted as a live handle.
 	Retry       *llm.Retry      // Foreground retry backoff metadata; nil for background session naming.
@@ -385,7 +387,19 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 				return e
 			}
 		}
-		r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, MessageType: message.Type})
+		event := Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, MessageType: message.Type}
+		if message.Type == llm.TypeUserInput {
+			committed, err := r.Store.Entry(entry)
+			if err != nil {
+				return err
+			}
+			event.InputSource = message.InputSource
+			if event.InputSource == "" {
+				event.InputSource = "normal"
+			}
+			event.InputTimeMS = committed.CreatedMS
+		}
+		r.emit(event)
 	}
 	priorAttempts := 0
 	var recovery *llm.Message
@@ -427,7 +441,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			if e = json.Unmarshal(v.Content, &m); e != nil {
 				return e
 			}
-			r.emit(Event{Kind: "message", Text: m.DisplayText(), EntryID: entry, MessageType: m.Type})
+			r.emit(Event{Kind: "message", Text: m.DisplayText(), EntryID: entry, MessageType: m.Type, InputSource: "steer", InputTimeMS: v.CreatedMS})
 		}
 		for _, entry := range admitted.NoticeEntries {
 			v, e := r.Store.Entry(entry)
