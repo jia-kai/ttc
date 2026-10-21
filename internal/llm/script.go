@@ -15,7 +15,8 @@ type ScriptResponse struct {
 	Calls  []ToolCall `json:"calls,omitempty"`
 }
 
-// Script provides explicit offline test mode; it never accesses credentials or the network.
+// Script provides explicit offline test mode; it never accesses credentials or
+// the network. It reports no usage because no provider measured its token count.
 type Script struct {
 	Responses []ScriptResponse
 	mu        sync.Mutex
@@ -66,5 +67,5 @@ func (s *Script) Stream(ctx context.Context, req Request, emit func(StreamEvent)
 			return e
 		}
 	}
-	return emit(StreamEvent{Kind: "completed", Usage: &Usage{InputTokens: len(req.System) / 3, OutputTokens: len(v.Text) / 3}, ResponseID: "offline"})
+	return emit(StreamEvent{Kind: "completed", ResponseID: "offline"})
 }

@@ -64,6 +64,7 @@ func (r *Runtime) ApplyModel(turn string) (Event, error) {
 	}
 	if err == nil {
 		r.selection, r.pendingModel = next, nil
+		r.estimator.Reset()
 	}
 	r.mu.Unlock()
 	if err != nil {

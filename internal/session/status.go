@@ -7,20 +7,13 @@ import (
 	"ttc/internal/llm"
 )
 
-// TokenPart is one disjoint estimate in tokens, never endpoint-reported usage.
-type TokenPart struct {
-	Name   string
-	Tokens int
-}
-
 // ContextUsage describes the latest parent request's frozen model and reserves.
 // Admission and compaction handoffs refresh parent context fields; explicit
 // session changes clear those fields but preserve the independent run totals.
 type ContextUsage struct {
 	Model                  string
-	RequestID              int64 // Identity of the estimated parent request; zero before it starts.
 	Limit, Input, Reserved int
-	Parts                  []TokenPart
+	Estimated              bool           // Input includes local estimation rather than an exact matching provider report.
 	Reported               *ReportedUsage // Latest successful parent response, independent of the current estimate.
 	Totals                 UsageTotals    // In-memory endpoint usage since process start or /new, including all agents.
 }
@@ -40,9 +33,8 @@ type UsageTotals struct {
 // Cached input and reasoning output are subsets, not extra tokens. Missing
 // optional counters remain unavailable rather than being presented as zero.
 type ReportedUsage struct {
-	Model     string
-	RequestID int64 // Producing request; permits matching exact input to its estimate.
-	Tokens    llm.Usage
+	Model  string
+	Tokens llm.Usage
 }
 
 func copyReported(u *ReportedUsage) *ReportedUsage {
@@ -99,55 +91,18 @@ func (r *Runtime) recordUsage(u *llm.Usage) {
 }
 
 func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefinition, messages []llm.Message) ContextUsage {
-	counts := make([]int, 6)
-	counts[0] = contextbuild.Estimate(system)
-	for _, d := range defs {
-		counts[1] += 16 + contextbuild.Estimate(d.Description) + contextbuild.Estimate(string(d.Parameters))
-	}
-	projected, err := contextbuild.ProjectRetainedInputs(messages)
-	if err != nil {
-		return ContextUsage{Input: -1, Limit: selection.Model.Budget.ContextLimit}
-	}
-	for _, m := range projected {
-		if m.State != nil {
-			counts[4] += llm.ReplayTokens(m.State)
-			continue
-		}
-		i := 2
-		if m.Type == llm.TypeToolResult {
-			i = 3
-		}
-		counts[i] += 16 + contextbuild.Estimate(m.Content)
-		for _, c := range m.Calls {
-			counts[i] += 16 + contextbuild.Estimate(c.Name) + contextbuild.Estimate(string(c.Arguments))
-		}
-		for _, file := range m.Files {
-			counts[5] += file.EstimatedTokens()
-		}
-	}
+	return usageFromEstimate(selection, contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: selection, System: system, Tools: defs, Messages: messages}))
+}
+
+func usageFromEstimate(selection llm.Selection, result contextbuild.Result) ContextUsage {
 	b := selection.Model.Budget
-	u := ContextUsage{Model: selection.Model.ID + " · " + selection.Variant, Limit: b.ContextLimit, Reserved: b.OutputAllowance + b.EstimationMargin}
-	for i, name := range []string{"Instructions", "Tool definitions", "Conversation", "Tool results", "Provider state", "Binary files"} {
-		u.Parts = append(u.Parts, TokenPart{name, counts[i]})
-		u.Input += counts[i]
-	}
-	u.Parts = append(u.Parts, TokenPart{"Output reserve", b.OutputAllowance}, TokenPart{"Safety margin", b.EstimationMargin})
-	return u
+	return ContextUsage{Model: selection.Model.ID + " · " + selection.Variant, Limit: b.ContextLimit, Input: result.Input, Estimated: result.Estimated, Reserved: b.OutputAllowance + b.EstimationMargin}
 }
 
 // contextMessages copies the selected provider projection and annotates replay
 // occupancy without changing durable history or the payload sent to the model.
 func (r *Runtime) contextMessages(selection llm.Selection, messages []llm.Message) []llm.Message {
-	out := llm.ContextFor(selection, messages)
-	for i, m := range out {
-		if m.State != nil {
-			state := *m.State
-			tokens := r.Provider.EstimateReplay(m)
-			state.EstimatedTokens = &tokens
-			out[i].State = &state
-		}
-	}
-	return out
+	return contextbuild.MessagesForEstimation(selection, messages, r.Provider)
 }
 
 // UsageSnapshot returns an immutable estimate without rebuilding history on UI ticks.
@@ -155,7 +110,6 @@ func (r *Runtime) UsageSnapshot() ContextUsage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	u := r.usage
-	u.Parts = append([]TokenPart(nil), u.Parts...)
 	u.Reported = copyReported(r.reported)
 	u.Totals = r.totals
 	u.Totals.Tokens = copyUsage(r.totals.Tokens)

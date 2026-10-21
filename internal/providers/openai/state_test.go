@@ -8,6 +8,25 @@ import (
 	"ttc/internal/llm"
 )
 
+func TestUsageRequiresMeasuredInputAndOutput(t *testing.T) {
+	for _, body := range []string{`null`, `{}`, `{"input_tokens":5}`, `{"output_tokens":5}`, `{"input_tokens":null,"output_tokens":0}`, `{"input_tokens":-1,"output_tokens":0}`} {
+		var usage *wireUsage
+		if err := json.Unmarshal([]byte(body), &usage); err != nil {
+			t.Fatal(err)
+		}
+		if got := usage.normalized(); got != nil {
+			t.Fatalf("incomplete/invalid report %s became measured usage: %+v", body, got)
+		}
+	}
+	var usage *wireUsage
+	if err := json.Unmarshal([]byte(`{"input_tokens":0,"output_tokens":0}`), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if got := usage.normalized(); got == nil || got.InputTokens != 0 || got.OutputTokens != 0 {
+		t.Fatal("reported zero became unavailable", got)
+	}
+}
+
 func TestAttachmentDisplayMetadataDoesNotChangeWireInput(t *testing.T) {
 	text := "Review this file."
 	content := text + "\n\nAttachment (text): file.txt\nPreserve complete snapshot."

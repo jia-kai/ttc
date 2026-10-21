@@ -323,6 +323,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if err != nil {
 		return nil, cursor, err
 	}
+	task.estimator.Reset()
 	if !task.aside {
 		event, _ := json.Marshal(map[string]any{"type": "child_compacted", "child_id": task.actor, "turn_id": task.turn, "context_tokens_estimate": contextbuild.Tokens(result)})
 		if err = r.queueNotification(string(event)); err != nil {

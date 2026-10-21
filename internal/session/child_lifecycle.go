@@ -24,6 +24,7 @@ type codingChild struct {
 	id, label, state, turn, job string
 	selection                   llm.Selection
 	tools                       *tool.Registry
+	estimator                   *contextbuild.Estimator // Owned by the running worker; retained across idle assignments.
 	messages                    []llm.Message
 	cursor                      contextCursor
 	closing                     bool
@@ -302,15 +303,18 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 			notices = append(notices, runtimeNotices...)
 			sort.Slice(notices, func(i, j int) bool { return notices[i].EventSeq < notices[j].EventSeq })
 		}
-		input := r.contextMessages(task.selection, append(append([]llm.Message(nil), messages...), notices...))
+		input := append(append([]llm.Message(nil), messages...), notices...)
 		if cm != nil {
 			input = append(input, *cm)
 		}
-		if !contextbuild.Fits(task.selection, system, task.tools.Definitions(), input, false) {
+		snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, Lineage: task.actor, ReplayEstimator: r.Provider}
+		observation := task.estimator.Prepare(snapshot)
+		if !contextbuild.FitsInput(observation.Input, task.selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
 		admitted, e = r.Store.AdmitRequest(r.Current(), task.turn, task.actor, task.selection, cm, notices, messages)
 		if e == nil {
+			task.estimator.ObserveRequest(admitted.RequestID, observation)
 			if task.assignment != nil {
 				task.assignment.queued = nil
 				task.assignment.queuedTokens = 0

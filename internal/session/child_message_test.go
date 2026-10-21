@@ -10,6 +10,7 @@ import (
 	"testing"
 	"ttc/internal/historytest"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -270,7 +271,7 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 		t.Fatal(result)
 	}
 	queuedTokens := assignment.queuedTokens
-	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment}
+	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment, estimator: &contextbuild.Estimator{}}
 	input := []llm.Message{{Type: llm.TypeUserInput, Content: "task", InputSource: "task"}}
 	var before int
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {

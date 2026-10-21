@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func TestUncachedCounterDoesNotRequireCacheWriteCounter(t *testing.T) {
 	b := newSidebar()
 	b.update(u, nil, nil)
 	text := strings.Join(b.sections[0].rows, "\n")
-	if strings.Count(text, "Uncached input 200") != 1 || !strings.Contains(text, "Input 1000") {
+	if strings.Count(text, "Uncached input 200") != 1 || !strings.Contains(text, "Last input 1000") {
 		t.Fatal("cached/full input remain indistinguishable", text)
 	}
 	if strings.Contains(text, "Cache writes") {
@@ -398,13 +399,11 @@ func TestSidebarIndependentWheelExpansionAndModalGeometry(t *testing.T) {
 	b := newSidebar()
 	var js []jobs.Snapshot
 	var timers []session.TimerView
-	var parts []session.TokenPart
 	for i := range 40 {
 		js = append(js, jobs.Snapshot{ID: fmt.Sprint(i), Label: "job", Kind: "shell"})
 		timers = append(timers, session.TimerView{ID: fmt.Sprint(i), Name: "timer"})
-		parts = append(parts, session.TokenPart{Name: "part", Tokens: i})
 	}
-	b.update(session.ContextUsage{Limit: 100000, Parts: parts}, js, timers)
+	b.update(session.ContextUsage{Limit: 100000}, js, timers)
 	if b.bounds(120, 24, false) != 86 {
 		t.Fatal(b)
 	}
@@ -520,10 +519,10 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 func TestSidebarReportedCountersRemainSeparateFromEstimates(t *testing.T) {
 	b := newSidebar()
 	cached, reasoning := 0, 70
-	u := session.ContextUsage{Model: "new model", Limit: 10000, Input: 345, Reported: &session.ReportedUsage{Model: "old model", Tokens: llm.Usage{InputTokens: 1000, OutputTokens: 100, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}}
+	u := session.ContextUsage{Model: "new model", Limit: 10000, Input: 345, Estimated: true, Reported: &session.ReportedUsage{Model: "old model", Tokens: llm.Usage{InputTokens: 1000, OutputTokens: 100, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
-	for _, want := range []string{"Last input · reported", "old model", "Input 1000 · cached 0", "Context 3.5%", "Input 345", "345 / 10000 tokens", "Breakdown · estimated"} {
+	for _, want := range []string{"old model", "Last input 1000 · cached 0", "Context (est.) 3.5%", "345 / 10000 tokens"} {
 		if !strings.Contains(rows, want) {
 			t.Fatalf("missing %q in %s", want, rows)
 		}
@@ -542,7 +541,7 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 	u := session.ContextUsage{Limit: 10000, Input: 200, Reported: &session.ReportedUsage{Tokens: llm.Usage{InputTokens: 200, OutputTokens: 3, CachedInputTokens: &lastCached, ReasoningOutputTokens: &lastReasoning}}, Totals: session.UsageTotals{Requests: 3, ReportedRequests: 2, Tokens: llm.Usage{InputTokens: 1000, OutputTokens: 10, CachedInputTokens: &cached, CacheWriteTokens: &written, ReasoningOutputTokens: &reasoning}}}
 	b.update(u, nil, nil)
 	rows := strings.Join(b.sections[0].rows, "\n")
-	for _, want := range []string{"Last input · reported", "Input 200 · cached 50", "Uncached input 150", "Run output · all agents", "Reported 2/3 requests", "Output 10 · reasoning 2"} {
+	for _, want := range []string{"Last input 200 · cached 50", "Uncached input 150", "Run output · all agents", "Reported 2/3 requests", "Output 10 · reasoning 2"} {
 		if !strings.Contains(rows, want) {
 			t.Fatal(want, rows)
 		}
@@ -552,8 +551,8 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 			t.Fatal("wrong counter scope", unwanted, rows)
 		}
 	}
-	if strings.Count(rows, "Output ") != 1 || strings.Index(rows, "Run output") > strings.Index(rows, "Breakdown") {
-		t.Fatal("run output duplicated or hidden below estimates", rows)
+	if strings.Count(rows, "Output ") != 1 {
+		t.Fatal("run output duplicated", rows)
 	}
 	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
@@ -568,7 +567,7 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 		visible.WriteString(sidebarScreenText(s, b.left+1, y, b.width-2))
 		visible.WriteByte('\n')
 	}
-	for _, want := range []string{"Input 200 · cached 50", "Output 10 · reasoning 2"} {
+	for _, want := range []string{"Context 2.0%", "Last input 200 · cached 50", "Output 10 · reasoning 2"} {
 		if !strings.Contains(visible.String(), want) {
 			t.Fatal("counter not visible in headless terminal", want, visible.String())
 		}
@@ -580,18 +579,52 @@ func TestSidebarShowsLastInputAndAccumulatedOutput(t *testing.T) {
 	}
 }
 
-func TestSidebarUsesReportedInputOnlyForMatchingRequest(t *testing.T) {
-	b := newSidebar()
-	u := session.ContextUsage{Model: "model", RequestID: 3, Limit: 10000, Input: 900, Reserved: 100, Reported: &session.ReportedUsage{Model: "model", RequestID: 3, Tokens: llm.Usage{InputTokens: 2000}}}
-	b.update(u, nil, nil)
-	rows := strings.Join(b.sections[0].rows, "\n")
-	if !strings.Contains(rows, "Context 21.0%") || !strings.Contains(rows, "2100 / 10000") || !strings.Contains(rows, "reported input + reserve") {
-		t.Fatal(rows)
+func TestSidebarContextUsesInputAndEstimatedFlag(t *testing.T) {
+	for _, estimated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("estimated=%t", estimated), func(t *testing.T) {
+			b := newSidebar()
+			u := session.ContextUsage{Model: "model", Limit: 10000, Input: 900, Reserved: 100, Estimated: estimated, Reported: &session.ReportedUsage{Model: "model", Tokens: llm.Usage{InputTokens: 2000}}}
+			b.update(u, nil, nil)
+			want := "Context 10.0%"
+			if estimated {
+				want = "Context (est.) 10.0%"
+			}
+			rows := b.sections[0].rows
+			if rows[1] != want || rows[2] != "━───────────────" || rows[3] != "1000 / 10000 tokens" {
+				t.Fatal("context summary overrode input or omitted reserve", rows)
+			}
+			text := strings.Join(rows, "\n")
+			for _, unwanted := range []string{"Breakdown", "reserve", "reported", "estimated", "Input 900"} {
+				if strings.Contains(text, unwanted) {
+					t.Fatal("obsolete context detail", unwanted, text)
+				}
+			}
+		})
 	}
-	u.RequestID = 4
-	b.update(u, nil, nil)
-	rows = strings.Join(b.sections[0].rows, "\n")
-	if !strings.Contains(rows, "Context 10.0%") || strings.Contains(rows, "reported input + reserve") {
-		t.Fatal(rows)
+}
+
+func TestSidebarContextLargeAndInvalidCounters(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		input, reserved, limit int
+		total                  uint64
+		bar                    string
+	}{
+		{"max provider input", math.MaxInt, 100, 10000, uint64(math.MaxInt) + 100, strings.Repeat("━", 16)},
+		{"max input and reserve", math.MaxInt, math.MaxInt, math.MaxInt, uint64(math.MaxInt) * 2, strings.Repeat("━", 16)},
+		{"large partial bar", math.MaxInt / 2, 1, math.MaxInt, uint64(math.MaxInt/2) + 1, strings.Repeat("━", 8) + strings.Repeat("─", 8)},
+		{"negative input", -1, 100, 10000, 100, strings.Repeat("─", 16)},
+		{"negative reserve", 100, -1, 10000, 100, strings.Repeat("─", 16)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newSidebar()
+			b.update(session.ContextUsage{Input: tc.input, Reserved: tc.reserved, Limit: tc.limit}, nil, nil)
+			rows := b.sections[0].rows
+			wantHeadline := fmt.Sprintf("Context %.1f%%", float64(tc.total)*100/float64(tc.limit))
+			wantTotal := fmt.Sprintf("%d / %d tokens", tc.total, tc.limit)
+			if rows[1] != wantHeadline || rows[2] != tc.bar || rows[3] != wantTotal {
+				t.Fatal("overflowed or invalid context summary", rows)
+			}
+		})
 	}
 }

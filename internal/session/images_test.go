@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -100,7 +101,7 @@ func TestChildImageReplySlotAndExitCleanup(t *testing.T) {
 	v = showTestImage(t, r, "three", "main/child_fixture", true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child_fixture", prompt: "task", selection: r.CurrentSelection(), tools: r.Tools}, io.Discard, io.Discard); err == nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_fixture", prompt: "task", selection: r.CurrentSelection(), tools: r.Tools, estimator: &contextbuild.Estimator{}}, io.Discard, io.Discard); err == nil {
 		t.Fatal("canceled child continued")
 	}
 	if r.ImageClickPending(v.ID) {
@@ -200,23 +201,11 @@ func TestContextUsageMatchesFitAndFrozenModel(t *testing.T) {
 	s := r.CurrentSelection()
 	defs := r.Tools.Definitions()
 	u := estimateUsage(s, "instructions", defs, nil)
-	sum := 0
-	for _, p := range u.Parts {
-		sum += p.Tokens
-	}
-	if sum != u.Input+u.Reserved {
-		t.Fatal("categories overlap", u)
+	if u.Input <= 0 || !u.Estimated || !contextbuild.FitsInput(u.Input, s.Model.Budget, false) {
+		t.Fatal("invalid local estimate", u)
 	}
 	if u.Model != s.Model.ID+" · "+s.Variant {
 		t.Fatal(u)
-	}
-	r.mu.Lock()
-	r.usage = u
-	r.mu.Unlock()
-	copy := r.UsageSnapshot()
-	copy.Parts[0].Tokens = 0
-	if r.UsageSnapshot().Parts[0].Tokens == 0 {
-		t.Fatal("snapshot does not own slices")
 	}
 }
 

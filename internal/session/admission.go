@@ -99,7 +99,6 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		messages = append(messages, r.notifications...)
 		steers := r.steeringMessagesLocked()
 		messages = append(messages, steers...)
-		messages = r.contextMessages(selection, messages)
 		if cm != nil {
 			messages = append(messages, *cm)
 		}
@@ -108,10 +107,13 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 			return e
 		}
 		defs := r.Tools.Definitions()
+		snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: defs, Messages: projected, Lineage: r.Current(), ReplayEstimator: r.Provider}
+		observation := r.estimator.Prepare(snapshot)
+		result := observation.Result
 		r.mu.Lock()
-		r.usage = estimateUsage(selection, systemTemplate, defs, projected)
+		r.usage = usageFromEstimate(selection, result)
 		r.mu.Unlock()
-		if !contextbuild.Fits(selection, systemTemplate, defs, projected, false) {
+		if !contextbuild.FitsInput(result.Input, selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
 		admitted, e = r.Store.AdmitRequest(r.Current(), turn, "main", selection, cm, r.notifications, nil, steers...)
@@ -121,9 +123,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		r.notifications = nil
 		r.steers = nil
 		r.mainContext = next
-		r.mu.Lock()
-		r.usage.RequestID = admitted.RequestID
-		r.mu.Unlock()
+		r.estimator.ObserveRequest(admitted.RequestID, observation)
 		return nil
 	})
 	return admitted, cm, err

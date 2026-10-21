@@ -14,6 +14,7 @@ import (
 	"time"
 	"ttc/internal/historytest"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -457,7 +458,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools}, io.Discard, io.Discard); err != nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools, estimator: &contextbuild.Estimator{}}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if contextUpdates != 1 {

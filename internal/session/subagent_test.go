@@ -82,8 +82,8 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 	if err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
-	if totals := r.UsageSnapshot().Totals; totals.Requests != 4 || totals.ReportedRequests != 4 {
-		t.Fatal("child responses missing from parent totals", totals)
+	if totals := r.UsageSnapshot().Totals; totals.Requests != 4 || totals.ReportedRequests != 0 {
+		t.Fatal("offline child responses missing from parent totals", totals)
 	}
 	var childTool bool
 	for len(events) > 0 {

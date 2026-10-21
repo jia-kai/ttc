@@ -30,8 +30,8 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 	if len(r.ChildViews("main")) != 0 || len(r.Jobs.Live()) != 0 || r.HasNotifications() {
 		t.Fatal("disposable child or owned job still active")
 	}
-	if totals := r.UsageSnapshot().Totals; totals.Requests != 4 || totals.ReportedRequests != 4 {
-		t.Fatal("child usage not accumulated exactly once", totals)
+	if totals := r.UsageSnapshot().Totals; totals.Requests != 4 || totals.ReportedRequests != 0 {
+		t.Fatal("offline child requests not counted exactly once", totals)
 	}
 	messages, err := r.Store.Messages(r.Current())
 	if err != nil {

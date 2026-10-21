@@ -21,11 +21,16 @@ interactions stay live; explicit session changes/exit cancel them.
   caps.
 
 - `/compact [focus]` requests main compaction. Before main/child admission,
-  estimate instructions, tools, attachments, history and output allowance
-  against capacity; compact before overflow. Native replay estimates
-  model-visible occupancy, not encrypted transport JSON; reported usage is
-  separate. Provider context-length rejection uses the bounded upstream retry
-  budget; it does not trigger automatic compaction.
+  assemble the next input and check `I + O + M` against capacity. The context
+  estimator owns local counts and provider feedback. With a compatible measured
+  request, `I = reported_input + local_next_input - local_measured_input`;
+  otherwise use the full local estimate. Newly retained output is already in
+  that difference; do not add reported output again. Missing feedback preserves
+  an older compatible measurement. Compaction, history resets and model changes
+  invalidate calibration. Native replay estimates model-visible occupancy, not
+  encrypted transport JSON. Summary requests and handoffs independently check
+  their local budgets. Provider context-length rejection uses the bounded
+  upstream retry budget; it does not trigger automatic compaction.
 - Preserve up to two latest admitted normal/queued prompts combined and up to
   two committed steers independently, chronologically, with exact
   text/attachments. Child tasks/asides count as normal/queued prompts.

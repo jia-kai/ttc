@@ -291,14 +291,13 @@ func TestReportedUsageSnapshotOwnershipAndModelBoundary(t *testing.T) {
 	source := &ReportedUsage{Model: "previous model", Tokens: llm.Usage{InputTokens: 100, OutputTokens: 20, CachedInputTokens: &cached, ReasoningOutputTokens: &reasoning}}
 	r.reported = copyReported(source)
 	cached = 99
-	r.usage = ContextUsage{Model: "next model", Parts: []TokenPart{{Name: "Instructions", Tokens: 100}}}
+	r.usage = ContextUsage{Model: "next model"}
 	snapshot := r.UsageSnapshot()
 	if snapshot.Model != "next model" || snapshot.Reported.Model != "previous model" || *snapshot.Reported.Tokens.CachedInputTokens != 0 {
 		t.Fatal(snapshot)
 	}
 	*snapshot.Reported.Tokens.ReasoningOutputTokens = 99
-	snapshot.Parts[0].Tokens = 0
-	if got := r.UsageSnapshot(); *got.Reported.Tokens.ReasoningOutputTokens != 15 || got.Parts[0].Tokens != 100 {
+	if got := r.UsageSnapshot(); *got.Reported.Tokens.ReasoningOutputTokens != 15 {
 		t.Fatal("snapshot aliases runtime")
 	}
 	if _, err := r.Command("/new"); err != nil {

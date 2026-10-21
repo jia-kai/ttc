@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/tool"
@@ -131,7 +132,7 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 		})
 	}
 	r, _ := runtimeFixture(t, nil)
-	_, _, err := r.compactChild(context.Background(), childTask{}, nil, contextCursor{}, nil)
+	_, _, err := r.compactChild(context.Background(), childTask{estimator: &contextbuild.Estimator{}}, nil, contextCursor{}, nil)
 	if err == nil || err.Error() != prompts.ChildCompactionIdentity {
 		t.Fatalf("got %v, want %q", err, prompts.ChildCompactionIdentity)
 	}

@@ -94,10 +94,11 @@ type Runtime struct {
 	questions         questions
 	images            imageInteractions
 	usage             ContextUsage
-	reported          *ReportedUsage // Protected by mu; cleared with the main session's transient state.
-	totals            UsageTotals    // All inference usage since construction or /new, protected by mu.
-	mainContext       contextCursor  // Owned by serial Run/Command; reset on explicit session changes.
-	mainPrefix        []llm.Message  // Latest balanced main request input, immutable after publication under mu.
+	estimator         contextbuild.Estimator // Owns main-request input estimates and provider feedback.
+	reported          *ReportedUsage         // Protected by mu; cleared with the main session's transient state.
+	totals            UsageTotals            // All inference usage since construction or /new, protected by mu.
+	mainContext       contextCursor          // Owned by serial Run/Command; reset on explicit session changes.
+	mainPrefix        []llm.Message          // Latest balanced main request input, immutable after publication under mu.
 	prefixSelection   llm.Selection
 	prefixTurn        string
 	prefixSession     string // Durable source of mainPrefix, frozen at request admission.
@@ -154,6 +155,7 @@ func (r *Runtime) resetTransient() {
 	r.mu.Lock()
 	r.fatalCompaction = ""
 	r.usage = ContextUsage{}
+	r.estimator.Reset()
 	r.reported = nil
 	r.mainContext = contextCursor{}
 	r.mainPrefix = nil
@@ -541,10 +543,17 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			return e
 		}
 		if streamErr == nil {
+			if usage != nil {
+				if result, ok := r.estimator.ObserveUsage(request, usage.InputTokens); ok {
+					r.mu.Lock()
+					r.usage = usageFromEstimate(selection, result)
+					r.mu.Unlock()
+				}
+			}
 			r.mu.Lock()
 			r.reported = nil
 			if usage != nil {
-				r.reported = copyReported(&ReportedUsage{Model: selection.Model.ID + " · " + selection.Variant, RequestID: request, Tokens: *usage})
+				r.reported = copyReported(&ReportedUsage{Model: selection.Model.ID + " · " + selection.Variant, Tokens: *usage})
 			}
 			r.mu.Unlock()
 		}

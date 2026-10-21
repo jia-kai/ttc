@@ -94,7 +94,7 @@ func partialRetryRunActor(t *testing.T, r *Runtime, actor string, stdout io.Writ
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Isolated task", selection: r.CurrentSelection(), tools: r.Tools}, stdout, io.Discard)
+	err = r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Isolated task", selection: r.CurrentSelection(), tools: r.Tools, estimator: &contextbuild.Estimator{}}, stdout, io.Discard)
 	status := "completed"
 	if err != nil {
 		status = "failed"

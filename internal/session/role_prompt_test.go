@@ -158,7 +158,7 @@ func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
 	if !contextbuild.Fits(r.selection, asideSystemTemplate, r.Tools.Definitions(), input, false) || contextbuild.Fits(r.selection, systemTemplate, r.Tools.Definitions(), input, false) {
 		t.Fatal("fixture does not distinguish shared-only from main prompt budgeting")
 	}
-	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: true}, messages, contextCursor{}); err != nil {
+	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: true, estimator: &contextbuild.Estimator{}}, messages, contextCursor{}); err != nil {
 		t.Fatal("aside admission budgeted irrelevant role instructions", err)
 	}
 }

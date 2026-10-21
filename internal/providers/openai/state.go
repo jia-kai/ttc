@@ -88,8 +88,8 @@ func replayItems(m llm.Message) ([]any, error) {
 }
 
 type wireUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens  *int `json:"input_tokens"`
+	OutputTokens *int `json:"output_tokens"`
 	InputDetails struct {
 		Cached  *int `json:"cached_tokens"`
 		Written *int `json:"cache_write_tokens"`
@@ -100,8 +100,9 @@ type wireUsage struct {
 }
 
 func (u *wireUsage) normalized() *llm.Usage {
-	if u == nil {
+	// An incomplete report is unavailable, not a measured zero-token prefix.
+	if u == nil || u.InputTokens == nil || u.OutputTokens == nil || *u.InputTokens < 0 || *u.OutputTokens < 0 {
 		return nil
 	}
-	return &llm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedInputTokens: u.InputDetails.Cached, CacheWriteTokens: u.InputDetails.Written, ReasoningOutputTokens: u.OutputDetails.Reasoning}
+	return &llm.Usage{InputTokens: *u.InputTokens, OutputTokens: *u.OutputTokens, CachedInputTokens: u.InputDetails.Cached, CacheWriteTokens: u.InputDetails.Written, ReasoningOutputTokens: u.OutputDetails.Reasoning}
 }

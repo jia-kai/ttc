@@ -48,32 +48,33 @@ func (b *sidebar) update(u session.ContextUsage, jobs []jobs.Snapshot, timers []
 	c.rows = append(c.rows[:0], "No request yet")
 	if u.Limit > 0 {
 		c.rows = append(c.rows[:0], u.Model)
+		// Two nonnegative int counters fit in uint64 even when their sum exceeds MaxInt.
+		total := uint64(max(0, u.Input)) + uint64(max(0, u.Reserved))
+		label := "Context"
+		if u.Estimated {
+			label += " (est.)"
+		}
+		ratio := float64(total) / float64(u.Limit)
+		used := int(min(1, ratio) * 16)
+		c.rows = append(c.rows,
+			fmt.Sprintf("%s %.1f%%", label, float64(total)*100/float64(u.Limit)),
+			strings.Repeat("━", used)+strings.Repeat("─", 16-used),
+			fmt.Sprintf("%d / %d tokens", total, u.Limit),
+		)
 		if v := u.Reported; v != nil {
-			c.rows = append(c.rows, "Last input · reported")
 			if v.Model != u.Model {
 				c.rows = append(c.rows, v.Model)
 			}
-			c.rows = append(c.rows, fmt.Sprintf("Input %d · cached %s", v.Tokens.InputTokens, optionalTokens(v.Tokens.CachedInputTokens)))
+			c.rows = append(c.rows, fmt.Sprintf("Last input %d · cached %s", v.Tokens.InputTokens, optionalTokens(v.Tokens.CachedInputTokens)))
 			if cached := v.Tokens.CachedInputTokens; cached != nil && *cached <= v.Tokens.InputTokens {
 				c.rows = append(c.rows, fmt.Sprintf("Uncached input %d", v.Tokens.InputTokens-*cached))
 			}
 		} else {
-			c.rows = append(c.rows, "Reported usage unavailable")
+			c.rows = append(c.rows, "Last input unavailable")
 		}
 	}
 	if totals := u.Totals; totals.Requests > 0 {
 		c.rows = append(c.rows, "Run output · all agents", fmt.Sprintf("Reported %d/%d requests", totals.ReportedRequests, totals.Requests), fmt.Sprintf("Output %d · reasoning %s", totals.Tokens.OutputTokens, optionalTokens(totals.Tokens.ReasoningOutputTokens)))
-	}
-	if u.Limit > 0 {
-		input, qualifier := u.Input, "estimated"
-		if u.RequestID > 0 && u.Reported != nil && u.Reported.RequestID == u.RequestID {
-			input, qualifier = u.Reported.Tokens.InputTokens, "reported input"
-		}
-		used := min(16, (input+u.Reserved)*16/max(1, u.Limit))
-		c.rows = append(c.rows, fmt.Sprintf("Context %.1f%%", float64(input+u.Reserved)*100/float64(u.Limit)), fmt.Sprintf("%s%s", strings.Repeat("━", used), strings.Repeat("─", 16-used)), fmt.Sprintf("%d / %d tokens", input+u.Reserved, u.Limit), qualifier+" + reserve", fmt.Sprintf("Input %d · reserve %s", input, shortTokens(u.Reserved)), "Breakdown · estimated")
-		for _, p := range u.Parts {
-			c.rows = append(c.rows, fmt.Sprintf("%-19s %7s", p.Name, shortTokens(p.Tokens)))
-		}
 	}
 	clear(c.rows[len(c.rows):cap(c.rows)])
 	if len(jobs) < len(b.jobs) {
@@ -303,15 +304,6 @@ func optionalTokens(n *int) string {
 	return fmt.Sprint(*n)
 }
 
-func shortTokens(n int) string {
-	if n >= 1000000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1000000)
-	}
-	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
-	}
-	return fmt.Sprint(n)
-}
 func shortDuration(d time.Duration) string {
 	seconds := max(0, int(d.Seconds()))
 	if seconds < 60 {

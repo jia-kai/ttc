@@ -10,6 +10,7 @@ import (
 	"time"
 	"ttc/internal/historytest"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/tool"
@@ -167,7 +168,7 @@ func TestConversationExportChildCompactionOverlapsMainHandoff(t *testing.T) {
 	}}
 	finished := make(chan error, 1)
 	go func() {
-		_, _, err := r.compactChild(ctx, childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{}, nil)
+		_, _, err := r.compactChild(ctx, childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, estimator: &contextbuild.Estimator{}}, messages, contextCursor{}, nil)
 		finished <- err
 	}()
 	select {

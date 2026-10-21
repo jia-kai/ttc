@@ -283,6 +283,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			return e
 		}
 		r.current = v.ID
+		r.estimator.Reset()
 		r.mainContext = contextCursor{}
 		input := append(append([]llm.Message(nil), assembled...), notices...)
 		if contextMessage != nil {

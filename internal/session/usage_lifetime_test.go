@@ -64,7 +64,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 			t.Fatal(command, err)
 		}
 		assertLifetimeTotals(t, r, 3)
-		if got := r.UsageSnapshot(); got.Reported != nil || got.RequestID != 0 || got.Input != 0 {
+		if got := r.UsageSnapshot(); got.Reported != nil || got.Input != 0 {
 			t.Fatal(command, "retained parent context counters", got)
 		}
 	}
@@ -95,7 +95,14 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 }
 
 func TestUsageLifetimeRestartDoesNotRestoreHistory(t *testing.T) {
-	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Durable answer"}})
+	r, _ := runtimeFixture(t, nil)
+	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
+		if err := emit(llm.StreamEvent{Kind: "text", Text: "Durable answer"}); err != nil {
+			return err
+		}
+		u := lifetimeUsage()
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &u})
+	}}
 	r.Emit = nil
 	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save a response"}); err != nil {
 		t.Fatal(err)

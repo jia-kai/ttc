@@ -192,7 +192,7 @@ func TestChildAdmissionsOwnIndependentSnapshotCursors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		task := childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools}
+		task := childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, estimator: &contextbuild.Estimator{}}
 		messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Inspect units"}}
 		first, cursor, err := r.admitChild(context.Background(), task, messages, contextCursor{})
 		if err != nil || first.ContextEntry == 0 {

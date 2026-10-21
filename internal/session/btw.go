@@ -9,6 +9,7 @@ import (
 	"ttc/internal/prompts"
 	"unicode/utf8"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
@@ -81,7 +82,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if len(label) > 64 {
 		label = append(label[:63], '…')
 	}
-	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: r.Tools.Filter(readOnlyTool), aside: true}
+	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: r.Tools.Filter(readOnlyTool), aside: true, estimator: &contextbuild.Estimator{}}
 	r.childStartMu.Lock()
 	defer r.childStartMu.Unlock()
 	count := len(r.children)

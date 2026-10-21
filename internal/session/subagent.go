@@ -97,7 +97,7 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
-			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), estimator: &contextbuild.Estimator{}, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
 			r.children[child.id] = child
 		}
 		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, selection)
@@ -109,6 +109,9 @@ func (r *Runtime) addSubagentTool() {
 			return nil, err
 		}
 		// Preserve the idle context and selection if durable admission fails.
+		if child.selection.Provider != selection.Provider || child.selection.Model.ID != selection.Model.ID || child.selection.Model.RequestID() != selection.Model.RequestID() || child.selection.Model.ServiceTier != selection.Model.ServiceTier || child.selection.Variant != selection.Variant {
+			child.estimator.Reset()
+		}
 		child.selection = selection
 		child.state = "running"
 		child.job = ""
@@ -125,7 +128,7 @@ func (r *Runtime) addSubagentTool() {
 		r.orderMu.Lock()
 		r.actorAssignments[child.id] = assignment
 		r.orderMu.Unlock()
-		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
+		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
 		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
@@ -189,6 +192,7 @@ type childTask struct {
 	selection           llm.Selection
 	prefix              []llm.Message
 	tools               *tool.Registry
+	estimator           *contextbuild.Estimator // Required; shared only with this persistent child, never another actor.
 	aside               bool
 	child               *codingChild
 	assignment          *childAssignment
@@ -338,6 +342,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			r.childStartMu.Unlock()
 		}
 		r.recordUsage(usage)
+		if streamErr == nil && usage != nil && usage.InputTokens >= 0 {
+			task.estimator.ObserveUsage(request, usage.InputTokens)
+		}
 		if streamErr != nil {
 			reply.State = nil // Interrupted completion callbacks may leave an incomplete replay payload.
 		}

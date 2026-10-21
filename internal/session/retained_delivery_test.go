@@ -59,7 +59,7 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 			if aside {
 				actor = "main/btw_retained_delivery"
 			}
-			task := childTask{actor: actor, prompt: "Continue isolated work.", selection: r.selection, tools: r.Tools, aside: aside}
+			task := childTask{actor: actor, prompt: "Continue isolated work.", selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
 			task.turn, err = r.Store.BeginChildTurn(mainSession, task.actor, task.selection)
 			if err != nil {
 				t.Fatal(err)

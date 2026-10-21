@@ -142,14 +142,17 @@ admission and handoff inequalities, retention defaults and failure behavior.
   writes; output includes reasoning. Cache reads/writes are disjoint input
   subsets; reasoning is an output subset. Uncached input subtracts reads only.
   Show missing usage as coverage, not estimated zero; an optional total is
-  unavailable if any reported response omitted it.
+  unavailable if any reported response omitted it. Offline scripts report no
+  usage and use local context estimates.
 - Copy counters under the runtime mutex. Match parent reported input/cache and
-  frozen model to the producing request ID. Numerical/percentage occupancy
-  includes reserves, with estimates labeled separately from endpoint usage.
-  Compaction refreshes occupancy immediately while prior reported usage remains
-  visible. Explicit session changes other than `/new` clear parent context
-  usage, not all-agent run totals (including `/clear`). Never rebuild those
-  totals from history.
+  frozen model to the producing request ID. Admission and the sidebar share one
+  input estimate, calibrated by compatible provider input feedback. Occupancy
+  includes output allowance and safety margin: `Context n.n%` for directly
+  reported input, `Context (est.) n.n%` for calibrated growth or local
+  estimates. Compaction refreshes occupancy immediately while prior reported
+  usage remains visible. Explicit session changes other than `/new` clear parent
+  context usage, not all-agent run totals (including `/clear`). Never rebuild
+  those totals from history.
 - Cost needs each producing model/tier's rates: ordinary input × input rate +
   reads × cached-input rate + writes × cache-write rate + output × output rate.
   Mixed-model totals determine neither cost nor a subscription bill. See

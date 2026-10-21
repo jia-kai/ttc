@@ -33,44 +33,10 @@ func Tokens(messages []llm.Message) int {
 	return rawTokens(projected)
 }
 
-func rawTokens(messages []llm.Message) int {
-	n := 0
-	for _, m := range messages {
-		content, err := m.ModelContent()
-		if err != nil {
-			return -1
-		}
-		if m.State != nil {
-			n += llm.ReplayTokens(m.State)
-			continue
-		}
-		n += 16 + Estimate(content)
-		for _, c := range m.Calls {
-			n += 16 + Estimate(string(c.Arguments)) + Estimate(c.Name)
-		}
-		for _, file := range m.Files {
-			n += file.EstimatedTokens()
-		}
-	}
-	return n
-}
-
 // Fits reserves next-turn headroom when requested.
 func Fits(selection llm.Selection, system string, tools []llm.ToolDefinition, messages []llm.Message, headroom bool) bool {
-	tokens := Tokens(messages)
-	if tokens < 0 {
-		return false
-	}
-	n := Estimate(system) + tokens
-	for _, t := range tools {
-		n += Estimate(t.Description) + Estimate(string(t.Parameters)) + 16
-	}
-	b := selection.Model.Budget
-	n += b.OutputAllowance + b.EstimationMargin
-	if headroom {
-		n += b.NextTurnInputReserve
-	}
-	return n < b.ContextLimit
+	input := EstimateInput(InputSnapshot{Selection: selection, System: system, Tools: tools, Messages: messages})
+	return FitsInput(input.Input, selection.Model.Budget, headroom)
 }
 
 // Retention describes independently selected human inputs and the recent
