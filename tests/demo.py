@@ -114,11 +114,18 @@ def main():
                 assert body['model'] == expected_model and body['reasoning']['effort'] == effort
                 assert body['parallel_tool_calls'] is True
                 assert body['stream'] and not body['store'] and 'max_output_tokens' not in body
-                # Unchanged tool boundaries reuse the last runtime snapshot.
+                # Runtime context starts with a baseline followed by field updates.
                 contexts = [item for item in body['input'] if item.get('role') == 'developer']
                 assert contexts, 'missing initial runtime context'
-                context = json.loads(contexts[-1]['content'][0]['text'])
+                context = json.loads(contexts[0]['content'][0]['text'])
                 assert context['type'] == 'runtime_context'
+                for item in contexts[1:]:
+                    payload = json.loads(item['content'][0]['text'])
+                    assert payload['type'] in ('runtime_context', 'runtime_context_update')
+                    if payload['type'] == 'runtime_context':
+                        context = payload
+                    else:
+                        assert isinstance(payload['set'], dict)
                 last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 child = context['actor'] != 'main'
                 conversation = child_requests if child else main_requests

@@ -106,8 +106,14 @@ def main():
                     assert all(results[call['id']]['ok'] for call in responses[index-1]['calls'])
                 contexts = [item for item in body['input'] if item.get('role') == 'developer']
                 assert contexts, 'missing initial runtime context'
-                context = json.loads(contexts[-1]['content'][0]['text'])
+                context = json.loads(contexts[0]['content'][0]['text'])
                 assert context['type'] == 'runtime_context'
+                # Undo/redo can introduce another baseline; model switches use updates.
+                for item in contexts[1:]:
+                    payload = json.loads(item['content'][0]['text'])
+                    assert payload['type'] in ('runtime_context', 'runtime_context_update')
+                    if payload['type'] == 'runtime_context_update':
+                        assert isinstance(payload['set'], dict)
                 last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 if last['type'] == 'function_call_output':
                     message = 'tool: ' + last['output']
