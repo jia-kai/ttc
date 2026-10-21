@@ -330,7 +330,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 				}
 				calls = []mockCall{
 					{"lsp_query", map[string]any{"job_id": get("m1_shell", "job_id"), "operation": "definition", "path": "sample.py", "line": 1, "column": 3, "limit": 1}}, {"edit", map[string]any{"path": "result.txt", "old_text": "alpha", "new_text": "beta"}}, {"patch", map[string]any{"patch_text": "*** Begin Patch\n*** Update File: result.txt\n@@\n-beta\n+gamma\n*** End Patch"}},
-					{"job_read", map[string]any{"job_id": get("m0_shell", "job_id"), "stream": "stderr", "cursor": "eof:-10:lines", "grep": "fixture"}}, {"job_list", map[string]any{"state": "all"}}, {"wakeup_list", map[string]any{}},
+					{"job_read", map[string]any{"job_id": get("m0_shell", "job_id"), "stream": "stderr", "grep": "fixture"}}, {"job_list", map[string]any{"state": "all"}}, {"wakeup_list", map[string]any{}},
 					{"web_fetch", map[string]any{"document_id": get("m0_web_fetch", "document_id"), "pattern": "fixture", "context_lines": 1}}, {"subagent", map[string]any{"persistent": true, "child_id": get("m1_subagent", "child_id"), "prompt": "Follow up by updating the retained result"}},
 				}
 			case 3:

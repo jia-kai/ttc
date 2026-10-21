@@ -39,7 +39,7 @@ type Budget struct {
 	OutputAllowance        int `json:"output_allowance"`
 	EstimationMargin       int `json:"estimation_margin"`
 	RecentTokensMin        int `json:"recent_tokens_min"` // Soft minimum for the recent model/tool tail, excluding independently retained human inputs.
-	RecentTokensMax        int `json:"recent_tokens_max"` // Tail target cap; oversized cycles are summarized except unconsumed binary tool results.
+	RecentTokensMax        int `json:"recent_tokens_max"` // Tail target cap; oversized consumed cycles are summarized, but unconsumed tool-result cycles stay intact.
 	NextTurnInputReserve   int `json:"next_turn_input_reserve"`
 	SummaryOutputAllowance int `json:"summary_output_allowance"`
 }

@@ -139,7 +139,7 @@ func TestStorageIntentsToolMetadataAndOutcomes(t *testing.T) {
 	if metadata, err := s.ToolExecution(ctx, call); err != nil || metadata.EntryID != copy || metadata.RequestID != request {
 		t.Fatal(metadata, err)
 	}
-	result, err := s.CallResult(loaded.ID, turn, "main", call, json.RawMessage(`null`), nil, nil, render.Markdown{Revision: 1, Summary: "image", Detail: "details"}, false)
+	result, err := s.CallResult(loaded.ID, turn, "main", call, json.RawMessage(`null`), nil, map[string]any{"result": json.RawMessage(`null`)}, render.Markdown{Revision: 1, Summary: "image", Detail: "details"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +178,64 @@ func TestStorageIntentsToolMetadataAndOutcomes(t *testing.T) {
 	}
 	if metadata, err := s.ToolExecution(ctx, call); err == nil || errors.Is(err, ErrNotFound) || metadata.EntryID != 0 {
 		t.Fatal("malformed model accepted", metadata, err)
+	}
+}
+
+func TestToolOutcomeUsesOriginalExecutionWhileConversationUsesDelivery(t *testing.T) {
+	s, v, turn, request := historyFixture(t)
+	_, calls, err := s.Assistant(v.ID, turn, "main", request, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "snapshot", Name: "image_show", Arguments: json.RawMessage(`{"path":"fixture.png"}`)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := s.ToolIntentEntry(context.Background(), calls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := json.RawMessage(`{"ok":true,"snapshot":"immutable-fixture.png","width":12,"height":8}`)
+	delivered := json.RawMessage(`{"ok":false,"reason":"batch_capacity","message":"original retained for inspection"}`)
+	result, err := s.CallResult(v.ID, turn, "main", calls[0], delivered, nil, map[string]any{"name": "image_show", "result": original}, render.Markdown{Revision: 1, Summary: "image", Detail: "snapshot fixture"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []int64{intent, result} {
+		outcome, err := s.ToolOutcomeForEntry(context.Background(), entry)
+		if err != nil || outcome.CallID != calls[0] || outcome.Name != "image_show" || string(outcome.Result) != string(original) {
+			t.Fatal("inspection did not recover original snapshot result", outcome, err)
+		}
+		outcome.Result[0] = 'X'
+	}
+	messages, err := s.Messages(v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range messages {
+		if message.Type == llm.TypeToolResult {
+			found = true
+			if message.Content != string(delivered) {
+				t.Fatal("conversation substituted original execution for delivery", message.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("conversation omitted completed tool result")
+	}
+}
+
+func TestToolOutcomeRejectsMalformedExecutionRecord(t *testing.T) {
+	for _, record := range []any{nil, map[string]any{"other": true}, []string{"not an object"}} {
+		s, v, turn, request := historyFixture(t)
+		call, err := s.CallIntent(v.ID, turn, "main", request, llm.ToolCall{ID: "snapshot", Name: "image_show", Arguments: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := s.CallResult(v.ID, turn, "main", call, json.RawMessage(`{"notice":true}`), nil, record, render.Markdown{Revision: 1}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ToolOutcomeForEntry(context.Background(), entry); err == nil {
+			t.Fatal("malformed execution record fell back to model delivery", record)
+		}
 	}
 }
 

@@ -283,8 +283,7 @@ func (t typed[A]) DecodeRecord(version int, b []byte) (Record, error) {
 
 // Registry owns a stable, sorted tool catalog and the dispatcher.
 type Registry struct {
-	tools  map[string]Tool
-	Detail func(Execution, []byte) (string, error)
+	tools map[string]Tool
 }
 
 // NewRegistry constructs an empty registry.
@@ -355,7 +354,6 @@ func (r *Registry) Get(name string) (Tool, bool) { t, ok := r.tools[name]; retur
 // keep their original ownership; excluded tools cannot be invoked through it.
 func (r *Registry) Filter(allow func(string) bool) *Registry {
 	out := NewRegistry()
-	out.Detail = r.Detail
 	for name, t := range r.tools {
 		if allow(name) {
 			out.tools[name] = t
@@ -364,7 +362,9 @@ func (r *Registry) Filter(allow func(string) bool) *Registry {
 	return out
 }
 
-// Invoke returns failures as serializable records; it does not persist or replay calls.
+// Invoke returns exact execution records, including oversized output and native
+// file references. It does not persist or replay calls; the runtime owns bounded
+// model delivery separately from this execution evidence.
 func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args json.RawMessage) Record {
 	var value any
 	var err error
@@ -440,19 +440,6 @@ func (r *Registry) Invoke(ctx context.Context, x Execution, name string, args js
 	if file != nil {
 		md.Summary += file.summary
 		md.Detail = file.detail + md.Detail
-	}
-	if len(b) > 64<<10 {
-		files = nil
-		path := ""
-		if r.Detail != nil {
-			path, e = r.Detail(x, b)
-		}
-		if path == "" || e != nil {
-			b, _ = marshalResult(map[string]any{"ok": false, "error": Fail("result_too_large", prompts.ToolResultTooLarge)})
-		} else {
-			b, _ = marshalResult(map[string]any{"ok": false, "truncated": true, "detail_path": path, "error": Fail("result_too_large", prompts.ToolResultRetained)})
-		}
-		md.Summary = render.Inline(name + prompts.ToolSummaryResultTooLarge)
 	}
 	return Record{Name: name, Arguments: args, Result: b, Markdown: md, Files: files}
 }

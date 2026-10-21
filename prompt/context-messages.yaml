@@ -6,8 +6,8 @@ ContextUnpairedResult: unpaired tool result prevents compaction
 ContextUnresolvedCalls: unresolved tool calls prevent compaction
 ContextHumanInputFailure: "human input %d: %w"
 ContextNoHumanInput: no human input to retain
-ContextUnreadBinaryCycle:
-  unread binary result has no complete assistant cycle to retain
+ContextUnconsumedToolCycle:
+  unconsumed tool result has no complete assistant cycle to retain
 ContextNoCompactableCycle:
   no unretained human input or completed older model cycle can be compacted
 ContextInvalidInputSource: invalid human input source %q

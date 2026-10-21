@@ -119,17 +119,27 @@ func (s *Store) ToolInspectionEntry(ctx context.Context, call string) (int64, bo
 	return entry.Int64, entry.Valid, nil
 }
 
-// ToolOutcomeForEntry resolves either an intent or result entry to its call.
+// ToolOutcomeForEntry resolves either an intent or result entry to its call and
+// original execution result, not the potentially reduced model delivery.
 // Unrelated or missing entries return ErrNotFound. Result bytes are caller-owned.
 func (s *Store) ToolOutcomeForEntry(ctx context.Context, entry int64) (ToolOutcome, error) {
 	var value ToolOutcome
 	var result sql.NullString
-	err := s.db.QueryRowContext(ctx, "SELECT id,name,result_json FROM tool_calls WHERE id=coalesce((SELECT call_id FROM tool_records WHERE entry_id=?),(SELECT json_extract(content_json,'$.call_id') FROM entries WHERE id=? AND kind='tool_call'))", entry, entry).Scan(&value.CallID, &value.Name, &result)
+	err := s.db.QueryRowContext(ctx, "SELECT c.id,c.name,r.record_json FROM tool_calls c LEFT JOIN tool_records r ON r.call_id=c.id WHERE c.id=coalesce((SELECT call_id FROM tool_records WHERE entry_id=?),(SELECT json_extract(content_json,'$.call_id') FROM entries WHERE id=? AND kind='tool_call')) ORDER BY r.entry_id DESC LIMIT 1", entry, entry).Scan(&value.CallID, &value.Name, &result)
 	if err != nil {
 		return ToolOutcome{}, intentError("read tool outcome", err)
 	}
 	if result.Valid {
-		value.Result = json.RawMessage(result.String)
+		var record struct {
+			Result json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(result.String), &record); err != nil {
+			return ToolOutcome{}, intentError("decode tool execution result", err)
+		}
+		if record.Result == nil {
+			return ToolOutcome{}, errors.New("saved tool execution record has no result")
+		}
+		value.Result = record.Result
 	}
 	return value, nil
 }

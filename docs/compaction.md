@@ -13,7 +13,7 @@ interactions stay live; explicit session changes/exit cancel them.
   ```text
   fixed_input + summary + retained_history + O + M
       + next_turn_input_reserve < C
-  recent_cycle_tail <= recent_tokens_max  (except unread binary-tool cycle)
+  recent_cycle_tail <= recent_tokens_max  (except unconsumed tool-result cycles)
   ```
 
   [Model budget metadata](models.md#budget-metadata) defines the fields and
@@ -57,14 +57,22 @@ interactions stay live; explicit session changes/exit cancel them.
   ```
 
   Keep the longest suffix within that target at a complete cycle boundary.
-  Summarize oversized cycles; never split tool pairs. Exception: retain the
-  newest cycle with binary tool results until a later assistant response
-  consumes them, even beyond the tail target. Fail if that cycle cannot fit
-  capacity/headroom; human/runtime messages alone do not establish consumption.
-  Unresolved calls block compaction. Subscription defaults: 4096–16000 estimated
-  tokens, excluding independently retained inputs. The replacement must fit
-  capacity/next-turn headroom. Fail if no older model work or unretained human
-  input can be summarized.
+  Summarize oversized consumed cycles; never split tool pairs. Keep the newest
+  call/result cycle outside summary input until a later assistant response
+  consumes its results, including text and native binary results, even beyond
+  the tail target. Overlapping pending calls move the cut back to the preceding
+  complete cycle boundary. Human/runtime messages alone do not establish
+  consumption. Compact preceding history first, then supply the fresh results
+  unchanged after the summary. Unresolved calls block compaction. Subscription
+  defaults: 4096–16000 estimated tokens, excluding independently retained
+  inputs. The replacement must fit capacity/next-turn headroom. If it cannot
+  fit, or no older model work or unretained human input can be summarized, leave
+  the existing context unchanged and report the failure. Tool completion
+  persistence bounds each batch's aggregate original payload below 20% of the
+  producing model's context, independent of remaining conversation capacity.
+  Bodies that exceed that intrinsic batch budget become model-facing retention
+  notices; full originals remain in durable tool records. See
+  [tool contracts](tools.md).
 
 ## Summary and history retrieval
 
@@ -135,11 +143,16 @@ interactions stay live; explicit session changes/exit cancel them.
   pause automatic notification turns without consuming pending messages. An
   explicit prompt, successful `/compact` or `/load`, or session/model change
   resumes them; failure alone never starts another compaction attempt.
-- Other summary/budget/invariant/persistence failures invalidate affected
-  context. Persist main failure and block the live process even if that write
-  fails; cancel jobs/timers/interactions. History remains
-  inspectable/exportable. Start or load another usable session; reloading does
-  not clear failure. Failed children close without invalidating main.
+- Summary input/output size limits, replacement capacity/headroom failures and
+  absence of older summarizable history are recoverable: keep the original
+  context and live jobs/timers/interactions. A failed capacity check does not
+  reject already admitted tool results. The actor may need smaller input or a
+  larger-context model before it can continue.
+- Other summary/invariant/persistence failures invalidate affected context.
+  Persist main failure and block the live process even if that write fails;
+  cancel jobs/timers/interactions. History remains inspectable/exportable. Start
+  or load another usable session; reloading does not clear failure. Failed
+  children close without invalidating main.
 - Failed handoff never switches/freezes main history. Child failure/cancellation
   still captures eager immutable diagnostic transcripts; these are not
   compaction archives. Startup leaves execution records untouched; manual

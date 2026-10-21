@@ -23,13 +23,12 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 	if err != nil || !strings.HasPrefix(v.Stdout, "out-1\n") || !strings.HasSuffix(v.Stdout, "out-20\n") || !strings.HasPrefix(v.Stderr, "err-1\n") || v.Truncated || len(v.Stdout)+len(v.Stderr) > 8192 {
 		t.Fatal(v, err)
 	}
-	page, err := m.Read(context.Background(), "main", id, ReadOptions{Stream: "stderr", Cursor: "eof:-3:lines", Limit: 1024, Grep: "ERR-(18|20)", IgnoreCase: true})
+	page, err := m.Read(context.Background(), "main", id, ReadOptions{Stream: "stderr", Limit: 1024, Grep: "ERR-(18|20)", IgnoreCase: true})
 	if err != nil || page["output"] != "err-18\nerr-20\n" || page["next_cursor"] != nil {
 		t.Fatal(page, err)
 	}
-	matched := page["matches"].([]map[string]any)
-	if len(matched) != 2 || matched[0]["line"] != int64(18) {
-		t.Fatal(matched)
+	if page["kind"] != "grep" || page["grep_origin"].(GrepOrigin).MatchCount != 2 {
+		t.Fatal(page)
 	}
 	for _, options := range []ReadOptions{{Stream: "combined", Limit: 16}, {Grep: "[", Limit: 16}, {Cursor: "eof:1:bytes", Limit: 16}} {
 		if _, err := m.Read(context.Background(), "main", id, options); err == nil {
@@ -64,7 +63,7 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if page["matches"].([]map[string]any)[0]["byte_offset"] != int64(2) {
+	if page["grep_origin"].(GrepOrigin).MatchCount != 1 {
 		t.Fatal(page)
 	}
 	v, err = m.Stop("main", childID)

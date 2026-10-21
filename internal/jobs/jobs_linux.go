@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -38,7 +37,8 @@ type Snapshot struct {
 	Kind            string             `json:"kind"`
 	Owner           string             `json:"owner_actor_id"`
 	Label           string             `json:"label"`
-	RecordDir       string             `json:"record_dir,omitempty"` // Watch-run records observed by a watch job.
+	RecordDir       string             `json:"record_dir,omitempty"`  // Watch-run records observed by a watch job.
+	Grep            *GrepOrigin        `json:"grep_origin,omitempty"` // Immutable filter and source snapshot bounds.
 	Status          string             `json:"status"`
 	Stdout          string             `json:"stdout"`
 	Stderr          string             `json:"stderr"`
@@ -78,14 +78,15 @@ type Manager struct {
 	Notify func(Snapshot)
 	// OnState publishes launch and terminal states outside the manager lock.
 	// Set before launching jobs; callbacks must not wait for this job to finish.
-	OnState func(Snapshot)
-	pool    *capture.Pool
+	OnState   func(Snapshot)
+	pool      *capture.Pool
+	grepScans chan struct{} // Bounds temporary whole-stream snapshots outside the capture pool.
 }
 
 // New constructs a live supervisor; foreground contexts do not own background jobs.
 func New(ctx context.Context, notify func(Snapshot)) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Manager{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, scopes: map[string]*managed.Scope{}, Notify: notify, pool: capture.NewPool(capture.SharedLimit)}
+	return &Manager{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, scopes: map[string]*managed.Scope{}, Notify: notify, pool: capture.NewPool(capture.SharedLimit), grepScans: make(chan struct{}, 2)}
 }
 
 // Start launches a closed-stdin shell in a dedicated process group.
@@ -377,11 +378,11 @@ func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 	return m.View(owner, id)
 }
 
-// ReadOptions selects a stream, cursor and bounded source page. Grep filters lines
-// within that source page; NextCursor still advances over the full source range.
+// ReadOptions selects a bounded stream page or creates a grep snapshot job.
+// Grep searches the entire retained raw stream and requires an empty cursor.
 type ReadOptions struct {
 	Stream, Cursor      string
-	Limit               int    // Bytes read before optional grep filtering; default is supplied by the tool.
+	Limit               int    // Source-byte page budget; default is supplied by the tool.
 	Grep                string // Go RE2 expression, empty disables filtering.
 	Literal, IgnoreCase bool
 	StripANSI           *bool // Nil uses cleaned output; false selects raw capture.
@@ -391,6 +392,9 @@ type ReadOptions struct {
 func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOptions) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if options.Grep != "" {
+		return m.grep(ctx, owner, id, options)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -422,45 +426,11 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 	if page.NextCursor != fmt.Sprint(page.End) || j.view.Status == "running" {
 		next = page.NextCursor
 	}
-	output := page.Output
-	matches := []map[string]any{}
-	if options.Grep != "" {
-		pattern := options.Grep
-		if options.Literal {
-			pattern = regexp.QuoteMeta(pattern)
-		}
-		if options.IgnoreCase {
-			pattern = "(?i)" + pattern
-		}
-		expression, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, fmt.Errorf(prompts.JobOutputGrepFailure, err)
-		}
-		var kept strings.Builder
-		line, offset := page.Line, page.Start
-		lines := page.Lines
-		if !capture.StripEnabled(options.StripANSI) {
-			for _, text := range strings.SplitAfter(output, "\n") {
-				lines = append(lines, capture.PresentedLine{Text: text, Start: offset, Line: line})
-				line++
-				offset += int64(len(text))
-			}
-		}
-		for _, source := range lines {
-			text := source.Text
-			if text == "" {
-				continue
-			}
-			if expression.MatchString(strings.TrimSuffix(text, "\n")) {
-				kept.WriteString(text)
-				matches = append(matches, map[string]any{"line": source.Line, "byte_offset": source.Start, "text": strings.TrimSuffix(text, "\n")})
-			}
-		}
-		output = kept.String()
-	}
-	out := map[string]any{"job_id": id, "kind": j.view.Kind, "status": j.view.Status, "stream": stream, "output": output, "next_cursor": next, "truncated": page.Truncated, "start_byte": page.Start}
-	if options.Grep != "" {
-		out["matches"] = matches
+	out := map[string]any{"job_id": id, "kind": j.view.Kind, "status": j.view.Status, "stream": stream, "output": page.Output, "next_cursor": next, "truncated": page.Truncated, "start_byte": page.Start}
+	if j.view.Grep != nil {
+		origin := *j.view.Grep
+		out["grep_origin"] = origin
+		out["truncated"] = page.Truncated || origin.Truncated
 	}
 	if j.view.ExitCode != nil {
 		out["exit_code"] = *j.view.ExitCode

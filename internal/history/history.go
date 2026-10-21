@@ -668,8 +668,10 @@ func (s *Store) CallIntent(session, turn, actor string, request int64, c llm.Too
 	return id, e
 }
 
-// CallResult commits immutable JSON metadata, native binary references and portable
-// presentation. Original bytes remain in a disposable cache, not in history.
+// CallResult atomically commits model-delivered JSON/files separately from the
+// immutable execution record and portable presentation. A delivery notice can
+// withhold an original result without losing execution evidence in record.
+// Original attachment bytes remain in a disposable cache, not in history.
 func (s *Store) CallResult(session, turn, actor, call string, result json.RawMessage, files []llm.BinaryFile, record any, md render.Markdown, visible bool) (int64, error) {
 	b, e := json.Marshal(record)
 	if e != nil {

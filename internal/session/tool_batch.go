@@ -51,6 +51,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 	entryIDs := make([]int64, len(ids))
 	requestIDs := make([]int64, len(ids))
 	binaryFiles := make([][]llm.BinaryFileType, len(ids))
+	budget := toolResultBudget{}
 	for i, id := range ids {
 		// Call IDs are globally unique. A continuation may archive rather than copy
 		// this intent; its historical entry is still inspectable while the call runs.
@@ -62,6 +63,10 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 		}
 		entryIDs[i], requestIDs[i] = metadata.EntryID, metadata.RequestID
 		binaryFiles[i] = metadata.Selection.Model.BinaryFileTypes()
+		limit := max(1, metadata.Selection.Model.Budget.ContextLimit/5)
+		if budget.limit == 0 || limit < budget.limit {
+			budget.limit = limit
+		}
 	}
 	run := func(i int) {
 		call := calls[i]
@@ -129,17 +134,22 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 	var batchErr error
 	for range calls {
 		result := <-done
-		records[result.index] = result.record
 		r.routeMu.RLock()
-		entry, err := r.Store.CallResult(r.Current(), turn, actor, ids[result.index], result.record.Result, result.record.Files, result.record, result.record.Markdown, actor == "main")
+		delivered, deliveryErr := budget.deliver(r, r.Current(), result.record)
+		// Preserve exact execution separately from the model-visible delivery.
+		original := result.record
+		original.Markdown = delivered.Markdown
+		entry, err := r.Store.CallResult(r.Current(), turn, actor, ids[result.index], delivered.Result, delivered.Files, original, delivered.Markdown, actor == "main")
 		r.routeMu.RUnlock()
+		records[result.index] = delivered
+		err = errors.Join(err, deliveryErr)
 		if err != nil {
 			batchErr = errors.Join(batchErr, err)
 			cancel()
 			close(result.stored)
 			continue
 		}
-		text := result.record.Markdown.Summary
+		text := delivered.Markdown.Summary
 		r.emit(Event{Kind: "tool", Actor: actor, Text: text, EntryID: entry, CallID: ids[result.index]})
 		close(result.stored)
 	}

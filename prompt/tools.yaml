@@ -69,14 +69,17 @@ job_read:
     Read captured job_id output. stream defaults to stdout, or stderr for LSP
     diagnostics. cursor defaults to the oldest retained byte, accepts an
     absolute byte offset or eof:-N:bytes / eof:-N:lines. limit_bytes defaults to
-    16384. Optional grep is a case-sensitive RE2 expression; literal=true
-    matches text and case_sensitive=false ignores case. Filtering applies only
-    to the source page; continue with next_cursor even if no lines match. Older
-    output may have been discarded; truncated identifies a lost prefix. status
-    is scheduler job status, even for subagents, not assignment_status.
-    strip_ansi defaults to true: strip escapes and resolve line-local progress
-    overwrites before grep. Set false for raw output. Limits, cursors and match
-    origins remain source-byte based; cleaning context is bounded to 64 KiB.
+    16384. Nonempty grep searches the entire retained raw stream snapshot as a
+    case-sensitive RE2 expression; literal=true matches text and
+    case_sensitive=false ignores case. With grep, omit cursor. It creates a
+    completed virtual job containing matching physical lines and returns its new
+    job_id, grep_origin metadata and first page. Page that new job's stdout
+    using next_cursor without repeating grep. Cursors refer to the virtual
+    output, not original source positions. Later source writes do not change
+    matches; normal capture eviction can still discard output. truncated and
+    grep_origin.truncated disclose retention loss. status is scheduler status,
+    not assignment_status. strip_ansi defaults to true for presentation only;
+    matching always uses raw bytes. Set false to read raw output.
 job_stop:
   description: >-
     Stop an accessible command process group with job_id. With child_id, main

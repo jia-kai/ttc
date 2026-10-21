@@ -341,6 +341,25 @@ func (b *Buffer) read(cursor string, limit int) (Page, error) {
 	return Page{Output: string(data), NextCursor: fmt.Sprint(base + int64(end)), Start: base + int64(start), End: b.total, Line: line, Truncated: lost}, nil
 }
 
+// Release removes an unpublished buffer and its allocation from the pool.
+// Callers must ensure no writers or readers still use the buffer.
+func (b *Buffer) Release() {
+	p := b.pool
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, candidate := range p.buffers {
+		if candidate == b {
+			copy(p.buffers[i:], p.buffers[i+1:])
+			p.buffers[len(p.buffers)-1] = nil
+			p.buffers = p.buffers[:len(p.buffers)-1]
+			p.used -= len(b.data)
+			b.data, b.clean = nil, nil
+			b.start, b.size = 0, 0
+			return
+		}
+	}
+}
+
 // Clear releases every retained ring once its runtime has joined all writers.
 func (p *Pool) Clear() {
 	p.mu.Lock()

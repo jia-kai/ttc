@@ -46,13 +46,17 @@ type Retention struct {
 	Inputs []int // Sorted human-message indices before Start: at most two non-steers and two steers.
 }
 
+// ErrNoCompactableHistory means retention leaves no older work to summarize.
+// The original conversation remains usable and must not be discarded.
+var ErrNoCompactableHistory = errors.New(prompts.ContextNoCompactableCycle)
+
 // Retain targets the tokens in the latest two assistant/tool cycles after the
 // latest human instruction, clamped to [minTokens, maxTokens]. It keeps the
 // longest suffix within that target starting at a complete cycle boundary;
-// oversized cycles enter the summary rather than exceeding maxTokens, except
-// the latest cycle with binary tool results not yet followed by an assistant
-// response. That cycle must remain intact, even above the tail target; callers
-// reject compaction if it cannot fit the complete request. The last
+// oversized consumed cycles enter the summary rather than exceeding maxTokens.
+// Tool results not yet followed by an assistant response stay with their entire
+// call cycle, even above the tail target; callers check the complete request's
+// capacity. The last
 // two normal/queued inputs combined and last two steers are retained separately,
 // outside the tail budget; task/btw inputs count with normal/queued inputs.
 // Runtime notices are not human inputs. Unresolved calls fail, and callers check
@@ -138,9 +142,9 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 			break
 		}
 	}
-	// A metadata-only summary cannot substitute for a native attachment that
-	// the coding model has never seen. A later assistant response establishes
-	// consumption; human/runtime messages alone do not.
+	// Summarization must not consume fresh tool results on the coding model's
+	// behalf. Only a later assistant response establishes consumption;
+	// human/runtime messages alone do not.
 	latestAssistant := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Type == llm.TypeAssistant {
@@ -150,7 +154,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	}
 	if latestAssistant >= 0 {
 		for _, message := range messages[latestAssistant+1:] {
-			if message.Type == llm.TypeToolResult && len(message.Files) > 0 {
+			if message.Type == llm.TypeToolResult {
 				// Overlapping calls can leave the latest assistant inside an
 				// earlier cycle. Preserve all calls needed to pair its results.
 				start := latestAssistant
@@ -158,7 +162,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 					start--
 				}
 				if start < 0 {
-					return fail(prompts.ContextUnreadBinaryCycle)
+					return fail(prompts.ContextUnconsumedToolCycle)
 				}
 				cut = min(cut, start)
 				break
@@ -176,7 +180,7 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 			return Retention{Start: cut, Inputs: inputs}, nil
 		}
 	}
-	return fail(prompts.ContextNoCompactableCycle)
+	return Retention{}, ErrNoCompactableHistory
 }
 
 func inputSource(message llm.Message) (string, error) {

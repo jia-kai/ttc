@@ -278,8 +278,8 @@ func TestClippingTypedNormalizer(t *testing.T) {
 	}
 }
 
-func TestClippingWarningsSurviveResultFallbacks(t *testing.T) {
-	for _, mode := range []string{"encoding", "oversize", "retained"} {
+func TestClippingWarningsSurviveEncodingAndLargeExecutionResults(t *testing.T) {
+	for _, mode := range []string{"encoding", "large"} {
 		t.Run(mode, func(t *testing.T) {
 			r := NewRegistry()
 			Register(r, "bounded", "", map[string]any{"first": IntegerRange(1, 10)}, nil,
@@ -289,22 +289,17 @@ func TestClippingWarningsSurviveResultFallbacks(t *testing.T) {
 					}
 					return map[string]any{"ok": true, "content": strings.Repeat("x", 70<<10)}, nil
 				})
-			if mode == "retained" {
-				r.Detail = func(_ Execution, data []byte) (string, error) {
-					if !strings.Contains(string(data), `"input_clipped"`) {
-						t.Fatal("retained result lost warning")
-					}
-					return "/synthetic-retained-result", nil
-				}
-			}
 			record := r.Invoke(context.Background(), Execution{}, "bounded", []byte(`{"first":99}`))
 			result := decodeClippingResult(t, record)
-			code := "result_too_large"
 			if mode == "encoding" {
-				code = "execution_failed"
+				if result.OK || result.Error == nil || result.Error.Code != "execution_failed" {
+					t.Fatal(string(record.Result))
+				}
+			} else if !result.OK || len(record.Result) <= 64<<10 {
+				t.Fatal("registry replaced original before runtime delivery")
 			}
-			if result.OK || result.Error == nil || result.Error.Code != code || len(result.Warnings) != 1 || result.Warnings[0].Effective != float64(10) || len(record.Result) > 64<<10 {
-				t.Fatalf("fallback lost warning or error: %s", record.Result)
+			if len(result.Warnings) != 1 || result.Warnings[0].Effective != float64(10) {
+				t.Fatal("execution record lost input warning")
 			}
 		})
 	}

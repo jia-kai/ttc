@@ -79,10 +79,9 @@ func TestCleanGrepRawOriginsAndInspection(t *testing.T) {
 	if err != nil || page["output"] != "second\n" {
 		t.Fatal(page, err)
 	}
-	matches := page["matches"].([]map[string]any)
-	firstSource := int64(strings.Index(raw, "\n") + 1)
-	if len(matches) != 1 || matches[0]["byte_offset"] != firstSource || matches[0]["line"] != int64(2) {
-		t.Fatal(matches)
+	origin := page["grep_origin"].(GrepOrigin)
+	if origin.MatchCount != 1 || origin.EndByte != int64(len(raw)) {
+		t.Fatal(origin)
 	}
 	inspection, err := m.Inspect(context.Background(), "main", id)
 	if err != nil || inspection.Output[0].Text != "first\nsecond\n" {

@@ -273,8 +273,8 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			return e
 		}
 		notices := append(append([]llm.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
-		if e = compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, notices, contextMessage); e != nil {
-			return e
+		if !compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, notices, contextMessage) {
+			return &compactionCapacityError{"Compacted context still exceeds this model's input budget. The current context was not replaced, and existing jobs/timers remain live. Select a larger-context model with /model, or save a concise handoff and start a new session with /new (which cancels session-owned work)."}
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()

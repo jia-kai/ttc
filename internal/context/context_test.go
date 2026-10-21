@@ -3,6 +3,7 @@ package context
 import (
 	stdcontext "context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -112,14 +113,14 @@ func TestRetentionClampsTokenTargetAtCompleteCycleBoundaries(t *testing.T) {
 		{"soft minimum extends to three", 3 * last, 10 * last, starts[2]},
 		{"hard maximum allows one", 0, last, starts[4]},
 		{"boundary rounds down", 0, last + last/2, starts[4]},
-		{"oversized latest cycle summarized", 0, last - 1, len(messages)},
+		{"oversized fresh cycle protected", 0, last - 1, starts[4]},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			retention, err := Retain(messages, test.min, test.max)
 			if err != nil || retention.Start != test.want || !reflect.DeepEqual(retention.Inputs, []int{0}) {
 				t.Fatal(retention, err)
 			}
-			if Tokens(messages[retention.Start:]) > test.max {
+			if Tokens(messages[retention.Start:]) > test.max && retention.Start != starts[4] {
 				t.Fatal("retained tail exceeded hard maximum")
 			}
 		})
@@ -169,6 +170,32 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 	retained, err = Retain(overlapping, 0, 100)
 	if err != nil || retained.Start != 3 {
 		t.Fatal("overlapping tool calls lost the unread original or its complete cycle", retained, err)
+	}
+}
+
+func TestRetentionPreservesUnconsumedTextBatch(t *testing.T) {
+	messages := []llm.Message{
+		{Type: llm.TypeUserInput, Content: "Task", InputSource: "task"},
+		{Type: llm.TypeAssistant, Content: strings.Repeat("older work ", 1000)},
+		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "a"}, {ID: "b"}}},
+		{Type: llm.TypeToolResult, CallID: "b", Content: strings.Repeat("fresh b ", 1000)},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "Keep going"},
+		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "c"}}},
+		{Type: llm.TypeToolResult, CallID: "c", Content: "fresh c"},
+		{Type: llm.TypeToolResult, CallID: "a", Content: strings.Repeat("fresh a ", 1000)},
+		{Type: llm.TypeRuntimeNotification, Content: "Timer fired"},
+	}
+	retained, err := Retain(messages, 0, 100)
+	if err != nil || retained.Start != 2 || !reflect.DeepEqual(retained.Inputs, []int{0}) {
+		t.Fatal("fresh text batch lost a pair or duplicated its steer", retained, err)
+	}
+	if _, err := Retain(append(messages[:1:1], messages[2:]...), 0, 100); !errors.Is(err, ErrNoCompactableHistory) {
+		t.Fatal("no older work must fail without discarding fresh results", err)
+	}
+	consumed := append(append([]llm.Message(nil), messages...), llm.Message{Type: llm.TypeAssistant, Content: "All results inspected"})
+	retained, err = Retain(consumed, 0, 100)
+	if err != nil || retained.Start != len(consumed)-1 {
+		t.Fatal("consumed oversized cycle did not become summarizable", retained, err)
 	}
 }
 

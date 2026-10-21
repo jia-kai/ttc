@@ -9,22 +9,27 @@ import (
 // Metadata is the output-free projection used by routine job lists and runtime
 // snapshots. Command is included only by an explicitly detailed job list.
 type Metadata struct {
-	ID         string `json:"job_id"`
-	Kind       string `json:"kind"`
-	Owner      string `json:"owner_actor_id"`
-	Label      string `json:"label"`
-	RecordDir  string `json:"record_dir,omitempty"`
-	Status     string `json:"status"`
-	StartedAt  string `json:"started_at"`
-	FinishedAt string `json:"finished_at,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
-	Signal     string `json:"signal,omitempty"`
-	Command    string `json:"command,omitempty"`
+	ID         string      `json:"job_id"`
+	Kind       string      `json:"kind"`
+	Owner      string      `json:"owner_actor_id"`
+	Label      string      `json:"label"`
+	RecordDir  string      `json:"record_dir,omitempty"`
+	Status     string      `json:"status"`
+	StartedAt  string      `json:"started_at"`
+	FinishedAt string      `json:"finished_at,omitempty"`
+	ExitCode   *int        `json:"exit_code,omitempty"`
+	Signal     string      `json:"signal,omitempty"`
+	Command    string      `json:"command,omitempty"`
+	Grep       *GrepOrigin `json:"grep_origin,omitempty"`
 }
 
 // Metadata returns an independent, output-free snapshot without the command.
 func (s Snapshot) Metadata() Metadata {
 	v := Metadata{ID: s.ID, Kind: s.Kind, Owner: s.Owner, Label: s.Label, RecordDir: s.RecordDir, Status: s.Status, StartedAt: s.StartedAt, FinishedAt: s.FinishedAt, Signal: s.Signal}
+	if s.Grep != nil {
+		origin := *s.Grep
+		v.Grep = &origin
+	}
 	if s.ExitCode != nil {
 		code := *s.ExitCode
 		v.ExitCode = &code

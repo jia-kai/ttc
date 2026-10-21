@@ -35,6 +35,8 @@ ToolInputTooLarge: "input exceeds 16 MiB"
 ToolInputClipped: "%s was clipped from %d to %d (accepted range %d-%d)."
 ToolIntegerRange: "%s must be %d–%d"
 ToolJobListState: "state must be running or all; omit it to list running jobs"
+JobGrepCursor:
+  "grep requires an empty cursor; paginate the returned grep job_id without grep"
 ToolJobStopIdentifier: "supply exactly one of job_id or child_id"
 ToolLSPBackgroundRequired: "protocol=lsp requires background=true"
 ToolLSPDocumentPosition:
@@ -92,12 +94,6 @@ ToolReplacementTooLarge:
   occurrences"
 ToolRequired: "%s is required"
 ToolResultEncodingFailed: "result encoding failed"
-ToolResultRetained:
-  "complete JSON retained at detail_path; narrow the original call, or use shell
-  if available for bounded JSON/byte extraction"
-ToolResultTooLarge:
-  "result exceeds 64 KiB; narrow the call or reduce its page limit"
-ToolSummaryResultTooLarge: " · result too large"
 ToolDiffBudgetExhausted: "Diff omitted: display limit reached."
 ToolDiffUnavailable: "Diff unavailable: "
 ToolDiffTruncated:

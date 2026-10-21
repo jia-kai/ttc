@@ -112,16 +112,16 @@
 `ModelInfo.Limits` carries endpoint capacities; `catalog.Policy` supplies TTC
 reserves when preparing `ModelSpec.Budget`. Never invent remote model limits.
 
-| Token field                | Meaning                                       |
-| -------------------------- | --------------------------------------------- |
-| `context_limit`            | Effective input-plus-output capacity          |
-| `max_output_tokens`        | Endpoint ceiling, or zero when unpublished    |
-| `output_allowance`         | Coding output reserve; cap where supported    |
-| `estimation_margin`        | Estimation/wire-overhead reserve              |
-| `recent_tokens_min`        | Soft minimum for recent model/tool cycles     |
-| `recent_tokens_max`        | Tail target cap; unread binary cycle excepted |
-| `next_turn_input_reserve`  | Free capacity for new input after compaction  |
-| `summary_output_allowance` | Summary reserve; cap where supported          |
+| Token field                | Meaning                                          |
+| -------------------------- | ------------------------------------------------ |
+| `context_limit`            | Effective input-plus-output capacity             |
+| `max_output_tokens`        | Endpoint ceiling, or zero when unpublished       |
+| `output_allowance`         | Coding output reserve; cap where supported       |
+| `estimation_margin`        | Estimation/wire-overhead reserve                 |
+| `recent_tokens_min`        | Soft minimum for recent model/tool cycles        |
+| `recent_tokens_max`        | Tail target cap; unconsumed tool cycles excepted |
+| `next_turn_input_reserve`  | Free capacity for new input after compaction     |
+| `summary_output_allowance` | Summary reserve; cap where supported             |
 
 Reject unknown variants/options, invalid capacities and invalid reserve policy.
 Preparation clamps output/summary allowances to published ceilings and omits

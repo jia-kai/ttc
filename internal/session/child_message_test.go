@@ -179,6 +179,9 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 				return map[string]bool{"settled": true}, nil
 			})
 			compactionBudget(t, r)
+			// Allow the first cycle to be consumed before compaction; fresh
+			// results cannot be summarized just to manufacture older work.
+			r.selection.Model.Budget.ContextLimit += 6000
 			started, release := make(chan struct{}), make(chan struct{})
 			var coding, summaries atomic.Int32
 			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
@@ -188,11 +191,11 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 					<-release
 					return emit(llm.StreamEvent{Kind: "text", Text: "Concise child handoff."})
 				}
-				if coding.Add(1) == 1 {
+				if n := coding.Add(1); n <= 2 {
 					if err := emit(llm.StreamEvent{Kind: "text", Text: strings.Repeat("Old child research notes. ", 700)}); err != nil {
 						return err
 					}
-					return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "noop", Name: "child_noop", Arguments: []byte(`{}`)}})
+					return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: fmt.Sprintf("noop-%d", n), Name: "child_noop", Arguments: []byte(`{}`)}})
 				}
 				count := 0
 				for _, message := range req.Messages {
@@ -240,14 +243,14 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 				t.Fatal(err)
 			}
 			if oversized {
-				if coding.Load() != 2 || delivered != 0 || view.Status != "completed" {
+				if coding.Load() != 3 || delivered != 0 || view.Status != "completed" {
 					t.Fatal(coding.Load(), delivered, view)
 				}
 				var undelivered int
 				if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 0 {
 					t.Fatal(undelivered, err)
 				}
-			} else if coding.Load() != 2 || delivered != 1 || view.Status != "completed" {
+			} else if coding.Load() != 3 || delivered != 1 || view.Status != "completed" {
 				t.Fatal(coding.Load(), delivered, view)
 			}
 		})

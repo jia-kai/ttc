@@ -186,8 +186,9 @@ func snapshotDimensions(path string) imageDimensions {
 	return imageDimensions{config.Width, config.Height}
 }
 
-// TranscriptJSONL saves original entry envelopes and exact related tool records,
-// including instruction text and opaque provider state, through the selected cut.
+// TranscriptJSONL saves original entry envelopes, execution tool records and
+// separately delivered results, including instruction text and opaque provider
+// state, through the selected cut.
 // Pending calls never acquire a result committed after that cut.
 func (s *Store) TranscriptJSONL(session string, tip int64) ([]byte, error) {
 	entries, err := s.Branch(session, tip)
@@ -240,11 +241,14 @@ func (s *Store) writeTranscriptJSONLEntries(ctx context.Context, q historyReader
 			}
 			record["call"] = map[string]any{"id": ref.CallID, "request_id": request, "version": version, "provider_call_id": providerID, "name": name, "payload": json.RawMessage(call)}
 			if entry.Kind == "tool_result" {
-				var raw, md string
-				if err := q.QueryRow("SELECT record_json,markdown_json FROM tool_records WHERE entry_id=?", entry.ID).Scan(&raw, &md); err != nil {
+				var raw, md, delivered string
+				// Only selected result entries expose delivery. Looking it up for
+				// an intent would leak completions committed after the frozen cut.
+				if err := q.QueryRow("SELECT r.record_json,r.markdown_json,c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=?", entry.ID).Scan(&raw, &md, &delivered); err != nil {
 					return err
 				}
 				record["tool_record"], record["presentation"] = json.RawMessage(raw), json.RawMessage(md)
+				record["delivered_result"] = json.RawMessage(delivered)
 			}
 		}
 		if err := enc.Encode(record); err != nil {

@@ -162,6 +162,10 @@ func (m *Manager) Inspect(ctx context.Context, owner, id string) (Inspection, er
 }
 
 func cloneSnapshot(view Snapshot) Snapshot {
+	if view.Grep != nil {
+		origin := *view.Grep
+		view.Grep = &origin
+	}
 	if view.ExitCode != nil {
 		code := *view.ExitCode
 		view.ExitCode = &code

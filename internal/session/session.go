@@ -166,7 +166,6 @@ func (r *Runtime) resetTransient() {
 	r.namingCtx, r.namingCancel = context.WithCancel(r.ctx)
 	r.namingDone = nil
 	r.Tools = tool.NewRegistry()
-	r.Tools.Detail = func(x tool.Execution, b []byte) (string, error) { return r.Store.Artifact(x.SessionID, "details", b) }
 	r.Jobs = jobs.New(r.ctx, func(v jobs.Snapshot) {
 		result, _ := json.Marshal(v)
 		// Summary identity is independent of inspection customization.

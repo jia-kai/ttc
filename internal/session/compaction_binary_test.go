@@ -132,8 +132,17 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						t.Fatal("expected exactly one bounded summary request", summaries, err)
 					}
 					if !fits {
-						if err == nil || !strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || result != nil || coding != 0 {
+						expected := prompts.SessionCompactionHeadroom
+						if actor == "main" {
+							expected = "/model"
+						} else if actor == "btw" {
+							expected = "/btw"
+						}
+						if err == nil || !strings.Contains(err.Error(), expected) || r.Current() != before || result != nil || coding != 0 {
 							t.Fatal("unfittable unread original was silently summarized", err, coding)
+						}
+						if actor != "child" && strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) {
+							t.Fatal("human-facing failure contains parent-agent instructions", err)
 						}
 						if actor != "main" && (cursor.snapshot == nil || cursor.snapshot.Actor != "old actor") {
 							t.Fatal("failed isolated compaction changed cursor", cursor)
@@ -149,8 +158,8 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 									found = true
 								}
 							}
-							if !found || r.checkContext() == nil {
-								t.Fatal("failed handoff lost original or left an unusable context admitted")
+							if !found || r.checkContext() != nil || !recoverableCompaction(err) {
+								t.Fatal("failed handoff lost original or invalidated unchanged context")
 							}
 						}
 						return

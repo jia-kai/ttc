@@ -55,6 +55,11 @@ func TestLSPJobsOwnProtocolAndCancelQueries(t *testing.T) {
 	if _, err := m.Read(ctx, "main", id, ReadOptions{Stream: "stdout", Limit: 1024}); err == nil {
 		t.Fatal("protocol stdout exposed")
 	}
+	_, err = m.Read(ctx, "main", id, ReadOptions{Stream: "stdout", Grep: ".*", Limit: 1024})
+	var grepFailure *lsp.Error
+	if !errors.As(err, &grepFailure) || grepFailure.Code != "invalid_input" {
+		t.Fatal("grep protocol stdout error lost invalid_input", err)
+	}
 	page, err := m.Read(ctx, "main", id, ReadOptions{Limit: 4096})
 	if err != nil || page["stream"] != "stderr" || strings.Contains(page["output"].(string), "Content-Length:") {
 		t.Fatal(page, err)

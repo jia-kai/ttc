@@ -57,6 +57,19 @@ WakeupCancelNotFound:
   or name
 SessionToolInterrupted: stream did not complete; tool was not executed
 SessionToolIntentMismatch: tool call/intent count mismatch
+SessionToolResultBudget: >-
+  Result delivery withheld: this result or the aggregate tool-result batch
+  reaches 20% of the producing model's context capacity. Request smaller pages,
+  narrower searches or fewer results per batch. This is not a tool-execution
+  failure: commands or mutations may already have completed. Do not rerun
+  side-effecting tools merely to retrieve output; inspect the retained result or
+  job with bounded reads instead.
+SessionToolResultRetention: "retain oversized tool result: %w"
+SessionToolResultByteLimit: >-
+  Result delivery withheld: JSON exceeds the 64-KiB per-result limit. Narrow
+  read-only queries or use bounded extraction from detail_path. Execution may
+  already have succeeded; do not rerun commands or mutations merely to retrieve
+  output. Full execution evidence and attachment references remain retained.
 SessionUnusableAfterCompaction:
   "session unusable after compaction: %s; inspect/export history or start/load
   another session"
@@ -66,12 +79,14 @@ SessionSummaryMessageHeader: "\n### %s"
 SessionSummaryCallID: " · %s"
 SessionSummaryToolCall: "Tool call %s · %s\n%s\n"
 SessionSummaryBinaryAttachment: "Binary attachment (%s): %s\n"
-SessionCompactionHeadroom:
-  compaction summary, retained history (including unread binary results) and
-  pending input/events exceed available model context; this context cannot
-  continue. For main-context failure, start/load another session; for
-  child-context failure, have main create a new child. Use smaller files or
-  narrower input.
+SessionCompactionHeadroom: >-
+  The child's context is still too large after compaction, so the assignment
+  failed and the child is closed. Inspect any returned partial answer and
+  transcript paths. Continue the remaining work yourself, or create a new child
+  with a narrower task, a concise handoff and bounded reads. Do not retry the
+  same assignment unchanged or send a follow-up to the closed child. Main-owned
+  jobs and timers remain live. Do not rerun commands or mutations merely to
+  recover their output.
 SessionCompactionInputTooLarge:
   compaction input exceeds model context (estimated input %d + output/margin
   reserve %d, limit %d tokens); no summary was requested

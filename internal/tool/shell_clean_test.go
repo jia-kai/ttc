@@ -36,3 +36,38 @@ func TestShellCleanToolAndRawOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestJobReadGrepCreatesPaginatedSnapshot(t *testing.T) {
+	r, w, x, req := toolFixture(t)
+	m := jobs.New(context.Background(), nil)
+	defer m.Close()
+	AddShell(r, m, w, nil)
+	record := invoke(t, r, w, x, req, "shell", `{"command":"printf 'skip\\nhit one\\nhit two\\n'"}`)
+	var source jobs.Snapshot
+	if err := json.Unmarshal(record.Result, &source); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{"job_id": source.ID, "grep": "hit", "limit_bytes": 8})
+	record = invoke(t, r, w, x, req, "job_read", string(args))
+	var first struct {
+		ID     string          `json:"job_id"`
+		Kind   string          `json:"kind"`
+		Output string          `json:"output"`
+		Next   string          `json:"next_cursor"`
+		Origin jobs.GrepOrigin `json:"grep_origin"`
+	}
+	if err := json.Unmarshal(record.Result, &first); err != nil || first.ID == source.ID || first.Kind != "grep" || first.Output != "hit one\n" || first.Origin.SourceJobID != source.ID {
+		t.Fatal(string(record.Result), err)
+	}
+	args, _ = json.Marshal(map[string]any{"job_id": first.ID, "cursor": first.Next})
+	record = invoke(t, r, w, x, req, "job_read", string(args))
+	var last map[string]any
+	if err := json.Unmarshal(record.Result, &last); err != nil || last["output"] != "hit two\n" || last["next_cursor"] != nil {
+		t.Fatal(string(record.Result), err)
+	}
+	args, _ = json.Marshal(map[string]any{"job_id": source.ID, "grep": "hit", "cursor": "0"})
+	record = invoke(t, r, w, x, req, "job_read", string(args))
+	if !strings.Contains(string(record.Result), "grep requires an empty cursor") {
+		t.Fatal(string(record.Result))
+	}
+}

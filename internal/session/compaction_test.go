@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"ttc/internal/capture"
 	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
@@ -64,6 +65,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 				{Type: llm.TypeUserInput, Content: "Inspect this array.", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
 				{Type: llm.TypeToolResult, CallID: "array", Content: payload},
+				{Type: llm.TypeAssistant, Content: "Array inspected."},
 				{Type: llm.TypeUserInput, Content: "Continue.", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 			}
 			calls := 0
@@ -98,7 +100,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 	}
 }
 
-func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
+func TestCompactionPreservesOversizedFreshToolCycle(t *testing.T) {
 	for _, actor := range []string{"main", "child", "btw"} {
 		t.Run(actor, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
@@ -115,8 +117,8 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 			requests := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
-				if !req.NoTools || !strings.Contains(req.Messages[0].Content, payload) || !strings.Contains(req.Messages[0].Content, `{"path":"fixture.txt"}`) {
-					t.Fatal("summary lost the complete oversized cycle")
+				if !req.NoTools || strings.Contains(req.Messages[0].Content, payload) || strings.Contains(req.Messages[0].Content, `{"path":"fixture.txt"}`) || !strings.Contains(req.Messages[0].Content, "Earlier result") {
+					t.Fatal("summary must cover older work, not fresh results")
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Recent output was inspected; continue the task."})
 			}}
@@ -143,17 +145,16 @@ func TestCompactionSummarizesOversizedRecentToolCycle(t *testing.T) {
 			if err != nil || requests != 1 || r.checkContext() != nil {
 				t.Fatal("oversized cycle prevented handoff", err, requests)
 			}
-			foundInstruction := false
+			foundInstruction, foundCall, foundResult := false, false, false
 			for _, message := range result {
 				if message.Content == messages[2].Content {
 					foundInstruction = true
 				}
-				if len(message.Calls) > 0 || message.Type == llm.TypeToolResult || message.Content == payload {
-					t.Fatal("oversized cycle survived the hard maximum")
-				}
+				foundCall = foundCall || len(message.Calls) == 1 && message.Calls[0].ID == "read"
+				foundResult = foundResult || message.Type == llm.TypeToolResult && message.CallID == "read" && message.Content == payload
 			}
-			if !foundInstruction {
-				t.Fatal("human instruction was not retained")
+			if !foundInstruction || !foundCall || !foundResult {
+				t.Fatal("handoff lost human input or the complete fresh tool cycle")
 			}
 		})
 	}
@@ -164,14 +165,28 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Actual model history. ", 10000))
 	before := r.Current()
+	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timer, err := r.timers.schedule(wakeupSchedule{Name: "preserve-capacity-failure", Message: "Still live"}, "main", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
 	r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { calls++; return nil }}
-	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
-	if err == nil || !strings.Contains(err.Error(), "estimated input") || calls != 0 || r.Current() != before || r.checkContext() == nil {
+	_, err = r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
+	if err == nil || !strings.Contains(err.Error(), "estimated input") || calls != 0 || r.Current() != before || r.checkContext() != nil || !recoverableCompaction(err) {
 		t.Fatal("oversized canonical input was admitted", err, calls)
+	}
+	if live := r.Jobs.Live(); len(live) != 1 || live[0].ID != job {
+		t.Fatal("capacity failure canceled unrelated job", live)
+	}
+	if live := r.timers.list(); len(live) != 1 || live[0].ID != timer.ID || live[0].Status != "scheduled" {
+		t.Fatal("capacity failure canceled unrelated timer", live)
 	}
 	files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before, "compactions", "*"))
 	if err != nil || len(files) != 0 {
@@ -259,8 +274,13 @@ func TestCompactionFailureClassification(t *testing.T) {
 		{"cancel", context.Canceled, true}, {"timeout", context.DeadlineExceeded, true},
 		{"transport", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, true},
 		{"service", transient, true}, {"disk full", &os.PathError{Op: "write", Path: "archive", Err: syscall.ENOSPC}, true},
+		{"capacity", &compactionCapacityError{prompts.SessionCompactionHeadroom}, true},
+		{"summary size", &compactionCapacityError{prompts.SessionCompactionSummaryTooLarge}, true},
+		{"no older work", contextbuild.ErrNoCompactableHistory, true},
+		{"wrapped capacity", fmt.Errorf("prepare: %w", &compactionCapacityError{prompts.SessionCompactionHeadroom}), true},
 		{"malformed", errors.New("invalid summary"), false},
 		{"joined storage", fmt.Errorf("save summary: %w", errors.Join(transient, errors.New("corrupt history"))), false},
+		{"capacity and broken storage", errors.Join(&compactionCapacityError{prompts.SessionCompactionSummaryTooLarge}, errors.New("corrupt history")), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := recoverableCompaction(test.err); got != test.recoverable {
@@ -333,11 +353,11 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
 	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
-	if err == nil || !strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || summaries != 1 {
+	if err == nil || !strings.Contains(err.Error(), "/model") || strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || summaries != 1 {
 		t.Fatal("oversized steer caused an unusable handoff", err, r.Current(), summaries)
 	}
-	if r.checkContext() == nil {
-		t.Fatal("unfittable compaction was not classified as fatal")
+	if r.checkContext() != nil || !recoverableCompaction(err) {
+		t.Fatal("unfittable compaction invalidated unchanged context")
 	}
 }
 

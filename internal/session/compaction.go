@@ -21,9 +21,21 @@ const summaryInstructions = prompts.Compaction
 // Earlier owning-context deadlines apply; synchronous storage may delay return.
 const compactionTimeout = 10 * time.Minute
 
+// compactionCapacityError leaves the admitted conversation unchanged. A smaller
+// focus/input or a different model can make a subsequent attempt fit.
+type compactionCapacityError struct{ message string }
+
+func (e *compactionCapacityError) Error() string { return e.message }
+
 // Recoverable failures leave the existing context usable. Unknown errors,
 // malformed summaries and broken persistence conservatively invalidate it.
 func recoverableCompaction(err error) bool {
+	if _, ok := err.(*compactionCapacityError); ok {
+		return true
+	}
+	if err == contextbuild.ErrNoCompactableHistory {
+		return true
+	}
 	if _, ok := err.(*llm.TransientError); ok {
 		return true
 	}
@@ -147,15 +159,12 @@ func prepareCompaction(messages []llm.Message, selection llm.Selection) (prepare
 	return p, err
 }
 
-func compactionFits(selection llm.Selection, system string, tools []llm.ToolDefinition, retained, notices []llm.Message, runtime *llm.Message) error {
+func compactionFits(selection llm.Selection, system string, tools []llm.ToolDefinition, retained, notices []llm.Message, runtime *llm.Message) bool {
 	messages := append(append([]llm.Message(nil), retained...), notices...)
 	if runtime != nil {
 		messages = append(messages, *runtime)
 	}
-	if !contextbuild.Fits(selection, system, tools, messages, true) {
-		return errors.New(prompts.SessionCompactionHeadroom)
-	}
-	return nil
+	return contextbuild.Fits(selection, system, tools, messages, true)
 }
 
 // summarize shares one request across main, coding children and asides using
@@ -166,7 +175,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection l
 	budget.Model.Budget.OutputAllowance = budget.Model.Budget.SummaryOutputAllowance
 	if !contextbuild.Fits(budget, summaryInstructions, nil, []llm.Message{input}, false) {
 		b := budget.Model.Budget
-		return "", fmt.Errorf(prompts.SessionCompactionInputTooLarge, contextbuild.Estimate(summaryInstructions)+contextbuild.Tokens([]llm.Message{input}), b.OutputAllowance+b.EstimationMargin, b.ContextLimit)
+		return "", &compactionCapacityError{fmt.Sprintf(prompts.SessionCompactionInputTooLarge, contextbuild.Estimate(summaryInstructions)+contextbuild.Tokens([]llm.Message{input}), b.OutputAllowance+b.EstimationMargin, b.ContextLimit)}
 	}
 	r.routeMu.RLock()
 	session := r.Current()
@@ -229,7 +238,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, selection l
 			return r.retryNotice(turn, actor, request, "compaction", ev.Retry)
 		case "text":
 			if summary.Len()+len(ev.Text) > 1<<20 {
-				return errors.New(prompts.SessionCompactionSummaryTooLarge)
+				return &compactionCapacityError{prompts.SessionCompactionSummaryTooLarge}
 			}
 			summary.WriteString(ev.Text)
 		}
@@ -304,8 +313,12 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if err != nil {
 		return nil, cursor, err
 	}
-	if err = compactionFits(task.selection, system, task.tools.Definitions(), result, nil, runtime); err != nil {
-		return nil, cursor, err
+	if !compactionFits(task.selection, system, task.tools.Definitions(), result, nil, runtime) {
+		if task.aside {
+			return nil, cursor, &compactionCapacityError{"Read-only answer context still exceeds the model's budget after compaction. Retry /btw with a shorter, more focused question. The main conversation is unchanged."}
+		}
+		// This diagnostic reaches main through the failed child assignment.
+		return nil, cursor, &compactionCapacityError{prompts.SessionCompactionHeadroom}
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, cursor, err

@@ -187,7 +187,7 @@ def main():
                     job = results['shell']['job_id']
                     calls = [call('lsp_query', {'job_id': results['lsp_job']['job_id'], 'operation': 'hover', 'path': 'analysis.py', 'line': 1, 'column': 1}),
                              call('job_stop', {'child_id': results['subagent']['child_id']}),
-                             call('job_list', {'state': 'all'}), call('job_read', {'job_id': job, 'stream': 'stdout', 'cursor': 'eof:-10:lines', 'grep': 'evidence'}),
+                             call('job_list', {'state': 'all'}), call('job_read', {'job_id': job, 'stream': 'stdout', 'grep': 'evidence'}),
                              call('job_stop', {'job_id': job}), call('wakeup_cancel', {'name': 'demo'})]
                 elif stage == 4:
                     calls = [call('question', {'questions': [{'id': 'continue', 'prompt': 'Finish the Markdown report?',
@@ -491,7 +491,10 @@ path.write_text('Looks good.')
         assert (results['image_show'][0]['width'], results['image_show'][0]['height']) == (320, 200)
         assert results['shell'][0]['stdout'] == 'Mean: 4.0\n'
         assert results['job_read'][0]['output'] == 'background evidence\n'
-        assert results['job_read'][0]['matches'][0]['line'] == 1
+        grep_result = results['job_read'][0]
+        assert grep_result['kind'] == 'grep'
+        assert grep_result['job_id'] != grep_result['grep_origin']['source_job_id']
+        assert grep_result['grep_origin']['match_count'] == 1
         assert any(result.get('status') == 'cancelled' for result in results['job_stop'])
         assert any(result.get('child_state') == 'closed'
                    and result.get('assignment_status') == 'completed'

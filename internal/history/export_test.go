@@ -236,15 +236,20 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 		t.Fatalf("exact snapshot incomplete: prompt=%t native=%t call=%t\n%s", foundPrompt, foundNative, foundCall, before)
 	}
 	result := json.RawMessage(`{"ok":true,"content":"future-result<exact>"}`)
+	delivered := json.RawMessage(`{"ok":false,"error":"model-delivery<notice>","reason":"batch_capacity"}`)
+	originalFiles := []llm.BinaryFile{{Path: "immutable-fixture.png", MIMEType: "image/png", SHA256: strings.Repeat("a", 64), Bytes: 32}}
 	exportBody := "Concise read result"
 	md := render.Markdown{Revision: 1, Summary: "read", Detail: "expanded details", Export: &exportBody}
-	resultID, err := s.CallResult(v.ID, turn, "main", calls[0], result, nil, map[string]any{"version": 1, "result": result}, md, true)
+	resultID, err := s.CallResult(v.ID, turn, "main", calls[0], delivered, nil, map[string]any{"version": 1, "result": result, "files": originalFiles}, md, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	after, err := s.TranscriptJSONL(v.ID, cut)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("future completion changed selected snapshot: %v\nbefore %s\nafter %s", err, before, after)
+	}
+	if bytes.Contains(after, []byte(`"delivered_result"`)) || bytes.Contains(after, []byte("model-delivery")) {
+		t.Fatal("pending intent exposed delivery outside its frozen cut")
 	}
 	pending, err := s.Transcript(v.ID, cut)
 	if err != nil || !strings.Contains(string(pending), "Pending call:") || strings.Contains(string(pending), prompt) || strings.Contains(string(pending), "future-result") {
@@ -264,22 +269,37 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 			Entry      Entry
 			ToolRecord struct {
 				Version int
+				Files   []llm.BinaryFile
 				Result  struct {
 					OK      bool
 					Content string
 				}
 			} `json:"tool_record"`
-			Presentation render.Markdown
+			Presentation    render.Markdown
+			DeliveredResult json.RawMessage `json:"delivered_result"`
 		}
 		if err := json.Unmarshal(line, &row); err != nil {
 			t.Fatal(err)
 		}
 		if row.Entry.ID == resultID {
-			foundResult = row.ToolRecord.Version == 1 && row.ToolRecord.Result.OK && row.ToolRecord.Result.Content == "future-result<exact>" && row.Presentation.Detail == md.Detail && row.Presentation.Export != nil && *row.Presentation.Export == exportBody
+			foundResult = row.ToolRecord.Version == 1 && row.ToolRecord.Result.OK && row.ToolRecord.Result.Content == "future-result<exact>" && row.Presentation.Detail == md.Detail && row.Presentation.Export != nil && *row.Presentation.Export == exportBody && bytes.Equal(row.DeliveredResult, delivered)
+			if len(row.ToolRecord.Files) != 1 || row.ToolRecord.Files[0] != originalFiles[0] {
+				t.Fatal("exact export lost original native file metadata", row.ToolRecord.Files)
+			}
+		} else if row.DeliveredResult != nil {
+			t.Fatal("delivery attached to an entry other than its completed result", row.Entry.ID)
 		}
 	}
 	if !foundResult {
 		t.Fatalf("completed exact records missing:\n%s", exactCompleted)
+	}
+	actorPending, err := s.ActorTranscriptJSONL(v.ID, "main", cut)
+	if err != nil || bytes.Contains(actorPending, []byte("model-delivery")) || bytes.Contains(actorPending, []byte("future-result")) {
+		t.Fatal("actor snapshot leaked future completion", err, string(actorPending))
+	}
+	actorCompleted, err := s.ActorTranscriptJSONL(v.ID, "main", resultID)
+	if err != nil || !bytes.Equal(actorCompleted, exactCompleted) {
+		t.Fatal("actor exact export lost execution or delivery", err, string(actorCompleted))
 	}
 	archive, err := s.writeArchive(v.ID, pending, before)
 	if err != nil {

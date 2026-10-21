@@ -39,13 +39,23 @@ These are TTC's complete target contracts. Current code:
   arguments, historical states, results, errors and artifact references;
   decoding never executes work or restores handles. Reject unknown versions. See
   [runtime boundaries](design.md#boundaries).
-- Cap model-facing results at 64 KiB of UTF-8 JSON, without
-  context-budget-dependent shrinking. Overflow returns `result_too_large`;
-  successful sidecar storage adds `truncated:true` and retained JSON
-  `detail_path`. Narrow/page the original call or use `shell` for bounded
-  field/byte extraction: single-line JSON can exceed `read`'s line cap. Exact
-  available bytes/arguments remain inspectable and exportable. Later boundaries
-  may compact; there is no automatic context-overflow recovery.
+- Each tool's JSON result is capped at 64 KiB. Overflow returns
+  `result_too_large`; successful sidecar storage adds `truncated:true` and
+  retained JSON `detail_path`. Coding delivery also bounds aggregate original
+  result payloads, including estimated native attachment occupancy, to strictly
+  less than 20% of the producing model's context capacity. Allocate this fixed
+  batch budget in completion order; it does not shrink with remaining context.
+  Results reaching the individual/shared limit become small `result_too_large`
+  notices, outside the original-payload budget. Preserve full execution results
+  and attachment references in immutable tool records; conversation history and
+  later requests contain the delivery notices, not withheld payloads. Notices
+  retain a result artifact path and bounded job/status facts where available.
+  Execution may already have succeeded: inspect retained output instead of
+  rerunning side-effecting tools. Use narrower queries/pages for read-only
+  retries, or `shell` for bounded extraction of single-line JSON artifacts. When
+  the remaining conversation cannot fit acceptable results, compact its
+  preceding history while retaining the fresh call/result exchange outside the
+  summary; do not reject delivery merely because remaining capacity is low.
 - Calls in one response must be independent. Read-only calls run concurrently
   before ordered mutations/controls; shells/subagents overlap both phases. File
   mutations share the workspace queue. Errors do not skip siblings; cancellation
@@ -111,8 +121,11 @@ Input: `{path, format?, scope?}`.
   partial file may be visible before success, not published by a final rename.
 - `format` is `markdown` (default) or `jsonl`. Markdown is a dense readable
   transcript; JSONL preserves exact saved records, including envelopes, tool
-  records and replay metadata. This is one requested file, not `/export`'s
-  Markdown/JSONL/assets bundle. Use existing `grep`/`read` tools to inspect it.
+  records and replay metadata. Completed tool-result rows include
+  `delivered_result` for exact model-visible JSON separately from execution
+  evidence in `tool_record.result/files`; pending calls never expose a later
+  completion. This is one requested file, not `/export`'s Markdown/JSONL/assets
+  bundle. Use existing `grep`/`read` tools to inspect it.
 - Success returns `path`, `bytes`, `actor`, `source_session`, `source_tip`,
   `scope` and `format`, identifying the frozen selection and file size in bytes.
 - `scope` is `full` (default) or `before_compaction`. Full freezes the selected
@@ -565,27 +578,43 @@ Input: `{path, format?, scope?}`.
   Offsets beyond EOF are invalid. `limit_bytes` is a source-byte budget, default
   16384, range 1–65536. Valid UTF-8 boundaries are respected; a budget too small
   for a character fails.
-- `grep` filters lines **within this bounded source page**, using Go RE2 regex
-  syntax. `literal=true` quotes the pattern; `case_sensitive` defaults to true.
-  Page boundaries can contain partial lines; increase the budget or use a
-  line-relative tail to include the desired line. Filtering does not expand the
-  scanned source range. `strip_ansi` defaults to true independently of launch
-  options; false returns raw capture. Filtering applies to the selected view.
-  `next_cursor` advances over the source range even when there are no matches.
-  Empty `grep` disables filtering.
+- Nonempty `grep` searches **the entire retained raw stream snapshot**, using Go
+  RE2 syntax on physical lines without their terminating newline. `literal=true`
+  quotes the pattern; `case_sensitive` defaults to true. Raw ANSI sequences
+  participate in matching. Long lines are searched whole, independent of page
+  boundaries. If retention has cut the first line, its retained fragment is
+  searched; the last unterminated line is also searched.
+- Grep requires an empty cursor and creates a completed, runtime-local job with
+  `kind:"grep"`, owned by the caller. Its stdout contains concatenated matching
+  raw lines; the response is its first bounded page, not the original job's
+  page. Paginate using the returned `job_id` and `next_cursor`, **without
+  grep**. Repeating grep creates another snapshot job; searching a grep job
+  searches its retained raw output. Zero hits still creates a job with empty
+  stdout. No shell process or background completion notification is produced.
+  Later source writes do not change the result; ordinary runtime capture
+  retention still applies. At most two grep scans run concurrently per runtime;
+  additional calls wait with cancellation before acquiring a source snapshot.
+  Empty `grep` performs an ordinary read.
+- `strip_ansi` defaults to true independently of launch options and affects only
+  presentation, never matching; false returns raw capture. Page budgets and
+  cursors always count raw bytes in the selected job's stream.
 - Result:
-  `{job_id:string, kind:string, status:string, stream:string, output:string, start_byte:integer, next_cursor:string|null, truncated:boolean, exit_code?:integer, matches?:[{line:integer,byte_offset:integer,text:string}]}`.
+  `{job_id:string, kind:string, status:string, stream:string, output:string, start_byte:integer, next_cursor:string|null, truncated:boolean, exit_code?:integer, grep_origin?:object}`.
+  `grep_origin`, also exposed in job metadata and inspection, records
+  `{source_job_id,stream,pattern,literal,case_sensitive,start_byte,end_byte,truncated,match_count}`.
+  Its byte bounds describe the searched source snapshot, end-exclusive; its
+  truncation flag reports source retention loss. Output positions are local to
+  the grep job's concatenated matches, not original source line/byte positions.
   `status` is scheduler job status, including for `kind:"subagent"`, not the
-  semantic child assignment outcome. Match line numbers are one-based physical
-  source lines; byte offsets are absolute source bytes, independent of JSON's
-  replacement of invalid UTF-8. `truncated` describes retained loss, rather than
-  whether another page exists. A running job always returns a next cursor; a
-  finished stream at EOF returns null. Captured bytes disappear when the runtime
-  ends and are never revived from history. Saved `job_read` results remain
-  inspectable after reload; their output is fenced literal text, with large
-  inspector records paged independently of the capture cursor. Paging preserves
-  split code delimiters; fence-row metadata over 64 KiB switches to explicitly
-  labeled plain-text display rather than accumulating unbounded hints.
+  semantic child assignment outcome. `truncated` describes retained loss in the
+  selected stream or grep source, rather than whether another page exists. A
+  running job always returns a next cursor; a finished stream at EOF returns
+  null. Captured bytes disappear when the runtime ends and are never revived
+  from history. Saved `job_read` results remain inspectable after reload; their
+  output is fenced literal text, with large inspector records paged
+  independently of the capture cursor. Paging preserves split code delimiters;
+  fence-row metadata over 64 KiB switches to explicitly labeled plain-text
+  display rather than accumulating unbounded hints.
 
 ### `job_stop`
 

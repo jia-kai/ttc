@@ -25,6 +25,15 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 		t.Run(fmt.Sprintf("paged=%v", large), func(t *testing.T) {
 			p := &llm.Script{Responses: []llm.ScriptResponse{{Text: "Ready."}, {}, {Text: "Page captured."}}}
 			u := newQuestionTestUI(t, p)
+			// This exercises inspector paging, not the fixed result-delivery cap.
+			selection := u.runtime.CurrentSelection()
+			selection.Model.Budget.ContextLimit = 128000
+			if err := u.runtime.RequestModel(selection); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := u.runtime.ApplyModel(""); err != nil {
+				t.Fatal(err)
+			}
 			u.typeText("Initialize capture history")
 			u.key(tcell.KeyEnter)
 			u.wait(t, "Turn complete")
