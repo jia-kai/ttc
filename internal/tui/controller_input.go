@@ -305,6 +305,17 @@ func (c *frontendController) submitPrompt(next frontendSubmission) {
 		c.attachments = nil
 		return
 	}
+	if c.frontend.Runtime.Awaiting("main") {
+		// A newly submitted input must not overtake FIFO input accepted before
+		// the awaiting transition. Publish the whole batch before waking inference.
+		if err := c.steerQueuedInputs(pending); err != nil {
+			c.draft.set(next.text)
+			c.add("Steering failed: "+err.Error(), 0)
+		} else {
+			c.attachments = nil
+		}
+		return
+	}
 	if next.steering {
 		if err := c.frontend.Runtime.Steer(pending); err != nil {
 			c.draft.set(next.text)
@@ -323,6 +334,21 @@ func (c *frontendController) submitPrompt(next frontendSubmission) {
 	if c.busy {
 		c.add(fmt.Sprintf("Queued input · %d unsent", len(c.queue)), 0)
 	}
+}
+
+// steerQueuedInputs transfers queue ownership only after runtime acceptance.
+// It runs solely on the frontend event loop, never starts another Run, and
+// retains original input units rather than flattening text or attachments.
+func (c *frontendController) steerQueuedInputs(extra ...contextbuild.Input) error {
+	inputs := make([]contextbuild.Input, 0, len(c.queue)+len(extra))
+	inputs = append(inputs, c.queue...)
+	inputs = append(inputs, extra...)
+	if err := c.frontend.Runtime.SteerInputs(inputs); err != nil {
+		return err
+	}
+	clear(c.queue)
+	c.queue = nil
+	return nil
 }
 
 func (c *frontendController) cancelPendingInput(text string) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -35,6 +36,13 @@ type editArgs struct {
 	New  *string `json:"new_text"`
 	All  bool    `json:"replace_all,omitempty"`
 }
+
+// unchangedEdit aborts a verified no-op before the workspace records a mutation.
+// It is consumed locally and never exposed as a tool failure.
+type unchangedEdit struct{}
+
+func (unchangedEdit) Error() string { return "" }
+
 type globArgs struct {
 	Pattern string `json:"pattern"`
 	Path    string `json:"path,omitempty"`
@@ -65,14 +73,8 @@ func validText(s string) error {
 
 // AddFiles registers read/search tools and serialized file mutations.
 func AddFiles(r *Registry, w *workspace.Manager) {
-	Register(r, "read", prompts.ToolDescription("read"), map[string]any{"path": Property("string"), "offset": Property("integer"), "limit": IntegerRange(1, 2000)}, []string{"path"}, func(a readArgs) error {
-		if e := Required("path", a.Path); e != nil {
-			return e
-		}
-		if a.Offset != nil && *a.Offset < 1 {
-			return errors.New(prompts.ToolPositiveOffset)
-		}
-		return nil
+	Register(r, "read", prompts.ToolDescription("read"), map[string]any{"path": Property("string"), "offset": IntegerRange(1, math.MaxInt), "limit": IntegerRange(1, 2000)}, []string{"path"}, func(a readArgs) error {
+		return Required("path", a.Path)
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
 		path := w.Path(a.Path)
 		page, err := readPage(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200), x.BinaryFiles)
@@ -83,7 +85,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		if !ok {
 			return page, nil
 		}
-		if a.Offset != nil || a.Limit != nil {
+		if intDefault(a.Offset, 1) != 1 || intDefault(a.Limit, 200) != 200 {
 			return nil, Fail("invalid_input", prompts.ToolBinaryPagination)
 		}
 		file, err := binary.Store(ctx, path)
@@ -119,7 +121,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		if e := Required("path", a.Path); e != nil {
 			return e
 		}
-		if a.Old == "" || a.New == nil || a.Old == *a.New {
+		if a.Old == "" || a.New == nil {
 			return errors.New(prompts.ToolEditTextRequired)
 		}
 		if e := validText(a.Old); e != nil {
@@ -128,6 +130,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		return validText(*a.New)
 	}, func(ctx context.Context, x Execution, a editArgs) (any, error) {
 		count := 0
+		unchanged := unchangedEdit{}
 		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Path: a.Path, MustExist: true, Transform: func(b []byte) ([]byte, error) {
 			if e := validText(string(b)); e != nil {
 				return nil, e
@@ -139,6 +142,11 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			if !a.All && count != 1 {
 				return nil, Fail("ambiguous_match", fmt.Sprintf(prompts.ToolEditMultipleMatches, count))
 			}
+			if a.Old == *a.New {
+				// Abort the queued mutation after match validation, before Apply
+				// snapshots or rewrites the unchanged file.
+				return nil, unchanged
+			}
 			// Matched old text cannot exceed the original file. Divide the
 			// remaining allowance so repeated replacements cannot overflow an
 			// integer or allocate an oversized result before Apply rejects it.
@@ -148,7 +156,14 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 			}
 			return []byte(strings.ReplaceAll(string(b), a.Old, *a.New)), nil
 		}}})
-		return presentFiles(ctx, map[string]any{"path": w.Path(a.Path), "replacements": count}, res.Changes), e
+		if errors.Is(e, unchanged) {
+			e = nil
+		}
+		value := map[string]any{"path": w.Path(a.Path), "replacements": count}
+		if e == nil && a.Old == *a.New {
+			value["replacements"], value["unchanged"] = 0, true
+		}
+		return presentFiles(ctx, value, res.Changes), e
 	})
 	addSearch(r, w)
 	addPatch(r, w)

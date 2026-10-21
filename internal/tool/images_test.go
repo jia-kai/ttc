@@ -141,8 +141,8 @@ func TestReadImageErrorsAndTextDetection(t *testing.T) {
 		vision     bool
 	}{
 		{`{"path":"image.png"}`, "unsupported_binary_input", false},
-		{`{"path":"image.png","offset":1}`, "invalid_input", true},
-		{`{"path":"image.png","limit":200}`, "invalid_input", true},
+		{`{"path":"image.png","offset":2}`, "invalid_input", true},
+		{`{"path":"image.png","limit":201}`, "invalid_input", true},
 	} {
 		x.BinaryFiles = (llm.ModelSpec{Images: test.vision}).BinaryFileTypes()
 		record := invoke(t, r, w, x, req, "read", test.args)

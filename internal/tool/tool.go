@@ -104,15 +104,55 @@ type typedCall[A any] struct {
 	warnings []InputWarning
 }
 
-// InputWarning describes a decoded argument clipped to inclusive bounds.
+// InputWarning describes a safe adjustment to a decoded argument. Bounds and
+// message retain the numeric clipping contract; bounds apply only to clipping.
 type InputWarning struct {
 	Code      string `json:"code"`
 	Parameter string `json:"parameter"`
-	Requested int    `json:"requested"`
-	Effective int    `json:"effective"`
+	Requested any    `json:"requested"`
+	Effective any    `json:"effective"`
 	Minimum   int    `json:"minimum"`
 	Maximum   int    `json:"maximum"`
 	Message   string `json:"message"`
+}
+
+// MarshalJSON keeps clipping's numeric contract while omitting inapplicable
+// bounds and empty explanatory text from normalization warnings.
+func (w InputWarning) MarshalJSON() ([]byte, error) {
+	if w.Code == "input_clipped" {
+		type plain InputWarning
+		return json.Marshal(plain(w))
+	}
+	return json.Marshal(struct {
+		Code      string `json:"code"`
+		Parameter string `json:"parameter"`
+		Requested any    `json:"requested"`
+		Effective any    `json:"effective"`
+		Message   string `json:"message,omitempty"`
+	}{w.Code, w.Parameter, w.Requested, w.Effective, w.Message})
+}
+
+// AdjustedInput reports a meaningful non-numeric adjustment. Values must be
+// immutable JSON-serializable snapshots, not pointers to arguments being changed.
+func AdjustedInput(parameter string, requested, effective any) []InputWarning {
+	return []InputWarning{{Code: "input_normalized", Parameter: parameter, Requested: requested, Effective: effective}}
+}
+
+// NormalizeEnum trims and lowercases only recognized finite enum spellings.
+// Unknown values are left unchanged for the caller's normal validation.
+func NormalizeEnum(parameter string, value *string, allowed ...string) []InputWarning {
+	canonical := strings.ToLower(strings.TrimSpace(*value))
+	for _, candidate := range allowed {
+		if canonical == candidate {
+			if canonical == *value {
+				return nil
+			}
+			warnings := AdjustedInput(parameter, *value, canonical)
+			*value = canonical
+			return warnings
+		}
+	}
+	return nil
 }
 
 func (c typedCall[A]) InputWarnings() []InputWarning { return c.warnings }

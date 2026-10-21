@@ -10,8 +10,20 @@ import (
 // Steer queues a human instruction for the next settled main request boundary.
 // It creates no durable position or undo checkpoint until request admission.
 func (r *Runtime) Steer(input contextbuild.Input) error {
-	if err := validateSteeringInput(input); err != nil {
-		return err
+	return r.SteerInputs([]contextbuild.Input{input})
+}
+
+// SteerInputs atomically queues an ordered batch of original human inputs.
+// Either every input is accepted, preserving individual units and attachments,
+// or none is accepted. One wake signal follows publication of the entire batch.
+func (r *Runtime) SteerInputs(inputs []contextbuild.Input) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	for _, input := range inputs {
+		if err := validateSteeringInput(input); err != nil {
+			return err
+		}
 	}
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
@@ -25,7 +37,8 @@ func (r *Runtime) Steer(input contextbuild.Input) error {
 	if fatal != "" {
 		return errors.New("session unusable after compaction; start or load another session")
 	}
-	r.steers = append(r.steers, input)
+	r.steers = append(r.steers, inputs...)
+	r.signalActorLocked("main")
 	return nil
 }
 

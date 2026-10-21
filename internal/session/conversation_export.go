@@ -48,7 +48,10 @@ func (r *Runtime) addConversationExportTool() {
 		"path":   tool.Property("string"),
 		"format": map[string]any{"type": "string", "enum": []string{"markdown", "jsonl"}},
 		"scope":  map[string]any{"type": "string", "enum": []string{"full", "before_compaction"}},
-	}, []string{"path"}, validateConversationExport, r.exportConversation)
+	}, []string{"path"}, validateConversationExport, r.exportConversation, func(a *conversationExportArgs) []tool.InputWarning {
+		warnings := tool.NormalizeEnum("format", &a.Format, "markdown", "jsonl")
+		return append(warnings, tool.NormalizeEnum("scope", &a.Scope, "full", "before_compaction")...)
+	})
 }
 
 func (r *Runtime) exportConversation(ctx context.Context, x tool.Execution, a conversationExportArgs) (any, error) {

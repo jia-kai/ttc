@@ -74,6 +74,10 @@ type Runtime struct {
 	publishedJobs     map[string]jobs.Snapshot
 	publishedTimers   map[string]wakeup
 	publishedChildren map[string]tool.ChildView
+	actorAssignments  map[string]*childAssignment // orderMu; assignment-specific event delivery.
+	actorSignals      map[string]chan struct{}    // orderMu; event-driven inference resumption.
+	awaiting          map[string]bool             // orderMu; transient UI state, never restored.
+	awaitRequests     map[string]awaitRequest     // orderMu; consumed only after tool settlement.
 	activityStop      func()
 	children          map[string]*codingChild // Owned by childStartMu; live handles never restored.
 	childStartMu      sync.Mutex              // Serializes child capacity checks and admission, never child execution.
@@ -139,6 +143,10 @@ func (r *Runtime) resetTransient() {
 	r.publishedJobs = map[string]jobs.Snapshot{}
 	r.publishedTimers = map[string]wakeup{}
 	r.publishedChildren = map[string]tool.ChildView{}
+	r.actorAssignments = map[string]*childAssignment{}
+	r.actorSignals = map[string]chan struct{}{}
+	r.awaiting = map[string]bool{}
+	r.awaitRequests = map[string]awaitRequest{}
 	r.orderError = nil
 	r.notifications = nil
 	r.steers = nil
@@ -167,7 +175,7 @@ func (r *Runtime) resetTransient() {
 		sessionID := r.Current()
 		entry, e := r.Store.Append(sessionID, "", v.Owner, "status", "", false, map[string]any{"type": "job_completion", "job": v, "markdown": md})
 		if e == nil && v.WakeOnExit && r.ctx.Err() == nil {
-			e = r.queueNotificationLocked(jobExitContent(v))
+			e = r.queueActorNotificationLocked(v.Owner, jobExitContent(v))
 		}
 		r.orderMu.Unlock()
 		if e != nil {
@@ -187,10 +195,12 @@ func (r *Runtime) resetTransient() {
 	tool.AddWeb(r.Tools, httpClient(), r.searchConfig)
 	tool.AddSkills(r.Tools, r.Skills)
 	w := newWakeups(r.ctx, r.publishTimer)
+	w.release = r.Jobs.ReleaseOwned
 	r.mu.Lock()
 	r.timers = w
 	r.mu.Unlock()
 	r.addWakeupTools()
+	r.addAwaitTool()
 	r.addImageTool()
 	r.questions.mu.Lock()
 	r.questions.pending = nil
@@ -285,6 +295,11 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
+	defer func() {
+		r.orderMu.Lock()
+		delete(r.awaitRequests, "main")
+		r.orderMu.Unlock()
+	}()
 	r.mu.Lock()
 	r.activeCancel = cancel
 	r.mu.Unlock()
@@ -443,23 +458,8 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			}
 			r.emit(Event{Kind: "message", Text: m.DisplayText(), EntryID: entry, MessageType: m.Type, InputSource: "steer", InputTimeMS: v.CreatedMS})
 		}
-		for _, entry := range admitted.NoticeEntries {
-			v, e := r.Store.Entry(entry)
-			if e != nil {
-				return e
-			}
-			var m llm.Message
-			if e = json.Unmarshal(v.Content, &m); e != nil {
-				return e
-			}
-			var wake struct {
-				ID    string `json:"wakeup_id"`
-				Fired int    `json:"fired_count"`
-			}
-			if json.Unmarshal([]byte(m.Content), &wake) == nil && wake.ID != "" {
-				r.timers.deliveredThrough(wake.ID, wake.Fired)
-			}
-			r.emit(Event{Kind: "message", Text: m.Content, EntryID: entry, MessageType: m.Type})
+		if e = r.deliverNoticeEntries("main", admitted.NoticeEntries); e != nil {
+			return e
 		}
 		promptEntry, e := r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
 		if e != nil {
@@ -559,6 +559,9 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: id, RequestID: request})
 		}
 		if _, e = r.runToolBatch(ctx, turn, "main", r.Tools, reply.Calls, callIDs, streamErr); e != nil {
+			return e
+		}
+		if e = r.settleAwait(ctx, "main"); e != nil {
 			return e
 		}
 		r.emit(Event{Kind: "usage"})

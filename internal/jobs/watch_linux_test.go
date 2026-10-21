@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"ttc/internal/capture"
 	"ttc/internal/watchrun"
 )
 
@@ -49,7 +50,7 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	defer m.Close()
 	launches := make(chan Snapshot, 2)
 	m.OnState = func(s Snapshot) { launches <- s }
-	id, err := m.StartWatch("main/child", dir, false, "")
+	id, err := m.StartWatch("main/child", dir, false, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func TestWatchLabelAndDetailedCommand(t *testing.T) {
 	dir, identity := watchFixture(t, true)
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartWatch("main", dir, false, "Training run")
+	id, err := m.StartWatch("main", dir, false, "Training run", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func TestWatchIncompleteOutputPreservesStatusButFails(t *testing.T) {
 	}
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartWatch("main", dir, true, "")
+	id, err := m.StartWatch("main", dir, true, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestWatchStopAndCloseOnlyObservation(t *testing.T) {
 			dir, _ := watchFixture(t, false)
 			m := New(context.Background(), nil)
 			defer m.Close()
-			id, err := m.StartWatch("main", dir, true, "")
+			id, err := m.StartWatch("main", dir, true, "", capture.OutputOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

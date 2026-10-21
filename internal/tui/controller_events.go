@@ -374,7 +374,17 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		}
 	case "runtime_context":
 		c.addActor(messageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeRuntimeContext}), event.Actor)
-	case "status", "wake":
+	case "awaiting":
+		// Input may have entered the FIFO while inference was busy immediately
+		// before it parked. Transfer that input at this serialized transition;
+		// submitPrompt handles input arriving after the transition instead.
+		if (event.Actor == "" || event.Actor == "main") && c.frontend.Runtime.Awaiting("main") {
+			if err := c.steerQueuedInputs(); err != nil {
+				c.add("Queued input could not resume awaiting turn: "+err.Error(), 0)
+			}
+		}
+		c.addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
+	case "status", "wake", "resumed":
 		c.addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 	default:
 		item := line{text: event.Text, id: event.EntryID, actor: event.Actor}

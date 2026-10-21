@@ -334,7 +334,7 @@ func TestInspectWatchIdentityIsCapturedBeforeLaunch(t *testing.T) {
 			}
 		}
 	}
-	id, err := m.StartWatch("main", dir, false, "")
+	id, err := m.StartWatch("main", dir, false, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

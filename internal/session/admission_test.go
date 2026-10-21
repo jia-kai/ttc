@@ -38,6 +38,7 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	}
 	before := append([]llm.Message(nil), r.notifications...)
 	cursor := r.mainContext
+	r.selection.Model.ID = "updated-model"
 	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -58,9 +59,13 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	if !reflect.DeepEqual(before, r.notifications) || !reflect.DeepEqual(cursor, r.mainContext) {
 		t.Fatal("oversized admission consumed events/cursor")
 	}
-	admitted, _, err := r.admitMain(context.Background(), turn, r.selection)
-	if err != nil || len(admitted.NoticeEntries) != 1 || len(r.notifications) != 0 || r.mainContext.jobs["job"] != "completed" {
+	admitted, cm, err := r.admitMain(context.Background(), turn, r.selection)
+	if err != nil || len(admitted.NoticeEntries) != 1 || len(r.notifications) != 0 || r.mainContext.snapshot == nil {
 		t.Fatal(admitted, err)
+	}
+	fields := runtimeFields(t, cm, "runtime_context_update")
+	if len(fields) != 1 || fields["model"] == nil || r.mainContext.snapshot.Model == cursor.snapshot.Model {
+		t.Fatal("retry lost the refused model update", fields)
 	}
 }
 
@@ -68,7 +73,7 @@ func TestTimerCoalescingAndExactRequestAcknowledgment(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Observe timer")
 	turn := admissionTurn(t, r)
-	v := wakeup{ID: "timer", Name: "check", Message: "Check progress", Status: "scheduled", Repeat: 60}
+	v := wakeup{ID: "timer", actor: "main", Name: "check", Message: "Check progress", Status: "scheduled", Repeat: 60}
 	r.publishTimer(v)
 	v.Fired = 1
 	r.publishTimer(v)
@@ -87,7 +92,7 @@ func TestTimerCoalescingAndExactRequestAcknowledgment(t *testing.T) {
 	if err := json.Unmarshal([]byte(cm.Content), &view); err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Changes) != 1 || view.Changes[0].FiredCount != 2 || len(view.Timers) != 1 {
+	if view.Type != "runtime_context" || len(view.Timers) != 1 {
 		t.Fatal(view)
 	}
 	var ack string
@@ -108,8 +113,8 @@ func TestTimerCoalescingAndExactRequestAcknowledgment(t *testing.T) {
 	if err != nil || next.Cutoff <= admitted.Cutoff {
 		t.Fatal(next, err)
 	}
-	if err := json.Unmarshal([]byte(cm.Content), &view); err != nil || view.Changes[0].FiredCount != 3 {
-		t.Fatal(view, err)
+	if cm != nil || len(next.NoticeEntries) != 1 {
+		t.Fatal("firing must be delivered only as notification", cm, next)
 	}
 }
 
@@ -142,7 +147,7 @@ func TestTimerCancellationCannotBeOverwrittenByEarlierFire(t *testing.T) {
 		t.Fatal("timer did not fire")
 	}
 	stopped := make(chan error, 1)
-	go func() { _, err := w.stop(v.ID, ""); stopped <- err }()
+	go func() { _, err := w.stop("main", v.ID, ""); stopped <- err }()
 	// Correct supervisors serialize stop behind the blocked firing callback.
 	// Older code publishes cancellation immediately, then overwrites it on release.
 	select {
@@ -290,17 +295,22 @@ func TestAdmissionUsesPublishedJobStateAtItsCutoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(cm.Content), &view); err != nil {
+	if cm != nil {
+		t.Fatal("committed job exit duplicated in context", cm)
+	}
+	fresh, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Jobs) != 0 || len(view.Changes) != 1 || view.Changes[0].ID != id || view.Changes[0].To != "completed" {
-		t.Fatal("committed exit was not delivered at next boundary", view)
+	if err := json.Unmarshal([]byte(fresh.Content), &view); err != nil || len(view.Jobs) != 0 {
+		t.Fatal("fresh baseline retained completed job", view, err)
 	}
+
 }
 
 func TestClosingChildJoinsItsBackgroundCommands(t *testing.T) {
 	for _, failed := range []bool{false, true} {
-		name := "explicit_idle_close"
+		name := "persistent_assignment"
 		if failed {
 			name = "failed_assignment"
 		}
@@ -329,14 +339,6 @@ func TestClosingChildJoinsItsBackgroundCommands(t *testing.T) {
 				t.Fatal(string(record.Result))
 			}
 			if !failed {
-				live := r.Jobs.Live()
-				found := false
-				for _, job := range live {
-					found = found || job.Owner == childID && job.Kind == "shell"
-				}
-				if !found {
-					t.Fatal("fixture did not launch child-owned shell", live)
-				}
 				if _, err := r.StopChild(context.Background(), "main", childID); err != nil {
 					t.Fatal(err)
 				}

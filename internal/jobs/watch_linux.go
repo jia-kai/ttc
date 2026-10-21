@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"ttc/internal/capture"
 
 	"ttc/internal/prompts"
 	"ttc/internal/watchrun"
@@ -14,7 +15,9 @@ import (
 // never signal the wrapper or its workload. Record logs remain externally owned.
 // label is normalized and bounded to 80 code points; its fallback
 // is "External run". Inspect and detailed metadata retain the exact recorded argv.
-func (m *Manager) StartWatch(owner, dir string, wake bool, label string) (string, error) {
+// output selects cleaned or raw model views without changing externally owned
+// record files. ReadOptions can override the view per page.
+func (m *Manager) StartWatch(owner, dir string, wake bool, label string, output capture.OutputOptions) (string, error) {
 	identity, err := watchrun.ReadIdentity(dir)
 	if err != nil {
 		return "", err
@@ -23,6 +26,7 @@ func (m *Manager) StartWatch(owner, dir string, wake bool, label string) (string
 	options := TaskOptions{Kind: "watch", Label: compactLabel(label, prompts.JobLabelWatch), command: command, Background: true, WakeOnExit: wake, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
 		return InspectionSpec{Fields: []InspectionField{{Name: "Record dir", Value: dir}, {Name: "Command", Value: command, Language: "sh"}}, Streams: defaultInspectionStreams(false)}
 	}}
+	options.Output = &output
 	return m.StartTask(owner, options, func(ctx context.Context, out, stderr io.Writer) (TaskResult, error) {
 		completion, err := watchrun.Observe(ctx, dir, identity, out, stderr)
 		result := TaskResult{}

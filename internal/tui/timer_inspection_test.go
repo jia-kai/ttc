@@ -25,6 +25,7 @@ func TestSidebarTimerInspectionShowsStartupAndSourceAfterChildCloses(t *testing.
 			llm.ScriptResponse{Calls: []llm.ToolCall{{ID: "schedule", Name: "wakeup_schedule", Arguments: []byte(`{"name":"inspect-timer","message":"Check the detailed timer parameters.","delay_seconds":86400,"repeat_seconds":180}`)}}},
 			llm.ScriptResponse{Text: "Timer scheduled."})
 		if child {
+			responses[len(responses)-1] = llm.ScriptResponse{Calls: []llm.ToolCall{{ID: "pause", Name: "await", Arguments: []byte(`{}`)}}}
 			responses = append(responses, llm.ScriptResponse{Text: "Parent finished."})
 		}
 		t.Run(name, func(t *testing.T) {
@@ -33,10 +34,11 @@ func TestSidebarTimerInspectionShowsStartupAndSourceAfterChildCloses(t *testing.
 			u.screen.EventQ() <- tcell.NewEventResize(180, 60)
 			u.typeText("schedule a timer")
 			u.key(tcell.KeyEnter)
-			frame := u.wait(t, "Turn complete")
-			if child && len(u.runtime.ChildViews("main")) != 0 {
-				t.Fatal("fixture child did not close")
+			ready := "Turn complete"
+			if child {
+				ready = "Awaiting events"
 			}
+			frame := u.wait(t, ready)
 			timers := u.runtime.LiveTimers()
 			if len(timers) != 1 {
 				t.Fatal("missing timer", timers)
@@ -60,9 +62,19 @@ func TestSidebarTimerInspectionShowsStartupAndSourceAfterChildCloses(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			record := u.runtime.Tools.Invoke(context.Background(), tool.Execution{Actor: "main", SessionID: u.runtime.Current()}, "wakeup_cancel", args)
-			if !strings.Contains(string(record.Result), `"ok":true`) {
-				t.Fatal("cancel failed", record)
+			if child {
+				views := u.runtime.ChildViews("main")
+				if len(views) != 1 {
+					t.Fatal(views)
+				}
+				if _, err := u.runtime.StopChild(context.Background(), "main", views[0].ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				record := u.runtime.Tools.Invoke(context.Background(), tool.Execution{Actor: "main", SessionID: u.runtime.Current()}, "wakeup_cancel", args)
+				if !strings.Contains(string(record.Result), `"ok":true`) {
+					t.Fatal("cancel failed", record)
+				}
 			}
 			u.wait(t, "cancelled")
 			u.wait(t, "Source agent: "+name)

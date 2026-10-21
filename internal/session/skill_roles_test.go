@@ -321,6 +321,58 @@ func TestSkillRolesInheritedProjectionPreservesOtherFields(t *testing.T) {
 	}
 }
 
+func TestSkillRolesInheritedUpdateProjection(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	setupRoleSkills(t, r)
+	catalog, err := r.Skills.List("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []string{"main/child_projection", "main/btw_projection"} {
+		t.Run(actor, func(t *testing.T) {
+			payload := runtimeContextUpdate{Type: "runtime_context_update", Set: map[string]any{
+				"model": "historical/model", "image_input": false,
+				"project": map[string]any{"available_skills": catalog, "instructions": []projectInstruction{{Path: "AGENTS.md", Content: "preserved evidence"}}},
+			}}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := llm.Message{Type: llm.TypeRuntimeContext, Content: string(data)}
+			instructionOnly := llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"project":{"instructions":[]}}}`}
+			messages := []llm.Message{original, instructionOnly}
+			projected, err := r.projectInheritedSkillCatalogs(messages, actor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(messages[0], original) || !reflect.DeepEqual(projected[1], instructionOnly) {
+				t.Fatal("projection mutated input or invented a catalog")
+			}
+			fields := runtimeFields(t, &projected[0], "runtime_context_update")
+			var project struct {
+				Skills       []skills.Skill       `json:"available_skills"`
+				Instructions []projectInstruction `json:"instructions"`
+			}
+			if err := json.Unmarshal(fields["project"], &project); err != nil {
+				t.Fatal(err)
+			}
+			if string(fields["model"]) != `"historical/model"` || string(fields["image_input"]) != "false" || len(project.Instructions) != 1 || project.Instructions[0].Content != "preserved evidence" {
+				t.Fatal("projection changed non-catalog delta fields", projected[0])
+			}
+			foundAll := false
+			for _, skill := range project.Skills {
+				if skill.Name == "role-main" || skill.Name == "file-based-plan" {
+					t.Fatal("main-only skill leaked through inherited delta", skill)
+				}
+				foundAll = foundAll || skill.Name == "role-all"
+			}
+			if !foundAll {
+				t.Fatal("unrestricted inherited skill removed")
+			}
+		})
+	}
+}
+
 func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 	for _, actor := range []string{"main", "main/child_skills", "main/btw_skills"} {
 		t.Run(actor, func(t *testing.T) {

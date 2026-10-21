@@ -43,12 +43,12 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	}
 	requireChildLifecycle(t, first, "completed", "idle")
 	id := first["child_id"].(string)
-	owned, err := r.Jobs.StartTask(id, jobs.TaskOptions{Kind: "fixture", Background: true}, func(ctx context.Context, _, _ io.Writer) (jobs.TaskResult, error) {
+	_, err := r.Jobs.StartTask(id, jobs.TaskOptions{Kind: "fixture", Background: true}, func(ctx context.Context, _, _ io.Writer) (jobs.TaskResult, error) {
 		<-ctx.Done()
 		return jobs.TaskResult{}, ctx.Err()
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("idle child accepted work outside an assignment")
 	}
 	r.childStartMu.Lock()
 	child := r.children[id]
@@ -90,9 +90,6 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	if !unchanged {
 		t.Fatal("failed admission mutated or removed retained context")
 	}
-	if view, err := r.Jobs.View("main", owned); err != nil || view.Status != "running" {
-		t.Fatal("failed admission stopped retained owned job", view, err)
-	}
 	if _, err := historytest.DB(t, r.Store).Exec(`DROP TRIGGER reject_retained_turn`); err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +107,6 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireChildLifecycle(t, closed, "completed", "closed")
-	if view, err := r.Jobs.View("main", owned); err != nil || view.Status != "cancelled" {
-		t.Fatal("close did not join retained owned job", view, err)
-	}
 	if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}

@@ -90,7 +90,7 @@ func TestWakeupUpdateInvalidIsAtomic(t *testing.T) {
 	timerState(t, states)
 	cases := []wakeupUpdate{
 		{ID: &initial.ID},
-		{ID: &initial.ID, Name: updatePtr("check"), Message: updatePtr("new")},
+		{ID: &initial.ID, Name: updatePtr("different"), Message: updatePtr("new")},
 		{ID: &initial.ID, At: updatePtr("bad"), Message: updatePtr("new")},
 		{ID: &initial.ID, At: updatePtr(time.Now().Format(time.RFC3339)), Delay: updatePtr(1)},
 		{ID: &initial.ID, Delay: updatePtr(-1), Message: updatePtr("new")},
@@ -116,7 +116,7 @@ func TestWakeupUpdateInvalidIsAtomic(t *testing.T) {
 		t.Fatal("failed update published", v)
 	default:
 	}
-	if _, err := r.timers.stop(initial.ID, ""); err != nil {
+	if _, err := r.timers.stop("main", initial.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.timers.update(wakeupUpdate{ID: &initial.ID, Message: updatePtr("late")}, "main"); err == nil {

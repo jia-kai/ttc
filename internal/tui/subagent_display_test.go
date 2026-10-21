@@ -255,15 +255,22 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 	p := &llm.Script{Responses: []llm.ScriptResponse{
 		{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start background shell","label":"shell helper"}`)}}},
 		{Calls: []llm.ToolCall{{ID: "background", Name: "shell", Arguments: []byte(`{"command":"while [ ! -e release ]; do sleep 0.01; done; cat release; cat diagnostic >&2; sleep 30","background":true,"wake_on_exit":false}`)}}},
-		{Text: "Child started shell"}, {Text: "Parent finished"},
+		{Calls: []llm.ToolCall{{ID: "pause", Name: "await", Arguments: []byte(`{}`)}}},
 	}}
 	u := newQuestionTestUI(t, p)
 	u.screen.SetSize(180, 60)
 	u.screen.EventQ() <- tcell.NewEventResize(180, 60)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
-	frame := u.wait(t, "Turn complete")
+	frame := u.wait(t, "Awaiting events")
 	live := u.runtime.Jobs.Live()
+	for i := 0; i < len(live); {
+		if live[i].Kind != "shell" {
+			live = append(live[:i], live[i+1:]...)
+		} else {
+			i++
+		}
+	}
 	if len(live) != 1 || live[0].Kind != "shell" || !strings.HasPrefix(live[0].Owner, "main/child_") || live[0].Stdout != "" || live[0].Stderr != "" {
 		t.Fatal("expected a quiet, child-owned shell", live)
 	}

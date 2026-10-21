@@ -385,7 +385,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 				return emit(llm.StreamEvent{Kind: "text", Text: "Useful child handoff."})
 			}}
 			task := childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: aside}
-			result, cursor, err := r.compactChild(context.Background(), task, messages, contextCursor{project: "old project", snapshot: "old runtime"}, nil)
+			result, cursor, err := r.compactChild(context.Background(), task, messages, contextCursor{snapshot: &runtimeContext{Actor: "old actor"}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -393,7 +393,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 			if aside {
 				expected = 6
 			}
-			if cursor.project != "" || cursor.snapshot != "" || len(result) != expected || !strings.HasPrefix(result[0].Content, "Useful child handoff.") {
+			if cursor.snapshot != nil || len(result) != expected || !strings.HasPrefix(result[0].Content, "Useful child handoff.") {
 				t.Fatal("incorrect retained child projection", cursor, result)
 			}
 			for _, message := range result {
@@ -490,9 +490,9 @@ func TestCanceledChildCompactionPreservesCursorAndPublishesNothing(t *testing.T)
 	seedRuntime(t, r, "Parent context")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cursor := contextCursor{project: "unchanged"}
+	cursor := contextCursor{snapshot: &runtimeContext{Actor: "unchanged"}}
 	result, next, err := r.compactChild(ctx, childTask{actor: "main/child_fixture", tools: r.Tools}, nil, cursor, nil)
-	if !errors.Is(err, context.Canceled) || result != nil || next.project != cursor.project {
+	if !errors.Is(err, context.Canceled) || result != nil || next.snapshot != cursor.snapshot {
 		t.Fatal("canceled child changed context", result, next, err)
 	}
 	r.orderMu.Lock()

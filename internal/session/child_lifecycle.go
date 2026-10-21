@@ -37,8 +37,10 @@ type childAssignment struct {
 	// orderMu protects the admission queue and terminal admission gate.
 	accepting       bool
 	queued          []llm.Message
-	queuedTokens    int // Conservative wire-token estimate, including event envelopes.
-	queueTokenLimit int // Bounded by the model's reserved next-turn input headroom.
+	runtimeNotices  []*pendingRuntimeNotice          // Durable source refs; bounded batches materialize only at admission.
+	runtimeTimers   map[string]*pendingRuntimeNotice // O(1) coalescing of pending timer firings.
+	queuedTokens    int                              // Conservative wire-token estimate, including event envelopes.
+	queueTokenLimit int                              // Bounded by the model's reserved next-turn input headroom.
 	turn, job       string
 	finish, result  int64 // childStartMu guards updates; each assignment retains distinct output refs.
 	answer          string
@@ -112,7 +114,7 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 	if child.state == "idle" {
 		child.closing = true
 		r.childStartMu.Unlock()
-		r.Jobs.StopOwned(id, "")
+		r.Jobs.StopOwned(id)
 		r.childStartMu.Lock()
 		child.state = "closed"
 		view := child.view()
@@ -135,7 +137,7 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 	}
 	// Completion may have passed its cleanup decision before closing was set.
 	// Join the assignment first so it cannot launch more owned jobs, then sweep.
-	r.Jobs.StopOwned(id, job)
+	r.Jobs.StopOwned(id)
 	r.childStartMu.Lock()
 	delete(r.children, id)
 	view := child.view()
@@ -147,6 +149,9 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	r.orderMu.Lock()
 	task.assignment.accepting = false
 	for _, message := range task.assignment.queued {
+		if message.Type != llm.TypeChildGuidance {
+			continue
+		}
 		body, _ := json.Marshal(map[string]any{"type": "child_message_undelivered", "child_id": child.id, "child_turn_id": task.turn, "job_id": task.assignment.job, "message_event_seq": message.EventSeq})
 		if e := r.queueNotificationLocked(string(body)); e != nil {
 			err = errors.Join(err, e)
@@ -154,6 +159,8 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	}
 	task.assignment.queued = nil
 	task.assignment.queuedTokens = 0
+	task.assignment.runtimeNotices = nil
+	task.assignment.runtimeTimers = nil
 	r.orderMu.Unlock()
 	status := "completed"
 	if err != nil {
@@ -162,12 +169,14 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	if task.cancelled {
 		status = "cancelled"
 	}
-	r.childStartMu.Lock()
-	closing := child.closing
-	r.childStartMu.Unlock()
-	if status != "completed" || closing || !task.assignment.persistent {
-		r.Jobs.StopOwned(child.id, task.assignment.job)
-	}
+	// Persistence retains context only, never assignment-owned work. Joining
+	// includes callback publication before this context can become idle/reused.
+	r.Jobs.StopOwned(child.id)
+	r.orderMu.Lock()
+	delete(r.actorAssignments, child.id)
+	delete(r.awaitRequests, child.id)
+	delete(r.actorSignals, child.id)
+	r.orderMu.Unlock()
 	var transcript string
 	var exportErr error
 	if status != "completed" {
@@ -216,7 +225,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	r.routeMu.RUnlock()
 	r.childStartMu.Unlock()
 	if commitErr != nil {
-		r.Jobs.StopOwned(child.id, task.assignment.job)
+		r.Jobs.StopOwned(child.id)
 		completionErr := fmt.Errorf(prompts.ChildCompletionCommitFailure, commitErr)
 		finish.Error = errors.Join(err, completionErr).Error()
 		finish.ContextState = "closed"
@@ -282,8 +291,16 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 			system = asideSystemTemplate
 		}
 		var notices []llm.Message
+		runtimeCount := 0
 		if task.assignment != nil {
-			notices = task.assignment.queued
+			notices = append([]llm.Message(nil), task.assignment.queued...)
+			runtimeNotices, count, e := r.runtimeNoticeBatch(task.assignment)
+			if e != nil {
+				return e
+			}
+			runtimeCount = count
+			notices = append(notices, runtimeNotices...)
+			sort.Slice(notices, func(i, j int) bool { return notices[i].EventSeq < notices[j].EventSeq })
 		}
 		input := r.contextMessages(task.selection, append(append([]llm.Message(nil), messages...), notices...))
 		if cm != nil {
@@ -297,6 +314,7 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 			if task.assignment != nil {
 				task.assignment.queued = nil
 				task.assignment.queuedTokens = 0
+				task.assignment.consumeRuntimeNotices(runtimeCount)
 			}
 			next = candidate
 			r.notifications = append(r.notifications, admitted.Notifications...)

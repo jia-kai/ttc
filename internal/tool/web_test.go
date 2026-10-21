@@ -67,7 +67,7 @@ func TestWebFetchRetainedPagingAndSearch(t *testing.T) {
 	id := first["document_id"].(string)
 	// A rejected presentation change must leave the cached document available
 	// for the corrected call, without another download.
-	badArgs, _ := json.Marshal(map[string]any{"document_id": id, "format": "markdown"})
+	badArgs, _ := json.Marshal(map[string]any{"document_id": id, "format": "html"})
 	rejected := invoke(t, r, w, x, request, "web_fetch", string(badArgs))
 	if !strings.Contains(string(rejected.Result), "invalid_input") {
 		t.Fatal(string(rejected.Result))

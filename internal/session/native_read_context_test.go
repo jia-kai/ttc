@@ -24,11 +24,25 @@ func nativeAnnouncement(t *testing.T, message *llm.Message) *[]nativeReadGroup {
 	if strings.Contains(message.Content, "mime_type") || strings.Contains(message.Content, `"kind":"document"`) {
 		t.Fatal("verbose format definitions in runtime context", message.Content)
 	}
-	var view runtimeContext
-	if err := json.Unmarshal([]byte(message.Content), &view); err != nil {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(message.Content), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	return view.BinaryFiles
+	fields := runtimeFields(t, message, envelope.Type)
+	raw, exists := fields["binary_files"]
+	if !exists {
+		return nil
+	}
+	var groups []nativeReadGroup
+	if err := json.Unmarshal(raw, &groups); err != nil {
+		t.Fatal(err)
+	}
+	if groups == nil {
+		t.Fatal("capability replacement must be an array", message.Content)
+	}
+	return &groups
 }
 
 func TestNativeReadGroups(t *testing.T) {
@@ -67,8 +81,8 @@ func TestNativeReadAnnouncementLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		message, cursor, err = r.runtimeContext(context.Background(), "main", selection, cursor)
-		if err != nil || nativeAnnouncement(t, message) != nil {
-			t.Fatal("routine state repeated native formats", message, err)
+		if err != nil || message != nil {
+			t.Fatal("routine activity emitted context", message, err)
 		}
 		unchanged, _, err := r.runtimeContext(context.Background(), "main", selection, cursor)
 		if err != nil || unchanged != nil {
@@ -203,7 +217,19 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if cursor.snapshot != nil {
+					t.Fatal("successful compaction retained the admitted snapshot")
+				}
 				message, next, err := r.runtimeContext(context.Background(), actor, selection, cursor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fields := runtimeFields(t, message, "runtime_context")
+				for _, key := range []string{"project", "children", "live_jobs", "live_timers"} {
+					if _, ok := fields[key]; !ok {
+						t.Fatal("compaction continuation omitted baseline field", key)
+					}
+				}
 				announcement := nativeAnnouncement(t, message)
 				want := nativeReadGroups(selection.Model.BinaryFileTypes())
 				if err != nil || announcement == nil || !reflect.DeepEqual(*announcement, want) {

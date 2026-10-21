@@ -18,6 +18,7 @@ type questionActivity struct {
 type turnActivity struct {
 	question                questionActivity
 	retryStarted, retryEnds time.Time
+	awaitStarted            time.Time
 }
 
 func questionStatus(form session.QuestionForm) string {
@@ -48,6 +49,10 @@ func (a *turnActivity) observe(event session.Event, now time.Time) {
 		a.retryEnds = now.Add(time.Duration(event.Retry.DelayMilliseconds) * time.Millisecond)
 	}
 	switch event.Kind {
+	case "awaiting":
+		a.awaitStarted = now
+	case "resumed":
+		a.awaitStarted = time.Time{}
 	case "delta", "assistant", "tool_pending", "tool_stream_end":
 		a.retryStarted, a.retryEnds = time.Time{}, time.Time{}
 	}
@@ -55,6 +60,9 @@ func (a *turnActivity) observe(event session.Event, now time.Time) {
 
 func (a *turnActivity) indicator(now, started time.Time) string {
 	label, since := "Working", started
+	if !a.awaitStarted.IsZero() {
+		label, since = "Awaiting events", a.awaitStarted
+	}
 	if q := a.question; q.id != "" {
 		if q.dismissed {
 			return "What would you like to do instead?"

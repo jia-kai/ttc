@@ -20,7 +20,7 @@ type wakeupUpdate struct {
 }
 
 func validateWakeupUpdate(a wakeupUpdate) error {
-	if (a.ID == nil) == (a.Name == nil) {
+	if a.ID == nil && a.Name == nil {
 		return errors.New(prompts.WakeupCancelIdentity)
 	}
 	if a.ID != nil {
@@ -69,18 +69,16 @@ func (w *wakeups) update(a wakeupUpdate, actor string) (wakeup, error) {
 	if w.closed {
 		return wakeup{}, errors.New(prompts.RuntimeEnded)
 	}
-	var v *wakeup
-	for _, candidate := range w.items {
-		if candidate.Status == "scheduled" && ((a.ID != nil && candidate.ID == *a.ID) || (a.Name != nil && candidate.Name == *a.Name)) {
-			v = candidate
-			break
-		}
+	id, name := "", ""
+	if a.ID != nil {
+		id = *a.ID
 	}
+	if a.Name != nil {
+		name = *a.Name
+	}
+	v := w.findActiveLocked(actor, id, name)
 	if v == nil {
 		return wakeup{}, tool.Fail("not_found", prompts.WakeupCancelNotFound)
-	}
-	if actor != "main" && actor != v.actor {
-		return wakeup{}, tool.Fail("ownership", prompts.WakeupUpdateOwnership)
 	}
 	if a.Message != nil {
 		v.Message = *a.Message

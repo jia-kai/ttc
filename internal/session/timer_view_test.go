@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -16,7 +17,10 @@ func timerInspectionFixture(t *testing.T) (*Runtime, <-chan wakeup) {
 	t.Helper()
 	states := make(chan wakeup, 16)
 	r := &Runtime{Tools: tool.NewRegistry()}
+	r.Jobs = jobs.New(context.Background(), nil)
+	t.Cleanup(r.Jobs.Close)
 	r.timers = newWakeups(context.Background(), func(v wakeup) { states <- v })
+	r.timers.release = r.Jobs.ReleaseOwned
 	r.addWakeupTools()
 	t.Cleanup(r.timers.close)
 	return r, states

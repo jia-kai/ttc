@@ -34,7 +34,7 @@ func (r *Runtime) addChildMessageTool() {
 		if !utf8.ValidString(a.Message) || strings.TrimSpace(a.Message) == "" {
 			return tool.Fail("invalid_arguments", prompts.ChildMessageNonempty)
 		}
-		if (a.JobID != "" && (a.ChildID != "" || a.TurnID != "")) || (a.JobID == "" && (a.ChildID == "" || a.TurnID == "")) {
+		if a.JobID == "" && (a.ChildID == "" || a.TurnID == "") {
 			return tool.Fail("invalid_arguments", prompts.ChildMessageTarget)
 		}
 		return nil
@@ -59,7 +59,7 @@ func (r *Runtime) addChildMessageTool() {
 				}
 			}
 		}
-		if child == nil || child.state != "running" || child.closing || child.assignment == nil || a.TurnID != "" && child.turn != a.TurnID {
+		if child == nil || child.state != "running" || child.closing || child.assignment == nil || a.TurnID != "" && child.turn != a.TurnID || a.ChildID != "" && child.id != a.ChildID || a.JobID != "" && child.job != a.JobID {
 			return nil, tool.Fail("assignment_inactive", prompts.ChildMessageInactive)
 		}
 		r.routeMu.RLock()
@@ -90,6 +90,7 @@ func (r *Runtime) addChildMessageTool() {
 		// summarize it; it is not independently retained as a human prompt.
 		assignment.queued = append(assignment.queued, llm.Message{Type: llm.TypeChildGuidance, Content: eventContent(string(content), id, 0), EventSeq: id})
 		assignment.queuedTokens += tokens
+		r.signalActorLocked(child.id)
 		return map[string]any{"state": "queued", "delivered": false, "message_event_seq": id, "child_id": child.id, "child_turn_id": child.turn, "job_id": child.job}, nil
 	})
 }

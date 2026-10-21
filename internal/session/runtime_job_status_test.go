@@ -15,7 +15,7 @@ import (
 	"ttc/internal/watchrun"
 )
 
-func TestRuntimeJobTransitionsPreserveCanonicalStatus(t *testing.T) {
+func TestRuntimeTerminalJobsAreNotReplayedInContext(t *testing.T) {
 	zero, seven, signaled := 0, 7, 143
 	for _, kind := range []string{"shell", "watch"} {
 		for _, tc := range []struct {
@@ -44,20 +44,21 @@ func TestRuntimeJobTransitionsPreserveCanonicalStatus(t *testing.T) {
 				job := jobs.Snapshot{ID: "job", Kind: kind, Owner: "main", Label: "fixture", Status: tc.status, ExitCode: tc.code, Signal: tc.signal, FinishedAt: "2026-01-01T00:00:00Z"}
 				r.publishJob(job)
 				m, next, err := r.runtimeContext(context.Background(), "main", r.selection, cursor)
-				if err != nil || m == nil {
-					t.Fatal("missing terminal transition", m, err)
+				if err != nil || m != nil {
+					t.Fatal("terminal activity emitted context", m, err)
 				}
-				var view runtimeContext
-				if err := json.Unmarshal([]byte(m.Content), &view); err != nil {
+				fresh, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
+				if err != nil {
 					t.Fatal(err)
 				}
-				want := stateChange{Kind: "job", ID: job.ID, Label: job.Label, From: "running", To: job.Status, ExitCode: job.ExitCode, Signal: job.Signal, FinishedAt: job.FinishedAt}
-				if !reflect.DeepEqual(view.Changes, []stateChange{want}) || len(view.Jobs) != 0 || next.jobs[job.ID] != job.Status {
-					t.Fatal("canonical state or exit metadata changed", view, next.jobs)
+				var view runtimeContext
+				if err := json.Unmarshal([]byte(fresh.Content), &view); err != nil || len(view.Jobs) != 0 {
+					t.Fatal("terminal job retained in fresh baseline", view, err)
 				}
 				if m, _, err := r.runtimeContext(context.Background(), "main", r.selection, next); err != nil || m != nil {
-					t.Fatal("terminal transition repeated", m, err)
+					t.Fatal("terminal activity emitted context", m, err)
 				}
+
 			})
 		}
 	}
@@ -84,7 +85,7 @@ func TestRuntimeCommandExitStatusMatchesJobSurfaces(t *testing.T) {
 					if _, err := watchrun.Run(dir, []string{"/bin/sh", "-c", command}, nil, io.Discard, io.Discard); err != nil {
 						t.Fatal(err)
 					}
-					id, err = r.Jobs.StartWatch("main", dir, false, "")
+					id, err = r.Jobs.StartWatch("main", dir, false, "", capture.OutputOptions{})
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -109,16 +110,10 @@ func TestRuntimeCommandExitStatusMatchesJobSurfaces(t *testing.T) {
 					t.Fatal("job_exit disagrees with completion", notification, err)
 				}
 				m, _, err := r.runtimeContext(ctx, "main", r.selection, cursor)
-				if err != nil || m == nil {
-					t.Fatal("missing runtime transition", m, err)
+				if err != nil || m != nil {
+					t.Fatal("completion duplicated in runtime context", m, err)
 				}
-				var view runtimeContext
-				if err := json.Unmarshal([]byte(m.Content), &view); err != nil {
-					t.Fatal(err)
-				}
-				if len(view.Jobs) != 0 || len(view.Changes) != 1 || view.Changes[0].To != job.Status || !reflect.DeepEqual(view.Changes[0].ExitCode, job.ExitCode) {
-					t.Fatal("runtime transition disagrees with completion", view)
-				}
+
 			})
 		}
 	}

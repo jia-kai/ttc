@@ -1,0 +1,4 @@
+RuntimeEventHistoryDetails: >-
+  Full event details remain in committed conversation history. Use
+  conversation_export and inspect the source event or inclusive event-sequence
+  range to recover every completion and payload.

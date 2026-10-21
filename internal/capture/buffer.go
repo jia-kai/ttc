@@ -46,8 +46,9 @@ type Buffer struct {
 	totalLines          int64
 	last                uint64
 	truncated           bool
-	previewEnd          int64 // Absolute end of the last nonblank line; includes its terminating newline.
-	previewLineContent  bool  // Whether the current physical line has non-whitespace bytes.
+	previewEnd          int64       // Absolute end of the last nonblank line; includes its terminating newline.
+	previewLineContent  bool        // Whether the current physical line has non-whitespace bytes.
+	clean               *cleanIndex // Bounded lexical restart index; never changes raw bytes.
 }
 
 // NewBuffer allocates no payload until the first write. limit is in bytes and is
@@ -92,6 +93,7 @@ func (b *Buffer) boundary(pos int, forward bool) int {
 
 func (b *Buffer) drop(n int) {
 	for i := 0; i < n; i++ {
+		b.cleanDropByte(b.data[(b.start+i)%len(b.data)])
 		if b.data[(b.start+i)%len(b.data)] == '\n' {
 			b.droppedLines++
 		}
@@ -112,6 +114,7 @@ func (b *Buffer) Write(input []byte) (int, error) {
 	if n == 0 {
 		return 0, nil
 	}
+	b.indexClean(input)
 	b.totalLines += int64(bytes.Count(input, []byte{'\n'}))
 	for i, char := range input {
 		if char == '\n' {
@@ -133,6 +136,9 @@ func (b *Buffer) Write(input []byte) (int, error) {
 	if len(input) > b.limit {
 		b.drop(b.size)
 		omitted := len(input) - b.limit
+		for _, v := range input[:omitted] {
+			b.cleanDropByte(v)
+		}
 		b.droppedLines += int64(bytes.Count(input[:omitted], []byte{'\n'}))
 		input = input[omitted:]
 		b.truncated = true
@@ -154,6 +160,7 @@ func (b *Buffer) Write(input []byte) (int, error) {
 			p.used -= len(victim.data)
 			victim.data = nil
 			victim.start = 0
+			victim.trimCleanIndex()
 		}
 		data := make([]byte, capacity)
 		if b.size > 0 {
@@ -172,6 +179,7 @@ func (b *Buffer) Write(input []byte) (int, error) {
 	copy(b.data, input[first:])
 	b.size += len(input)
 	b.total += int64(n)
+	b.trimCleanIndex()
 	return n, nil
 }
 
@@ -194,6 +202,28 @@ func (b *Buffer) Tail(lines, limit int) string {
 		start++
 	}
 	return strings.ToValidUTF8(string(data[start:]), "?")
+}
+
+// TailView uses Tail's source-byte and line selection with optional cleaning.
+// Cleaning failures are explicit; callers must not silently substitute raw text.
+func (b *Buffer) TailView(lines, limit int, stripANSI bool) (string, error) {
+	if !stripANSI {
+		return b.Tail(lines, limit), nil
+	}
+	if lines <= 0 || limit <= 0 {
+		return "", nil
+	}
+	b.pool.mu.Lock()
+	defer b.pool.mu.Unlock()
+	end := int(max(0, b.previewEnd-(b.total-int64(b.size))))
+	start := max(0, end-limit)
+	data := make([]byte, end-start)
+	for i := range data {
+		data[i] = b.at(start + i)
+	}
+	start += tailLineStart(data, lines)
+	start = b.boundary(start, true)
+	return b.cleanRange(start, end)
 }
 
 func tailLineStart(data []byte, lines int) int {
@@ -219,6 +249,13 @@ type Page struct {
 	Output, NextCursor string
 	Start, End, Line   int64
 	Truncated          bool
+	Lines              []PresentedLine // Clean presentation lines with authoritative raw origins.
+}
+
+// PresentedLine maps a rendered line to its first source byte and physical line.
+type PresentedLine struct {
+	Text        string
+	Start, Line int64
 }
 
 // Read accepts an absolute byte cursor or eof:-N:bytes / eof:-N:lines. Empty starts
@@ -228,6 +265,10 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 	p := b.pool
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return b.read(cursor, limit)
+}
+
+func (b *Buffer) read(cursor string, limit int) (Page, error) {
 	if limit < 1 {
 		return Page{}, errors.New(prompts.CapturePositiveReadLimit)
 	}
@@ -288,7 +329,7 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 	}
 	start := int(pos - base)
 	start = b.boundary(start, true)
-	end := b.boundary(min(b.size, start+limit), false)
+	end := b.boundary(start+min(b.size-start, limit), false)
 	if start < b.size && end == start {
 		return Page{}, errors.New(prompts.CaptureUTF8ReadLimit)
 	}
@@ -296,21 +337,7 @@ func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 	for i := range data {
 		data[i] = b.at(start + i)
 	}
-	line := b.droppedLines + 1
-	if start < b.size/2 {
-		for i := 0; i < start; i++ {
-			if b.at(i) == '\n' {
-				line++
-			}
-		}
-	} else {
-		line = b.totalLines + 1
-		for i := start; i < b.size; i++ {
-			if b.at(i) == '\n' {
-				line--
-			}
-		}
-	}
+	line := b.lineAt(start)
 	return Page{Output: string(data), NextCursor: fmt.Sprint(base + int64(end)), Start: base + int64(start), End: b.total, Line: line, Truncated: lost}, nil
 }
 
@@ -322,6 +349,7 @@ func (p *Pool) Clear() {
 		b.drop(b.size)
 		b.data = nil
 		b.start = 0
+		b.clean = nil
 	}
 	p.used = 0
 	p.buffers = nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -110,7 +111,7 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 		}
 		return nil
 	}
-	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": Property("integer"), "max_chars": IntegerRange(1, 64000), "pattern": Property("string"), "context_lines": IntegerRange(0, 10), "timeout_ms": IntegerRange(1, 120000)}, nil, func(a webArgs) error {
+	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": IntegerRange(0, math.MaxInt), "max_chars": IntegerRange(1, 64000), "pattern": Property("string"), "context_lines": IntegerRange(0, 10), "timeout_ms": IntegerRange(1, 120000)}, nil, func(a webArgs) error {
 		if (a.URL == "") == (a.DocumentID == "") {
 			return errors.New(prompts.ToolWebSourceIdentifier)
 		}
@@ -120,15 +121,18 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 			}
 		}
 		if a.DocumentID != "" && a.Format != "" {
-			return errors.New(prompts.ToolWebRetainedFormat)
+			doc, err := cache.get(a.DocumentID)
+			if err != nil {
+				return err
+			}
+			if a.Format != doc.format {
+				return errors.New(prompts.ToolWebRetainedFormat)
+			}
 		}
 		if a.Format != "" && a.Format != "markdown" && a.Format != "text" && a.Format != "html" {
 			return errors.New(prompts.ToolWebFormat)
 		}
-		if a.Offset != nil && *a.Offset < 0 {
-			return errors.New(prompts.ToolWebOffset)
-		}
-		if a.Context != nil && a.Pattern == "" {
+		if a.Context != nil && *a.Context != 0 && a.Pattern == "" {
 			return errors.New(prompts.ToolWebContextPattern)
 		}
 		if len(a.Pattern) > 1024 {
@@ -158,6 +162,8 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 			return nil, err
 		}
 		return webPage(ctx, doc, a)
+	}, func(a *webArgs) []InputWarning {
+		return NormalizeEnum("format", &a.Format, "markdown", "text", "html")
 	})
 	addWebSearch(r, client, cache, config)
 }
@@ -256,7 +262,7 @@ func webPage(ctx context.Context, doc webDocument, a webArgs) (map[string]any, e
 			if index == offset {
 				begin = pos
 			}
-			if index == offset+limit {
+			if index >= offset && index-offset == limit {
 				end = pos
 				break
 			}

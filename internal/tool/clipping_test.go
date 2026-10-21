@@ -71,8 +71,8 @@ func TestIntegerRangeClipping(t *testing.T) {
 		t.Fatalf("original arguments changed: %s", record.Arguments)
 	}
 	want := []InputWarning{
-		{Code: "input_clipped", Parameter: "first", Requested: -100, Effective: 1, Minimum: 1, Maximum: 10, Message: "first was clipped from -100 to 1 (accepted range 1-10)."},
-		{Code: "input_clipped", Parameter: "second", Requested: 99, Effective: 5, Minimum: -5, Maximum: 5, Message: "second was clipped from 99 to 5 (accepted range -5-5)."},
+		{Code: "input_clipped", Parameter: "first", Requested: float64(-100), Effective: float64(1), Minimum: 1, Maximum: 10, Message: "first was clipped from -100 to 1 (accepted range 1-10)."},
+		{Code: "input_clipped", Parameter: "second", Requested: float64(99), Effective: float64(5), Minimum: -5, Maximum: 5, Message: "second was clipped from 99 to 5 (accepted range -5-5)."},
 	}
 	if !reflect.DeepEqual(result.Warnings, want) {
 		t.Fatalf("warnings = %+v", result.Warnings)
@@ -273,7 +273,7 @@ func TestClippingTypedNormalizer(t *testing.T) {
 		return map[string]any{"ok": true}, nil
 	}, func(a *clippingArgs) []InputWarning { return ClipInteger("first", a.First, 1, 10) })
 	record := r.Invoke(context.Background(), Execution{}, "dynamic", []byte(`{"first":100}`))
-	if result := decodeClippingResult(t, record); !result.OK || len(result.Warnings) != 1 || result.Warnings[0].Effective != 10 {
+	if result := decodeClippingResult(t, record); !result.OK || len(result.Warnings) != 1 || result.Warnings[0].Effective != float64(10) {
 		t.Fatal(string(record.Result))
 	}
 }
@@ -303,7 +303,7 @@ func TestClippingWarningsSurviveResultFallbacks(t *testing.T) {
 			if mode == "encoding" {
 				code = "execution_failed"
 			}
-			if result.OK || result.Error == nil || result.Error.Code != code || len(result.Warnings) != 1 || result.Warnings[0].Effective != 10 || len(record.Result) > 64<<10 {
+			if result.OK || result.Error == nil || result.Error.Code != code || len(result.Warnings) != 1 || result.Warnings[0].Effective != float64(10) || len(record.Result) > 64<<10 {
 				t.Fatalf("fallback lost warning or error: %s", record.Result)
 			}
 		})

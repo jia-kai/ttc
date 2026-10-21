@@ -76,7 +76,11 @@ func TestChildIdleFollowupRetainsContextAndDistinctAssignments(t *testing.T) {
 	}
 	requireChildLifecycle(t, listed.Children[0], "completed", "idle")
 	childID := first["child_id"].(string)
-	args, _ := json.Marshal(map[string]any{"persistent": true, "prompt": "follow up", "child_id": childID})
+	wrong, _ := json.Marshal(map[string]any{"persistent": true, "prompt": "not admitted", "child_id": childID, "label": "other"})
+	if result := childInvocation(t, r, ids[0], string(wrong)); result["ok"] == true {
+		t.Fatal("follow-up accepted conflicting label", result)
+	}
+	args, _ := json.Marshal(map[string]any{"persistent": true, "prompt": "follow up", "child_id": childID, "label": "  research  "})
 	second := childInvocation(t, r, ids[0], string(args))
 	if second["ok"] != true || second["child_id"] != childID || second["job_id"] == first["job_id"] || second["child_turn_id"] == first["child_turn_id"] || second["finish_event_seq"] == first["finish_event_seq"] {
 		t.Fatal(first, second)

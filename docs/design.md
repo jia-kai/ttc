@@ -28,8 +28,14 @@ history/ reversible edits. This defines the complete v1 target;
 - Compaction preserves live state. Completion handlers resolve the current
   session at commit. A routing read lock covers child commits/file tools; main
   handoff takes its write lock. Streams/blocking non-file tools hold neither.
-  Coding instructions and changed runtime snapshots follow
+  Coding instructions and runtime-context baselines/updates follow
   [system_prompt.md](system_prompt.md).
+- Each child assignment owns a managed-work scope. Completion closes
+  registration, cancels all commands/watchers/timers, and joins them before
+  publishing the final outcome. Persistent children retain conversation/model
+  context only. Scope cleanup fences late events against later assignments;
+  watcher cancellation never signals external workloads. Main-owned work lasts
+  until explicitly stopped or the runtime closes.
 - Graceful shutdown records interruptions and bounded output; startup leaves
   saved execution records untouched. An abrupt OS kill guarantees no process
   cleanup. Managed commands must stay in their process group; daemonization is
@@ -238,8 +244,9 @@ remain in the
   notifications in sequence order. Commit delivered IDs and versioned message
   counts, not another transcript. Unpublished updates cannot alter input; failed
   admission consumes nothing or advances no actor cursor.
-- [Runtime snapshots](system_prompt.md#runtime-snapshots) supply immutable state
-  at admission. Retry an admitted request with identical in-memory input.
+- [Runtime context](system_prompt.md#runtime-snapshots) supplies an initial
+  baseline and developer-role field updates at admission, not repeated activity
+  inventories. Retry an admitted request with identical in-memory input.
   Canonical history/archives retain exact messages. Delivery means inclusion
   through a result or notice at admission, not successful inference or merely
   recording a result.

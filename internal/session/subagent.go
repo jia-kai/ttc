@@ -45,9 +45,6 @@ func (r *Runtime) addSubagentTool() {
 			return tool.Fail("invalid_arguments", prompts.ChildNonemptyVariant)
 		}
 		if a.ChildID != "" {
-			if a.Label != "" {
-				return tool.Fail("invalid_arguments", prompts.ChildFollowupLabel)
-			}
 			return nil
 		}
 		if words := len(strings.Fields(a.Label)); words < 1 || words > 4 || utf8.RuneCountInString(a.Label) > 64 || strings.IndexFunc(a.Label, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }) >= 0 {
@@ -71,6 +68,10 @@ func (r *Runtime) addSubagentTool() {
 			if child == nil {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("not_found", prompts.ChildUnknownFollowup)
+			}
+			if a.Label != "" && strings.Join(strings.Fields(a.Label), " ") != child.label {
+				r.childStartMu.Unlock()
+				return nil, tool.Fail("invalid_arguments", prompts.ChildFollowupLabel)
 			}
 			if child.state != "idle" || child.closing {
 				r.childStartMu.Unlock()
@@ -120,6 +121,10 @@ func (r *Runtime) addSubagentTool() {
 			inheritedAnswer: child.lastAnswer != "",
 		}
 		child.assignment = assignment
+		r.Jobs.BeginOwned(child.id)
+		r.orderMu.Lock()
+		r.actorAssignments[child.id] = assignment
+		r.orderMu.Unlock()
 		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
@@ -164,6 +169,17 @@ func (r *Runtime) addSubagentTool() {
 			}
 		})
 		return r.childResult(child, assignment, v), err
+	}, func(a *args) []tool.InputWarning {
+		if a.ChildID == "" {
+			return nil
+		}
+		normalized := strings.Join(strings.Fields(a.Label), " ")
+		if normalized == a.Label {
+			return nil
+		}
+		warnings := tool.AdjustedInput("label", a.Label, normalized)
+		a.Label = normalized
+		return warnings
 	})
 }
 
@@ -255,6 +271,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return err
 		}
 		r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · inspect", EntryID: entry})
+		if err := r.deliverNoticeEntries(actor, admitted.NoticeEntries); err != nil {
+			return err
+		}
 		reply := llm.Message{Type: llm.TypeAssistant}
 		var text strings.Builder
 		started := time.Now()
@@ -369,6 +388,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			}
 			messages = append(messages, llm.Message{Type: llm.TypeToolResult, CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
 		}
+		if err := r.settleAwait(ctx, actor); err != nil {
+			return err
+		}
 		if streamErr != nil {
 			var partial *llm.PartialError
 			if callbackFailed || !errors.As(streamErr, &partial) {
@@ -406,7 +428,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				// A final response and a parent send race on the same gate. A
 				// queued message continues this assignment, never a new turn.
 				r.orderMu.Lock()
-				pending := len(task.assignment.queued) != 0
+				pending := len(task.assignment.queued) != 0 || len(task.assignment.runtimeNotices) != 0
 				if !pending {
 					task.assignment.accepting = false
 				}

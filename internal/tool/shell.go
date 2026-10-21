@@ -22,6 +22,7 @@ type shellArgs struct {
 	Strict      *bool  `json:"strict,omitempty"` // Nil enables set -eu; false disables it.
 	OutputMode  string `json:"output_mode,omitempty"`
 	OutputBytes *int   `json:"output_bytes,omitempty"`
+	StripANSI   *bool  `json:"strip_ansi,omitempty"`
 }
 
 // ChildView is copied live metadata for one reusable coding context.
@@ -43,7 +44,7 @@ type ChildController interface {
 // AddShell exposes managed commands and owner-scoped live handles. A nil child
 // controller leaves standalone shell registries without reusable child contexts.
 func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
-	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": IntegerRange(1, capture.MaxOutputBytes)}, []string{"command"}, func(a shellArgs) error {
+	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": IntegerRange(1, capture.MaxOutputBytes), "strip_ansi": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
 		}
@@ -71,7 +72,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		wake := a.Wake == nil || *a.Wake
 		var id string
 		var e error
-		output := capture.OutputOptions{Mode: a.OutputMode, Bytes: intDefault(a.OutputBytes, capture.DefaultOutputBytes)}
+		output := capture.OutputOptions{Mode: a.OutputMode, Bytes: intDefault(a.OutputBytes, capture.DefaultOutputBytes), StripANSI: a.StripANSI}
 		if a.Protocol == "lsp" {
 			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake, output, a.Label)
 		} else {
@@ -91,14 +92,16 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		})
 		return v, jobToolError(err)
 	}, func(a *shellArgs) []InputWarning {
+		warnings := NormalizeEnum("protocol", &a.Protocol, "lsp")
+		warnings = append(warnings, NormalizeEnum("output_mode", &a.OutputMode, "head", "tail", "head_tail")...)
 		if a.Timeout == nil {
-			return nil
+			return warnings
 		}
 		minimum := 1
 		if a.Background {
 			minimum = 0
 		}
-		return ClipInteger("timeout_ms", a.Timeout, minimum, 86400000)
+		return append(warnings, ClipInteger("timeout_ms", a.Timeout, minimum, 86400000)...)
 	})
 	type list struct {
 		State   string `json:"state,omitempty"`
@@ -121,7 +124,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 			result["children"] = views
 		}
 		return result, nil
-	})
+	}, func(a *list) []InputWarning { return NormalizeEnum("state", &a.State, "running", "all") })
 	type read struct {
 		ID            string `json:"job_id"`
 		Cursor        string `json:"cursor,omitempty"`
@@ -130,19 +133,20 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		Literal       bool   `json:"literal,omitempty"`
 		CaseSensitive *bool  `json:"case_sensitive,omitempty"`
 		Limit         *int   `json:"limit_bytes,omitempty"`
+		StripANSI     *bool  `json:"strip_ansi,omitempty"`
 	}
-	Register(r, "job_read", prompts.ToolDescription("job_read"), map[string]any{"job_id": Property("string"), "cursor": Property("string"), "stream": Property("string", "stdout", "stderr"), "grep": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit_bytes": IntegerRange(1, 65536)}, []string{"job_id"}, func(a read) error {
+	Register(r, "job_read", prompts.ToolDescription("job_read"), map[string]any{"job_id": Property("string"), "cursor": Property("string"), "stream": Property("string", "stdout", "stderr"), "grep": Property("string"), "literal": Property("boolean"), "case_sensitive": Property("boolean"), "limit_bytes": IntegerRange(1, 65536), "strip_ansi": Property("boolean")}, []string{"job_id"}, func(a read) error {
 		if e := Required("job_id", a.ID); e != nil {
 			return e
 		}
 		return nil
 	}, func(ctx context.Context, x Execution, a read) (any, error) {
-		v, e := m.Read(ctx, x.Actor, a.ID, jobs.ReadOptions{Stream: a.Stream, Cursor: a.Cursor, Limit: intDefault(a.Limit, 16384), Grep: a.Grep, Literal: a.Literal, IgnoreCase: a.CaseSensitive != nil && !*a.CaseSensitive})
+		v, e := m.Read(ctx, x.Actor, a.ID, jobs.ReadOptions{Stream: a.Stream, Cursor: a.Cursor, Limit: intDefault(a.Limit, 16384), Grep: a.Grep, Literal: a.Literal, IgnoreCase: a.CaseSensitive != nil && !*a.CaseSensitive, StripANSI: a.StripANSI})
 		if e != nil {
 			return nil, jobToolError(e)
 		}
 		return v, nil
-	})
+	}, func(a *read) []InputWarning { return NormalizeEnum("stream", &a.Stream, "stdout", "stderr") })
 	type stop struct {
 		ID    string `json:"job_id,omitempty"`
 		Child string `json:"child_id,omitempty"`

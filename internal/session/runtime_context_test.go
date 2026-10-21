@@ -11,8 +11,57 @@ import (
 	"testing"
 
 	"ttc/internal/capture"
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/skills"
+	"ttc/internal/tool"
 )
+
+func TestRuntimeContextUpdateExplicitClearingAndIndependentProjectLists(t *testing.T) {
+	formats := []nativeReadGroup{{Extensions: []string{".pdf"}, MaxBytes: 32}}
+	emptyFormats := []nativeReadGroup{}
+	previous := runtimeContext{
+		Cwd: "/old", IsRepo: true, Branch: "main", Scratch: "/scratch", Date: "yesterday", Model: "old",
+		ImageInput: true, ImageClick: true, BinaryFiles: &formats,
+		Project: &projectContext{Instructions: []projectInstruction{{Path: "AGENTS.md", Content: "old"}}, Skills: []skills.Skill{{Name: "old"}}},
+	}
+	current := runtimeContext{BinaryFiles: &emptyFormats, Project: &projectContext{Instructions: []projectInstruction{}, Skills: []skills.Skill{}}}
+	update := contextUpdate(&previous, &current)
+	data, err := json.Marshal(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := runtimeFields(t, &llm.Message{Type: llm.TypeRuntimeContext, Content: string(data)}, "runtime_context_update")
+	for _, key := range []string{"is_repo", "image_input", "image_click"} {
+		if string(fields[key]) != "false" {
+			t.Fatal("false clearing omitted", key, string(data))
+		}
+	}
+	for _, key := range []string{"cwd", "branch", "scratch_directory", "date_utc", "model"} {
+		if string(fields[key]) != `""` {
+			t.Fatal("empty clearing omitted", key, string(data))
+		}
+	}
+	if string(fields["binary_files"]) != "[]" {
+		t.Fatal("capability clearing omitted", string(data))
+	}
+	var project map[string]json.RawMessage
+	if err := json.Unmarshal(fields["project"], &project); err != nil {
+		t.Fatal(err)
+	}
+	if string(project["instructions"]) != "[]" || string(project["available_skills"]) != "[]" {
+		t.Fatal("project clearing omitted", string(data))
+	}
+	current.Project.Instructions = previous.Project.Instructions
+	update = contextUpdate(&previous, &current)
+	projectSet := update.Set["project"].(map[string]any)
+	if len(projectSet) != 1 || projectSet["available_skills"] == nil {
+		t.Fatal("skill-only change resent instructions", projectSet)
+	}
+	if unchanged := contextUpdate(&current, &current); len(unchanged.Set) != 0 {
+		t.Fatal("unchanged state emitted replacements", unchanged)
+	}
+}
 
 func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
@@ -33,26 +82,48 @@ func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {
 	}
 }
 
+// runtimeFields decodes the wire envelope without applying baseline defaults to a
+// delta. Tests must check key presence to distinguish omission from clearing.
+func runtimeFields(t *testing.T, message *llm.Message, kind string) map[string]json.RawMessage {
+	t.Helper()
+	if message == nil || message.Role() != "developer" || message.Type != llm.TypeRuntimeContext {
+		t.Fatalf("missing developer runtime message: %+v", message)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(message.Content), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["type"]) != `"`+kind+`"` {
+		t.Fatalf("expected %s: %s", kind, message.Content)
+	}
+	if kind == "runtime_context_update" {
+		if len(fields) != 2 {
+			t.Fatal("delta has fields outside type/set", message.Content)
+		}
+		raw := fields["set"]
+		fields = nil
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fields
+}
+
 func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Inspect runtime state")
-	decode := func(m *llm.Message) runtimeContext {
-		t.Helper()
-		var v runtimeContext
-		if m == nil || m.Role() != "developer" || !m.Type.IsRuntime() {
-			t.Fatal(m)
-		}
-		if err := json.Unmarshal([]byte(m.Content), &v); err != nil {
-			t.Fatal(err)
-		}
-		return v
-	}
 	m, cursor, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decode(m).Project == nil {
-		t.Fatal("missing initial project context")
+	initial := runtimeFields(t, m, "runtime_context")
+	for _, key := range []string{"project", "live_jobs", "live_timers", "children", "binary_files"} {
+		if _, ok := initial[key]; !ok {
+			t.Fatal("incomplete baseline", key)
+		}
+	}
+	if _, ok := initial["changes_since_previous_request"]; ok {
+		t.Fatal("baseline includes historical transitions")
 	}
 	m, cursor, err = r.runtimeContext(context.Background(), "main", r.selection, cursor)
 	if err != nil || m != nil {
@@ -69,21 +140,68 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, next, err := r.runtimeContext(context.Background(), "main", r.selection, cursor)
-	v := decode(m)
-	if err != nil || v.Project == nil || len(v.Jobs) != 0 || len(v.Changes) != 1 {
-		t.Fatal(v, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	change := v.Changes[0]
-	if change.ID != id || change.To != "completed" || change.ExitCode == nil || *change.ExitCode != 7 {
-		t.Fatal(change)
+	fields := runtimeFields(t, m, "runtime_context_update")
+	var project map[string]json.RawMessage
+	if err := json.Unmarshal(fields["project"], &project); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 1 || len(project) != 1 || project["instructions"] == nil {
+		t.Fatal("instruction-only change resent unrelated state", m.Content)
 	}
 	child, _, err := r.runtimeContext(context.Background(), "main/child_fixture", r.selection, contextCursor{})
-	if err != nil || len(decode(child).Changes) != 0 {
-		t.Fatal(child, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := runtimeFields(t, child, "runtime_context")
+	if string(fresh["live_jobs"]) != "[]" || fresh["changes_since_previous_request"] != nil {
+		t.Fatal("fresh child received terminal history", child.Content)
 	}
 	m, _, err = r.runtimeContext(context.Background(), "main", r.selection, next)
 	if err != nil || m != nil {
 		t.Fatal(m, err)
+	}
+}
+
+func TestFreshRuntimeBaselineIncludesOnlyAccessibleActiveInventories(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Inspect fresh inventories")
+	actor := "main/child_fixture"
+	for _, job := range []jobs.Snapshot{
+		{ID: "own", Owner: actor, Status: "running"},
+		{ID: "descendant", Owner: actor + "/child_nested", Status: "running"},
+		{ID: "sibling", Owner: "main/child_other", Status: "running"},
+		{ID: "finished", Owner: actor, Status: "completed"},
+	} {
+		r.publishJob(job)
+	}
+	for _, timer := range []wakeup{
+		{ID: "own", actor: actor, Status: "scheduled"},
+		{ID: "descendant", actor: actor + "/child_nested", Status: "scheduled"},
+		{ID: "sibling", actor: "main/child_other", Status: "scheduled"},
+		{ID: "cancelled", actor: actor, Status: "cancelled"},
+	} {
+		r.publishTimer(timer)
+	}
+	if err := r.publishChild(tool.ChildView{ID: actor, ChildState: "running", AssignmentStatus: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := runtimeFields(t, message, "runtime_context")
+	var view runtimeContext
+	if err := json.Unmarshal([]byte(message.Content), &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Jobs) != 2 || view.Jobs[0].ID != "descendant" || view.Jobs[1].ID != "own" || len(view.Timers) != 2 || view.Timers[0].ID != "descendant" || view.Timers[1].ID != "own" || len(view.Children) != 1 || view.Children[0].ID != actor {
+		t.Fatal("baseline did not reflect accessible active inventories", view)
+	}
+	if fields["changes_since_previous_request"] != nil {
+		t.Fatal("fresh actor inherited terminal transitions", message.Content)
 	}
 }
 
@@ -138,7 +256,8 @@ func TestAncestorInstructionsAreOrderedAndRefreshAtRequestBoundary(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(m.Content), &result); err != nil {
+	fields := runtimeFields(t, m, "runtime_context_update")
+	if err := json.Unmarshal(fields["project"], &result.Project); err != nil {
 		t.Fatal(err)
 	}
 	if result.Project == nil || result.Project.Instructions[len(result.Project.Instructions)-2].Content != "updated parent instructions" {
@@ -152,7 +271,8 @@ func TestAncestorInstructionsAreOrderedAndRefreshAtRequestBoundary(t *testing.T)
 		t.Fatal(err)
 	}
 	result = runtimeContext{}
-	if err := json.Unmarshal([]byte(m.Content), &result); err != nil {
+	fields = runtimeFields(t, m, "runtime_context_update")
+	if err := json.Unmarshal(fields["project"], &result.Project); err != nil {
 		t.Fatal(err)
 	}
 	if result.Project == nil {
@@ -218,23 +338,26 @@ func TestInterruptedNativeCompletionResumesCanonicalHistory(t *testing.T) {
 	}
 }
 
-func TestRepeatingTimerContextHighlightsFiring(t *testing.T) {
+func TestRepeatingTimerActivityDoesNotEmitContext(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Observe timer")
-	// Model the supervisor's already-observed transition without a timing race.
-	r.timers.mu.Lock()
-	_, cancel := context.WithCancel(r.ctx)
-	r.timers.items["timer"] = &wakeup{ID: "timer", Name: "Repeated check", Status: "scheduled", Repeat: 60, Fired: 2, cancel: cancel}
-	vtimer := *r.timers.items["timer"]
-	r.timers.mu.Unlock()
-	r.publishTimer(vtimer)
-	m, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{timers: map[string]string{"timer": "scheduled/1"}})
-	var v runtimeContext
-	if err != nil || json.Unmarshal([]byte(m.Content), &v) != nil {
-		t.Fatal(m, err)
+	_, cursor, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(v.Changes) != 1 || v.Changes[0].To != "fired" || v.Changes[0].From != "scheduled" || v.Changes[0].FiredCount != 2 || len(v.Timers) != 1 {
-		t.Fatal(v)
+	r.publishTimer(wakeup{ID: "timer", actor: "main", Name: "Repeated check", Status: "scheduled", Repeat: 60, Fired: 2})
+	m, _, err := r.runtimeContext(context.Background(), "main", r.selection, cursor)
+	if err != nil || m != nil {
+		t.Fatal("activity emitted context", m, err)
+	}
+	m, _, err = r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := runtimeFields(t, m, "runtime_context")
+	var timers []TimerView
+	if err := json.Unmarshal(fields["live_timers"], &timers); err != nil || len(timers) != 1 || timers[0].ID != "timer" {
+		t.Fatal("fresh baseline omitted active timer", timers, err)
 	}
 }
 

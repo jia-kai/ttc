@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"ttc/internal/prompts"
@@ -24,6 +25,34 @@ type lspArgs struct {
 	Offset     *int    `json:"offset,omitempty"`
 	Limit      *int    `json:"limit,omitempty"`
 	Timeout    *int    `json:"timeout_ms,omitempty"`
+}
+
+func normalizeLSP(a *lspArgs) []InputWarning {
+	warnings := NormalizeEnum("operation", &a.Operation, "definition", "references", "hover", "document_symbols", "workspace_symbols")
+	clearText := func(name string, value **string) {
+		if *value != nil && **value == "" {
+			warnings = append(warnings, AdjustedInput(name, "", nil)...)
+			*value = nil
+		}
+	}
+	if a.Operation == "workspace_symbols" {
+		clearText("path", &a.Path)
+		clearText("language_id", &a.LanguageID)
+	} else {
+		clearText("query", &a.Query)
+		clearText("language_id", &a.LanguageID)
+	}
+	if a.Operation == "hover" {
+		if a.Offset != nil && *a.Offset == 0 {
+			warnings = append(warnings, AdjustedInput("offset", 0, nil)...)
+			a.Offset = nil
+		}
+		if a.Limit != nil && *a.Limit == 100 {
+			warnings = append(warnings, AdjustedInput("limit", 100, nil)...)
+			a.Limit = nil
+		}
+	}
+	return warnings
 }
 
 func validateLSP(a lspArgs) error {
@@ -61,9 +90,6 @@ func validateLSP(a lspArgs) error {
 	if a.Operation == "hover" && (a.Offset != nil || a.Limit != nil) {
 		return errors.New(prompts.ToolLSPHoverPagination)
 	}
-	if a.Offset != nil && *a.Offset < 0 {
-		return errors.New(prompts.ToolNonnegativeOffset)
-	}
 	return nil
 }
 
@@ -80,7 +106,7 @@ func jobToolError(err error) error {
 
 func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 	Register(r, "lsp_query", prompts.ToolDescription("lsp_query"), map[string]any{
-		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": Property("integer"), "limit": IntegerRange(1, 500), "timeout_ms": IntegerRange(1, 120000),
+		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": IntegerRange(0, math.MaxInt), "limit": IntegerRange(1, 500), "timeout_ms": IntegerRange(1, 120000),
 	}, []string{"job_id", "operation"}, validateLSP, func(ctx context.Context, x Execution, a lspArgs) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30000))*time.Millisecond)
 		defer cancel()
@@ -105,5 +131,5 @@ func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 			return nil, Fail("timeout", fmt.Sprintf(prompts.ToolLSPTimeout, intDefault(a.Timeout, 30000)))
 		}
 		return result, jobToolError(err)
-	})
+	}, normalizeLSP)
 }

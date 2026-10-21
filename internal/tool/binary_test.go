@@ -164,12 +164,14 @@ func TestReadDocumentsCapabilitiesPaginationAndText(t *testing.T) {
 		x.BinaryFiles = []llm.BinaryFileType{documentCapability(".pdf")}
 		ok(t, invoke(t, r, w, x, req, "read", string(args)))
 		for _, pagination := range []string{"offset", "limit"} {
-			args, _ := json.Marshal(map[string]any{"path": name, pagination: 1})
+			args, _ := json.Marshal(map[string]any{"path": name, pagination: 2})
 			record := invoke(t, r, w, x, req, "read", string(args))
-			if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"invalid_input"`) || !strings.Contains(string(record.Result), "omit pagination") {
+			if len(record.Files) != 0 || !strings.Contains(string(record.Result), `"code":"invalid_input"`) || !strings.Contains(string(record.Result), "only omitted or default pagination") {
 				t.Fatalf("binary pagination accepted: %s", record.Result)
 			}
 		}
+		args, _ = json.Marshal(map[string]any{"path": name, "offset": 1, "limit": 200})
+		ok(t, invoke(t, r, w, x, req, "read", string(args)))
 	}
 	for extension, mime := range map[string]string{".txt": "text/plain", ".csv": "text/csv", ".md": "text/markdown", ".json": "application/json", ".xml": "application/xml"} {
 		name := "text" + extension

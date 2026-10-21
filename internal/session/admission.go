@@ -19,6 +19,31 @@ import (
 
 var errNeedsCompaction = errors.New("request requires compaction")
 
+// deliverNoticeEntries updates timer delivery state only after durable request
+// admission. It runs outside orderMu because timer publishers hold timers.mu
+// before entering the publication gate.
+func (r *Runtime) deliverNoticeEntries(actor string, entries []int64) error {
+	for _, id := range entries {
+		entry, err := r.Store.Entry(id)
+		if err != nil {
+			return err
+		}
+		var message llm.Message
+		if err := json.Unmarshal(entry.Content, &message); err != nil {
+			return err
+		}
+		var wake struct {
+			ID    string `json:"wakeup_id"`
+			Fired int    `json:"fired_count"`
+		}
+		if json.Unmarshal([]byte(message.Content), &wake) == nil && wake.ID != "" {
+			r.timers.deliveredThrough(wake.ID, wake.Fired)
+		}
+		r.emit(Event{Kind: "message", Actor: actor, Text: message.Content, EntryID: id, MessageType: message.Type})
+	}
+	return nil
+}
+
 // queueNotification commits the source event before making its immutable body
 // eligible for a request. Repeating timers replace only undelivered firings.
 func (r *Runtime) queueNotification(content string) error {
@@ -27,28 +52,7 @@ func (r *Runtime) queueNotification(content string) error {
 	return r.queueNotificationLocked(content)
 }
 func (r *Runtime) queueNotificationLocked(content string) error {
-	id, err := r.Store.Append(r.Current(), "", "main", "status", "", false, map[string]any{"type": "runtime_event", "body": json.RawMessage(content)})
-	if err != nil {
-		r.orderError = errors.Join(r.orderError, err)
-		return err
-	}
-	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, id, 0), EventSeq: id}
-	var incoming struct {
-		ID string `json:"wakeup_id"`
-	}
-	if json.Unmarshal([]byte(content), &incoming) == nil && incoming.ID != "" {
-		for i, old := range r.notifications {
-			var prior struct {
-				ID string `json:"wakeup_id"`
-			}
-			if json.Unmarshal([]byte(old.Content), &prior) == nil && prior.ID == incoming.ID {
-				r.notifications = append(r.notifications[:i], r.notifications[i+1:]...)
-				break
-			}
-		}
-	}
-	r.notifications = append(r.notifications, m)
-	return nil
+	return r.queueActorNotificationLocked("main", content)
 }
 func (r *Runtime) publishJob(v jobs.Snapshot) {
 	r.orderMu.Lock()
@@ -154,7 +158,7 @@ func (r *Runtime) publishTimer(v wakeup) {
 	r.publishedTimers[v.ID] = v
 	if v.Fired > old.Fired {
 		content, _ := json.Marshal(map[string]any{"type": "wakeup", "wakeup_id": v.ID, "message": v.Message, "fired_count": v.Fired})
-		if r.queueNotificationLocked(string(content)) != nil {
+		if r.queueActorNotificationLocked(v.actor, string(content)) != nil {
 			return
 		}
 	}
@@ -193,6 +197,7 @@ func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64
 		}
 	}
 	r.notifications = append(r.notifications, llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, eventID, 0), EventSeq: eventID})
+	r.signalActorLocked("main")
 	sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].EventSeq < r.notifications[j].EventSeq })
 	return nil
 }

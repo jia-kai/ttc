@@ -267,9 +267,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	e = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
-		cursor := r.mainContext
-		cursor.project = ""
-		cursor.snapshot = ""
+		cursor := contextCursor{}
 		contextMessage, _, e := r.runtimeContextLocked(ctx, "main", selection, cursor)
 		if e != nil {
 			return e
@@ -285,8 +283,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			return e
 		}
 		r.current = v.ID
-		r.mainContext.project = ""
-		r.mainContext.snapshot = ""
+		r.mainContext = contextCursor{}
 		input := append(append([]llm.Message(nil), assembled...), notices...)
 		if contextMessage != nil {
 			input = append(input, *contextMessage)

@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"ttc/internal/capture"
 
 	"ttc/internal/prompts"
 )
@@ -58,6 +59,7 @@ type TaskOptions struct {
 	Kind, Label            string
 	Background, WakeOnExit bool
 	Inspector              Inspector
+	Output                 *capture.OutputOptions // Optional model-facing source selection; nil retains compact task previews.
 	// StartWatch retains record_dir in Snapshot for the tool JSON contract.
 	recordDir string
 	command   string // Exact command retained by watch tasks for explicit detail lists.
@@ -142,7 +144,8 @@ func (m *Manager) Inspect(ctx context.Context, owner, id string) (Inspection, er
 		if output.Name == "stderr" {
 			buffer = j.stderr
 		}
-		page, err := buffer.Read(fmt.Sprintf("eof:-%d:bytes", output.LimitBytes), output.LimitBytes)
+		strip := j.output == nil || capture.StripEnabled(j.output.StripANSI)
+		page, err := buffer.ReadView(fmt.Sprintf("eof:-%d:bytes", output.LimitBytes), output.LimitBytes, strip)
 		if err != nil {
 			output.Error = err.Error()
 			continue

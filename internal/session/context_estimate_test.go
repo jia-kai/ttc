@@ -72,8 +72,12 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
-	r.usage = ContextUsage{RequestID: 87, Input: 9000, Limit: r.selection.Model.Budget.ContextLimit}
-	r.reported = &ReportedUsage{RequestID: 87, Model: "previous", Tokens: llm.Usage{InputTokens: 9000, OutputTokens: 50}}
+	// Keep the predecessor near the model's input ceiling, independent of the
+	// size of the current generated tool and runtime prompts.
+	budget := r.selection.Model.Budget
+	predecessorInput := budget.ContextLimit - budget.OutputAllowance - budget.EstimationMargin - budget.NextTurnInputReserve
+	r.usage = ContextUsage{RequestID: 87, Input: predecessorInput, Limit: budget.ContextLimit}
+	r.reported = &ReportedUsage{RequestID: 87, Model: "previous", Tokens: llm.Usage{InputTokens: predecessorInput, OutputTokens: 50}}
 	r.recordUsage(&r.reported.Tokens)
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier task completed."}); err != nil {
@@ -85,10 +89,10 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 		t.Fatal(err)
 	}
 	u := r.UsageSnapshot()
-	if u.RequestID != 0 || u.Input >= 9000 || u.Input <= 0 || u.Reported.RequestID != 87 {
+	if u.RequestID != 0 || u.Input >= predecessorInput || u.Input <= 0 || u.Reported.RequestID != 87 {
 		t.Fatal("manual handoff kept predecessor occupancy or replaced response", u)
 	}
-	if u.Totals.Requests != 2 || u.Totals.Tokens.InputTokens != 13000 || u.Totals.Tokens.OutputTokens != 130 {
+	if u.Totals.Requests != 2 || u.Totals.Tokens.InputTokens != predecessorInput+4000 || u.Totals.Tokens.OutputTokens != 130 {
 		t.Fatal("compaction usage was duplicated or became context size", u.Totals)
 	}
 }

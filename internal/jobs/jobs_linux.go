@@ -19,6 +19,7 @@ import (
 
 	"ttc/internal/history"
 	"ttc/internal/lsp"
+	"ttc/internal/managed"
 )
 
 // ErrNotFound identifies a stale or inaccessible job handle without exposing
@@ -55,6 +56,7 @@ type job struct {
 	cmd              *exec.Cmd
 	cancel           context.CancelFunc
 	done             chan struct{}
+	published        chan struct{} // Closed after all terminal callbacks return.
 	promoted         chan struct{} // Closed once when foreground shell ownership moves to background.
 	promotionClaimed bool          // The original waiter owns promotion; later waits observe ordinary completion.
 	stdout, stderr   *capture.Buffer
@@ -71,6 +73,7 @@ type Manager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	jobs   map[string]*job
+	scopes map[string]*managed.Scope
 	closed bool
 	Notify func(Snapshot)
 	// OnState publishes launch and terminal states outside the manager lock.
@@ -82,7 +85,7 @@ type Manager struct {
 // New constructs a live supervisor; foreground contexts do not own background jobs.
 func New(ctx context.Context, notify func(Snapshot)) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Manager{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, Notify: notify, pool: capture.NewPool(capture.SharedLimit)}
+	return &Manager{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, scopes: map[string]*managed.Scope{}, Notify: notify, pool: capture.NewPool(capture.SharedLimit)}
 }
 
 // Start launches a closed-stdin shell in a dedicated process group.
@@ -146,6 +149,12 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	startedAt := time.Now().UTC()
 	j := &job{startedAt: startedAt, view: Snapshot{command: command, ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	j.inspector = commandInspector
+	j.published = make(chan struct{})
+	if !m.scopeLocked(owner).Register(cancel, j.published) {
+		cancel()
+		m.mu.Unlock()
+		return "", errors.New(prompts.RuntimeEnded)
+	}
 	cmd.Stdout = j.stdout
 	j.output = &options
 	cmd.Stderr = j.stderr
@@ -162,6 +171,8 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 				_ = input.Close()
 			}
 			cancel()
+			close(j.published)
+			m.scopeLocked(owner).Release(j.published)
 			m.mu.Unlock()
 			return "", fmt.Errorf(prompts.JobLSPPipeFailure, err)
 		}
@@ -175,6 +186,8 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 			_ = writer.Close()
 		}
 		cancel()
+		close(j.published)
+		m.scopeLocked(owner).Release(j.published)
 		m.mu.Unlock()
 		return "", e
 	}
@@ -191,6 +204,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	}
 	go func() {
 		defer m.wg.Done()
+		defer func() { close(j.published); m.ReleaseOwned(owner, j.published) }()
 		e := cmd.Wait() // Kill lingering descendants even if the group leader exits first.
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		if j.client != nil {
@@ -370,6 +384,7 @@ type ReadOptions struct {
 	Limit               int    // Bytes read before optional grep filtering; default is supplied by the tool.
 	Grep                string // Go RE2 expression, empty disables filtering.
 	Literal, IgnoreCase bool
+	StripANSI           *bool // Nil uses cleaned output; false selects raw capture.
 }
 
 // Read pages one named stream. EOF-relative cursors use eof:-N:bytes or eof:-N:lines.
@@ -399,7 +414,7 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 	} else if stream != "stdout" {
 		return nil, errors.New(prompts.JobInvalidStream)
 	}
-	page, err := buffer.Read(options.Cursor, options.Limit)
+	page, err := buffer.ReadView(options.Cursor, options.Limit, capture.StripEnabled(options.StripANSI))
 	if err != nil {
 		return nil, err
 	}
@@ -423,16 +438,23 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 		}
 		var kept strings.Builder
 		line, offset := page.Line, page.Start
-		for _, text := range strings.SplitAfter(output, "\n") {
+		lines := page.Lines
+		if !capture.StripEnabled(options.StripANSI) {
+			for _, text := range strings.SplitAfter(output, "\n") {
+				lines = append(lines, capture.PresentedLine{Text: text, Start: offset, Line: line})
+				line++
+				offset += int64(len(text))
+			}
+		}
+		for _, source := range lines {
+			text := source.Text
 			if text == "" {
 				continue
 			}
 			if expression.MatchString(strings.TrimSuffix(text, "\n")) {
 				kept.WriteString(text)
-				matches = append(matches, map[string]any{"line": line, "byte_offset": offset, "text": strings.TrimSuffix(text, "\n")})
+				matches = append(matches, map[string]any{"line": source.Line, "byte_offset": source.Start, "text": strings.TrimSuffix(text, "\n")})
 			}
-			line++
-			offset += int64(len(text))
 		}
 		output = kept.String()
 	}
@@ -454,21 +476,30 @@ func preview(j *job) Snapshot {
 	a, b := capture.SelectOutput(j.stdout, j.stderr, *j.output)
 	v.Stdout, v.Stderr = a.Output, b.Output
 	v.StdoutSelection, v.StderrSelection = &a, &b
-	v.Truncated = a.OmittedBytes > 0 || b.OmittedBytes > 0
+	v.Truncated = a.OmittedBytes > 0 || b.OmittedBytes > 0 || a.CleaningError != "" || b.CleaningError != ""
 	return v
 }
 
 func compactPreview(j *job) Snapshot {
 	v := cloneSnapshot(j.view)
+	strip := j.output == nil || capture.StripEnabled(j.output.StripANSI)
+	tail := func(buffer *capture.Buffer, lines, limit int, selection **capture.Selection) string {
+		text, err := buffer.TailView(lines, limit, strip)
+		if err != nil {
+			*selection = &capture.Selection{CleaningError: err.Error()}
+			v.Truncated = true
+		}
+		return text
+	}
 	a, _ := j.stdout.Read("eof:0:bytes", 1)
 	b, _ := j.stderr.Read("eof:0:bytes", 1)
-	v.Stdout = j.stdout.Tail(10, 1024)
-	v.Stderr = j.stderr.Tail(10, 1024)
+	v.Stdout = tail(j.stdout, 10, 1024, &v.StdoutSelection)
+	v.Stderr = tail(j.stderr, 10, 1024, &v.StderrSelection)
 	if v.Stdout != "" && v.Stderr != "" {
-		v.Stdout = j.stdout.Tail(5, 512)
-		v.Stderr = j.stderr.Tail(5, 512)
+		v.Stdout = tail(j.stdout, 5, 512, &v.StdoutSelection)
+		v.Stderr = tail(j.stderr, 5, 512, &v.StderrSelection)
 	}
-	v.Truncated = a.Truncated || b.Truncated || int64(len(v.Stdout)) < a.End || int64(len(v.Stderr)) < b.End
+	v.Truncated = v.Truncated || a.Truncated || b.Truncated || int64(len(v.Stdout)) < a.End || int64(len(v.Stderr)) < b.End
 	return v
 }
 
@@ -497,7 +528,25 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	if inspector == nil {
 		inspector = taskInspector
 	}
-	j := &job{startedAt: startedAt, view: metadata, inspector: inspector, cancel: cancel, done: make(chan struct{}), background: options.Background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	var output *capture.OutputOptions
+	if options.Output != nil {
+		normalized, err := options.Output.Normalize()
+		if err != nil {
+			cancel()
+			m.mu.Unlock()
+			return "", err
+		}
+		output = &normalized
+	}
+	j := &job{startedAt: startedAt, view: metadata, inspector: inspector, output: output, cancel: cancel, done: make(chan struct{}), background: options.Background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j.published = make(chan struct{})
+	// An assignment supervisor closes its resource scope from its deferred
+	// completion path, so it must live outside that scope.
+	if options.Kind != "subagent" && !m.scopeLocked(owner).Register(cancel, j.published) {
+		cancel()
+		m.mu.Unlock()
+		return "", errors.New(prompts.RuntimeEnded)
+	}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
 	launch := j.view
@@ -507,6 +556,7 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	}
 	go func() {
 		defer m.wg.Done()
+		defer func() { close(j.published); m.ReleaseOwned(owner, j.published) }()
 		result, err := run(ctx, j.stdout, j.stderr)
 		m.mu.Lock()
 		if result.ExitCode != nil {
@@ -543,11 +593,21 @@ func (m *Manager) Close() {
 	m.closed = true
 	m.cancel()
 	var done []chan struct{}
+	var scopes []*managed.Scope
+	for _, scope := range m.scopes {
+		scopes = append(scopes, scope)
+	}
 	for _, j := range m.jobs {
 		j.cancel()
 		done = append(done, j.done)
 	}
 	m.mu.Unlock()
+	for _, scope := range scopes {
+		scope.Cancel()
+	}
+	for _, scope := range scopes {
+		scope.Join()
+	}
 	for _, d := range done {
 		<-d
 	}

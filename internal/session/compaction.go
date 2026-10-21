@@ -295,9 +295,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 		}
 	}
 	result, _ = contextbuild.AppendPendingMessage(result, pending)
-	next := cursor
-	next.project = ""
-	next.snapshot = ""
+	next := contextCursor{}
 	system := childSystemTemplate
 	if task.aside {
 		system = asideSystemTemplate

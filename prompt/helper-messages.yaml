@@ -48,6 +48,9 @@ JobLSPPipeFailure: "create LSP pipes: %w"
 JobSupervisionFailure: "Shell supervision failed: %v\n"
 JobOutputGrepFailure: "invalid output grep: %w"
 CapturePositiveReadLimit: read limit must be positive
+CaptureCleanReplayLimit:
+  ANSI cleaning context exceeds 65536 source bytes; use strip_ansi=false for raw
+  output
 CaptureEOFCursorFormat: expected eof:-N:bytes or eof:-N:lines
 CaptureEOFOffset:
   use eof:-N:bytes or eof:-N:lines with N between 0 and 9223372036854775807

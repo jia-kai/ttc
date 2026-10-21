@@ -19,12 +19,11 @@ func TestSessionToolMessageAssets(t *testing.T) {
 	}{
 		{"persistence", "subagent", "main", `{"prompt":"audit","label":"audit"}`, "invalid_input", "invalid_arguments: " + prompts.ChildExplicitPersistence},
 		{"variant", "subagent", "main", `{"prompt":"audit","label":"audit","persistent":false,"variant":""}`, "invalid_input", "invalid_arguments: " + prompts.ChildNonemptyVariant},
-		{"follow-up label", "subagent", "main", `{"prompt":"audit","child_id":"child","label":"audit","persistent":false}`, "invalid_input", "invalid_arguments: " + prompts.ChildFollowupLabel},
 		{"label", "subagent", "main", `{"prompt":"audit","label":"one two three four five","persistent":false}`, "invalid_input", "invalid_arguments: " + prompts.ChildValidLabel},
 		{"child assignment", "subagent", "main/child_fixture", `{"prompt":"audit","label":"audit","persistent":false}`, "ownership", prompts.ChildCannotAssign},
 		{"question count", "question", "main", `{"questions":[]}`, "invalid_input", prompts.QuestionCount},
 		{"question identity", "question", "main", `{"questions":[{"id":"q","prompt":""}]}`, "invalid_input", prompts.QuestionIdentityAndPrompt},
-		{"choice count", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","options":[]}]}`, "invalid_input", prompts.QuestionChoiceCount},
+		{"choice count", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","options":[{"id":"a","label":"A"}]}]}`, "invalid_input", prompts.QuestionChoiceCount},
 		{"option identity", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","options":[{"id":"a","label":"A"},{"id":"a","label":"B"}]}]}`, "invalid_input", prompts.QuestionOptionIdentityAndLabel},
 		{"recommendation", "question", "main", `{"questions":[{"id":"q","prompt":"Q?","recommended_option_id":"a"}]}`, "invalid_input", prompts.QuestionRecommendation},
 		{"child question", "question", "main/child_fixture", `{"questions":[{"id":"q","prompt":"Q?"}]}`, "execution_failed", prompts.QuestionMainOnly},

@@ -129,7 +129,7 @@ func TestClippedDirectoryReadUsesDecodedFieldNames(t *testing.T) {
 		var result struct {
 			Warnings []InputWarning
 		}
-		if err := json.Unmarshal(record.Result, &result); err != nil || len(result.Warnings) != 1 || result.Warnings[0].Requested != -1 || result.Warnings[0].Effective != 1 || string(record.Arguments) != args {
+		if err := json.Unmarshal(record.Result, &result); err != nil || len(result.Warnings) != 1 || result.Warnings[0].Requested != float64(-1) || result.Warnings[0].Effective != float64(1) || string(record.Arguments) != args {
 			t.Fatalf("directory limit bypassed clipping: %s, %v", record.Result, err)
 		}
 	}

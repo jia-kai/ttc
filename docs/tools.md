@@ -9,10 +9,12 @@ These are TTC's complete target contracts. Current code:
 
 - Input is one JSON object containing only listed fields; `?` means optional.
   Reject unknown fields and invalid operation-specific combinations before
-  dispatch. Paths are absolute or relative to the session workdir unless stated
-  otherwise. Text is UTF-8; integer bounds are inclusive. Page sizes, limits and
-  byte caps are positive; offsets use each tool's documented base. Read pages
-  are capped at 40,000 bytes; mutation files at 8 MiB.
+  execution. Known redundant values are accepted when they agree with the
+  selected operation/target; conflicting selectors remain errors. Paths are
+  absolute or relative to the session workdir unless stated otherwise. Text is
+  UTF-8; integer bounds are inclusive. Page sizes, limits and byte caps are
+  positive; offsets use each tool's documented base. Read pages are capped at
+  40,000 bytes; mutation files at 8 MiB.
 - Out-of-range numeric budgets, page sizes, timeouts and reminder durations are
   clipped to their supported inclusive bounds before validation and execution.
   Results include `warnings` with `code:"input_clipped"`, `parameter`,
@@ -22,7 +24,10 @@ These are TTC's complete target contracts. Current code:
   one second, not a one-shot reminder. Exact requested arguments stay in saved
   records; execution uses corrected values. Recovery does not retry execution or
   suppress semantic validation or execution errors. Malformed values, integers
-  outside Go's `int` range, offsets and source coordinates are not corrected.
+  outside Go's `int` range and source coordinates are not corrected. Pagination
+  offsets clip to their documented minimum. Finite enum values accept
+  surrounding whitespace and case normalization; commands, paths, content,
+  identifiers and search patterns do not undergo intent repair.
 - Result is one JSON object: success adds `"ok":true`; failure returns
   `{"ok":false,"error":{"code":"snake_case_code","message":"actionable detail"}}`.
   Include `error.details` only for structured recovery. Empty search results and
@@ -151,8 +156,9 @@ Input: `{path, format?, scope?}`.
   extension groups and `max_bytes`, at first admission, after compaction and on
   capability changes. Omission retains the prior announcement; `[]` clears it.
   Tool execution uses the producing request's frozen catalog, not later picker
-  changes. Binary reads reject supplied `offset`/`limit`; text formats retain
-  ordinary line pagination. No implicit extraction, rendering or conversion.
+  changes. Binary reads accept omitted or default pagination (`offset=1`,
+  `limit=200`); nondefault values are invalid. Text formats retain ordinary line
+  pagination. No implicit extraction, rendering or conversion.
 - Image result:
   `{kind:"image", path:string, sha256:string, mime_type:string, width:integer, height:integer, bytes:integer, truncated:false}`,
   accompanied by native image input associated with the tool call. Detect
@@ -228,14 +234,16 @@ Input: `{path, format?, scope?}`.
 
 - Input:
   `{path:string, old_text:string, new_text:string, replace_all?:boolean}`.
-  `old_text` must be nonempty and differ from `new_text`; `replace_all` defaults
-  to false.
+  `old_text` must be nonempty; `replace_all` defaults to false.
 - Result: `{path:string, replacements:integer}`. With `replace_all=false`,
   exactly one occurrence must match. No match or multiple matches fails without
   writing. Matching includes whitespace and line endings; there is no fuzzy
   fallback. Replacements exceeding the 8 MiB file limit return `file_too_large`
   before allocating the expanded contents; reduce `new_text` or replace fewer
   occurrences.
+- Identical old/new text still requires the normal match-count validation, then
+  returns `replacements:0, unchanged:true` without writing or recording a
+  mutation.
 
 ### `write`
 
@@ -269,10 +277,25 @@ Input: `{path, format?, scope?}`.
 
 ## Execution and jobs
 
+### `await`
+
+- Input: `{deadline_seconds?:integer}`, range 0–31536000. Main and coding
+  children may pause inference at a settled tool boundary without completing the
+  turn or assignment. Already pending actor input resumes immediately; zero is
+  an immediate deadline. Without a deadline, waiting continues until eligible
+  input or cancellation; supply a deadline when no event is guaranteed.
+- Eligible job completions, timer firings, parent guidance, user input or the
+  deadline resume inference. Awaiting children still occupy their slot and
+  active assignment; `persistent:false` does not prevent awaiting. `/btw` asides
+  cannot await. Cancellation ends the wait; session changes never restore it.
+- The UI distinguishes awaiting from active inference and final completion.
+  Event registration and pending-input checks serialize with delivery so a
+  racing completion cannot be lost. This is not a job dependency mechanism.
+
 ### `shell`
 
 - Input:
-  `{command:string, label?:string, workdir?:string, timeout_ms?:integer, background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean, output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer}`.
+  `{command:string, label?:string, workdir?:string, timeout_ms?:integer, background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean, output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer, strip_ansi?:boolean}`.
   `strict` defaults to true: `/bin/sh -eu -c` enables POSIX errexit and nounset,
   without pipefail. Set `strict:false` for commands requiring neither behavior;
   handle expected failures with conditionals or `||` when appropriate. The
@@ -296,16 +319,25 @@ Input: `{path, format?, scope?}`.
   stream), sharing a 1 GiB runtime ring-capacity pool. Pressure evicts the least
   recently written other ring and marks its loss. `output_bytes` is a combined
   stdout/stderr payload budget, default 8192, range 1–8192. Complete retained
-  output, including whitespace, is returned whenever it fits. Otherwise
-  `output_mode` selects `head`, `tail`, or `head_tail` (default). Both streams
-  share the budget; unused allowance goes to the other stream. Selection
-  respects UTF-8 character boundaries. `stdout_selection` and `stderr_selection`
-  report total/omitted/lost-prefix source bytes and head/tail segment lengths.
-  Head and tail are concatenated without an inserted separator; the lengths
-  identify the omitted gap. `truncated` includes selection omission or retained
-  loss. Raw output and `job_read` cursors remain independent of selection. The
-  same job settings govern its completion snapshot; TUI summary rows remain
-  short.
+  source output is selected whenever it fits. Otherwise `output_mode` selects
+  `head`, `tail`, or `head_tail` (default). Both streams share the budget;
+  unused allowance goes to the other stream. Selection respects UTF-8 character
+  boundaries. `stdout_selection` and `stderr_selection` report
+  total/omitted/lost-prefix source bytes and head/tail segment lengths. Head and
+  tail are concatenated without an inserted separator; the lengths identify the
+  omitted gap. `truncated` includes selection omission or retained loss. Raw
+  output and `job_read` cursors remain independent of selection. The same job
+  settings govern its completion snapshot; TUI summary rows remain short.
+- `strip_ansi` defaults to true for model-facing results. A stateful ANSI parser
+  removes escape sequences and applies carriage returns, backspaces and
+  erase-line controls within each selected page/segment. Normal newlines/tabs
+  remain. This is a bounded log view, not a full terminal emulator: separately
+  paged rewrites need not concatenate into a screen snapshot. Raw capture
+  remains unchanged; false selects exact output. Budgets, segment lengths and
+  cursors always count source bytes, not cleaned text. Sequences split across
+  writes/pages are indexed; reconstructing more than 64 KiB of preceding source
+  reports a cleaning error. Request a raw page in that case. Selection metadata
+  exposes `cleaning_error` when a preview cannot be cleaned.
 - `protocol="lsp"` requires `background=true`. TTC runs without a PTY, reserves
   raw stdin/stdout for LSP framing, and keeps stderr in the job log. The command
   must replace the shell with the server and must print nothing to stdout first.
@@ -319,11 +351,12 @@ Input: `{path, format?, scope?}`.
   Explicitly choose `persistent` on every assignment, including follow-ups;
   omission is invalid. Omit `child_id` to create a child; a nonblank single-line
   `label` of 1–4 words and at most 64 Unicode characters without controls is
-  then required. Supply `child_id` for an idle follow-up; omit `label` and
-  retain its title. `background` defaults to false. `variant` selects a
-  supported reasoning variant of the child's frozen model. Omission inherits the
-  parent at creation and retains the child's choice on idle follow-up; it never
-  changes the model ID. New assignments get distinct child-turn/job IDs. Running
+  then required. Supply `child_id` for an idle follow-up; omit `label` or supply
+  the same whitespace-normalized label to retain its title. A different label is
+  rejected. `background` defaults to false. `variant` selects a supported
+  reasoning variant of the child's frozen model. Omission inherits the parent at
+  creation and retains the child's choice on idle follow-up; it never changes
+  the model ID. New assignments get distinct child-turn/job IDs. Running
   children return `child_busy` with wait guidance; closed/unknown handles
   require a new child.
 - Coding-child contexts (including idle children) and running `/btw` asides
@@ -334,11 +367,14 @@ Input: `{path, format?, scope?}`.
   accept no steering.
 - Persistent children retain their conversation, model and tool policy across
   successful assignments; an idle follow-up may change the reasoning variant.
-  New children receive the task, project instructions and tools, not the parent
-  transcript. File mutations share the workspace queue and main-session undo
-  history. Child messages/prompts/tool records remain inspectable and outside
-  parent model context, apart from explicit completion/compaction events. No
-  cycle limit applies.
+  Every assignment cancels and joins its managed commands, watchers and timers
+  before completion, including successful persistent assignments. Retaining a
+  context does not retain executable work. Durable tmux workloads remain
+  external. New children receive the task, project instructions and tools, not
+  the parent transcript. File mutations share the workspace queue and
+  main-session undo history. Child messages/prompts/tool records remain
+  inspectable and outside parent model context, apart from explicit
+  completion/compaction events. No cycle limit applies.
 - Child input uses [compaction](compaction.md), including its retention, handoff
   and failure policy. A child cut never switches main history or its undo floor;
   successful handoff emits the
@@ -347,11 +383,10 @@ Input: `{path, format?, scope?}`.
   `child_turn_finished`. With `persistent:true`, success normally leaves the
   child idle unless explicitly closed; a close racing with completion can
   produce `assignment_status:"completed"` with `child_state:"closed"`. With
-  `false`, it closes the context and cancels and joins its owned background
-  work. Failed or canceled assignments always close and stop owned work.
-  Foreground results carry that event for acknowledgment at request admission;
-  background turns always notify the main agent, whether busy or idle. Do not
-  emit an additional `job_exit`.
+  `false`, it also closes the context. Failed or canceled assignments always
+  close the context after managed-work cleanup. Foreground results carry that
+  event for acknowledgment at request admission; background turns always notify
+  the main agent, whether busy or idle. Do not emit an additional `job_exit`.
 - Result: a child-specific named-stream snapshot with `kind:"subagent"`,
   `child_id`, `child_turn_id`, `persistent`, and a terminal `finish_event_seq`
   when available. Unlike shell results, it uses `assignment_status` (`running`,
@@ -438,16 +473,19 @@ Input: `{path, format?, scope?}`.
 ### `tmux_watch_run`
 
 - Input:
-  `{command:string,record_dir:string,label?:string,workdir?:string,wake_on_exit?:boolean}`.
+  `{command:string,record_dir:string,label?:string,workdir?:string,wake_on_exit?:boolean,strip_ansi?:boolean}`.
   `command` is a shell string run with `/bin/sh -eu`, without pipefail. Relative
   `record_dir` and `workdir` use the workspace, independently; `workdir`
   defaults to the workspace. The record parent must exist and its final
-  directory must not. `label` is at most 64 bytes with no control characters;
+  directory must not. Cosmetic watch labels normalize controls/whitespace and
+  truncate to at most 64 UTF-8 bytes, reporting changes in input warnings;
   `wake_on_exit` defaults to true.
 - Requires `tmux` on PATH. Launches a new detached session and automatically
   creates a local watch job. Records capture stdout, stderr and completion
   without manual redirection. The session closes when the workload exits;
   records remain on disk.
+- `strip_ansi` defaults to true for watcher output views. Durable stdout/stderr
+  records always retain raw bytes; false selects raw model-facing previews.
 - Result includes absolute `record_dir`, `session_name`, available `session_id`
   and `pane_id`, and `status`. `watching` includes `job_id` and `watcher`
   snapshot. `launch_failed` indicates a definite pre-launch failure;
@@ -463,11 +501,14 @@ Input: `{path, format?, scope?}`.
 
 ### `watch`
 
-- Input: `{record_dir:string,label?:string,wake_on_exit?:boolean}`. Reattach to
-  saved runs created by `tmux_watch_run`. Relative paths use the workspace.
-  Returns a background job snapshot with kind `watch`; `wake_on_exit` defaults
-  to true. `label` supplies a short job name; omission uses `External run`.
-- `job_read` pages captured stdout/stderr; `job_list` shows the watcher and
+- Input:
+  `{record_dir:string,label?:string,wake_on_exit?:boolean,strip_ansi?:boolean}`.
+  Reattach to saved runs created by `tmux_watch_run`. Relative paths use the
+  workspace. Returns a background job snapshot with kind `watch`; `wake_on_exit`
+  defaults to true. `label` supplies a short job name; omission uses
+  `External run`.
+- `strip_ansi` defaults to true for previews, without changing raw record files.
+  `job_read` pages captured stdout/stderr; `job_list` shows the watcher and
   `job_stop` cancels observation. Session changes and TTC exit also stop only
   observation, never signal the external wrapper/workload. A new runtime can
   watch the same saved run, including one already completed. Observers are
@@ -514,7 +555,7 @@ Input: `{path, format?, scope?}`.
 ### `job_read`
 
 - Input:
-  `{job_id:string, stream?:"stdout"|"stderr", cursor?:string, limit_bytes?:integer, grep?:string, literal?:boolean, case_sensitive?:boolean}`.
+  `{job_id:string, stream?:"stdout"|"stderr", cursor?:string, limit_bytes?:integer, grep?:string, literal?:boolean, case_sensitive?:boolean, strip_ansi?:boolean}`.
   Stream defaults to stdout. Empty cursor begins at the oldest retained byte. A
   decimal cursor is an absolute byte offset from stream creation. `eof:-N:bytes`
   starts N bytes before the observed EOF; `eof:-N:lines` starts at the newest N
@@ -528,8 +569,10 @@ Input: `{path, format?, scope?}`.
   syntax. `literal=true` quotes the pattern; `case_sensitive` defaults to true.
   Page boundaries can contain partial lines; increase the budget or use a
   line-relative tail to include the desired line. Filtering does not expand the
-  scanned source range. `next_cursor` advances over that range even when there
-  are no matches. Empty `grep` disables filtering.
+  scanned source range. `strip_ansi` defaults to true independently of launch
+  options; false returns raw capture. Filtering applies to the selected view.
+  `next_cursor` advances over the source range even when there are no matches.
+  Empty `grep` disables filtering.
 - Result:
   `{job_id:string, kind:string, status:string, stream:string, output:string, start_byte:integer, next_cursor:string|null, truncated:boolean, exit_code?:integer, matches?:[{line:integer,byte_offset:integer,text:string}]}`.
   `status` is scheduler job status, including for `kind:"subagent"`, not the
@@ -582,8 +625,9 @@ return actionable errors without reviving old jobs.
   (empty string is allowed). `language_id` may accompany a path; otherwise infer
   it from the extension. `offset` (0-based, default 0) and `limit` (default 100,
   maximum 500) apply only to location and symbol results. Other
-  operation-specific fields are invalid. `timeout_ms` defaults to 30000 and must
-  be 1–120000.
+  operation-specific fields are invalid except redundant empty text values and
+  hover's explicit default `offset=0` / `limit=100`. `timeout_ms` defaults to
+  30000 and must be 1–120000.
 - Definition/references result:
   `{kind:"locations", locations:[Location], next_offset:integer|null, truncated:boolean}`.
   `Location` is
@@ -701,8 +745,8 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 - Main agent only; children report material information gaps in their answers.
 - Input:
   `{questions:[{id:string, prompt:string, options?:[{id:string,label:string,description?:string}], recommended_option_id?:string}]}`.
-  There must be 1–3 questions with unique IDs. If `options` is omitted, the
-  question accepts free text only. If present, it has 2–5 choices. Every answer
+  There must be 1–3 questions with unique IDs. Omitted, null or empty `options`
+  accept free text only; a nonempty list must contain 2–5 choices. Every answer
   contains exactly one option or free-text value; multiple selections are
   unsupported. A recommendation identifies an existing option ID, with optional
   explanation in that option's description. Invalid recommendation IDs fail
@@ -775,7 +819,9 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   `{name:string, message:string, at?:string, delay_seconds?:integer, repeat_seconds?:integer}`.
   Require exactly one of `at` (RFC3339 with timezone) or `delay_seconds`
   (0–31536000). `repeat_seconds`, if present, is 1–31536000; omission makes a
-  one-shot timer. Names are unique among active wakeups in the session.
+  one-shot timer. Names are unique among active wakeups in the session. Timers
+  belong to their creating actor's managed-work scope; every child assignment
+  cancels and joins its timers before finishing.
 - Result:
   `{wakeup_id:string, name:string, next_at:string, repeat_seconds?:integer, status:"scheduled"}`.
 
@@ -783,10 +829,11 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 - Input:
   `{wakeup_id?:string, name?:string, message?:string, at?:string, delay_seconds?:integer, repeat_seconds?:integer}`.
-  Identify an active reminder by exactly one of ID or name, and supply at least
-  one changed field. Names identify reminders; this operation does not rename
-  them. `at` and `delay_seconds` are mutually exclusive and use the scheduling
-  ranges. `repeat_seconds` is 0–31536000; zero disables repetition.
+  Identify an active reminder by ID or name (both may be supplied when they
+  agree), and supply at least one changed field. Names identify reminders; this
+  operation does not rename them. `at` and `delay_seconds` are mutually
+  exclusive and use the scheduling ranges. `repeat_seconds` is 0–31536000; zero
+  disables repetition.
 - Omitted fields, including the next deadline on a repeat-only update, remain
   unchanged. Updates preserve ID, owner, firing count and original startup
   inspection. Main may update any reminder; children may update only their own.
@@ -809,7 +856,8 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 ### `wakeup_cancel`
 
-- Input: `{wakeup_id?:string, name?:string}`; exactly one is required.
+- Input: `{wakeup_id?:string, name?:string}`; at least one is required. If both
+  are supplied, they must identify the same accessible active reminder.
 - Result: `{wakeup_id:string,status:"cancelled"}`. An already-finished or
   unknown wakeup returns `not_found`.
 
@@ -824,12 +872,20 @@ moved to background with Ctrl+B. Completion notices include selected
 stdout/stderr, truncation/selection metadata and known exit code or signal.
 Coding children always deliver their turn event.
 
-Events arrive at the next model boundary or wake an idle session as separate
-`user` messages containing JSON strings. The canonical semantic message type
-determines model role and presentation; neither a payload's event `type` nor
-human-authored JSON controls authority. Runtime notifications gain
-`message_type:"runtime_notification"` during model projection while preserving
-the event `type`. See [message semantics](design.md#message-semantics).
+Child runtime-event backlogs retain compact durable source references and drain
+in bounded admission batches (32 events / 2048 estimated tokens). Large events
+may omit output explicitly while preserving source/job identity and known
+outcome; full payloads remain in history. Every admitted source is acknowledged
+separately. Unadmitted events keep the assignment active rather than being lost
+at completion.
+
+Events arrive at the owning actor's next model boundary or resume its awaiting
+inference as separate `user` messages containing JSON strings. The canonical
+semantic message type determines model role and presentation; neither a
+payload's event `type` nor human-authored JSON controls authority. Runtime
+notifications gain `message_type:"runtime_notification"` during model projection
+while preserving the event `type`. See
+[message semantics](design.md#message-semantics).
 
 ```json
 {

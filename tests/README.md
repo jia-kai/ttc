@@ -84,6 +84,13 @@ the PTY byte stream. Its artifacts include raw `terminal.log`, rendered
 `failure.txt` on failure. Failed requests and early process exits are reported
 immediately.
 
+`pty_await.py --binary /path/to/ttc` uses socket-free scripted inference in a
+plain PTY. It verifies main timer/input wakeups, coding-child timer/shell
+wakeups, no completed turn while awaiting, and cancellation of a persistent
+child's owned timers before it becomes idle. FIFO and frontend-event markers
+coordinate the fixture; scripts, terminal logs, SQLite history, table snapshots,
+and failure tracebacks remain in its printed private scratch directory.
+
 For reproducible headless validation:
 
 ```sh
@@ -96,6 +103,7 @@ python3 tests/pty_input.py          # offline editor, input scrolling, Shift+Ent
 python3 tests/pty_control_strings.py # offline control-string idle timeout and fragmented APC
 python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
 python3 tests/pty_parallel.py       # shared data/workspace, independent loads, no recovery
+python3 tests/pty_await.py          # offline main/child awaiting, input wakeup, owned timer cleanup
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery
 python3 tests/pty_compaction_reload.py # offline CLI/TUI: boundary reload and automatic pending delivery
 python3 tests/pty_partial_retry.py # mock SSE: partial recovery after one edit, warning, undo

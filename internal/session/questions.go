@@ -75,7 +75,7 @@ func (r *Runtime) addQuestionTool() {
 				return errors.New(prompts.QuestionIdentityAndPrompt)
 			}
 			ids[q.ID] = true
-			if q.Options != nil && (len(q.Options) < 2 || len(q.Options) > 5) {
+			if len(q.Options) != 0 && (len(q.Options) < 2 || len(q.Options) > 5) {
 				return errors.New(prompts.QuestionChoiceCount)
 			}
 			options := map[string]bool{}

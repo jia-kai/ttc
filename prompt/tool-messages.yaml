@@ -9,7 +9,7 @@ ScratchExportOutside:
   "export path must name a new file inside the verified per-UID scratch
   directory"
 ToolBinaryPagination:
-  "binary reads do not support offset or limit; omit pagination arguments"
+  "binary reads accept only omitted or default pagination (offset=1, limit=200)"
 ToolContentRequired: "content required"
 ToolDecodeRGOutput: "decode rg output: %w"
 ToolDirectoryTooLarge:
@@ -22,8 +22,8 @@ ToolEditNoMatch:
   "old_text matched 0 times; read current contents and adjust old_text to match
   exactly"
 ToolEditTextRequired:
-  "old_text must be nonempty and new_text must be present and different;
-  new_text may be empty to delete text"
+  "old_text must be nonempty and new_text must be present; new_text may be empty
+  to delete text"
 ToolExpectedJSONObject: "expected JSON object"
 ToolExpectedUTF8: "expected UTF-8 text without NUL"
 ToolHTMLPageLimit:
@@ -55,7 +55,6 @@ ToolLineTooLong:
   "line exceeds 40000-byte page cap; use shell if available to extract a bounded
   byte range, otherwise report this read limitation"
 ToolNoCodingChildren: "no coding children in this runtime"
-ToolNonnegativeOffset: "offset must be nonnegative"
 ToolNotRegularFile: "not a regular file"
 ToolPartialPatch:
   "%v; some changes were applied: read the applied paths before retrying only
@@ -87,7 +86,6 @@ ToolPatchMoveTarget:
   "move destination must be nonempty and distinct from all other patch targets"
 ToolPathNotUTF8: "file path is not UTF-8"
 ToolPatternRequired: "pattern required"
-ToolPositiveOffset: "offset must be positive"
 ToolRGFailed: "rg search failed: %w: %s"
 ToolReplacementTooLarge:
   "replacement exceeds the 8 MiB file limit; reduce new_text or replace fewer
@@ -159,14 +157,12 @@ ToolWebInvalidPattern:
   "invalid pattern; use a valid RE2 expression (no lookaround or
   backreferences): %w"
 ToolWebNotUTF8: "page is not UTF-8"
-ToolWebOffset:
-  "offset must be nonnegative; start at 0 or use the returned next_offset"
 ToolWebPageTooLarge: "page exceeds 4 MiB; use a URL for a smaller page"
 ToolWebPatternTooLarge: "pattern exceeds 1024 bytes"
 ToolWebRedirectLimit: "too many redirects"
 ToolWebRetainedFormat:
-  "retained document format cannot change; omit format with document_id, or
-  fetch url again with the desired format"
+  "retained document format cannot change; omit format or repeat the retained
+  format with document_id, or fetch url again with the desired format"
 ToolWebRetainedLimit: "converted document exceeds retained-page limit"
 ToolWebSourceIdentifier: "provide exactly one of url or document_id"
 ToolWebTextResponse:
@@ -185,8 +181,6 @@ WakeupUpdateTime:
   at and delay_seconds are mutually exclusive; omit both to keep the next firing
   time
 WakeupUpdateRepeat: repeat_seconds must be 0–31536000; 0 disables repetition
-WakeupUpdateOwnership:
-  only main or the scheduling child may update this reminder
 
 # External-run validation and observation diagnostics.
 WatchInvalidProcessStat: invalid recorder process stat.
@@ -203,8 +197,6 @@ WatchDrainIncomplete:
 WatchNonregularFile:
   external-run records and logs must be regular files, not special files.
 WatchMetadataTooLarge: external-run metadata exceeds the 64 KiB limit.
-TmuxWatchInvalidLabel:
-  label must be at most 64 bytes with no control characters.
 TmuxWatchReadinessTimeout:
   recorder did not become ready within 5 seconds; the workload may still be
   running. Inspect the returned session and record_dir before retrying; use

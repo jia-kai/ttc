@@ -50,7 +50,6 @@ func TestLSPStrictOperationParameters(t *testing.T) {
 		`{"job_id":"a","operation":"workspace_symbols","query":"","path":"x.py"}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","line":1}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","query":"x"}`,
-		`{"job_id":"a","operation":"document_symbols","path":"x.py","offset":-1}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","unknown":true}`,
 	} {
 		if _, err := tool.DecodeCall(1, []byte(input)); err == nil {
@@ -58,6 +57,7 @@ func TestLSPStrictOperationParameters(t *testing.T) {
 		}
 	}
 	for _, input := range []string{
+		`{"job_id":"a","operation":"document_symbols","path":"x.py","offset":-1}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","limit":501}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","timeout_ms":0}`,
 		`{"job_id":"a","operation":"hover","path":"x.py","line":1,"column":1}`,

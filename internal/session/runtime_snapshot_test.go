@@ -109,16 +109,9 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 			r.images.mu.Unlock()
 		}},
 		{"date", func() {
-			var old map[string]any
-			if err := json.Unmarshal([]byte(cursor.snapshot), &old); err != nil {
-				t.Fatal(err)
-			}
-			old["date_utc"] = "1900-01-01"
-			data, err := json.Marshal(old)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cursor.snapshot = string(data)
+			old := *cursor.snapshot
+			old.Date = "1900-01-01"
+			cursor.snapshot = &old
 		}},
 	}
 	for _, change := range changes {
@@ -140,11 +133,15 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 			t.Fatal(err)
 		}
 		m, next, err := r.runtimeContext(context.Background(), "main", selection, cursor)
-		if err != nil || m == nil {
-			t.Fatal("child transition omitted", state, err)
+		if err != nil || m != nil {
+			t.Fatal("child activity emitted context", state, m, err)
+		}
+		fresh, _, err := r.runtimeContext(context.Background(), "main", selection, contextCursor{})
+		if err != nil {
+			t.Fatal(err)
 		}
 		var view runtimeContext
-		if err := json.Unmarshal([]byte(m.Content), &view); err != nil {
+		if err := json.Unmarshal([]byte(fresh.Content), &view); err != nil {
 			t.Fatal(err)
 		}
 		if state == "closed" {
@@ -152,8 +149,9 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 				t.Fatal("closed child retained", view.Children)
 			}
 		} else if len(view.Children) != 1 || view.Children[0].ChildState != state {
-			t.Fatal("wrong child state", view.Children)
+			t.Fatal("fresh baseline has wrong child state", view.Children)
 		}
+
 		cursor = next
 		if m, _, err := r.runtimeContext(context.Background(), "main", selection, cursor); err != nil || m != nil {
 			t.Fatal("child transition repeated", state, m, err)
@@ -161,55 +159,28 @@ func TestRuntimeSnapshotTracksMetadataAndChildState(t *testing.T) {
 	}
 }
 
-func TestRuntimeJobAndTimerTransitionsAreSuppliedOnce(t *testing.T) {
+func TestRuntimeJobAndTimerActivityDoesNotEmitContext(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Observe transitions")
 	_, cursor, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	exit := 1
-	for _, job := range []jobs.Snapshot{
-		{ID: "job", Owner: "main", Status: "running"},
-		{ID: "job", Owner: "main", Status: "completed", ExitCode: &exit},
-	} {
-		r.publishJob(job)
+	for _, status := range []string{"running", "completed"} {
+		r.publishJob(jobs.Snapshot{ID: "job", Owner: "main", Status: status})
 		m, next, err := r.runtimeContext(context.Background(), "main", r.selection, cursor)
-		if err != nil || m == nil {
-			t.Fatal("job transition omitted", job, err)
-		}
-		var view runtimeContext
-		if err := json.Unmarshal([]byte(m.Content), &view); err != nil || len(view.Changes) != 1 {
-			t.Fatal(view, err)
-		}
-		if view.Changes[0].To != job.Status || (job.Status == "completed" && len(view.Jobs) != 0) {
-			t.Fatal("job status changed or finished job retained", view)
-		}
-		if view.BinaryFiles != nil {
-			t.Fatal("job transition repeated native-read capabilities", view)
+		if err != nil || m != nil {
+			t.Fatal("job activity emitted context", m, err)
 		}
 		cursor = next
-		if m, _, err := r.runtimeContext(context.Background(), "main", r.selection, cursor); err != nil || m != nil {
-			t.Fatal("job transition repeated", m, err)
-		}
 	}
 	for fired := 0; fired <= 2; fired++ {
-		r.publishTimer(wakeup{ID: "timer", Name: "Observe progress", Status: "scheduled", Repeat: 60, Fired: fired})
+		r.publishTimer(wakeup{ID: "timer", actor: "main", Name: "Observe progress", Status: "scheduled", Repeat: 60, Fired: fired})
 		m, next, err := r.runtimeContext(context.Background(), "main", r.selection, cursor)
-		if err != nil || m == nil {
-			t.Fatal("timer firing omitted", fired, err)
-		}
-		var view runtimeContext
-		if err := json.Unmarshal([]byte(m.Content), &view); err != nil || len(view.Changes) != 1 || view.Changes[0].FiredCount != fired {
-			t.Fatal(view, err)
-		}
-		if view.BinaryFiles != nil {
-			t.Fatal("timer transition repeated native-read capabilities", view)
+		if err != nil || m != nil {
+			t.Fatal("timer activity emitted context", m, err)
 		}
 		cursor = next
-		if m, _, err := r.runtimeContext(context.Background(), "main", r.selection, cursor); err != nil || m != nil {
-			t.Fatal("timer transition repeated", fired, m, err)
-		}
 	}
 }
 
@@ -232,7 +203,7 @@ func TestChildAdmissionsOwnIndependentSnapshotCursors(t *testing.T) {
 			t.Fatal("unchanged child context grew", second, err)
 		}
 	}
-	if r.mainContext.snapshot != "" {
+	if r.mainContext.snapshot != nil {
 		t.Fatal("child admission changed parent cursor")
 	}
 }
@@ -250,7 +221,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 	if _, err := r.Command("/load " + r.Current()); err != nil {
 		t.Fatal(err)
 	}
-	if r.mainContext.snapshot != "" || r.mainContext.project != "" {
+	if r.mainContext.snapshot != nil {
 		t.Fatal("reload retained runtime cursor")
 	}
 	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "After reload"}); err != nil {

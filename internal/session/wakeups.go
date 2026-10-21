@@ -34,6 +34,7 @@ type wakeup struct {
 	Fired          int    `json:"fired_count"`
 	Last           string `json:"last_result,omitempty"`
 	cancel         context.CancelFunc
+	done           chan struct{} // Joins timer callbacks as well as the scheduler goroutine.
 	changed        chan struct{} // Buffered reschedule signal; mutable state is protected by wakeups.mu.
 	actor          string        // Immutable scheduler actor ID; names are resolved by the frontend.
 	startupText    string        // Immutable startup Markdown, preserving original option omission.
@@ -41,12 +42,13 @@ type wakeup struct {
 	deliveredCount int           // Last admitted firing; later firings remain pending.
 }
 type wakeups struct {
-	ctx    context.Context
-	mu     sync.Mutex
-	items  map[string]*wakeup
-	notify func(wakeup)
-	wg     sync.WaitGroup
-	closed bool
+	ctx     context.Context
+	mu      sync.Mutex
+	items   map[string]*wakeup
+	notify  func(wakeup)
+	release func(string, <-chan struct{}) // Removes completed ownership registration after publication.
+	wg      sync.WaitGroup
+	closed  bool
 }
 
 // wakeupView keeps routine inspection independent of reminder-body size.
@@ -98,6 +100,7 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 	}
 	ctx, cancel := context.WithCancel(w.ctx)
 	v := &wakeup{ID: history.NewID("wake"), Name: a.Name, Message: a.Message, Status: "scheduled", NextAt: at.UTC().Format(time.RFC3339), Repeat: repeat, cancel: cancel, changed: make(chan struct{}, 1), actor: actor, startupText: startupText, nextAt: at}
+	v.done = make(chan struct{})
 	w.items[v.ID] = v
 	w.wg.Add(1)
 	initial := *v
@@ -105,6 +108,12 @@ func (w *wakeups) schedule(a wakeupSchedule, actor string, at time.Time) (wakeup
 	w.mu.Unlock()
 	go func() {
 		defer w.wg.Done()
+		defer func() {
+			close(v.done)
+			if w.release != nil {
+				w.release(actor, v.done)
+			}
+		}()
 		for {
 			w.mu.Lock()
 			next := v.nextAt
@@ -173,25 +182,41 @@ func (w *wakeups) deliveredThrough(id string, fired int) {
 		}
 	}
 }
-func (w *wakeups) stop(id, name string) (wakeup, error) {
+func (w *wakeups) stop(actor, id, name string) (wakeup, error) {
 	w.mu.Lock()
-	for _, v := range w.items {
-		if (id != "" && v.ID == id) || (name != "" && v.Name == name) {
-			if v.Status != "scheduled" {
-				continue
-			}
-			v.Status = "cancelled"
-			v.NextAt = ""
-			v.nextAt = time.Time{}
-			v.cancel()
-			snapshot := *v
-			w.notify(snapshot)
-			w.mu.Unlock()
-			return snapshot, nil
-		}
+	if v := w.findActiveLocked(actor, id, name); v != nil {
+		v.Status = "cancelled"
+		v.NextAt = ""
+		v.nextAt = time.Time{}
+		v.cancel()
+		snapshot := *v
+		w.notify(snapshot)
+		w.mu.Unlock()
+		return snapshot, nil
 	}
 	w.mu.Unlock()
 	return wakeup{}, errors.New("not_found")
+}
+
+func (w *wakeups) findActiveLocked(actor, id, name string) *wakeup {
+	eligible := func(v *wakeup) bool {
+		return v != nil && v.Status == "scheduled" && (name == "" || v.Name == name) && (actor == "main" || actor == v.actor)
+	}
+	if id != "" {
+		v := w.items[id]
+		if eligible(v) {
+			return v
+		}
+		return nil
+	}
+	if name != "" {
+		for _, v := range w.items {
+			if eligible(v) {
+				return v
+			}
+		}
+	}
+	return nil
 }
 func (w *wakeups) close() {
 	w.mu.Lock()
@@ -234,6 +259,12 @@ func (r *Runtime) addWakeupTools() {
 		if e != nil {
 			return nil, e
 		}
+		cancel := func() { _, _ = r.timers.stop(x.Actor, v.ID, "") }
+		if !r.Jobs.RegisterOwned(x.Actor, cancel, v.done) {
+			cancel()
+			<-v.done
+			return nil, errors.New(prompts.RuntimeEnded)
+		}
 		return map[string]any{"wakeup_id": v.ID, "name": v.Name, "next_at": v.NextAt, "repeat_seconds": v.Repeat, "status": v.Status}, nil
 	})
 	type list struct {
@@ -242,6 +273,9 @@ func (r *Runtime) addWakeupTools() {
 	tool.Register(r.Tools, "wakeup_list", prompts.ToolDescription("wakeup_list"), map[string]any{"details": tool.Property("boolean")}, nil, func(list) error { return nil }, func(ctx context.Context, x tool.Execution, a list) (any, error) {
 		views := make([]wakeupView, 0)
 		for _, timer := range r.timers.list() {
+			if x.Actor != "main" && timer.actor != x.Actor {
+				continue
+			}
 			views = append(views, timer.listView(a.Details))
 		}
 		return map[string]any{"wakeups": views}, nil
@@ -251,7 +285,7 @@ func (r *Runtime) addWakeupTools() {
 		Name *string `json:"name,omitempty"`
 	}
 	tool.Register(r.Tools, "wakeup_cancel", prompts.ToolDescription("wakeup_cancel"), map[string]any{"wakeup_id": tool.Property("string"), "name": tool.Property("string")}, nil, func(a stop) error {
-		if (a.ID == nil) == (a.Name == nil) {
+		if a.ID == nil && a.Name == nil {
 			return errors.New(prompts.WakeupCancelIdentity)
 		}
 		return nil
@@ -263,7 +297,7 @@ func (r *Runtime) addWakeupTools() {
 		if a.Name != nil {
 			name = *a.Name
 		}
-		v, e := r.timers.stop(id, name)
+		v, e := r.timers.stop(x.Actor, id, name)
 		if e != nil {
 			return nil, tool.Fail("not_found", prompts.WakeupCancelNotFound)
 		}

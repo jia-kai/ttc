@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/capture"
 	"ttc/internal/jobs"
 	"ttc/internal/watchrun"
 )
@@ -62,7 +63,7 @@ func TestTmuxWatchTool(t *testing.T) {
 	defer m.Close()
 	addTmuxWatchRun(r, m, w, launcher)
 	tool, _ := r.Get("tmux_watch_run")
-	for _, args := range []string{`{}`, `{"command":"true"}`, `{"command":"true","record_dir":"r","unknown":1}`, `{"command":"true","record_dir":"r","label":"line\nbreak"}`} {
+	for _, args := range []string{`{}`, `{"command":"true"}`, `{"command":"true","record_dir":"r","unknown":1}`} {
 		if _, err := tool.DecodeCall(1, []byte(args)); err == nil {
 			t.Fatalf("accepted %s", args)
 		}
@@ -88,7 +89,7 @@ func TestTmuxWatchTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Watch stopping must not signal either external process. Reattach normally.
-	id, err := m.StartWatch(x.Actor, launch.RecordDir, false, "")
+	id, err := m.StartWatch(x.Actor, launch.RecordDir, false, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

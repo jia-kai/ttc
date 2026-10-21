@@ -104,7 +104,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						return emit(llm.StreamEvent{Kind: "text", Text: "Original document consumed."})
 					}}
 					var result []llm.Message
-					cursor := contextCursor{project: "old project", snapshot: "old runtime"}
+					cursor := contextCursor{snapshot: &runtimeContext{Actor: "old actor"}}
 					if actor == "main" {
 						for _, message := range messages {
 							if _, err := r.Store.Append(before, "", "main", "message", message.Role(), true, message); err != nil {
@@ -135,7 +135,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 						if err == nil || !strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || result != nil || coding != 0 {
 							t.Fatal("unfittable unread original was silently summarized", err, coding)
 						}
-						if actor != "main" && (cursor.project != "old project" || cursor.snapshot != "old runtime") {
+						if actor != "main" && (cursor.snapshot == nil || cursor.snapshot.Actor != "old actor") {
 							t.Fatal("failed isolated compaction changed cursor", cursor)
 						}
 						if actor == "main" {

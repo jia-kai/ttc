@@ -6,7 +6,8 @@ ChildExplicitPersistence:
 ChildNonemptyVariant:
   variant must be nonempty; omit it to inherit the current reasoning selection
 ChildFollowupLabel:
-  omit label for a follow-up; the existing child retains its title
+  a follow-up label must match the existing child's title after whitespace
+  normalization
 ChildValidLabel:
   choose a label of 1–4 words and at most 64 characters, on one line without
   controls; shorten the name and retry
@@ -31,7 +32,7 @@ ImageSelectionPending:
   that reply before requesting another click
 QuestionCount: require 1–3 questions
 QuestionIdentityAndPrompt: question IDs must be unique and prompts nonempty
-QuestionChoiceCount: require 2–5 choices
+QuestionChoiceCount: nonempty options require 2–5 choices
 QuestionOptionIdentityAndLabel:
   option IDs must be nonempty and unique within each question; labels must be
   nonempty
@@ -48,7 +49,9 @@ WakeupDelayRange: delay_seconds must be 0–31536000
 WakeupInvalidTimestamp:
   "at must be RFC3339 with a timezone, such as 2026-10-02T15:04:05Z; use
   delay_seconds instead for a relative time: %w"
-WakeupCancelIdentity: exactly one of wakeup_id or name required
+WakeupCancelIdentity:
+  supply wakeup_id or name; if both are supplied they must identify the same
+  active reminder
 WakeupCancelNotFound:
   no scheduled reminder matches; use wakeup_list and choose an active wakeup_id
   or name

@@ -76,7 +76,7 @@ func assertReceivingRolePrompt(t *testing.T, r *Runtime, role string, req llm.Re
 		if req.System != prompts.System+"\n"+prompts.Coding+"\n"+prompts.Main || !reflect.DeepEqual(req.Tools, r.Tools.Definitions()) {
 			t.Error("main lost role guidance or capabilities")
 		}
-		want := []string{"child_message", "conversation_export", "edit", "glob", "grep", "image_show", "job_list", "job_read", "job_stop", "lsp_query", "patch", "question", "read", "shell", "skill", "subagent", "tmux_watch_run", "wakeup_cancel", "wakeup_list", "wakeup_schedule", "wakeup_update", "watch", "web_fetch", "web_search", "write"}
+		want := []string{"await", "child_message", "conversation_export", "edit", "glob", "grep", "image_show", "job_list", "job_read", "job_stop", "lsp_query", "patch", "question", "read", "shell", "skill", "subagent", "tmux_watch_run", "wakeup_cancel", "wakeup_list", "wakeup_schedule", "wakeup_update", "watch", "web_fetch", "web_search", "write"}
 		if !reflect.DeepEqual(names, want) {
 			t.Errorf("main advertised capabilities = %v, want %v", names, want)
 		}
