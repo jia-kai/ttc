@@ -93,7 +93,7 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	put(t, root, "prompt/system.yaml", strings.Replace(fixtureSystem,
 		"Child: \"Child instructions.\\n\"\n",
 		"Child: >\n  First wrapped\n  paragraph.\n\n  Second paragraph.\n", 1))
-	put(t, root, "prompt/compaction.yaml", "instructions: >-\n  Summarize the\n  conversation.\n\n  Return only the handoff.\nfocus: >-\n  Compaction focus:\n  %s\ncontext: >-\n  %s\n\n  Export earlier history\n  on demand.\n")
+	put(t, root, "prompt/compaction.yaml", "instructions: |-\n  Summarize the\n  conversation.\n\n  ## Next steps\n\n  Return only the handoff.\nfocus: >-\n  Compaction focus:\n  %s\ncontext: |-\n  Continue using the summary below.\n\n  %s\n")
 	if err := generate(root, "generated.go"); err != nil {
 		t.Fatal(err)
 	}
@@ -103,9 +103,9 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	}
 	for _, want := range []string{
 		`const Child = "First wrapped paragraph.\nSecond paragraph.\n"`,
-		`const Compaction = "Summarize the conversation.\nReturn only the handoff."`,
+		`const Compaction = "Summarize the\nconversation.\n\n## Next steps\n\nReturn only the handoff."`,
 		`const CompactionFocus = "Compaction focus: %s"`,
-		`const CompactionContext = "%s\nExport earlier history on demand."`,
+		`const CompactionContext = "Continue using the summary below.\n\n%s"`,
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("generated output missing %s", want)

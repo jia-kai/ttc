@@ -25,9 +25,10 @@ fixtures.
   prose; legacy marker decoding belongs only in `internal/history/migrate`.
 - `compaction.yaml`: a static final summary instruction, a separate one-slot
   focus message included only for nonempty focus, and a one-slot developer
-  context wrapper. The wrapper receives a JSON-quoted summary as reference data;
-  TTC's framing and history-retrieval guidance stay outside the quote. The focus
-  message precedes the final summary instruction; history remains structured.
+  context wrapper. The wrapper prepends only a short continuation hint to the
+  verbatim Markdown summary, which supplies instructions for resuming the task.
+  The focus message precedes the final summary instruction; history remains
+  structured.
 - `naming.md`: title instructions. Token/deadline limits belong to session code.
 - `tools.yaml`: descriptions keyed by tool name, with reusable notes.
 - `tool-messages.yaml`: tool validation/recovery text, including shell output,
@@ -46,10 +47,13 @@ fixtures.
 
 ## Build and validation
 
-Use folded YAML blocks (`>`) for source-wrapped prose. Use literal blocks (`|`)
-when line breaks are part of the template or structured content. Compaction
-instructions, focus and context all use `>-`, omitting the final newline. The
-generator embeds decoded YAML strings without extra normalization.
+Use folded YAML blocks (`>`) for source-wrapped prose without significant line
+breaks. A single blank source line in a folded block becomes only one newline;
+two blank source lines are needed for a Markdown paragraph break. Prefer literal
+blocks (`|`) for multi-paragraph Markdown, headings, lists and code fences so
+source blank lines and structure survive decoding. System sections use `>`;
+compaction instructions and context use `|-`. The `-` omits the final template
+newline. The generator embeds decoded YAML strings without extra normalization.
 
 Edit assets, then run `make prompts`. `make build`, `make test` and `make check`
 generate git-ignored `internal/prompts/assets_generated.go` before compiling.

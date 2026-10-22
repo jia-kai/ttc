@@ -56,7 +56,7 @@ sequence, request identity and input source remain separate metadata.
 | `system_instruction`    | `system`    | Inspectable instructions                |
 | `developer_instruction` | `developer` | Inspectable instructions                |
 | `runtime_context`       | `developer` | Compact runtime context                 |
-| `compaction_context`    | `developer` | Inspectable quoted compaction context   |
+| `compaction_context`    | `developer` | Inspectable Markdown compaction context |
 | `runtime_notification`  | `user`      | Runtime notice; attributed child result |
 | `runtime_instruction`   | `developer` | Inspectable runtime instructions        |
 | `child_guidance`        | `user`      | Main-agent assignment guidance          |

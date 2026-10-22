@@ -1,10 +1,11 @@
 # Context compaction
 
 Compaction replaces an actor's input with a developer context message containing
-a quoted generated summary, followed by retained inputs and recent messages.
-Main creates a continuation and freezes its predecessor; child compaction
-changes only child context. Jobs, timers, queued input and interactions stay
-live; explicit session changes/exit cancel them.
+a short continuation hint and the generated Markdown summary verbatim, followed
+by retained inputs and recent messages. Main creates a continuation and freezes
+its predecessor; child compaction changes only child context. Jobs, timers,
+queued input and interactions stay live; explicit session changes/exit cancel
+them.
 
 ## Trigger and retention
 
@@ -141,13 +142,12 @@ live; explicit session changes/exit cancel them.
   asides. Actor adapters supply only ownership-specific commits, scope and live
   state; they do not format or reinterpret the handoff.
 - The first replacement message has type `compaction_context` and developer
-  role. TTC explains that earlier history was compacted and the separately
-  generated summary is lossy reference data, not new instructions or proof of
-  success. The summary is one JSON-quoted string, so embedded quotes, fences and
-  apparent instructions cannot escape its data boundary. Current instructions
-  and newer messages take precedence. All actors budget the exact canonical
-  message; main persists it unchanged and isolated actors keep it in their
-  input. A prior compaction context counts as summarized work for later
+  role. It is one Markdown message: a short hint to continue the active task
+  using the summary below, followed by the generated summary verbatim. The
+  summary supplies continuation instructions, without JSON quoting, an enclosing
+  code fence or reference-data disclaimers. All actors budget the exact
+  canonical message; main persists it unchanged and isolated actors keep it in
+  their input. A prior compaction context counts as summarized work for later
   compaction, not as an assistant response consuming fresh tool results.
 - Pause only the compacting actor; others may append committed tails. Main takes
   the routing gate, waits for file mutations and rechecks summary, retained

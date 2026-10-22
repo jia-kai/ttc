@@ -183,17 +183,16 @@ def verify_compaction_context(db, session, summary):
     assert sum(message['type'] == 'compaction_context' for _, message in messages) == 1, messages
     assert not any(role == 'assistant' and message.get('content') in (summary, context['content'])
                    for role, message in messages), 'Summary leaked into ordinary assistant history'
-    # Fold the repository asset with the same paragraph semantics as YAML >-.
+    # Preserve the literal Markdown block, omitting its final template newline.
     lines = (Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.yaml').read_text().splitlines()
-    start = lines.index('context: >-') + 1
+    start = lines.index('context: |-') + 1
     end = next((i for i in range(start, len(lines))
                 if lines[i] and not lines[i].startswith(' ')), len(lines))
-    body = textwrap.dedent('\n'.join(lines[start:end])).strip()
-    framing = '\n'.join(' '.join(paragraph.splitlines()) for paragraph in body.split('\n\n'))
+    framing = textwrap.dedent('\n'.join(lines[start:end])).strip()
     prefix, suffix = framing.split('%s')
     assert context['content'].startswith(prefix) and context['content'].endswith(suffix), context
-    quoted = context['content'][len(prefix):len(context['content']) - len(suffix) if suffix else None]
-    assert json.loads(quoted) == summary, context
+    raw = context['content'][len(prefix):len(context['content']) - len(suffix) if suffix else None]
+    assert raw == summary, context
 
 
 def verify_recovery(db, source, before, wanted, delivered, result, answer):

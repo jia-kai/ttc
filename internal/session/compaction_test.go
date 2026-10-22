@@ -451,9 +451,6 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 			if after.ID != before.ID || after.ReadOnly || after.FileTip != before.FileTip || after.UndoFloor != before.UndoFloor || string(encodedMain) != string(originalMain) {
 				t.Fatal("child changed parent context or undo state", after)
 			}
-			if !strings.Contains(result[0].Content, "conversation_export") {
-				t.Fatal("handoff lost on-demand history guidance", result[0].Content)
-			}
 			files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before.LineageID, "compactions", "*"))
 			if err != nil || len(files) != 0 {
 				t.Fatal("child compaction eagerly wrote archives", files, err)

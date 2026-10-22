@@ -22,11 +22,11 @@ Messages store one canonical semantic `Type`, not independent role/runtime
 flags. Model role and presentation derive from that type: human input, runtime
 notifications and child guidance use `user`; assistant/tool messages use their
 corresponding roles; runtime context/instructions and compaction context use
-`developer`. Compaction context frames its JSON-quoted generated summary as
-reference data, not developer instructions or verified facts. System and
-developer instructions retain their respective roles. See
-[message semantics](design.md#message-semantics) for the central mapping and
-persistence contract.
+`developer`. Compaction context is one Markdown message: a short continuation
+hint followed by the generated summary verbatim, serving as instructions for
+resuming the active task. System and developer instructions retain their
+respective roles. See [message semantics](design.md#message-semantics) for the
+central mapping and persistence contract.
 
 Model-projected runtime notifications carry
 `message_type:"runtime_notification"`; child guidance carries

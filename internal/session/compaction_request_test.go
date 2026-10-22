@@ -158,18 +158,15 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 			if len(result) == 0 || !reflect.DeepEqual(result[0], wantContext) || result[0].Type != llm.TypeCompactionContext || result[0].Role() != "developer" {
 				t.Fatalf("handoff is not the exact framed developer context: got %#v, want %#v", result, wantContext)
 			}
-			encoded, err := json.Marshal(rawSummary)
-			if err != nil || result[0].Content != fmt.Sprintf(prompts.CompactionContext, string(encoded)) {
-				t.Fatal("handoff changed the JSON-quoted summary or TTC framing", result[0], err)
+			if result[0].Content != fmt.Sprintf(prompts.CompactionContext, rawSummary) {
+				t.Fatal("handoff changed the Markdown summary or TTC framing", result[0])
 			}
 			framing := strings.Split(prompts.CompactionContext, "%s")
 			if len(framing) != 2 {
 				t.Fatal("compaction context must frame exactly one summary value", framing)
 			}
-			quoted := strings.TrimSuffix(strings.TrimPrefix(result[0].Content, framing[0]), framing[1])
-			var decoded string
-			if err := json.Unmarshal([]byte(quoted), &decoded); err != nil || decoded != rawSummary {
-				t.Fatal("framed summary data did not round trip", decoded, err)
+			if raw := strings.TrimSuffix(strings.TrimPrefix(result[0].Content, framing[0]), framing[1]); raw != rawSummary {
+				t.Fatal("framed summary Markdown was not preserved verbatim", raw)
 			}
 			contexts := 0
 			for _, message := range result {
