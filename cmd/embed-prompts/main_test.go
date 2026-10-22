@@ -4,25 +4,29 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 const fixtureSystem = "System: \"Stable instructions.\\r\\n\\n\"\nCoding: \"Coding workflow.\\n\"\nMain: \"Main workflow.\\n\"\nChild: \"Child instructions.\\n\"\nBtw: Read-only answer.\n"
 
+const fixtureCompactionFocus = "CompactionFocus: 'Compaction focus: %s'\n"
+
 func fixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	for path, text := range map[string]string{
-		"prompt/system.yaml":           fixtureSystem,
-		"prompt/child-messages.yaml":   "ChildMessageNonempty: message must be nonempty UTF-8\n",
-		"prompt/compaction.yaml":       "instructions: Summarize.\nfocus: 'Compaction focus: %s'\ncontext: '%s Export earlier history on demand.'\n",
-		"prompt/naming.md":             "Name it.\r\n\n",
-		"prompt/tools.yaml":            "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
-		"prompt/runtime.yaml":          "RuntimeWarning: 'Synthetic warning: %s'\n",
-		"prompt/tool-messages.yaml":    "ToolMissing: Synthetic missing input.\n",
-		"internal/tool/register.go":    "package tool\nfunc setup() { Register(r, \"read\", description, properties) }\n",
-		"internal/session/register.go": "package session\n",
+		"prompt/system.yaml":              fixtureSystem,
+		"prompt/child-messages.yaml":      "ChildMessageNonempty: message must be nonempty UTF-8\n",
+		"prompt/compaction.md":            "Summarize.\n",
+		"prompt/compaction-messages.yaml": fixtureCompactionFocus + "CompactionContext: '%s Continue the task.'\n",
+		"prompt/naming.md":                "Name it.\r\n\n",
+		"prompt/tools.yaml":               "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
+		"prompt/runtime.yaml":             "RuntimeWarning: 'Synthetic warning: %s'\n",
+		"prompt/tool-messages.yaml":       "ToolMissing: Synthetic missing input.\n",
+		"internal/tool/register.go":       "package tool\nfunc setup() { Register(r, \"read\", description, properties) }\n",
+		"internal/session/register.go":    "package session\n",
 	} {
 		put(t, root, path, text)
 	}
@@ -88,12 +92,14 @@ func TestGenerationPreservesTextAndIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
+func TestGenerationPreservesMarkdownAndYAMLBlockSemantics(t *testing.T) {
 	root := fixture(t)
+	const markdown = "Summarize the\nconversation.\n\n## Next steps\n\n- Return only the handoff.\n\n```text\n  Keep indentation.\n```\n"
 	put(t, root, "prompt/system.yaml", strings.Replace(fixtureSystem,
 		"Child: \"Child instructions.\\n\"\n",
 		"Child: >\n  First wrapped\n  paragraph.\n\n  Second paragraph.\n", 1))
-	put(t, root, "prompt/compaction.yaml", "instructions: |-\n  Summarize the\n  conversation.\n\n  ## Next steps\n\n  Return only the handoff.\nfocus: >-\n  Compaction focus:\n  %s\ncontext: |-\n  Continue using the summary below.\n\n  %s\n")
+	put(t, root, "prompt/compaction.md", markdown)
+	put(t, root, "prompt/compaction-messages.yaml", "CompactionFocus: >-\n  Compaction focus:\n  %s\nCompactionContext: \"Continue using the summary below.\\n\\n%s\"\n")
 	if err := generate(root, "generated.go"); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +109,7 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	}
 	for _, want := range []string{
 		`const Child = "First wrapped paragraph.\nSecond paragraph.\n"`,
-		`const Compaction = "Summarize the\nconversation.\n\n## Next steps\n\nReturn only the handoff."`,
+		"const Compaction = " + strconv.Quote(markdown),
 		`const CompactionFocus = "Compaction focus: %s"`,
 		`const CompactionContext = "Continue using the summary below.\n\n%s"`,
 	} {
@@ -134,12 +140,18 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"empty naming", "prompt/naming.md", "", "nonempty UTF-8"},
 		{"naming encoding", "prompt/naming.md", "\xff", "UTF-8"},
 		{"naming nul", "prompt/naming.md", "Name\x00it.", "NUL"},
-		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\nfocus: '%s'\ncontext: '%s'", "nonempty"},
-		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\ncontext: '%s'\ntypo: bad", "field typo"},
-		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\nfocus: Focus\ncontext: '%s'", "format"},
-		{"obsolete focus slot", "prompt/compaction.yaml", "instructions: 'Summary %s'\nfocus: '%s'\ncontext: '%s'", "format"},
-		{"obsolete compaction input", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\ninput: '%s %s'\ncontext: '%s'", "field input"},
-		{"obsolete handoff field", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\nhandoff: '%s'", "field handoff"},
+		{"obsolete compaction yaml", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\ncontext: '%s'", "unsupported prompt asset compaction.yaml"},
+		{"empty compaction", "prompt/compaction.md", "", "nonempty UTF-8"},
+		{"compaction encoding", "prompt/compaction.md", "\xff", "UTF-8"},
+		{"compaction nul", "prompt/compaction.md", "Summary\x00.", "NUL"},
+		{"invalid focus template", "prompt/compaction-messages.yaml", "CompactionFocus: Focus\nCompactionContext: '%s'", "format"},
+		{"invalid summary template", "prompt/compaction.md", "Summary %s", "format"},
+		{"empty context", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: ''", "nonempty UTF-8"},
+		{"missing context slot", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: Continue.", "format"},
+		{"extra context slot", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: '%s %s'", "format"},
+		{"invalid context format", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: '%s %d'", "format"},
+		{"compaction collision", "prompt/runtime.yaml", "Compaction: Duplicate.", "duplicate prompt"},
+		{"compaction context collision", "prompt/runtime.yaml", "CompactionContext: '%s'", "duplicate prompt"},
 		{"empty messages", "prompt/runtime.yaml", "{}", "model-facing messages"},
 		{"empty message", "prompt/runtime.yaml", "RuntimeWarning: ''", "nonempty"},
 		{"message nul", "prompt/runtime.yaml", "RuntimeWarning: \"bad\\0text\"", "NUL"},
@@ -218,5 +230,27 @@ func TestMissingRequiredMessageAsset(t *testing.T) {
 		if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), name) {
 			t.Fatal("missing required message source was not rejected", name, err)
 		}
+	}
+}
+
+func TestMissingRequiredCompactionPrompt(t *testing.T) {
+	for symbol, remaining := range map[string]string{
+		"Compaction":        "",
+		"CompactionContext": fixtureCompactionFocus,
+		"CompactionFocus":   "CompactionContext: '%s'\n",
+	} {
+		t.Run(symbol, func(t *testing.T) {
+			root := fixture(t)
+			if symbol == "Compaction" {
+				if err := os.Remove(filepath.Join(root, "prompt", "compaction.md")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				put(t, root, "prompt/compaction-messages.yaml", remaining)
+			}
+			if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing required prompt "+symbol) {
+				t.Fatalf("missing %s was not rejected: %v", symbol, err)
+			}
+		})
 	}
 }

@@ -96,25 +96,26 @@ them.
 ## Summary and history retrieval
 
 - Freeze a committed cut; send its original structured actor prefix once with an
-  appended developer instruction from
-  [compaction.yaml](../prompt/compaction.yaml). Keep message roles, raw
-  calls/results, compatible native replay and attachment references; use the
-  normal retained-input projection, not a text transcript. Preserve the actor's
-  model, system instructions, tool schemas and coding conversation/cache
-  identity. Disable tools without removing their schemas. Append optional focus
-  and the final summary instruction after the unchanged prefix, keeping it
-  eligible for LLM input-cache reuse; actual hits depend on the provider.
-  Attachments use normal resolution, including explicit unavailable-original
-  notices. The temporary instruction and summary-request records never enter
-  live coding input. Main-summary input/reply bodies remain inspectable in the
-  frozen predecessor, not its writable continuation; small lifecycle metadata
-  still follows the tail.
+  appended developer instruction from [compaction.md](../prompt/compaction.md).
+  Keep message roles, raw calls/results, compatible native replay and attachment
+  references; use the normal retained-input projection, not a text transcript.
+  Preserve the actor's model, system instructions, tool schemas and coding
+  conversation/cache identity. Disable tools without removing their schemas.
+  Append optional focus from
+  [compaction-messages.yaml](../prompt/compaction-messages.yaml) and the final
+  summary instruction after the unchanged prefix, keeping it eligible for LLM
+  input-cache reuse; actual hits depend on the provider. Attachments use normal
+  resolution, including explicit unavailable-original notices. The temporary
+  instruction and summary-request records never enter live coding input.
+  Main-summary input/reply bodies remain inspectable in the frozen predecessor,
+  not its writable continuation; small lifecycle metadata still follows the
+  tail.
 - The prompt requests optional handoff sections; their structure is guidance,
   not a validated schema.
 - No chunking or regeneration. Reject empty/tool-calling summaries and summaries
   over 1 MiB. Estimated oversized input is refused unless explicitly forced.
   Output reserves follow [model metadata](models.md#budget-metadata);
-  instructions live in [prompt/compaction.yaml](../prompt/compaction.yaml).
+  instructions live in [prompt/compaction.md](../prompt/compaction.md).
 - Main, child and aside compaction use a cooperative 10-minute deadline for the
   whole operation, including naming, summary inference/retries and handoff.
   Earlier owning-operation deadlines and cancellation still apply. Synchronous
@@ -143,7 +144,8 @@ them.
   state; they do not format or reinterpret the handoff.
 - The first replacement message has type `compaction_context` and developer
   role. It is one Markdown message: a short hint to continue the active task
-  using the summary below, followed by the generated summary verbatim. The
+  using the summary below, followed by the generated summary verbatim. The hint
+  comes from [compaction-messages.yaml](../prompt/compaction-messages.yaml). The
   summary supplies continuation instructions, without JSON quoting, an enclosing
   code fence or reference-data disclaimers. All actors budget the exact
   canonical message; main persists it unchanged and isolated actors keep it in

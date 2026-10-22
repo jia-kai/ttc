@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
-import textwrap
 import time
 import traceback
 
@@ -62,14 +61,9 @@ def stop_after_expected_failure(terminal):
 
 
 def static_directive():
-    """Read the repository's folded instruction scalar without a YAML dependency."""
-    asset = Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.yaml'
-    lines = asset.read_text().splitlines()
-    assert lines[0] == 'instructions: >-', asset
-    end = next(i for i, line in enumerate(lines[1:], 1)
-               if line and not line.startswith(' '))
-    body = textwrap.dedent('\n'.join(lines[1:end])).strip()
-    return '\n'.join(' '.join(paragraph.splitlines()) for paragraph in body.split('\n\n'))
+    """Read the Markdown instruction verbatim, including its final newline."""
+    asset = Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.md'
+    return asset.read_text()
 
 
 def visible_messages(db, session):

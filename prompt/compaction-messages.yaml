@@ -1,0 +1,4 @@
+CompactionFocus: "Compaction focus: %s"
+CompactionContext:
+  "The following is a summary of the conversation so far. Use it to continue the
+  active task.\n\n%s"

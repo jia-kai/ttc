@@ -23,12 +23,11 @@ fixtures.
 - `retained-inputs.md`: `RetainedInputs` format guidance for the grouped
   model-facing projection. Provenance is typed message metadata, not prompt
   prose; legacy marker decoding belongs only in `internal/history/migrate`.
-- `compaction.yaml`: a static final summary instruction, a separate one-slot
-  focus message included only for nonempty focus, and a one-slot developer
-  context wrapper. The wrapper prepends only a short continuation hint to the
-  verbatim Markdown summary, which supplies instructions for resuming the task.
-  The focus message precedes the final summary instruction; history remains
-  structured.
+- `compaction.md`: the final summary instruction (`Compaction`).
+- `compaction-messages.yaml`: the short continuation hint (`CompactionContext`)
+  prepended to the verbatim Markdown summary, and the `CompactionFocus` message
+  included only for nonempty focus before the final summary instruction. Both
+  templates take one string slot. History remains structured.
 - `naming.md`: title instructions. Token/deadline limits belong to session code.
 - `tools.yaml`: descriptions keyed by tool name, with reusable notes.
 - `tool-messages.yaml`: tool validation/recovery text, including shell output,
@@ -47,13 +46,17 @@ fixtures.
 
 ## Build and validation
 
-Use folded YAML blocks (`>`) for source-wrapped prose without significant line
-breaks. A single blank source line in a folded block becomes only one newline;
-two blank source lines are needed for a Markdown paragraph break. Prefer literal
-blocks (`|`) for multi-paragraph Markdown, headings, lists and code fences so
-source blank lines and structure survive decoding. System sections use `>`;
-compaction instructions and context use `|-`. The `-` omits the final template
-newline. The generator embeds decoded YAML strings without extra normalization.
+Use `.md` assets for long Markdown instructions, headings, lists and code
+fences; `make format` autoformats them. Each asset's hyphenated basename becomes
+an exported Go constant (`retained-inputs.md` becomes `RetainedInputs`). The
+generator preserves Markdown bytes, including the final newline.
+
+Use YAML for short messages and plain prose. Folded blocks (`>`) allow source
+wrapping without significant line breaks; one blank source line becomes one
+newline, so a Markdown paragraph break requires two blank source lines. System
+sections remain in `system.yaml`. YAML values are embedded after decoding,
+without extra normalization. Preserve printf slots and significant whitespace in
+either format.
 
 Edit assets, then run `make prompts`. `make build`, `make test` and `make check`
 generate git-ignored `internal/prompts/assets_generated.go` before compiling.

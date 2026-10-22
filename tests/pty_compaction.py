@@ -190,8 +190,8 @@ def main():
                 "ORDER BY e.id")]
             directive = summary_messages[-2]
             assert directive['role'] == 'developer' and directive['message']['type'] == 'runtime_instruction', directive
-            assert directive['message']['content'].startswith('This conversation is about to be compacted.'), directive
-            assert 'Do not execute tools' in directive['message']['content'], directive
+            instruction = (Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.md').read_text()
+            assert directive['message']['content'] == instruction, directive
             assert summary_messages[-1]['role'] == 'assistant', summary_messages[-1]
             assert summary_messages[-1]['message']['type'] == 'assistant', summary_messages[-1]
             verify_compaction_context(db, current, summary_messages[-1]['message']['content'])

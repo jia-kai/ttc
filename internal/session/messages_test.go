@@ -122,13 +122,15 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 }
 
 func TestCompactionInstructionKeepsHandoffFocused(t *testing.T) {
+	// Markdown soft line breaks may move when the source is autoformatted.
+	instruction := strings.Join(strings.Fields(prompts.Compaction), " ")
 	for _, text := range []string{"Keep the handoff reasonably short", "Omit irrelevant details", "## Goal and constraints", "## Decisions", "## Progress and evidence", "## Next steps"} {
-		if !strings.Contains(prompts.Compaction, text) {
+		if !strings.Contains(instruction, text) {
 			t.Fatalf("compaction instruction lost required guidance %q", text)
 		}
 	}
 	for _, text := range []string{"## Continuation details", "Additional summary focus", "%s"} {
-		if strings.Contains(prompts.Compaction, text) {
+		if strings.Contains(instruction, text) {
 			t.Fatalf("static compaction instruction contains obsolete section or focus template %q", text)
 		}
 	}

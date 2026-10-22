@@ -9,8 +9,9 @@
   newlines. Read-only asides receive only `System`, with `Btw` as a separate
   developer message. Naming uses its own instructions. Compaction preserves the
   actor's system/history prefix and appends a temporary developer instruction
-  from `compaction.yaml`. Dynamic identity belongs in runtime context, not those
-  stable instructions.
+  from [compaction.md](../prompt/compaction.md), optionally preceded by focus
+  from [compaction-messages.yaml](../prompt/compaction-messages.yaml). Dynamic
+  identity belongs in runtime context, not those stable instructions.
 - Preserve exact per-request instructions through the
   [inspection/artifact contract](design.md#inspectable-request-messages).
   OpenAI's local replay, storage and cache-affinity behavior is defined in
@@ -23,10 +24,11 @@ flags. Model role and presentation derive from that type: human input, runtime
 notifications and child guidance use `user`; assistant/tool messages use their
 corresponding roles; runtime context/instructions and compaction context use
 `developer`. Compaction context is one Markdown message: a short continuation
-hint followed by the generated summary verbatim, serving as instructions for
-resuming the active task. System and developer instructions retain their
-respective roles. See [message semantics](design.md#message-semantics) for the
-central mapping and persistence contract.
+hint from [compaction-messages.yaml](../prompt/compaction-messages.yaml)
+followed by the generated summary verbatim, serving as instructions for resuming
+the active task. System and developer instructions retain their respective
+roles. See [message semantics](design.md#message-semantics) for the central
+mapping and persistence contract.
 
 Model-projected runtime notifications carry
 `message_type:"runtime_notification"`; child guidance carries

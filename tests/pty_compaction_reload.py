@@ -16,7 +16,6 @@ import sqlite3
 import struct
 import subprocess
 import tempfile
-import textwrap
 import termios
 import time
 import traceback
@@ -183,16 +182,9 @@ def verify_compaction_context(db, session, summary):
     assert sum(message['type'] == 'compaction_context' for _, message in messages) == 1, messages
     assert not any(role == 'assistant' and message.get('content') in (summary, context['content'])
                    for role, message in messages), 'Summary leaked into ordinary assistant history'
-    # Preserve the literal Markdown block, omitting its final template newline.
-    lines = (Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.yaml').read_text().splitlines()
-    start = lines.index('context: |-') + 1
-    end = next((i for i in range(start, len(lines))
-                if lines[i] and not lines[i].startswith(' ')), len(lines))
-    framing = textwrap.dedent('\n'.join(lines[start:end])).strip()
-    prefix, suffix = framing.split('%s')
-    assert context['content'].startswith(prefix) and context['content'].endswith(suffix), context
-    raw = context['content'][len(prefix):len(context['content']) - len(suffix) if suffix else None]
-    assert raw == summary, context
+    hint = ('The following is a summary of the conversation so far. '
+            'Use it to continue the active task.')
+    assert context['content'] == f'{hint}\n\n{summary}', context
 
 
 def verify_recovery(db, source, before, wanted, delivered, result, answer):
@@ -253,8 +245,8 @@ def verify_recovery(db, source, before, wanted, delivered, result, answer):
         "AND json_extract(e.content_json,'$.type')='request_message' ORDER BY e.id")]
     directive = summary_messages[-2]
     assert directive['role'] == 'developer' and directive['message']['type'] == 'runtime_instruction', directive
-    assert directive['message']['content'].startswith('This conversation is about to be compacted.'), directive
-    assert 'Do not execute tools' in directive['message']['content'], directive
+    instruction = (Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.md').read_text()
+    assert directive['message']['content'] == instruction, directive
     assert summary_messages[-1]['role'] == 'assistant', summary_messages[-1]
     assert summary_messages[-1]['message']['type'] == 'assistant', summary_messages[-1]
     verify_compaction_context(db, session, summary_messages[-1]['message']['content'])

@@ -27,12 +27,6 @@ type toolPrompt struct {
 	Notes       map[string]string `yaml:"notes,omitempty"`
 }
 
-type compactionPrompts struct {
-	Instructions string `yaml:"instructions"`
-	Focus        string `yaml:"focus"`
-	Context      string `yaml:"context"`
-}
-
 var assetName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 var toolName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var messageName = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
@@ -42,12 +36,9 @@ var rolePromptNames = map[string]bool{
 	"System": true, "Coding": true, "Main": true, "Child": true, "Btw": true,
 }
 
-// Reserved names belong to structured assets or the handwritten prompts API.
+// Reserved names belong to the handwritten prompts API.
 var reservedNames = map[string]bool{
-	"Compaction":        true,
-	"CompactionFocus":   true,
-	"CompactionContext": true,
-	"ToolDescription":   true, "ToolNote": true, "ToolNames": true,
+	"ToolDescription": true, "ToolNote": true, "ToolNames": true,
 }
 
 func main() {
@@ -144,7 +135,7 @@ func generate(root, output string) error {
 		if name == "README.md" {
 			continue
 		}
-		if name == "tools.yaml" || name == "compaction.yaml" || name == "system.yaml" || name == "runtime.yaml" || name == "tool-messages.yaml" {
+		if name == "tools.yaml" || name == "system.yaml" || name == "runtime.yaml" || name == "tool-messages.yaml" {
 			continue
 		}
 		if !entry.IsDir() && strings.HasSuffix(name, "-messages.yaml") && assetName.MatchString(strings.TrimSuffix(name, ".yaml")) {
@@ -211,18 +202,11 @@ func generate(root, output string) error {
 			}
 		}
 	}
-	var compaction compactionPrompts
-	if err = decodeYAML(filepath.Join(directory, "compaction.yaml"), &compaction); err != nil {
-		return err
-	}
-	for name, text := range map[string]string{"Compaction": compaction.Instructions, "CompactionFocus": compaction.Focus, "CompactionContext": compaction.Context} {
-		if !validText(text) {
-			return fmt.Errorf("compaction %s must contain nonempty UTF-8 text without NUL", name)
-		}
-		texts[name] = text
-	}
 	for name, slots := range map[string]int{"Compaction": 0, "CompactionFocus": 1, "CompactionContext": 1} {
-		text := texts[name]
+		text, found := texts[name]
+		if !found {
+			return fmt.Errorf("missing required prompt %s", name)
+		}
 		if strings.Count(text, "%s") != slots || strings.Contains(strings.ReplaceAll(text, "%s", ""), "%") {
 			return fmt.Errorf("%s format must contain exactly %d %%s placeholders", name, slots)
 		}

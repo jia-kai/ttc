@@ -7,10 +7,10 @@ prompts:
 	go run ./cmd/embed-prompts
 
 format:
-	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.9.10 --write
+	git ls-files --cached --others --exclude-standard -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.9.10 --no-error-on-unmatched-pattern --write
 
 format-check:
-	git ls-files -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.9.10 --check
+	git ls-files --cached --others --exclude-standard -z '*.md' '*.yaml' '*.yml' | xargs -0 npx --yes prettier@3.9.10 --no-error-on-unmatched-pattern --check
 
 build: prompts
 	go build -o ttc ./cmd/ttc
