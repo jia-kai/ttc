@@ -784,7 +784,8 @@ The concrete boundaries above are TTC decisions, informed by:
   terminal height, and scrolls beyond that cap. Ctrl-J/K scroll its viewport
   down/up without moving the cursor; editing or cursor movement reveals it. Only
   Shift-Enter inserts a hard newline, requiring a distinct terminal key report;
-  pasted and external-editor newlines remain intact.
+  pasted newlines remain intact. External-editor results retain leading and
+  internal whitespace but have trailing whitespace removed.
 - Up/Down always recalls original main user/steer messages across saved
   sessions, capped at 1000 entries/8 MiB. Exclude file snapshots, runtime
   notices and continuation copies. Current submissions, including commands,

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
@@ -78,5 +80,5 @@ func readEditedDraft(path, original string) (string, error) {
 	if len(b) > maxDraftBytes || !utf8.Valid(b) {
 		return original, errors.New("edited input exceeds 8 MiB or is not UTF-8")
 	}
-	return string(b), nil
+	return strings.TrimRightFunc(string(b), unicode.IsSpace), nil
 }

@@ -62,15 +62,34 @@ func TestHeldEditorDrainsEventsAndJoinsOnCancellation(t *testing.T) {
 	}
 }
 
-func TestReadEditedDraftPreservesFailureAndAcceptsEmpty(t *testing.T) {
+func TestReadEditedDraftTrimsTrailingWhitespace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "draft.md")
-	for _, text := range []string{"", "edited\nαβ\n"} {
-		os.WriteFile(path, []byte(text), 0600)
-		got, err := readEditedDraft(path, "original")
-		if err != nil || got != text {
-			t.Fatal(got, err)
-		}
+	for _, tt := range []struct {
+		name, text, want string
+	}{
+		{name: "empty"},
+		{name: "unchanged", text: "edited\nαβ", want: "edited\nαβ"},
+		{name: "final newline", text: "edited\nαβ\n", want: "edited\nαβ"},
+		{name: "trailing spaces", text: "edited   ", want: "edited"},
+		{name: "mixed suffix", text: "edited \t\r\n\n \t", want: "edited"},
+		{name: "unicode whitespace", text: "αβ\u00a0\u2003\n", want: "αβ"},
+		{name: "whitespace only", text: " \t\r\n\n"},
+		{name: "preserve leading and internal whitespace", text: "\n  first  \n\n\tsecond\n", want: "\n  first  \n\n\tsecond"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tt.text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readEditedDraft(path, "original")
+			if err != nil || got != tt.want {
+				t.Fatalf("readEditedDraft() = %q, %v; want %q, nil", got, err, tt.want)
+			}
+		})
 	}
+}
+
+func TestReadEditedDraftPreservesFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "draft.md")
 	os.WriteFile(path, []byte{0xff}, 0600)
 	if got, err := readEditedDraft(path, "original"); err == nil || got != "original" {
 		t.Fatal(got, err)

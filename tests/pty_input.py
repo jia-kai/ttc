@@ -66,7 +66,7 @@ text = path.read_text()
 (Path(__file__).parent / 'editor-observed.json').write_text(json.dumps({'draft': text, 'argv': sys.argv[1:]}))
 if text == 'fail draft':
     sys.exit(2)
-path.write_text('Edited in external editor.\\nsecond line')
+path.write_text('Edited in external editor.\\nsecond line  \\n\\n \\t')
 ''')
     binary = str(Path(args.binary).resolve())
     data = root / 'data'
