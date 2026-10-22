@@ -145,7 +145,7 @@ func TestSummaryRequestRejectsInvalidSemanticMessage(t *testing.T) {
 		return nil
 	}}
 	snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: "unknown"}}, Lineage: r.Current()}
-	if _, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false); err == nil || requests != 0 {
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false); err == nil || requests != 0 {
 		t.Fatal("invalid semantic message reached summary provider", err, requests)
 	}
 }

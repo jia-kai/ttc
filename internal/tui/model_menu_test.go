@@ -83,6 +83,7 @@ func TestModelMenuNarrowViewportKeepsSelectionVisible(t *testing.T) {
 }
 
 type gatedModelProvider struct {
+	llm.Script
 	requests chan llm.Request
 	release  chan struct{}
 	step     int // Stream calls are serial in this fixture, matching Runtime ownership.

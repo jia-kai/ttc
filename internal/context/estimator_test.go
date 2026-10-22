@@ -224,12 +224,14 @@ type replayEstimateFunc func(llm.Message) int
 
 func (f replayEstimateFunc) EstimateReplay(message llm.Message) int { return f(message) }
 
+func (f replayEstimateFunc) TokenizerID(model llm.ModelSpec) string { return model.RequestID() }
+
 func TestEstimatorOwnsReplayProjection(t *testing.T) {
 	s := estimatorSnapshot()
 	state := &llm.ReplayState{Provider: "test", Model: "model", Items: []json.RawMessage{json.RawMessage(`{"opaque":"state"}`)}}
 	s.Messages = []llm.Message{{Type: llm.TypeAssistant, Content: "canonical", State: state}}
 	calls := 0
-	s.ReplayEstimator = replayEstimateFunc(func(message llm.Message) int {
+	s.TokenEstimator = replayEstimateFunc(func(message llm.Message) int {
 		calls++
 		if message.State != state {
 			t.Fatal("codec did not receive native replay")
@@ -251,5 +253,102 @@ func TestEstimatorOwnsReplayProjection(t *testing.T) {
 	s.Selection.Model.ID = "other"
 	if r := EstimateInput(s); r.Input != Estimate(s.System)+16+Estimate("canonical") || calls != 1 {
 		t.Fatalf("incompatible native state was not projected away: %+v", r)
+	}
+}
+
+func TestEstimatorCheckpointRoundTripAndRebinding(t *testing.T) {
+	var original, restored Estimator
+	s := estimatorSnapshot()
+	observation := original.Prepare(s)
+	checkpoint := observation.Checkpoint()
+	if checkpoint == nil {
+		t.Fatal("missing checkpoint")
+	}
+	data, err := json.Marshal(checkpoint)
+	if err != nil || len(data) > 256 {
+		t.Fatal("checkpoint is not bounded", len(data), err)
+	}
+	var decoded Checkpoint
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	s.Lineage = "loaded-copy"
+	if err := restored.Restore(decoded, 900, s.Lineage); err != nil {
+		t.Fatal(err)
+	}
+	if result := restored.Estimate(s); result.Input != 900 || result.Estimated {
+		t.Fatal(result)
+	}
+	s.Messages = append(s.Messages, llm.Message{Type: llm.TypeUserInput, Content: "continued"})
+	if result := restored.Estimate(s); result.Input != 900+result.LocalInput-observation.LocalInput || !result.Estimated {
+		t.Fatal(result)
+	}
+	if _, ok := restored.ObserveUsage(1, 1); ok {
+		t.Fatal("restore created pending request")
+	}
+	s.Lineage = "compacted"
+	if result := restored.Estimate(s); result.Input != result.LocalInput || !result.Estimated {
+		t.Fatal("checkpoint crossed reset", result)
+	}
+}
+
+func TestEstimatorRejectsInvalidCheckpoint(t *testing.T) {
+	var e Estimator
+	s := estimatorSnapshot()
+	checkpoint := e.Prepare(s).Checkpoint()
+	for _, mutate := range []func(*Checkpoint){
+		func(c *Checkpoint) { c.Version++ },
+		func(c *Checkpoint) { c.LocalInput = -1 },
+		func(c *Checkpoint) { c.Compatible = "not hex" },
+		func(c *Checkpoint) { c.Exact = "00" },
+	} {
+		invalid := *checkpoint
+		mutate(&invalid)
+		if err := e.Restore(invalid, 900, s.Lineage); err == nil {
+			t.Fatal("accepted invalid checkpoint", invalid)
+		}
+	}
+	if err := e.Restore(*checkpoint, -1, s.Lineage); err == nil {
+		t.Fatal("accepted negative measured input")
+	}
+	if (Observation{}).Checkpoint() != nil {
+		t.Fatal("zero observation persisted")
+	}
+}
+
+func TestEstimatorApproximateRestorationNeverExact(t *testing.T) {
+	var e Estimator
+	s := estimatorSnapshot()
+	if !e.RestoreApproximate(s, 900) {
+		t.Fatal("restore failed")
+	}
+	if result := e.Estimate(s); result.Input != 900 || !result.Estimated {
+		t.Fatal(result)
+	}
+	before := EstimateInput(s).Input
+	s.Messages = append(s.Messages, llm.Message{Type: llm.TypeUserInput, Content: "continued"})
+	if result := e.Estimate(s); result.Input != 900+result.LocalInput-before || !result.Estimated {
+		t.Fatal(result)
+	}
+}
+
+type sharedTokenizer struct{ replayEstimateFunc }
+
+func (sharedTokenizer) TokenizerID(llm.ModelSpec) string { return "shared-version" }
+
+func TestEstimatorSharedTokenizerAcrossModelIDs(t *testing.T) {
+	var e Estimator
+	s := estimatorSnapshot()
+	s.TokenEstimator = sharedTokenizer{replayEstimateFunc(func(llm.Message) int { return 0 })}
+	e.ObserveRequest(1, e.Prepare(s))
+	e.ObserveUsage(1, 900)
+	s.Selection.Model.ID = "another-variant"
+	if result := e.Estimate(s); result.Input != 900 || result.Estimated {
+		t.Fatal("same-tokenizer switch lost calibration", result)
+	}
+	// Actual model input still controls identity, even for a shared tokenizer.
+	s.Messages[0].Content += " new text"
+	if result := e.Estimate(s); result.Input <= 900 || !result.Estimated {
+		t.Fatal(result)
 	}
 }

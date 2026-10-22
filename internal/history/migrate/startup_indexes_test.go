@@ -9,6 +9,12 @@ import (
 // resetSchema9 restores the previous index boundary without changing evidence.
 func resetSchema9(t *testing.T, db *sql.DB) {
 	t.Helper()
+	// Restore the table boundary too; changing user_version alone does not
+	// turn a current fixture into a valid historical database.
+	exec(t, db, "DROP TABLE request_observations")
+	exec(t, db, "ALTER TABLE model_requests DROP COLUMN admission_entry_id")
+	exec(t, db, "ALTER TABLE model_requests DROP COLUMN system_prompt_entry_id")
+	exec(t, db, "ALTER TABLE model_requests ADD COLUMN attempts_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(attempts_json))")
 	for _, name := range []string{"entry_created", "entry_prompt_recall", "session_list_workspace"} {
 		exec(t, db, "DROP INDEX "+name)
 	}

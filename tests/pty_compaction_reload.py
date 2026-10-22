@@ -5,6 +5,7 @@ Only a stopped CLI's private fixture database is seeded; no live history is
 modified. Every phase retains its terminal transcript, including on failure.
 """
 import argparse
+from dataclasses import dataclass
 import fcntl
 import json
 import os
@@ -19,6 +20,7 @@ import tempfile
 import termios
 import time
 import traceback
+from typing import Callable
 
 from scratch import private_scratch
 
@@ -100,13 +102,98 @@ class Terminal:
 
 
 def source_state(db, source):
-    """Include every column so even cursor, timestamp or request changes fail."""
-    return {
+    """Include all history except the startup retention-protection activity clock."""
+    state = {
         table: db.execute(f'SELECT * FROM {table} WHERE {key}=? ORDER BY id',
                           (source,)).fetchall()
         for table, key in [('sessions', 'id'), ('entries', 'session_id'),
                            ('turns', 'session_id'), ('model_requests', 'session_id')]
     }
+    # Opening --session protects this source from retention before loading its
+    # fresh context. That maintenance clock is not a conversation mutation.
+    activity = next(row[0] for row in db.execute('PRAGMA table_info(sessions)')
+                    if row[1] == 'last_activity_ms')
+    state['sessions'] = [row[:activity] + row[activity+1:] for row in state['sessions']]
+    state['request_observations'] = db.execute(
+        'SELECT o.* FROM request_observations o JOIN model_requests r ON r.id=o.request_id '
+        'WHERE r.session_id=? ORDER BY o.completion_entry_id', (source,)).fetchall()
+    return state
+
+
+@dataclass(frozen=True)
+class FixtureRequest:
+    request_id: int
+    admission_entry_id: int
+
+
+def admit_fixture_request(db: sqlite3.Connection, append: Callable[..., int], *,
+                          source: str, model: str, cutoff: int, now: int,
+                          purpose: str, delivered: tuple[int, ...] = ()) -> FixtureRequest:
+    """Stage a running request and its admission pointer in the caller's transaction."""
+    request = db.execute(
+        'INSERT INTO model_requests(session_id,actor_id,event_cutoff,purpose,model_json,'
+        "status,delivered_events_json,created_ms) VALUES(?,'main',?,?,?,'running',?,?)",
+        (source, cutoff, purpose, model, json.dumps(delivered), now)).lastrowid
+    admission = append({'type': 'request_admitted', 'request_id': request,
+                        'purpose': purpose, 'event_cutoff': cutoff})
+    db.execute('UPDATE model_requests SET admission_entry_id=? WHERE id=?', (admission, request))
+    return FixtureRequest(request, admission)
+
+
+def finish_fixture_request(db: sqlite3.Connection, append: Callable[..., int],
+                           request: FixtureRequest, *, status: str) -> None:
+    """Stage a no-usage completion audit and matching immutable observation."""
+    assert status in ('completed', 'failed', 'interrupted'), status
+    completion = append({'type': 'request_finished', 'request_id': request.request_id,
+                         'status': status, 'attempts': [{'status': status}]})
+    db.execute('UPDATE model_requests SET status=? WHERE id=?', (status, request.request_id))
+    db.execute(
+        'INSERT INTO request_observations(completion_entry_id,request_id,admission_entry_id,'
+        'system_prompt_entry_id,status,usage_json,checkpoint_json) '
+        "SELECT ?,id,admission_entry_id,system_prompt_entry_id,?,NULL,"
+        "json_extract(input_json,'$.input_estimate') FROM model_requests WHERE id=?",
+        (completion, status, request.request_id))
+
+
+def measure_seed_completion(db: sqlite3.Connection, source: str) -> int:
+    """Change only stopped private-fixture usage, retaining the CLI's genuine input."""
+    request, completion, admission, checkpoint, raw = db.execute(
+        'SELECT r.id,o.completion_entry_id,o.admission_entry_id,o.checkpoint_json,e.content_json '
+        'FROM request_observations o JOIN model_requests r ON r.id=o.request_id '
+        'JOIN entries e ON e.id=o.completion_entry_id '
+        "WHERE r.session_id=? AND r.actor_id='main' AND r.purpose='coding' "
+        "AND o.status='completed' ORDER BY o.completion_entry_id DESC LIMIT 1", (source,)).fetchone()
+    assert admission and checkpoint, 'Seed CLI must persist genuine admitted input accounting'
+    assert db.execute(
+        "SELECT admission_entry_id,json_extract(input_json,'$.input_estimate') "
+        'FROM model_requests WHERE id=?', (request,)).fetchone() == (admission, checkpoint)
+    usage = {'input_tokens': 10000, 'output_tokens': 32}
+    audit = json.loads(raw)
+    attempt = next(item for item in reversed(audit['attempts']) if item['status'] == 'completed')
+    attempt['usage'] = usage
+    db.execute('UPDATE entries SET content_json=? WHERE id=?', (json.dumps(audit), completion))
+    db.execute('UPDATE request_observations SET usage_json=? WHERE completion_entry_id=?',
+               (json.dumps(usage), completion))
+    return request
+
+
+def verify_selected_usage(db: sqlite3.Connection, tip: int, delivery: FixtureRequest,
+                          measured_request: int) -> None:
+    """Mirror MainUsage's selected-completion ordering before compaction cuts the anchor."""
+    rows = db.execute(
+        'WITH RECURSIVE ancestry(id,parent_id) AS ('
+        'SELECT id,parent_id FROM entries WHERE id=? UNION ALL '
+        'SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id) '
+        'SELECT o.request_id,o.usage_json,o.admission_entry_id,o.checkpoint_json '
+        'FROM ancestry a JOIN entries e ON e.id=a.id '
+        'JOIN request_observations o ON o.completion_entry_id=coalesce(e.source_id,e.id) '
+        'JOIN model_requests r ON r.id=o.request_id '
+        "WHERE r.actor_id='main' AND r.purpose='coding' AND o.status='completed' "
+        'ORDER BY e.id DESC', (tip,)).fetchall()
+    assert rows[0][:3] == (delivery.request_id, None, delivery.admission_entry_id), rows
+    anchor = next(row for row in rows if row[1] is not None)
+    assert anchor[0] == measured_request and anchor[2] and anchor[3], anchor
+    assert json.loads(anchor[1]) == {'input_tokens': 10000, 'output_tokens': 32}, anchor
 
 
 def seed_boundary(db, status):
@@ -115,6 +202,7 @@ def seed_boundary(db, status):
     main_turn = db.execute(
         "SELECT turn_id FROM model_requests WHERE purpose='coding'").fetchone()[0]
     assert db.execute('SELECT status FROM turns WHERE id=?', (main_turn,)).fetchone() == ('completed',)
+    measured_request = measure_seed_completion(db, source)
     now = int(time.time()*1000)
     child = 'main/child_fixture'
     child_turn = 'ct_fixture'
@@ -123,12 +211,12 @@ def seed_boundary(db, status):
                "VALUES(?,?,?,'child','completed',?,?,?)",
                (child_turn, source, child, model, now, now))
 
-    def append(body, actor='main', kind='status', role=None, turn=None, delivered=None):
+    def append(body, actor='main', kind='status', role=None, turn=None):
         nonlocal tip
         tip = db.execute(
             'INSERT INTO entries(session_id,parent_id,turn_id,actor_id,kind,role,model_visible,'
-            'content_json,delivered_request_id,created_ms) VALUES(?,?,?,?,?,?,0,?,?,?)',
-            (source, tip, turn, actor, kind, role, json.dumps(body), delivered, now)).lastrowid
+            'content_json,created_ms) VALUES(?,?,?,?,?,?,0,?,?)',
+            (source, tip, turn, actor, kind, role, json.dumps(body), now)).lastrowid
         return tip
 
     result = append({'type': 'assistant', 'content': answer}, actor=child,
@@ -140,31 +228,25 @@ def seed_boundary(db, status):
     pending = append({'type': 'runtime_event', 'body': {
         'type': 'job_exit', 'job_id': 'job_pending_fixture', 'exit_code': 0,
         'message': 'Durable offline job finished.'}})
-    # Defer the FK until commit so the event can precede the request that
-    # acknowledges it, without changing a request made by the seed CLI.
-    db.execute('PRAGMA defer_foreign_keys=ON')
-    delivery_request = db.execute('SELECT max(id)+1 FROM model_requests').fetchone()[0]
     delivered = append({'type': 'runtime_event', 'body': {
-        'type': 'job_exit', 'job_id': 'job_already_delivered_fixture', 'exit_code': 0}},
-        delivered=delivery_request)
-    db.execute('INSERT INTO model_requests(id,session_id,actor_id,event_cutoff,purpose,model_json,status,'
-               'attempts_json,delivered_events_json,created_ms) '
-               "VALUES(?,?,'main',?,'coding',?,'completed','[]',?,?)",
-               (delivery_request, source, tip, model, json.dumps([delivered]), now))
-    append({'type': 'request_admitted', 'request_id': delivery_request, 'event_cutoff': tip})
-    append({'type': 'request_finished', 'request_id': delivery_request, 'status': 'completed'})
+        'type': 'job_exit', 'job_id': 'job_already_delivered_fixture', 'exit_code': 0}})
+    delivery_request = admit_fixture_request(
+        db, append, source=source, model=model, cutoff=tip, now=now,
+        purpose='coding', delivered=(delivered,))
+    db.execute('UPDATE entries SET delivered_request_id=? WHERE id=?',
+               (delivery_request.request_id, delivered))
+    finish_fixture_request(db, append, delivery_request, status='completed')
     # These are durable history only, not process/child state to restore.
     append({'type': 'job_state', 'job_id': 'job_stale_fixture', 'status': 'running'})
     append({'type': 'child_state', 'child_id': child, 'status': 'idle'})
-    request = db.execute(
-        'INSERT INTO model_requests(session_id,actor_id,event_cutoff,purpose,model_json,status,'
-        "attempts_json,created_ms) VALUES(?,'main',?,'compaction',?,?,'[]',?)",
-        (source, tip, model, status, now)).lastrowid
-    append({'type': 'request_admitted', 'request_id': request,
-            'purpose': 'compaction', 'event_cutoff': tip})
+    request = admit_fixture_request(db, append, source=source, model=model, cutoff=tip,
+                                    now=now, purpose='compaction')
     if status == 'failed':
-        append({'type': 'request_finished', 'request_id': request, 'status': status})
+        finish_fixture_request(db, append, request, status=status)
     db.execute('UPDATE sessions SET active_entry_id=? WHERE id=?', (tip, source))
+    verify_selected_usage(db, tip, delivery_request, measured_request)
+    assert db.execute('SELECT count(*) FROM request_observations WHERE request_id=?',
+                      (request.request_id,)).fetchone() == (int(status == 'failed'),)
     db.commit()
     assert not db.execute('PRAGMA foreign_key_check').fetchall()
     return source, {finish: 'child_turn_finished', pending: 'job_exit'}, delivered, result, answer
@@ -284,6 +366,7 @@ def run_case(root, mode, status, binary):
             db.execute('PRAGMA foreign_keys=ON')
             source, wanted, delivered, result, answer = seed_boundary(db, status)
             before = source_state(db, source)
+            (root / 'source-before.json').write_text(json.dumps(before, indent=2))
         script = root / 'resume.json'
         script.write_text(json.dumps([
             # Prefix matching skips the final developer directive; inspect the
@@ -305,6 +388,7 @@ def run_case(root, mode, status, binary):
         terminal.close()
         terminal = None
         with sqlite3.connect(data / 'history.sqlite') as db:
+            (root / 'source-after.json').write_text(json.dumps(source_state(db, source), indent=2))
             current = verify_recovery(db, source, before, wanted, delivered, result, answer)
             count = db.execute('SELECT count(*) FROM model_requests').fetchone()[0]
             recovered_count = db.execute("SELECT count(*) FROM entries WHERE source_id IS NULL AND json_extract(content_json,'$.recovered_from_event_seq') IS NOT NULL").fetchone()[0]

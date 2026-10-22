@@ -64,7 +64,8 @@ func (r *Runtime) ApplyModel(turn string) (Event, error) {
 	}
 	if err == nil {
 		r.selection, r.pendingModel = next, nil
-		r.estimator.Reset()
+		// Calibration compatibility is checked against the provider's tokenizer
+		// identity on admission; changing a picker ID need not change tokenization.
 	}
 	r.mu.Unlock()
 	if err != nil {

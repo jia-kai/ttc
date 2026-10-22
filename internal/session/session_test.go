@@ -202,6 +202,7 @@ func TestPartialFailureLeavesUndoableAndWellFormedHistory(t *testing.T) {
 }
 
 type gatedNamingProvider struct {
+	llm.Script
 	naming  chan llm.Request
 	release chan struct{}
 }

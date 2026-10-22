@@ -8,8 +8,8 @@ import (
 )
 
 // ContextUsage describes the latest parent request's frozen model and reserves.
-// Admission and compaction handoffs refresh parent context fields; explicit
-// session changes clear those fields but preserve the independent run totals.
+// Admission, compaction handoffs and loads refresh parent context fields.
+// Other history resets clear them; independent run totals are not reconstructed.
 type ContextUsage struct {
 	Model                  string
 	Limit, Input, Reserved int
@@ -64,6 +64,9 @@ func copyUsage(u llm.Usage) llm.Usage {
 }
 
 func (r *Runtime) recordUsage(u *llm.Usage) {
+	if !u.Usable() {
+		u = nil
+	}
 	r.mu.Lock()
 	r.totals.Requests++
 	if u != nil {

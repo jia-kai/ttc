@@ -116,7 +116,7 @@ func TestMainFailureDetailsPersistWithoutBecomingModelInput(t *testing.T) {
 				t.Fatal("lost original failure", err)
 			}
 			var requestError, turnError string
-			if err := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(attempts_json,'$[0].error') FROM model_requests WHERE session_id=? AND purpose='coding'", r.Current()).Scan(&requestError); err != nil {
+			if err := historytest.DB(t, r.Store).QueryRow(`SELECT json_extract(e.content_json,'$.attempts[0].error') FROM model_requests r JOIN request_observations o ON o.request_id=r.id JOIN entries e ON e.id=o.completion_entry_id WHERE r.session_id=? AND r.purpose='coding' ORDER BY o.completion_entry_id DESC LIMIT 1`, r.Current()).Scan(&requestError); err != nil {
 				t.Fatal(err)
 			}
 			if err := historytest.DB(t, r.Store).QueryRow("SELECT json_extract(content_json,'$.error') FROM entries WHERE session_id=? AND json_extract(content_json,'$.type')='turn_end' AND model_visible=0", r.Current()).Scan(&turnError); err != nil {

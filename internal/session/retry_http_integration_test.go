@@ -58,7 +58,7 @@ func TestHTTPMockUnknownErrorsPersistAcrossBoundedRetries(t *testing.T) {
 					}
 					request := assertHTTPRetryHistory(t, r, actor, "coding", shape)
 					var status, recordedError string
-					if err := historytest.DB(t, r.Store).QueryRow("SELECT status,coalesce(json_extract(attempts_json,'$[0].error'),'') FROM model_requests WHERE id=?", request).Scan(&status, &recordedError); err != nil {
+					if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,coalesce(json_extract(e.content_json,'$.attempts[0].error'),'') FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id WHERE o.request_id=? ORDER BY o.completion_entry_id DESC LIMIT 1`, request).Scan(&status, &recordedError); err != nil {
 						t.Fatal(err)
 					}
 					if recover {
@@ -182,7 +182,7 @@ func TestHTTPMockNamingAndCompactionShareDefaultRetries(t *testing.T) {
 				}
 			} else {
 				snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "Research conversation"}}, Lineage: r.Current()}
-				text, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false)
+				text, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false)
 				if err != nil || text != "Recovered Research Session" {
 					t.Fatal("compaction summary did not recover", text, err)
 				}
@@ -218,7 +218,7 @@ func TestHTTPMockPrivatePartialFailuresPersistAfterExhaustion(t *testing.T) {
 				r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Type: llm.TypeUserInput, Content: "Research task"}, llm.Message{Type: llm.TypeAssistant, Content: "Research completed"})
 			} else {
 				snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "Research conversation"}}, Lineage: r.Current()}
-				text, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false)
+				text, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false)
 				if err == nil || text != "" || !recoverableCompaction(err) {
 					t.Fatal("private reply exhaustion invalidated usable context or leaked text", text, err)
 				}
@@ -228,7 +228,7 @@ func TestHTTPMockPrivatePartialFailuresPersistAfterExhaustion(t *testing.T) {
 			}
 			request := assertHTTPRetryHistory(t, r, "main", purpose, "nested")
 			var status, diagnostic string
-			if err := historytest.DB(t, r.Store).QueryRow("SELECT status,json_extract(attempts_json,'$[0].error') FROM model_requests WHERE id=?", request).Scan(&status, &diagnostic); err != nil || status != "failed" || !strings.Contains(diagnostic, "upstream attempt 3/3") || !strings.Contains(diagnostic, "Backend failure 3") {
+			if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].error') FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id WHERE o.request_id=? ORDER BY o.completion_entry_id DESC LIMIT 1`, request).Scan(&status, &diagnostic); err != nil || status != "failed" || !strings.Contains(diagnostic, "upstream attempt 3/3") || !strings.Contains(diagnostic, "Backend failure 3") {
 				t.Fatal("private request final failure was not recorded", status, diagnostic, err)
 			}
 			exact, err := r.Store.TranscriptJSONL(r.Current(), 0)

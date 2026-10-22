@@ -32,15 +32,18 @@ them.
   `I = reported_input + local_next_input - local_measured_input`; otherwise use
   the full local estimate. Newly retained output is already in that difference;
   do not add reported output again. Missing feedback preserves an older
-  compatible measurement. Compaction, history resets and model changes
-  invalidate calibration. Native replay estimates model-visible occupancy, not
-  encrypted transport JSON. Summary preflight uses the same actor estimator on
-  the selected structured prefix plus its final instruction, preserving
-  compatible coding feedback without updating its anchor. It reserves `Q + M`.
-  The reserves are proactive slack: uncapped output, heuristic estimates,
-  oversized committed input or model changes can still cause recoverable summary
-  or handoff failures. Provider context-length rejection uses the bounded
-  upstream retry budget; it does not trigger automatic compaction.
+  compatible measurement. Compaction and history resets invalidate calibration;
+  loads restore compatible saved feedback. Model switches preserve it only for
+  the same provider tokenizer, service tier and reasoning effort; recognized
+  same-version OpenAI model IDs are treated as tokenizer-compatible. Native
+  replay estimates model-visible occupancy, not encrypted transport JSON.
+  Summary preflight uses the same actor estimator on the selected structured
+  prefix plus its final instruction, preserving compatible coding feedback
+  without updating its anchor. It reserves `Q + M`. The reserves are proactive
+  slack: uncapped output, heuristic estimates, oversized committed input or
+  model changes can still cause recoverable summary or handoff failures.
+  Provider context-length rejection uses the bounded upstream retry budget; it
+  does not trigger automatic compaction.
 - `/force-compact [focus]` is an explicit idle main-actor command that bypasses
   only the estimated summary input-size check. It uses the same structured
   request and cache identity as `/compact`; automatic and child compaction keep

@@ -107,7 +107,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 			return e
 		}
 		defs := r.Tools.Definitions()
-		snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: defs, Messages: projected, Lineage: r.Current(), ReplayEstimator: r.Provider}
+		snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: defs, Messages: projected, Lineage: r.Current(), TokenEstimator: r.Provider}
 		observation := r.estimator.Prepare(snapshot)
 		result := observation.Result
 		r.mu.Lock()
@@ -116,7 +116,14 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if !codingInputFits(result.Input, selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
-		admitted, e = r.Store.AdmitRequest(r.Current(), turn, "main", selection, cm, r.notifications, nil, steers...)
+		checkpoint := observation.Checkpoint()
+		if checkpoint == nil {
+			return errors.New("admitted request has no token checkpoint")
+		}
+		admitted, e = r.Store.AdmitRequest(history.RequestAdmission{
+			SessionID: r.Current(), TurnID: turn, Actor: "main", Selection: selection,
+			Checkpoint: checkpoint, Context: cm, Notices: r.notifications, Steers: steers,
+		})
 		if e != nil {
 			return e
 		}

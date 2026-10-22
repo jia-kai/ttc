@@ -49,6 +49,7 @@ type Components struct {
 type Inference interface {
 	Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
 	EstimateReplay(llm.Message) int
+	TokenizerID(llm.ModelSpec) string
 }
 
 // Catalog supplies discovery binding and a cache location, not refresh policy.

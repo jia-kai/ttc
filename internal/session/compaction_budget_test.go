@@ -165,7 +165,7 @@ func TestIsolatedCompactionHandoffBudgetsPendingGuidanceAndRuntimeNotices(t *tes
 			queuedTokens := assignment.queuedTokens
 			// Keep summary inference below capacity so this regression reaches
 			// the independent, uncalibrated replacement-handoff validation.
-			prefix := contextbuild.InputSnapshot{Selection: *a.selection(), System: system, Tools: a.r.Tools.Definitions(), Messages: prepared.prefix, Lineage: a.task.actor, ReplayEstimator: a.r.Provider}
+			prefix := contextbuild.InputSnapshot{Selection: *a.selection(), System: system, Tools: a.r.Tools.Definitions(), Messages: prepared.prefix, Lineage: a.task.actor, TokenEstimator: a.r.Provider}
 			a.estimator().ObserveRequest(1, a.estimator().Prepare(prefix))
 			if _, ok := a.estimator().ObserveUsage(1, 256); !ok {
 				t.Fatal("prefix calibration was not registered")
@@ -203,7 +203,7 @@ func TestSummaryBudgetCompactsBeforeCodingConsumesFreshResults(t *testing.T) {
 	if _, ok := a.estimator().ObserveUsage(first.RequestID, 256); !ok {
 		t.Fatal("initial request did not register feedback")
 	}
-	if err := a.r.Store.FinishRequest(first.RequestID, "completed", nil); err != nil {
+	if err := a.r.Store.FinishRequest(first.RequestID, history.RequestCompletion{Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.r.Store.FinishTurn(a.turn, "completed"); err != nil {
@@ -398,7 +398,7 @@ func (a *summaryBudgetActor) estimator() *contextbuild.Estimator {
 	if a.task != nil {
 		return a.task.estimator
 	}
-	return &a.r.estimator
+	return a.r.estimator
 }
 
 func (a *summaryBudgetActor) admit() (history.Admission, error) {
@@ -460,7 +460,7 @@ func (a *summaryBudgetActor) snapshot(t *testing.T) contextbuild.InputSnapshot {
 			t.Fatal(err)
 		}
 	}
-	return contextbuild.InputSnapshot{Selection: *a.selection(), System: system, Tools: a.r.Tools.Definitions(), Messages: messages, Lineage: lineage, ReplayEstimator: a.r.Provider}
+	return contextbuild.InputSnapshot{Selection: *a.selection(), System: system, Tools: a.r.Tools.Definitions(), Messages: messages, Lineage: lineage, TokenEstimator: a.r.Provider}
 }
 
 func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *testing.T) {
@@ -477,7 +477,7 @@ func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *t
 				if _, ok := a.estimator().ObserveUsage(first.RequestID, 256); !ok {
 					t.Fatal("initial admission did not register provider feedback")
 				}
-				if err := a.r.Store.FinishRequest(first.RequestID, "completed", nil); err != nil {
+				if err := a.r.Store.FinishRequest(first.RequestID, history.RequestCompletion{Status: "completed"}); err != nil {
 					t.Fatal(err)
 				}
 				a.append(t, llm.Message{Type: llm.TypeAssistant, Content: strings.Repeat("Canonical research evidence. ", 1000)})

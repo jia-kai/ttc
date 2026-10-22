@@ -98,7 +98,10 @@ class Instance:
         self.expect(text)
         self.expect('Turn complete')
         self.until(lambda: self.rows("SELECT count(*) FROM turns WHERE actor_id='main' AND trigger!='steer' AND status='completed'") == [(1,)], 'durable turn completion')
-        failed = self.rows("SELECT id,status,attempts_json FROM model_requests WHERE status!='completed'")
+        failed = self.rows("""SELECT r.id,r.status,(SELECT json_extract(e.content_json,'$.attempts')
+            FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id
+            WHERE o.request_id=r.id ORDER BY o.completion_entry_id DESC LIMIT 1)
+            FROM model_requests r WHERE r.status!='completed'""")
         assert not failed, failed
         assert b'Error:' not in self.output, self.root
 

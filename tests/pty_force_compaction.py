@@ -82,7 +82,11 @@ def visible_messages(db, session):
 
 def verify_forced_request(db, source, loaded, prefix, baseline_count):
     requests = db.execute(
-        'SELECT id,session_id,purpose,status,attempts_json FROM model_requests WHERE id>? ORDER BY id',
+        """SELECT r.id,r.session_id,r.purpose,r.status,
+            (SELECT json_extract(e.content_json,'$.attempts') FROM request_observations o
+             JOIN entries e ON e.id=o.completion_entry_id WHERE o.request_id=r.id
+             ORDER BY o.completion_entry_id DESC LIMIT 1)
+            FROM model_requests r WHERE r.id>? ORDER BY r.id""",
         (baseline_count,)).fetchall()
     assert [(row[1], row[2], row[3]) for row in requests[:1]] == [
         (loaded, 'compaction', 'completed')], requests

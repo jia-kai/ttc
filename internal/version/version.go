@@ -1,6 +1,7 @@
 // Package version identifies the TTC release.
 package version
 
-// Version is the semantic version of TTC. Breaking changes, including local
-// database schema changes, require a major bump even during 0.x development.
-const Version = "0.9.2"
+// Version is the semantic version of TTC. During 0.x development, breaking
+// changes, including local database schema changes, bump the minor version.
+// Once stable at 1.0.0, breaking changes require a major bump.
+const Version = "0.10.0"

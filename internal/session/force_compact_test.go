@@ -148,7 +148,7 @@ func TestForceCompactCommandPreservesStructuredRequestAndPendingChildAnswer(t *t
 	if found != 1 || r.HasNotifications() {
 		t.Fatal("pending child answer was not delivered exactly once", found)
 	}
-	if err := r.Store.FinishRequest(admitted.RequestID, "completed", nil); err != nil {
+	if err := r.Store.FinishRequest(admitted.RequestID, history.RequestCompletion{Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -291,7 +291,7 @@ func TestForceSummarySkipsInputEstimation(t *testing.T) {
 			}}}
 			r.Provider = p
 			snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Messages: []llm.Message{message}, Lineage: r.Current()}
-			text, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", force)
+			text, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", force)
 			if force {
 				if err != nil || text != "Summary." || calls != 1 || p.estimates.Load() != 0 {
 					t.Fatal("forced summary performed input estimation", text, err, calls, p.estimates.Load())
@@ -321,7 +321,7 @@ func TestSummaryRejectsInvalidProjectionBeforeRequest(t *testing.T) {
 				{Type: llm.TypeUserInput, RetainedAtMS: 1000},
 			} {
 				snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Messages: []llm.Message{message}, Lineage: r.Current()}
-				if _, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", force); err == nil || calls != 0 {
+				if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", force); err == nil || calls != 0 {
 					t.Fatal("invalid semantic/projection input reached provider", message, calls, err)
 				}
 			}
@@ -378,7 +378,7 @@ func TestForceCompactHTTPContextRejectionPreservesContextLiveWorkAndQueues(t *te
 		t.Fatal("upstream rejection canceled unrelated timer", live)
 	}
 	var status, attemptStatus, diagnostic string
-	if err := historytest.DB(t, r.Store).QueryRow("SELECT status,json_extract(attempts_json,'$[0].status'),json_extract(attempts_json,'$[0].error') FROM model_requests WHERE session_id=? AND purpose='compaction'", source).Scan(&status, &attemptStatus, &diagnostic); err != nil || status != "failed" || attemptStatus != "failed" || diagnostic != upstream.Error() || !strings.Contains(diagnostic, "context_length_exceeded") || !strings.Contains(diagnostic, "force-context-3") {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].status'),json_extract(e.content_json,'$.attempts[0].error') FROM model_requests r JOIN request_observations o ON o.request_id=r.id JOIN entries e ON e.id=o.completion_entry_id WHERE r.session_id=? AND r.purpose='compaction' ORDER BY o.completion_entry_id DESC LIMIT 1`, source).Scan(&status, &attemptStatus, &diagnostic); err != nil || status != "failed" || attemptStatus != "failed" || diagnostic != upstream.Error() || !strings.Contains(diagnostic, "context_length_exceeded") || !strings.Contains(diagnostic, "force-context-3") {
 		t.Fatal("forced rejection lost durable request-failed diagnostics", status, attemptStatus, diagnostic, err)
 	}
 	var forced int

@@ -3,6 +3,7 @@ package history
 import (
 	_ "embed"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -98,7 +99,12 @@ func testOpenWaitsForLifetimeReader(t *testing.T, oldVersion int) {
 	defer db.Close()
 	fixture := schema5Fixture
 	if oldVersion == 10 {
-		fixture = schema + "\nPRAGMA user_version=10;"
+		fixture = schema + `
+		DROP TABLE request_observations;
+		ALTER TABLE model_requests DROP COLUMN admission_entry_id;
+		ALTER TABLE model_requests DROP COLUMN system_prompt_entry_id;
+		ALTER TABLE model_requests ADD COLUMN attempts_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(attempts_json));
+		PRAGMA user_version=10;`
 	}
 	if _, err = db.Exec(fixture); err != nil {
 		t.Fatal(err)
@@ -137,8 +143,11 @@ func testOpenWaitsForLifetimeReader(t *testing.T, oldVersion int) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("unblocked migration version %d: %v", version, err)
 	}
-	if oldVersion == 10 && (len(transitions) != 1 || transitions[0] != [2]int{10, 11}) {
-		t.Fatalf("version-only upgrade ran unexpected steps: %v", transitions)
+	if oldVersion == 10 {
+		want := [][2]int{{10, 11}, {11, 12}}
+		if !reflect.DeepEqual(transitions, want) {
+			t.Fatalf("adjacent upgrades = %v, want %v", transitions, want)
+		}
 	}
 	second, err := OpenWithProgress(root, func(progress migrate.Progress) {
 		t.Errorf("current startup reported progress: %+v", progress)

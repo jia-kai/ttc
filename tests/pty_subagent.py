@@ -277,7 +277,10 @@ def main():
             assert json.loads(states[-1][0])['child']['context_state'] == 'closed'
             assert db.execute("SELECT count(*) FROM tool_calls WHERE name IN ('job_read','job_stop')").fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM model_requests,json_each(delivered_events_json) WHERE value=?", (event_id,)).fetchone()[0] == 1
-            meters = db.execute('SELECT status,attempts_json FROM model_requests').fetchall()
+            meters = db.execute("""SELECT r.status,(SELECT json_extract(e.content_json,'$.attempts')
+                FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id
+                WHERE o.request_id=r.id ORDER BY o.completion_entry_id DESC LIMIT 1)
+                FROM model_requests r""").fetchall()
             expected_requests = 3 if args.offline else len(requests)
             if args.failure:
                 expected_requests -= 1  # Last two pre-output attempts share one request record.

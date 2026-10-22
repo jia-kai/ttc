@@ -52,7 +52,7 @@ func TestContinueLeavesMainCompactionMessageAuditInPredecessor(t *testing.T) {
 	}
 	// Small lifecycle records remain available for chronology and recovery.
 	appendStatus("main", map[string]any{"type": "request_retry", "request_id": mainRequest, "attempt": 2})
-	if err := s.FinishRequest(mainRequest, "completed", []any{map[string]any{"attempt": 2}}); err != nil {
+	if err := s.FinishRequest(mainRequest, RequestCompletion{Status: "completed", Attempts: []RequestAttempt{{Attempt: 2}}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, owner := range []struct{ actor, purpose string }{
@@ -70,7 +70,7 @@ func TestContinueLeavesMainCompactionMessageAuditInPredecessor(t *testing.T) {
 			t.Fatal(err)
 		}
 		appendStatus(owner.actor, map[string]any{"type": "request_retry", "request_id": request, "purpose": "compaction"})
-		if err := s.FinishRequest(request, "completed", nil); err != nil {
+		if err := s.FinishRequest(request, RequestCompletion{Status: "completed"}); err != nil {
 			t.Fatal(err)
 		}
 	}

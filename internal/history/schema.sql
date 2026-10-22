@@ -1,4 +1,4 @@
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -69,15 +69,26 @@ CREATE TABLE model_requests (
     turn_id TEXT REFERENCES turns(id),
     actor_id TEXT NOT NULL,
     event_cutoff INTEGER NOT NULL DEFAULT 0,
+    admission_entry_id INTEGER REFERENCES entries(id),
+    system_prompt_entry_id INTEGER REFERENCES entries(id),
     input_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(input_json)),
     delivered_events_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(delivered_events_json)),
     purpose TEXT NOT NULL CHECK (purpose IN ('coding','naming','compaction')),
     model_json TEXT NOT NULL CHECK (json_valid(model_json)),
     status TEXT NOT NULL CHECK (status IN ('running','completed','failed','interrupted')),
-    attempts_json TEXT NOT NULL CHECK (json_valid(attempts_json)),
     created_ms INTEGER NOT NULL
 );
 CREATE INDEX request_turn ON model_requests(turn_id, id);
+CREATE TABLE request_observations (
+    completion_entry_id INTEGER PRIMARY KEY REFERENCES entries(id),
+    request_id INTEGER NOT NULL REFERENCES model_requests(id),
+    admission_entry_id INTEGER REFERENCES entries(id),
+    system_prompt_entry_id INTEGER REFERENCES entries(id),
+    status TEXT NOT NULL CHECK (status IN ('completed','failed','interrupted')),
+    usage_json TEXT CHECK (usage_json IS NULL OR json_valid(usage_json)),
+    checkpoint_json TEXT CHECK (checkpoint_json IS NULL OR json_valid(checkpoint_json))
+);
+CREATE INDEX request_observation_request ON request_observations(request_id, completion_entry_id);
 CREATE TABLE tool_calls (
     id TEXT PRIMARY KEY NOT NULL,
     session_id TEXT NOT NULL REFERENCES sessions(id),

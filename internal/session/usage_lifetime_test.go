@@ -64,7 +64,12 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 			t.Fatal(command, err)
 		}
 		assertLifetimeTotals(t, r, 3)
-		if got := r.UsageSnapshot(); got.Reported != nil || got.Input != 0 {
+		got := r.UsageSnapshot()
+		if strings.HasPrefix(command, "/load ") {
+			if got.Reported == nil || !reflect.DeepEqual(got.Reported.Tokens, lifetimeUsage()) || got.Input <= 0 {
+				t.Fatal(command, "did not restore parent context counters", got)
+			}
+		} else if got.Reported != nil || got.Input != 0 {
 			t.Fatal(command, "retained parent context counters", got)
 		}
 	}
@@ -94,7 +99,7 @@ func TestUsageLifetimeAcrossSessionChangesWithChild(t *testing.T) {
 	assertLifetimeTotals(t, r, 1)
 }
 
-func TestUsageLifetimeRestartDoesNotRestoreHistory(t *testing.T) {
+func TestUsageLifetimeRestartRestoresParentButNotRunTotals(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		if err := emit(llm.StreamEvent{Kind: "text", Text: "Durable answer"}); err != nil {
@@ -117,8 +122,8 @@ func TestUsageLifetimeRestartDoesNotRestoreHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(restarted.Close)
-	if got := restarted.UsageSnapshot(); !reflect.DeepEqual(got.Totals, UsageTotals{}) || got.Reported != nil {
-		t.Fatal("restart rebuilt counters from durable requests", got)
+	if got := restarted.UsageSnapshot(); !reflect.DeepEqual(got.Totals, UsageTotals{}) || got.Reported == nil || !reflect.DeepEqual(got.Reported.Tokens, lifetimeUsage()) {
+		t.Fatal("restart did not separate parent and run counters", got)
 	}
 	if entries, err := restarted.Entries(); err != nil || len(entries) == 0 {
 		t.Fatal("restart lost history rather than ignoring its usage", entries, err)

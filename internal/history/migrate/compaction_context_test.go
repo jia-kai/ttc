@@ -99,9 +99,17 @@ func TestSchema10FencePreservesAllEvidenceAndLayout(t *testing.T) {
 				if report {
 					callback = func(event Progress) { events = append(events, event) }
 				}
-				if err := Apply(tx, callback); err != nil {
+				var progress *progressReporter
+				if callback != nil {
+					progress = &progressReporter{report: callback, value: Progress{FromVersion: 10, ToVersion: 11}}
+				}
+				if err := upgrade10(tx, progress); err != nil {
 					t.Fatal(err)
 				}
+				if _, err := tx.Exec("PRAGMA user_version=11"); err != nil {
+					t.Fatal(err)
+				}
+				progress.finish()
 				var version int
 				if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 11 {
 					t.Fatalf("uncommitted fence version=%d err=%v", version, err)
@@ -145,7 +153,16 @@ func TestSchema10FenceDoesNotRequireHistoryTables(t *testing.T) {
 	}
 	defer db.Close()
 	exec(t, db, "PRAGMA user_version=10")
-	applyCurrent(t, db)
+	tx := transaction(t, db)
+	if err := upgrade10(tx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("PRAGMA user_version=11"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
 	if got := scalar(t, db, "PRAGMA user_version"); got != "11" {
 		t.Fatal(got)
 	}

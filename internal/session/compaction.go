@@ -12,6 +12,7 @@ import (
 	"ttc/internal/prompts"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
 	"ttc/internal/llm"
 )
 
@@ -212,7 +213,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 	}
 	snapshot.Messages = append(snapshot.Messages, compactionInstruction())
 	if !force {
-		snapshot.ReplayEstimator = r.Provider
+		snapshot.TokenEstimator = r.Provider
 		estimate := estimator.Estimate(snapshot)
 		b := selection.Model.Budget
 		b.OutputAllowance = b.SummaryOutputAllowance
@@ -236,11 +237,11 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 		if errors.Is(err, context.Canceled) {
 			status = "interrupted"
 		}
-		attempt := map[string]any{"status": status, "usage": usage}
+		attempt := history.RequestAttempt{Status: status, Usage: usage}
 		if err != nil {
-			attempt["error"] = err.Error()
+			attempt.Error = err.Error()
 		}
-		if failure := r.Store.FinishRequest(request, status, []any{attempt}); failure != nil {
+		if failure := r.Store.FinishRequest(request, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}}); failure != nil {
 			err = errors.Join(err, fmt.Errorf(prompts.SessionRecordCompactionResult, failure))
 		}
 	}()

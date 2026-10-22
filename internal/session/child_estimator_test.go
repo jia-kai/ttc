@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
 	"ttc/internal/llm"
 )
 
@@ -32,12 +33,12 @@ func TestChildAdmissionUsesReportedInput(t *testing.T) {
 			if aside {
 				system = asideSystemTemplate
 			}
-			snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: admitted.Messages, Lineage: actor, ReplayEstimator: r.Provider}
+			snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: admitted.Messages, Lineage: actor, TokenEstimator: r.Provider}
 			local := contextbuild.EstimateInput(snapshot).Input
 			if _, ok := task.estimator.ObserveUsage(admitted.RequestID, local+1000); !ok {
 				t.Fatal("admission did not register the request")
 			}
-			if err := r.Store.FinishRequest(admitted.RequestID, "completed", nil); err != nil {
+			if err := r.Store.FinishRequest(admitted.RequestID, history.RequestCompletion{Status: "completed"}); err != nil {
 				t.Fatal(err)
 			}
 			task.selection.Model.Budget.ContextLimit = local + task.selection.Model.Budget.OutputAllowance + task.selection.Model.Budget.EstimationMargin + task.selection.Model.Budget.SummaryOutputAllowance + compactionInstructionTokens() + 500
@@ -69,7 +70,7 @@ func TestChildCompactionResetsEstimatorOnlyOnSuccess(t *testing.T) {
 				task := childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
 				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Research task", InputTimeMS: 1000}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)}}
 				seedIsolatedHistory(t, r, actor, turn, messages)
-				snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: childSystemTemplate, Tools: task.tools.Definitions(), Messages: messages, Lineage: actor, ReplayEstimator: r.Provider}
+				snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: childSystemTemplate, Tools: task.tools.Definitions(), Messages: messages, Lineage: actor, TokenEstimator: r.Provider}
 				observation := task.estimator.Prepare(snapshot)
 				task.estimator.ObserveRequest(1, observation)
 				task.estimator.ObserveUsage(1, observation.LocalInput+500)
@@ -109,7 +110,7 @@ func TestPersistentChildUnusableFeedbackPreservesEstimator(t *testing.T) {
 			requests := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
-				latest = contextbuild.InputSnapshot{Selection: req.Selection, System: req.System, Tools: req.Tools, Messages: req.Messages, Lineage: req.ConversationID, ReplayEstimator: r.Provider}
+				latest = contextbuild.InputSnapshot{Selection: req.Selection, System: req.System, Tools: req.Tools, Messages: req.Messages, Lineage: req.ConversationID, TokenEstimator: r.Provider}
 				if err := emit(llm.StreamEvent{Kind: "text", Text: "Completed task"}); err != nil {
 					return err
 				}

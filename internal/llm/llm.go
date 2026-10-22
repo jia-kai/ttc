@@ -269,6 +269,13 @@ type Usage struct {
 	ReasoningOutputTokens *int `json:"reasoning_output_tokens,omitempty"` // Subset of output; nil if unavailable.
 }
 
+// Usable reports whether aggregate input/output counters can support accounting.
+// Nil or negative aggregates are unavailable; zero is a valid measurement.
+// Optional provider-specific detail counters do not determine availability.
+func (u *Usage) Usable() bool {
+	return u != nil && u.InputTokens >= 0 && u.OutputTokens >= 0
+}
+
 // Retry describes the next attempt, before its wait. Pre-output retries reuse the
 // immutable request; PartialError hands off a new request built by the runtime.
 // Reason is a safe explanation without credentials or raw transport errors.

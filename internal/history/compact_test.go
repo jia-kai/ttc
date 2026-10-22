@@ -160,8 +160,10 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(original.ID, turn, "main", original.Model, nil, nil, nil,
-		llm.Message{Type: llm.TypeUserInput, Content: "first steer"}, llm.Message{Type: llm.TypeUserInput, Content: "second steer"})
+	admitted, err := s.AdmitRequest(RequestAdmission{
+		SessionID: original.ID, TurnID: turn, Actor: "main", Selection: original.Model,
+		Steers: []llm.Message{{Type: llm.TypeUserInput, Content: "first steer"}, {Type: llm.TypeUserInput, Content: "second steer"}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +375,7 @@ func TestMessagesUsesOriginalHumanInputMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(session.ID, legacyTurn, "main", session.Model, nil, nil, nil, llm.Message{Type: llm.TypeUserInput, Content: "new steer"})
+	admitted, err := s.AdmitRequest(RequestAdmission{SessionID: session.ID, TurnID: legacyTurn, Actor: "main", Selection: session.Model, Steers: []llm.Message{{Type: llm.TypeUserInput, Content: "new steer"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +417,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		t.Fatal(err)
 	}
 	ids := []int64{original.ID}
-	steer, err := s.AdmitRequest(session.ID, turn, "main", session.Model, nil, nil, nil, llm.Message{Type: llm.TypeUserInput, Content: "steer one"})
+	steer, err := s.AdmitRequest(RequestAdmission{SessionID: session.ID, TurnID: turn, Actor: "main", Selection: session.Model, Steers: []llm.Message{{Type: llm.TypeUserInput, Content: "steer one"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +432,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		t.Fatal(err)
 	}
 	ids = append(ids, queued)
-	steer, err = s.AdmitRequest(session.ID, turn, "main", session.Model, nil, nil, nil, llm.Message{Type: llm.TypeUserInput, Content: "steer two"})
+	steer, err = s.AdmitRequest(RequestAdmission{SessionID: session.ID, TurnID: turn, Actor: "main", Selection: session.Model, Steers: []llm.Message{{Type: llm.TypeUserInput, Content: "steer two"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +604,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(session.ID, secondTurn, "main", session.Model, nil, nil, nil, llm.Message{Type: llm.TypeUserInput, Content: "steer"})
+	admitted, err := s.AdmitRequest(RequestAdmission{SessionID: session.ID, TurnID: secondTurn, Actor: "main", Selection: session.Model, Steers: []llm.Message{{Type: llm.TypeUserInput, Content: "steer"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

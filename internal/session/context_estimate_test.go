@@ -88,7 +88,7 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldSnapshot := contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: append(original, *runtime), Lineage: r.Current(), ReplayEstimator: r.Provider}
+	oldSnapshot := contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: append(original, *runtime), Lineage: r.Current(), TokenEstimator: r.Provider}
 	r.estimator.ObserveRequest(87, r.estimator.Prepare(oldSnapshot))
 	r.estimator.ObserveUsage(87, predecessorInput)
 	r.recordUsage(&r.reported.Tokens)
@@ -155,7 +155,7 @@ func TestMainRequestFeedbackUpdatesSharedEstimate(t *testing.T) {
 	}
 }
 
-func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchResetsIt(t *testing.T) {
+func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchIsolatesIt(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	var baseline contextbuild.InputSnapshot
 	interrupted := errors.New("interrupted after usage")
@@ -163,7 +163,7 @@ func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchResetsIt(t *testing
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		calls++
 		if calls == 1 {
-			baseline = contextbuild.InputSnapshot{Selection: req.Selection, System: req.System, Tools: req.Tools, Messages: req.Messages, Lineage: r.Current(), ReplayEstimator: r.Provider}
+			baseline = contextbuild.InputSnapshot{Selection: req.Selection, System: req.System, Tools: req.Tools, Messages: req.Messages, Lineage: r.Current(), TokenEstimator: r.Provider}
 			return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
 		}
 		if err := emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 9999}}); err != nil {
@@ -188,7 +188,8 @@ func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchResetsIt(t *testing
 	if _, err := r.ApplyModel(""); err != nil {
 		t.Fatal(err)
 	}
+	baseline.Selection = selection
 	if result := r.estimator.Estimate(baseline); !result.Estimated || result.Input != result.LocalInput {
-		t.Fatal("model switch retained old measurement", result)
+		t.Fatal("different model reused old measurement", result)
 	}
 }

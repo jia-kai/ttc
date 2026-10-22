@@ -3,16 +3,19 @@ package context
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"hash"
 	"sync"
 
 	"ttc/internal/llm"
 )
 
-// ReplayEstimator supplies provider-native replay occupancy in input tokens.
+// TokenEstimator supplies tokenizer compatibility and native replay occupancy.
 // Implementations must be concurrency-safe when shared across estimator calls.
-type ReplayEstimator interface {
+type TokenEstimator interface {
 	EstimateReplay(llm.Message) int
+	TokenizerID(llm.ModelSpec) string
 }
 
 // InputSnapshot is an immutable model-input view for one estimation. Messages
@@ -25,8 +28,8 @@ type InputSnapshot struct {
 	Tools     []llm.ToolDefinition
 	Messages  []llm.Message
 	Lineage   string
-	// ReplayEstimator is optional; nil uses llm.ReplayTokens conservatively.
-	ReplayEstimator ReplayEstimator
+	// TokenEstimator is optional; nil uses exact request model IDs and conservative replay counts.
+	TokenEstimator TokenEstimator
 }
 
 // Result separates effective input occupancy from its local estimate. Input and
@@ -51,14 +54,14 @@ type Observation struct {
 // EstimateInput estimates the complete input without calibration or state.
 // Invalid message or retained-input metadata returns -1.
 func EstimateInput(snapshot InputSnapshot) Result {
-	snapshot.Messages = MessagesForEstimation(snapshot.Selection, snapshot.Messages, snapshot.ReplayEstimator)
+	snapshot.Messages = MessagesForEstimation(snapshot.Selection, snapshot.Messages, snapshot.TokenEstimator)
 	return estimateLocal(snapshot)
 }
 
 // MessagesForEstimation copies the selected provider projection and annotates
 // replay occupancy without changing canonical history or provider payloads.
 // With no estimator, existing annotations or conservative replay counts are used.
-func MessagesForEstimation(selection llm.Selection, messages []llm.Message, estimator ReplayEstimator) []llm.Message {
+func MessagesForEstimation(selection llm.Selection, messages []llm.Message, estimator TokenEstimator) []llm.Message {
 	out := llm.ContextFor(selection, messages)
 	for i, message := range out {
 		if message.State == nil {
@@ -78,6 +81,7 @@ func MessagesForEstimation(selection llm.Selection, messages []llm.Message, esti
 type inputIdentity struct {
 	compatible [sha256.Size]byte
 	exact      [sha256.Size]byte
+	lineage    string
 }
 
 type inputObservation struct {
@@ -87,9 +91,90 @@ type inputObservation struct {
 }
 
 type inputAnchor struct {
-	identity inputIdentity
-	local    int
-	reported int
+	identity    inputIdentity
+	local       int
+	reported    int
+	approximate bool // Historical reconstruction without a saved tool-schema fingerprint is never exact.
+}
+
+// Checkpoint is a versioned, payload-free prepared-input observation. It stores
+// local tokens and SHA-256 fingerprints, not messages, schemas or usage. History
+// must bind it to a successful response before Restore can establish an anchor.
+type Checkpoint struct {
+	Version    int    `json:"version"`     // Fingerprint/estimation contract version, independent of history schema.
+	LocalInput int    `json:"local_input"` // Local input estimate, in tokens, before endpoint calibration.
+	Compatible string `json:"compatible"`  // Hex SHA-256 of tokenizer, provider, settings, system and schemas.
+	Exact      string `json:"exact"`       // Hex SHA-256 additionally covering the projected message payloads.
+}
+
+// Checkpoint returns bounded persistence metadata for this prepared input.
+// Invalid observations return nil.
+func (o Observation) Checkpoint() *Checkpoint {
+	if !o.valid {
+		return nil
+	}
+	return &Checkpoint{Version: 1, LocalInput: o.local,
+		Compatible: hex.EncodeToString(o.identity.compatible[:]), Exact: hex.EncodeToString(o.identity.exact[:])}
+}
+
+// Validate checks the format version, token count and fingerprint encodings
+// without changing estimator state or establishing historical ownership.
+func (c Checkpoint) Validate() error {
+	_, err := c.identity()
+	return err
+}
+
+func (c Checkpoint) identity() (inputIdentity, error) {
+	if c.Version != 1 || c.LocalInput < 0 {
+		return inputIdentity{}, errors.New("invalid token checkpoint version or count")
+	}
+	var identity inputIdentity
+	for _, field := range []struct {
+		text   string
+		target *[sha256.Size]byte
+	}{{c.Compatible, &identity.compatible}, {c.Exact, &identity.exact}} {
+		decoded, err := hex.DecodeString(field.text)
+		if err != nil || len(decoded) != sha256.Size {
+			return inputIdentity{}, errors.New("invalid token checkpoint fingerprint")
+		}
+		copy(field.target[:], decoded)
+	}
+	return identity, nil
+}
+
+// Restore installs a validated historical observation and nonnegative measured
+// input, rebinding it to a selected load's context. The caller must establish
+// selected-branch ownership and reject observations from before compaction.
+// Pending requests are never restored. Invalid metadata leaves state unchanged.
+func (e *Estimator) Restore(c Checkpoint, inputTokens int, lineage string) error {
+	identity, err := c.identity()
+	if err != nil {
+		return err
+	}
+	if inputTokens < 0 {
+		return errors.New("invalid measured input token count")
+	}
+	identity.lineage = lineage
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.anchor = &inputAnchor{identity: identity, local: c.LocalInput, reported: inputTokens}
+	e.pending = nil
+	return nil
+}
+
+// RestoreApproximate reconstructs an older request using current token accounting
+// policy and tool schemas. Its measurement calibrates deltas but can never mark
+// an input exact. Invalid input leaves state unchanged and returns false.
+func (e *Estimator) RestoreApproximate(snapshot InputSnapshot, inputTokens int) bool {
+	r, identity, ok := estimateSnapshot(snapshot)
+	if !ok || inputTokens < 0 {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.anchor = &inputAnchor{identity: identity, local: r.LocalInput, reported: inputTokens, approximate: true}
+	e.pending = nil
+	return true
 }
 
 // Estimator calibrates local token deltas against one latest reported request.
@@ -166,10 +251,10 @@ func (e *Estimator) Reset() {
 
 func (e *Estimator) calibrate(r Result, identity inputIdentity) Result {
 	a := e.anchor
-	if a == nil || identity.compatible != a.identity.compatible {
+	if a == nil || r.Input < 0 || identity.compatible != a.identity.compatible || identity.lineage != a.identity.lineage {
 		return r
 	}
-	if identity.exact == a.identity.exact {
+	if !a.approximate && identity.exact == a.identity.exact {
 		r.Input, r.Estimated = a.reported, false
 		return r
 	}
@@ -221,16 +306,22 @@ func rawTokens(messages []llm.Message) int {
 }
 
 func estimateSnapshot(snapshot InputSnapshot) (Result, inputIdentity, bool) {
-	snapshot.Messages = MessagesForEstimation(snapshot.Selection, snapshot.Messages, snapshot.ReplayEstimator)
+	snapshot.Messages = MessagesForEstimation(snapshot.Selection, snapshot.Messages, snapshot.TokenEstimator)
 	r := estimateLocal(snapshot)
 	if r.Input < 0 {
 		return r, inputIdentity{}, false
 	}
 	// Length-prefixed fields avoid allocating serialized copies of large payloads.
 	compatible := fingerprintWriter{Hash: sha256.New()}
-	for _, field := range []string{snapshot.Selection.Provider, snapshot.Selection.Model.ID,
-		snapshot.Selection.Model.RequestID(), snapshot.Selection.Model.ServiceTier,
-		snapshot.Selection.Variant, snapshot.Lineage, snapshot.System} {
+	tokenizer := snapshot.Selection.Model.RequestID()
+	if snapshot.TokenEstimator != nil {
+		tokenizer = snapshot.TokenEstimator.TokenizerID(snapshot.Selection.Model)
+	}
+	if tokenizer == "" {
+		return Result{Input: -1, LocalInput: -1, Estimated: true}, inputIdentity{}, false
+	}
+	for _, field := range []string{snapshot.Selection.Provider, tokenizer, snapshot.Selection.Model.ServiceTier,
+		snapshot.Selection.Variant, snapshot.System} {
 		compatible.string(field)
 	}
 	compatible.integer(int64(len(snapshot.Tools)))
@@ -276,6 +367,7 @@ func estimateSnapshot(snapshot InputSnapshot) (Result, inputIdentity, bool) {
 		}
 	}
 	var identity inputIdentity
+	identity.lineage = snapshot.Lineage
 	copy(identity.compatible[:], compatible.Sum(nil))
 	copy(identity.exact[:], exact.Sum(nil))
 	return r, identity, true

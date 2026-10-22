@@ -103,9 +103,14 @@ func TestJobReadCompletedRowRendersOutputThroughClickInspectAndLoad(t *testing.T
 			check()
 			// Reload closes the capture manager. Inspection must use the durable
 			// output page, not a job handle or a fresh unrelated capture tail.
+			// Name changes are displayed on replay, making this a fresh-frame
+			// barrier even when restored usage matches the pre-load sidebar.
+			if err := u.runtime.Store.RenameSession(u.runtime.Current(), "Reloaded capture fixture"); err != nil {
+				t.Fatal(err)
+			}
 			u.typeText("/load " + u.runtime.Current())
 			u.key(tcell.KeyEnter)
-			frame = u.wait(t, "No request yet")
+			frame = u.wait(t, "Reloaded capture fixture")
 			click(frame)
 			check()
 		})

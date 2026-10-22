@@ -33,7 +33,7 @@ func TestRequestMessagesAttributionOrderAndIsolation(t *testing.T) {
 				t.Fatal(err)
 			}
 			var requestBefore string
-			const requestState = "SELECT json_array(event_cutoff,input_json,delivered_events_json,status,attempts_json) FROM model_requests WHERE id=?"
+			const requestState = "SELECT json_array(event_cutoff,input_json,delivered_events_json,status) FROM model_requests WHERE id=?"
 			if err := s.db.QueryRow(requestState, request).Scan(&requestBefore); err != nil {
 				t.Fatal(err)
 			}

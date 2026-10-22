@@ -32,7 +32,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if _, err := s.db.Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{notice}, nil); err == nil {
+	if _, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Context: cm, Notices: []llm.Message{notice}}); err == nil {
 		t.Fatal("forced failure succeeded")
 	}
 	after, err := s.Session(v.ID)
@@ -49,7 +49,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if _, err := s.db.Exec("DROP TRIGGER fail_admission"); err != nil {
 		t.Fatal(err)
 	}
-	admitted, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{notice}, nil)
+	admitted, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Context: cm, Notices: []llm.Message{notice}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestRequestInputMetadataStaysBoundedForMainAndChildReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		admitted, err := s.AdmitRequest(v.ID, actorTurn, actor, v.Model, nil, nil, prefix)
+		admitted, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: actorTurn, Actor: actor, Selection: v.Model, ChildInput: prefix})
 		if err != nil {
 			t.Fatal(actor, err)
 		}
@@ -184,7 +184,7 @@ func TestRejectedFutureNotificationRollsBackAndChildInputStaysIsolated(t *testin
 		t.Fatal(err)
 	}
 	cm := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context"}`}
-	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Type: llm.TypeUserInput, Content: "future", EventSeq: before.EntryTip + 100}}, nil)
+	_, err = s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Context: cm, Notices: []llm.Message{{Type: llm.TypeUserInput, Content: "future", EventSeq: before.EntryTip + 100}}})
 	if err == nil || !strings.Contains(err.Error(), "cutoff") {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestRejectedFutureNotificationRollsBackAndChildInputStaysIsolated(t *testin
 		t.Fatal(err)
 	}
 	prefix := []llm.Message{{Type: llm.TypeUserInput, Content: "frozen child prefix"}}
-	admitted, err := s.AdmitRequest(v.ID, childTurn, "main/child", v.Model, cm, nil, prefix)
+	admitted, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: childTurn, Actor: "main/child", Selection: v.Model, Context: cm, ChildInput: prefix})
 	if err != nil || len(admitted.Messages) != 2 || admitted.Messages[0].Content != "frozen child prefix" {
 		t.Fatal(admitted, err)
 	}
@@ -228,11 +228,11 @@ func TestForegroundFinishAcknowledgmentIsOnceOnly(t *testing.T) {
 	cm := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context"}`}
 	// A fast background assignment can be represented by both its immutable
 	// launch result and the queued finish; it still receives one acknowledgment.
-	first, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"child_turn_finished"}`, EventSeq: finish}}, nil)
+	first, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Context: cm, Notices: []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"child_turn_finished"}`, EventSeq: finish}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.AdmitRequest(v.ID, turn, "main", v.Model, cm, nil, nil)
+	second, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Context: cm})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,10 +273,10 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	notice := llm.Message{Type: llm.TypeRuntimeNotification, Content: "finished", EventSeq: finish}
-	if _, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, []llm.Message{notice}, nil); err == nil {
+	if _, err := s.AdmitRequest(RequestAdmission{SessionID: loaded.ID, TurnID: loadedTurn, Actor: "main", Selection: loaded.Model, Notices: []llm.Message{notice}}); err == nil {
 		t.Fatal("loaded runtime accepted its source's live notification")
 	}
-	admitted, err := s.AdmitRequest(loaded.ID, loadedTurn, "main", loaded.Model, nil, nil, nil)
+	admitted, err := s.AdmitRequest(RequestAdmission{SessionID: loaded.ID, TurnID: loadedTurn, Actor: "main", Selection: loaded.Model})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := s.AdmitRequest(next.ID, turn, "main", next.Model, nil, nil, nil)
+	original, err := s.AdmitRequest(RequestAdmission{SessionID: next.ID, TurnID: turn, Actor: "main", Selection: next.Model})
 	if err != nil {
 		t.Fatal(err)
 	}

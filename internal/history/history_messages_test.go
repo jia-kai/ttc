@@ -126,20 +126,20 @@ func TestHistoryArtifactMessagesAndWrapping(t *testing.T) {
 
 func TestHistoryAdmissionMessages(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
-	_, err := s.AdmitRequest(v.ID, turn, "main/child", v.Model, &llm.Message{Type: llm.TypeUserInput, Content: "wrong envelope"}, nil, nil)
+	_, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main/child", Selection: v.Model, Context: &llm.Message{Type: llm.TypeUserInput, Content: "wrong envelope"}})
 	requireHistoryMessage(t, err, "runtime context must be a nonempty developer runtime message")
-	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, []llm.Message{{EventSeq: math.MaxInt64}}, nil)
+	_, err = s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main/child", Selection: v.Model, Notices: []llm.Message{{EventSeq: math.MaxInt64}}})
 	requireHistoryMessage(t, err, "notification is not a committed event at request cutoff")
-	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, nil, llm.Message{Type: llm.TypeUserInput})
+	_, err = s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main/child", Selection: v.Model, Steers: []llm.Message{{Type: llm.TypeUserInput}}})
 	requireHistoryMessage(t, err, "only main requests accept human steering")
-	_, err = s.AdmitRequest(v.ID, turn, "main", v.Model, nil, nil, nil, llm.Message{Type: llm.TypeAssistant})
+	_, err = s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Steers: []llm.Message{{Type: llm.TypeAssistant}}})
 	requireHistoryMessage(t, err, "steering must be a human user message")
-	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, []llm.Message{{Type: llm.TypeToolResult, Content: fmt.Sprintf(`{"finish_event_seq":%d}`, int64(math.MaxInt64))}})
+	_, err = s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main/child", Selection: v.Model, ChildInput: []llm.Message{{Type: llm.TypeToolResult, Content: fmt.Sprintf(`{"finish_event_seq":%d}`, int64(math.MaxInt64))}}})
 	requireHistoryMessage(t, err, "child finish exceeds request cutoff")
 	if err := s.InvalidateContext(v.ID, "broken summary"); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.AdmitRequest(v.ID, turn, "main/child", v.Model, nil, nil, nil)
+	_, err = s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main/child", Selection: v.Model})
 	requireHistoryMessage(t, err, "session unusable after compaction: broken summary; start or load another session")
 	requireHistoryMessage(t, s.InvalidateContext(v.ID, ""), "missing compaction failure reason")
 	entries, err := s.Branch(v.ID, 0)

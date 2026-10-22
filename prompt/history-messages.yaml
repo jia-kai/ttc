@@ -8,6 +8,9 @@ HistoryRequestMessageOwner:
   "request %d turn or purpose does not match message batch"
 HistoryRequestMessageSession: "request %d session does not own message batch"
 HistoryRequestMessage: "request message %d: %w"
+HistoryRequestCompletionStatus: "invalid terminal request or attempt status"
+HistoryRequestAttemptMetadata:
+  "request attempt duration and number must be nonnegative"
 HistoryNotificationMessageType: "invalid notification message type %q"
 HistoryArtifactCategory: "invalid artifact category"
 HistoryArtifactConflict: "artifact hash conflict"
@@ -51,6 +54,8 @@ HistoryContinuationWarning: "invalid continuation recovery warning"
 HistoryContinuationWarningMissing:
   "continuation recovery warning is not persisted"
 HistoryInputMetadata: "original human input metadata: %w"
+HistoryInputCheckpointActor: "only main requests accept input checkpoints"
+HistoryInputCheckpointInvalid: "invalid input checkpoint: %w"
 HistoryInputMissing: "original human input #%d: %w"
 HistoryInputSource: "original human input #%d has invalid source %q"
 HistoryInvalidJSON: "invalid history JSON"

@@ -1,5 +1,6 @@
-// Package migrate upgrades canonical history without changing saved model requests
-// or archive files. The caller owns the transaction and must roll it back on error.
+// Package migrate upgrades canonical history while preserving original request
+// inputs, immutable audit evidence and archive files. The caller owns the
+// transaction and must roll it back on error.
 package migrate
 
 import (
@@ -13,7 +14,7 @@ import (
 )
 
 // CurrentVersion is the schema version produced by Apply.
-const CurrentVersion = 11
+const CurrentVersion = 12
 
 // legacyMarker is the fixed schema-5 storage signature, not live model guidance.
 const legacyMarker = `The following user message is an original human input retained across compaction,
@@ -51,6 +52,7 @@ var upgrades = [...]struct {
 	{8, upgrade8},
 	{9, upgrade9},
 	{10, upgrade10},
+	{11, upgrade11},
 }
 
 // Apply runs ordered upgrades from MinimumVersion to CurrentVersion inside tx.

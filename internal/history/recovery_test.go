@@ -101,7 +101,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			s, source, turn, _ := historyFixture(t)
 			delivered := appendRecoveryRuntime(t, s, source.ID, `{"type":"job_exit","job_id":"delivered"}`)
-			admitted, err := s.AdmitRequest(source.ID, turn, "main", source.Model, nil, []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit"}`, EventSeq: delivered}}, nil)
+			admitted, err := s.AdmitRequest(RequestAdmission{SessionID: source.ID, TurnID: turn, Actor: "main", Selection: source.Model, Notices: []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit"}`, EventSeq: delivered}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +114,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 			appendRecoveryRuntime(t, s, source.ID, `{"type":"wakeup","wakeup_id":"repeat","message":"old","fired_count":1}`)
 			last := appendRecoveryRuntime(t, s, source.ID, `{"type":"wakeup","wakeup_id":"repeat","message":"latest","fired_count":2}`)
 			if status != "running" {
-				if err := s.FinishRequest(request, status, []any{}); err != nil {
+				if err := s.FinishRequest(request, RequestCompletion{Status: status, Attempts: []RequestAttempt{}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -186,7 +186,7 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 			for _, notice := range recoveredAgain {
 				messages = append(messages, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: notice.EventSeq, Content: string(notice.Body)})
 			}
-			fresh, err := s.AdmitRequest(reloaded.ID, loadedTurn, "main", reloaded.Model, nil, messages, nil)
+			fresh, err := s.AdmitRequest(RequestAdmission{SessionID: reloaded.ID, TurnID: loadedTurn, Actor: "main", Selection: reloaded.Model, Notices: messages})
 			if err != nil {
 				t.Fatal(err)
 			}

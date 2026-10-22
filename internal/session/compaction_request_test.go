@@ -241,7 +241,7 @@ func TestSummaryRequestExcludesIncompatibleReplayWithoutFlattening(t *testing.T)
 		return emit(llm.StreamEvent{Kind: "text", Text: "Canonical handoff."})
 	}}
 	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: messages, Lineage: r.Current()}
-	if _, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false); err != nil || requests != 1 {
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false); err != nil || requests != 1 {
 		t.Fatal("summary failed", requests, err)
 	}
 	if messages[1].State == nil || messages[2].State == nil {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
@@ -78,13 +79,13 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		if ownerCtx.Err() != nil {
 			status = "interrupted"
 		}
-		attempt := map[string]any{"status": status, "usage": usage}
+		attempt := history.RequestAttempt{Status: status, Usage: usage}
 		if e != nil {
-			attempt["error"] = e.Error()
+			attempt.Error = e.Error()
 		} else if status != "completed" {
-			attempt["error"] = "naming request did not produce a valid title"
+			attempt.Error = "naming request did not produce a valid title"
 		}
-		if err := r.Store.FinishRequest(request, status, []any{attempt}); err != nil {
+		if err := r.Store.FinishRequest(request, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}}); err != nil {
 			r.namingFailure(ownerCtx, sessionID, turn, "record result: "+err.Error())
 		}
 	}()
@@ -209,7 +210,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	var inputIDs []int64
 	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: messages, Lineage: session}
 	compacted, e := r.compactInput(ctx, compactionInput{
-		actor: "main", snapshot: snapshot, estimator: &r.estimator, focus: focus, force: force,
+		actor: "main", snapshot: snapshot, estimator: r.estimator, focus: focus, force: force,
 		freeze: func(prepared preparedCompaction) error {
 			retention := prepared.retention
 			inputIDs = make([]int64, 0, len(retention.Inputs))

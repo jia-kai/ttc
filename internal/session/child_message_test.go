@@ -11,6 +11,7 @@ import (
 	"ttc/internal/historytest"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -309,7 +310,7 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 	if err != nil || admitted.RequestID == 0 || len(admitted.Notifications) != 1 || len(r.notifications) != 1 || len(assignment.queued) != 0 || assignment.queuedTokens != 0 {
 		t.Fatal(admitted, err)
 	}
-	if err := r.Store.FinishRequest(admitted.RequestID, "completed", nil); err != nil {
+	if err := r.Store.FinishRequest(admitted.RequestID, history.RequestCompletion{Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 }

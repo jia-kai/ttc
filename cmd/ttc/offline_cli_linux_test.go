@@ -32,6 +32,9 @@ func TestOfflineCLIRequiresNeitherCredentialsNorCatalog(t *testing.T) {
 	if data := os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_DATA"); data != "" {
 		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--plain", "--data-dir", data, "--workdir", os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_WORK"), "--offline-script", os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_SCRIPT")}
+		if load := os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_SESSION"); load != "" {
+			os.Args = append(os.Args, "--session", load)
+		}
 		if err := run(); err != nil {
 			t.Fatal(err)
 		}

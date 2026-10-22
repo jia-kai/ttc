@@ -76,13 +76,14 @@ with sqlite3.connect(root / 'history.sqlite') as db:
     db.executescript("""
 CREATE TABLE turns(id,status,started_ms);
 INSERT INTO turns VALUES('turn','failed',0);
-CREATE TABLE model_requests(id,purpose,status,attempts_json);
+CREATE TABLE model_requests(id,purpose,status);
+CREATE TABLE request_observations(completion_entry_id,request_id);
 CREATE TABLE entries(id INTEGER PRIMARY KEY,content_json);
 """)
-    db.execute('INSERT INTO model_requests VALUES(1,?,?,?)',
-               ('coding', 'failed', json.dumps([{'error': 'original fixture failure'}])))
+    db.execute('INSERT INTO model_requests VALUES(1,?,?)', ('coding', 'failed'))
     db.execute('INSERT INTO entries(content_json) VALUES(?)',
-               (json.dumps({'error': 'original fixture failure'}),))
+               (json.dumps({'error': 'original fixture failure', 'attempts': [{'error': 'original fixture failure'}]}),))
+    db.execute('INSERT INTO request_observations VALUES(1,1)')
 print('/help', flush=True)
 time.sleep(30)
 ''')

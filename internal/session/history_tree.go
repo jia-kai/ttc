@@ -32,11 +32,9 @@ func (r *Runtime) RestoreBranch(entryID int64) error {
 	if _, err := r.Store.BranchSelectionTarget(id, entryID); err != nil {
 		return err
 	}
-	r.stopNaming()
-	r.Jobs.Close()
-	r.timers.close()
-	r.clearImages()
-	r.resetTransient()
+	r.stopLiveWork()
+	r.resetLiveWork()
+	r.replaceAccounting(preparedAccounting{})
 	// Joined completions may append history, so resolve against the final state.
 	target, err := r.Store.BranchSelectionTarget(id, entryID)
 	if err != nil {

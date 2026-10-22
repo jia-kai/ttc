@@ -93,7 +93,11 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			r.Close()
 			// Reconstruct the schema-7 index and compaction boundaries, not just
 			// its version, so later migrations build their indexes from scratch.
-			if _, err := historytest.DB(t, r.Store).Exec(`DROP INDEX compaction_summary;
+			if _, err := historytest.DB(t, r.Store).Exec(`DROP TABLE request_observations;
+				ALTER TABLE model_requests DROP COLUMN admission_entry_id;
+				ALTER TABLE model_requests DROP COLUMN system_prompt_entry_id;
+				ALTER TABLE model_requests ADD COLUMN attempts_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(attempts_json));
+				DROP INDEX compaction_summary;
 				DROP INDEX entry_created;
 				DROP INDEX entry_prompt_recall;
 				DROP INDEX session_list_workspace;

@@ -252,37 +252,34 @@ func runWithModules(modules []providers.Module) error {
 	if notice != "" {
 		fmt.Fprintln(os.Stderr, "ttc:", notice)
 	}
-	var saved history.Session
+	// Persist the startup choice before a writable load can record its switch.
+	// Loading itself (validation, copying and activation) is owned by the runtime.
+	var source history.Session
 	if *load != "" {
-		saved, e = store.Session(*load)
-		if e == nil {
-			var path string
-			path, e = store.WorkspacePath(context.Background(), saved.WorkspaceID)
-			if e == nil && path != w.Root {
-				return fmt.Errorf("session belongs to another workspace")
+		source, e = store.Session(*load)
+		if e != nil {
+			return e
+		}
+		// Reject another workspace before persisting a startup preference. The
+		// runtime also validates its load boundary before preparing a snapshot.
+		if source.WorkspaceID != "" {
+			path, err := store.WorkspacePath(ctx, source.WorkspaceID)
+			if err != nil {
+				return err
+			}
+			if path != w.Root {
+				return errors.New("session belongs to another workspace")
 			}
 		}
-		if e == nil {
-			saved, e = store.Load(*load)
-		}
 	}
-	if e != nil {
-		return e
-	}
-	if saved.ReadOnly {
-		selection = saved.Model
-	} else if e = store.SaveSelection(selection); e != nil {
-		return e
-	}
-	if !saved.ReadOnly && *load != "" && (saved.Model.Provider != selection.Provider || saved.Model.Model.ID != selection.Model.ID || saved.Model.Variant != selection.Variant) {
-		text := fmt.Sprintf("Model switched · %s · %s", selection.Model.ID, selection.Variant)
-		if _, e := store.SwitchModel(saved.ID, "", saved.Model, selection, text); e != nil {
+	if !source.ReadOnly {
+		if e := store.SaveSelection(selection); e != nil {
 			return e
 		}
 	}
 	// Maintenance owns the database before any runtime or frontend interaction.
 	// Its synchronous callbacks write startup stderr, never runtime events.
-	notices, e := maintainHistory(ctx, store, saved.ID, progress)
+	notices, e := maintainHistory(ctx, store, *load, progress)
 	if e != nil {
 		return e
 	}
@@ -295,7 +292,7 @@ func runWithModules(modules []providers.Module) error {
 		return e
 	}
 	events := make(chan session.Event, 256)
-	runtime, e := session.New(ctx, store, w, p, selection, saved.ID, catalog, searchConfig, func(event session.Event) {
+	runtime, e := session.New(ctx, store, w, p, selection, "", catalog, searchConfig, func(event session.Event) {
 		select {
 		case events <- event:
 		case <-ctx.Done():
@@ -304,15 +301,20 @@ func runWithModules(modules []providers.Module) error {
 	if e != nil {
 		return e
 	}
-	runtime.AutoName = *autoName
-	for _, notice := range notices {
-		events <- session.Event{Kind: "status", Text: notice, Generation: runtime.Generation(), SessionID: runtime.Current()}
-	}
 	defer func() {
 		// Stop UI delivery before joining callbacks after the frontend has exited.
 		cancel()
 		runtime.Close()
 	}()
+	if *load != "" {
+		if e := runtime.Load(*load); e != nil {
+			return e
+		}
+	}
+	runtime.AutoName = *autoName
+	for _, notice := range notices {
+		events <- session.Event{Kind: "status", Text: notice, Generation: runtime.Generation(), SessionID: runtime.Current()}
+	}
 	ui := &tui.Frontend{Runtime: runtime, Events: events, Input: os.Stdin, Output: os.Stdout, Plain: *plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginCurrent, Models: models, ModelUpdates: modelUpdates}
 	return ui.Run(ctx)
 }

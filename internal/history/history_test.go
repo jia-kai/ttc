@@ -260,7 +260,7 @@ func TestHistoryImmutableResultsBranchAndSystemInspection(t *testing.T) {
 }
 func TestContinuationRebasesRetainedUndoWithoutArchiveDependency(t *testing.T) {
 	s, v, first, req := historyFixture(t)
-	s.FinishRequest(req, "completed", nil)
+	s.FinishRequest(req, RequestCompletion{Status: "completed"})
 	s.FinishTurn(first, "completed")
 	s.Append(v.ID, first, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "old"})
 	second, e := s.BeginTurn(v.ID, "user", v.Model)

@@ -56,6 +56,9 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if _, err := s.RecordSystemPrompt(v.ID, turn, "main", req, "Exact instructions."); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.FinishRequest(req, RequestCompletion{Status: "completed", Attempts: []RequestAttempt{{Status: "completed", Usage: &llm.Usage{InputTokens: 100}}}}); err != nil {
+		t.Fatal(err)
+	}
 	childRequest, err := s.StartRequest(v.ID, turn, "main/child", "compaction", v.Model)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +94,7 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 			t.Fatal("expired session survived", id, err)
 		}
 	}
-	for _, table := range []string{"tool_records", "file_changes", "tool_calls", "compactions"} {
+	for _, table := range []string{"tool_records", "file_changes", "tool_calls", "compactions", "request_observations"} {
 		var count int
 		if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatal(table, count, err)

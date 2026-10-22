@@ -342,7 +342,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			r.childStartMu.Unlock()
 		}
 		r.recordUsage(usage)
-		if streamErr == nil && usage != nil && usage.InputTokens >= 0 {
+		if streamErr == nil && usage.Usable() {
 			task.estimator.ObserveUsage(request, usage.InputTokens)
 		}
 		if streamErr != nil {
@@ -358,11 +358,11 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		if streamErr != nil {
 			status = "failed"
 		}
-		attempt := map[string]any{"duration_ms": time.Since(started).Milliseconds(), "usage": usage, "response_id": responseID, "service_tier": serviceTier, "status": status}
+		attempt := history.RequestAttempt{DurationMS: time.Since(started).Milliseconds(), Usage: usage, ResponseID: responseID, ServiceTier: serviceTier, Status: status}
 		if streamErr != nil {
-			attempt["error"] = streamErr.Error()
+			attempt.Error = streamErr.Error()
 		}
-		if err := r.Store.FinishRequest(request, status, []any{attempt}); err != nil {
+		if err := r.Store.FinishRequest(request, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}}); err != nil {
 			return err
 		}
 		r.routeMu.RLock()

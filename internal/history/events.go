@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
@@ -34,8 +35,30 @@ type Admission struct {
 // requestInputMetadata describes an admitted input without duplicating its
 // messages. Exact records remain in history; retries own the frozen input in memory.
 type requestInputMetadata struct {
-	Version      int `json:"version"`
-	MessageCount int `json:"message_count"`
+	Version       int                `json:"version"`
+	MessageCount  int                `json:"message_count"`
+	InputEstimate *ctxmgr.Checkpoint `json:"input_estimate,omitempty"`
+}
+
+// RequestAdmission describes the input to one coding request. The caller owns
+// all pointers and slices; AdmitRequest reads them synchronously without mutation.
+type RequestAdmission struct {
+	SessionID string
+	TurnID    string
+	Actor     string
+	Selection llm.Selection
+	// Checkpoint is optional main-only input accounting, committed atomically
+	// with the request after validation.
+	Checkpoint *ctxmgr.Checkpoint
+	// Context is an optional nonempty runtime-context message. Admission copies
+	// it and assigns the committed request ID without changing the caller's value.
+	Context *llm.Message
+	// Notices are undelivered source events acknowledged and persisted for Actor.
+	Notices []llm.Message
+	// ChildInput is the isolated child projection; main uses stored history instead.
+	ChildInput []llm.Message
+	// Steers are main-only human inputs persisted with independent undo ownership.
+	Steers []llm.Message
 }
 
 // AdmitRequest atomically snapshots main input, records an optional new runtime
@@ -43,8 +66,20 @@ type requestInputMetadata struct {
 // Notices are persisted for the receiving actor; isolated child deliveries do not
 // enter the main projection or change human undo ownership. Messages contains the
 // admitted main projection or the caller's isolated child input plus notices, with
-// any new runtime context appended.
-func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, contextMessage *llm.Message, notices, childInput []llm.Message, steers ...llm.Message) (v Admission, err error) {
+// any new runtime context appended. A nonnil checkpoint is validated before any
+// writes and persisted with the admission; only main requests accept it.
+func (s *Store) AdmitRequest(input RequestAdmission) (v Admission, err error) {
+	session, turn, actor := input.SessionID, input.TurnID, input.Actor
+	model, checkpoint, contextMessage := input.Selection, input.Checkpoint, input.Context
+	notices, childInput, steers := input.Notices, input.ChildInput, input.Steers
+	if checkpoint != nil {
+		if actor != "main" {
+			return v, errors.New(prompts.HistoryInputCheckpointActor)
+		}
+		if err := checkpoint.Validate(); err != nil {
+			return v, fmt.Errorf(prompts.HistoryInputCheckpointInvalid, err)
+		}
+	}
 	if contextMessage != nil && (contextMessage.Type != llm.TypeRuntimeContext || contextMessage.Content == "") {
 		return v, errors.New(prompts.HistoryRuntimeContext)
 	}
@@ -126,7 +161,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 		if err != nil {
 			return err
 		}
-		r, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,attempts_json,event_cutoff,delivered_events_json,created_ms) VALUES(?,?,?,'coding',?,'running','[]',?,?,?)`, session, textOrNil(turn), actor, string(data), v.Cutoff, string(ack), time.Now().UnixMilli())
+		r, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,event_cutoff,delivered_events_json,created_ms) VALUES(?,?,?,'coding',?,'running',?,?,?)`, session, textOrNil(turn), actor, string(data), v.Cutoff, string(ack), time.Now().UnixMilli())
 		if err != nil {
 			return err
 		}
@@ -210,11 +245,11 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 		if _, err = tx.Exec("UPDATE model_requests SET delivered_events_json=? WHERE id=?", string(ack), v.RequestID); err != nil {
 			return err
 		}
-		input, err := json.Marshal(requestInputMetadata{Version: 1, MessageCount: len(v.Messages)})
+		input, err := json.Marshal(requestInputMetadata{Version: 1, MessageCount: len(v.Messages), InputEstimate: checkpoint})
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec("UPDATE model_requests SET input_json=? WHERE id=?", string(input), v.RequestID); err != nil {
+		if _, err = tx.Exec("UPDATE model_requests SET input_json=?,admission_entry_id=? WHERE id=?", string(input), v.EntryTip, v.RequestID); err != nil {
 			return err
 		}
 		if actor != "main" {

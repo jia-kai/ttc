@@ -38,7 +38,7 @@ func TestUnchangedRuntimeAdmissionsKeepContextBounded(t *testing.T) {
 	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE role='developer'").Scan(&snapshots); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 100 || distinctInput != 1 || snapshots != 1 || metadataBytes > 128 {
+	if requests != 100 || distinctInput != 1 || snapshots != 1 || metadataBytes > 384 {
 		t.Fatal("snapshot overhead accumulated", requests, distinctInput, snapshots, metadataBytes)
 	}
 }

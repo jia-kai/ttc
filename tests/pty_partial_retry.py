@@ -149,7 +149,10 @@ def main():
         assert len(requests) == 3
         assert result.read_text() == 'after\n'
         with sqlite3.connect(root / 'data/history.sqlite') as db:
-            rows = db.execute("SELECT id,status,attempts_json FROM model_requests WHERE purpose='coding' ORDER BY id").fetchall()
+            rows = db.execute("""SELECT r.id,r.status,(SELECT json_extract(e.content_json,'$.attempts')
+                FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id
+                WHERE o.request_id=r.id ORDER BY o.completion_entry_id DESC LIMIT 1)
+                FROM model_requests r WHERE r.purpose='coding' ORDER BY r.id""").fetchall()
             assert [row[1] for row in rows] == ['completed', 'failed', 'completed'], rows
             assert 'interrupted' in json.loads(rows[1][2])[0]['error']
             assert db.execute('SELECT count(*) FROM tool_calls').fetchone()[0] == 1

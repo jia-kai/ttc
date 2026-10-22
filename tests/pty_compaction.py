@@ -117,7 +117,11 @@ def main():
             with sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=0.1) as db:
                 return {
                     'turns': db.execute('SELECT id,status FROM turns ORDER BY started_ms').fetchall(),
-                    'requests': db.execute('SELECT id,purpose,status,attempts_json FROM model_requests ORDER BY id').fetchall(),
+                    'requests': db.execute("""SELECT r.id,r.purpose,r.status,
+                        (SELECT json_extract(e.content_json,'$.attempts') FROM request_observations o
+                         JOIN entries e ON e.id=o.completion_entry_id WHERE o.request_id=r.id
+                         ORDER BY o.completion_entry_id DESC LIMIT 1)
+                        FROM model_requests r ORDER BY r.id""").fetchall(),
                     'errors': db.execute("SELECT content_json FROM entries WHERE json_extract(content_json,'$.error') IS NOT NULL ORDER BY id").fetchall(),
                 }
         except sqlite3.OperationalError as error:

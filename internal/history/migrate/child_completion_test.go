@@ -106,7 +106,7 @@ func TestSchema7CompletionFormsAndEvidence(t *testing.T) {
 	completionInsert(t, db, 102, ` { "type":"runtime_event", "body":{"type":"other","status":"completed"} } `)
 	completionInsert(t, db, 103, ` { "type":"request_message", "message":`+legacy+` } `)
 	exec(t, db, `INSERT INTO model_requests(id,session_id,actor_id,input_json,purpose,model_json,status,attempts_json,created_ms) VALUES(2,'old','main',?,'coding','{}','completed','[]',100)`, "["+legacy+"]")
-	evidenceQuery := `SELECT json_array((SELECT json_group_array(json_array(id,content_json)) FROM entries WHERE id<1000),(SELECT json_group_array(json_array(id,input_json,attempts_json)) FROM model_requests),(SELECT json_group_array(json_array(id,result_json)) FROM tool_calls),(SELECT json_group_array(json_array(id,active_entry_id,redo_entry_id,undo_floor_id,file_tip_id)) FROM sessions),(SELECT json_group_array(json_array(id,parent_id,source_id,turn_id,delivered_request_id,created_ms)) FROM entries))`
+	evidenceQuery := `SELECT json_array((SELECT json_group_array(json_array(id,content_json)) FROM entries WHERE id<1000),(SELECT json_group_array(json_array(id,input_json,status)) FROM model_requests),(SELECT json_group_array(json_array(id,result_json)) FROM tool_calls),(SELECT json_group_array(json_array(id,active_entry_id,redo_entry_id,undo_floor_id,file_tip_id)) FROM sessions),(SELECT json_group_array(json_array(id,parent_id,source_id,turn_id,delivered_request_id,created_ms)) FROM entries))`
 	before := scalar(t, db, evidenceQuery)
 	archive := filepath.Join(t.TempDir(), "archive.jsonl")
 	if err := os.WriteFile(archive, []byte(legacy), 0600); err != nil {

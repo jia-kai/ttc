@@ -368,7 +368,7 @@ func TestCleanupIndexesCoverEveryDeletedParentLookup(t *testing.T) {
 	if err := indexCleanupReferences(context.Background(), tx); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"sessions", "turns", "entries", "model_requests", "tool_calls", "tool_records", "file_changes", "compactions"} {
+	for _, table := range []string{"sessions", "turns", "entries", "model_requests", "tool_calls", "tool_records", "file_changes", "compactions", "request_observations"} {
 		rows, err := tx.Query(`SELECT "from" FROM pragma_foreign_key_list(?) WHERE "table"!='workspaces'`, table)
 		if err != nil {
 			t.Fatal(err)

@@ -61,7 +61,7 @@ func TestSummaryRequestPreservesRetainedProvenance(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "Retained task handoff."})
 	}}
 	snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{input}, Lineage: r.Current()}
-	if _, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false); err != nil || requests != 1 {
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false); err != nil || requests != 1 {
 		t.Fatal("retained-input summary failed", requests, err)
 	}
 }

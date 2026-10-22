@@ -316,12 +316,15 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		if cm != nil {
 			input = append(input, *cm)
 		}
-		snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, Lineage: task.actor, ReplayEstimator: r.Provider}
+		snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, Lineage: task.actor, TokenEstimator: r.Provider}
 		observation := task.estimator.Prepare(snapshot)
 		if !codingInputFits(observation.Input, task.selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
-		admitted, e = r.Store.AdmitRequest(r.Current(), task.turn, task.actor, task.selection, cm, notices, messages)
+		admitted, e = r.Store.AdmitRequest(history.RequestAdmission{
+			SessionID: r.Current(), TurnID: task.turn, Actor: task.actor, Selection: task.selection,
+			Context: cm, Notices: notices, ChildInput: messages,
+		})
 		if e == nil {
 			task.estimator.ObserveRequest(admitted.RequestID, observation)
 			if task.assignment != nil {

@@ -148,6 +148,16 @@ One Go module uses direct construction and small interfaces at their consumers:
 - `history.Store` owns SQLite, schema knowledge and persistence transactions.
   Callers use typed operations rather than SQL or database handles. Request
   admission, compaction and file-tip changes remain atomic storage operations.
+- `RequestAdmission` carries one admission's selection, input deliveries and
+  optional accounting checkpoint. `RequestCompletion` carries typed attempts;
+  completion atomically saves audit evidence and an immutable usage observation.
+  Operational usage reads follow selected completion/source identities, not
+  mutable latest-request diagnostics or JSON status searches.
+- Startup and `/load` share session preparation and activation. Preparation
+  validates the target, recovers notices and builds accounting against the
+  target tool schemas before stopping old work. Activation joins old workers and
+  installs prepared state without target-storage operations. Live-work reset,
+  conversation accounting and process-wide usage totals have separate lifetimes.
 - Durable history values and canonical `llm.Message` values are independent of
   SQL. Typed history reads assemble replay and inspection data; pure projections
   format loaded data without database or filesystem access. Large supported TUI
@@ -300,8 +310,13 @@ production provider registration or services. Sessions consume only
 type Inference interface {
     Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
     EstimateReplay(llm.Message) int
+    TokenizerID(llm.ModelSpec) string
 }
 ```
+
+`TokenizerID` supplies the provider-owned calibration identity; sharing an
+identity is TTC policy, not a claim of a provider tokenizer guarantee. Native
+replay compatibility remains separate.
 
 `internal/providers` defines neutral module contracts and configuration helpers.
 Concrete subpackages own each provider's implementation and wiring; shared LLM
@@ -548,9 +563,9 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 11;
-  startup supports schemas 5–11 and runs ordered, adjacent upgrades (5 → 6 → 7 →
-  8 → 9 → 10 → 11) in one transaction, validating before commit. Each step
+- Empty databases initialize in one immediate transaction. Current schema is 12;
+  startup supports schemas 5–12 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9 → 10 → 11 → 12) in one transaction, validating before commit. Each step
   reports its own progress; completion of a step is not a committed upgrade.
   Rebuilding entries temporarily indexes all incoming foreign-key lookups to
   avoid per-entry table scans. Schemas below 5, nonempty unversioned databases
@@ -584,7 +599,11 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   step adds oldest-entry and authored-prompt indexes and prefixes the session
   listing index with workspace identity. The 10 → 11 step is a version-only
   compatibility fence for the `compaction_context` message vocabulary; it does
-  not rewrite historical records or table definitions.
+  not rewrite historical records or table definitions. The 11 → 12 step builds
+  typed request observations from original admission, instruction and completion
+  events, then removes the obsolete mutable attempt-diagnostics column. Original
+  input JSON, immutable audit events and archive bytes are preserved; copies
+  resolve observations through source identities rather than duplicating them.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting
@@ -606,6 +625,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   `model_visible=1`; child records use the same tree with visibility false.
   Status is UI history, never a hidden instruction. Child execution remains
   memory-only.
+- `model_requests` records original admission/instruction identities and
+  prepared input metadata. `request_observations` records each completion's
+  immutable status, optional measured usage and checkpoint, linked to its
+  original events. Missing or unusable provider counts are unavailable, not
+  measured zero; audit attempts preserve the original feedback without a second
+  mutable diagnostic copy. Live accounting and persisted observations use the
+  same usability rule. Calibration never crosses a selected compaction boundary.
+  Historical decoding belongs to migration, not runtime fallback queries.
 - `file_changes.paths_json` is a versioned ordered list of paths, before/after
   absence/type/mode/hash/blob state and actual applied flags. Non-undoable
   effects include reasons/paths. No filesystem-operation journal or recovery

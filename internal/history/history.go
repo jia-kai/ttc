@@ -628,7 +628,7 @@ func (s *Store) StartRequest(session, turn, actor, purpose string, model llm.Sel
 		if err := tx.QueryRow("SELECT coalesce(max(id),0) FROM entries").Scan(&cutoff); err != nil {
 			return err
 		}
-		result, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,attempts_json,event_cutoff,created_ms) VALUES(?,?,?,?,?,'running','[]',?,?)`, session, textOrNil(turn), actor, purpose, string(m), cutoff, time.Now().UnixMilli())
+		result, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,event_cutoff,created_ms) VALUES(?,?,?,?,?,'running',?,?)`, session, textOrNil(turn), actor, purpose, string(m), cutoff, time.Now().UnixMilli())
 		if err != nil {
 			return err
 		}
@@ -637,19 +637,38 @@ func (s *Store) StartRequest(session, turn, actor, purpose string, model llm.Sel
 			return err
 		}
 		b, _ := json.Marshal(map[string]any{"type": "request_admitted", "request_id": id, "event_cutoff": cutoff, "purpose": purpose})
-		_, err = appendTx(tx, session, turn, actor, "status", "", false, b, 0)
+		entry, err := appendTx(tx, session, turn, actor, "status", "", false, b, 0)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("UPDATE model_requests SET admission_entry_id=? WHERE id=?", entry, id)
 		return err
 	})
 	return id, err
 }
 
 // FinishRequest commits terminal request metadata and its chronological event.
-// Attempt diagnostics are also embedded in the event so exact transcript exports
-// preserve failures without needing the live model_requests table.
-func (s *Store) FinishRequest(id int64, status string, attempts any) error {
-	b, err := json.Marshal(attempts)
+// Attempt diagnostics live only in the immutable event so exact transcript
+// exports preserve failures without needing the live model_requests table.
+func (s *Store) FinishRequest(id int64, completion RequestCompletion) error {
+	if err := completion.validate(); err != nil {
+		return err
+	}
+	event, err := json.Marshal(struct {
+		Type      string `json:"type"`
+		RequestID int64  `json:"request_id"`
+		RequestCompletion
+	}{"request_finished", id, completion})
 	if err != nil {
 		return err
+	}
+	var usageJSON any
+	if usage := completion.usage(); usage != nil {
+		encoded, err := json.Marshal(usage)
+		if err != nil {
+			return err
+		}
+		usageJSON = string(encoded)
 	}
 	return s.transact(func(tx *sql.Tx) error {
 		var session, turn, actor string
@@ -662,11 +681,15 @@ func (s *Store) FinishRequest(id int64, status string, attempts any) error {
         ) SELECT id FROM successors WHERE read_only=0`, session).Scan(&session); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("UPDATE model_requests SET status=?,attempts_json=? WHERE id=?", status, string(b), id); err != nil {
+		if _, err := tx.Exec("UPDATE model_requests SET status=? WHERE id=?", completion.Status, id); err != nil {
 			return err
 		}
-		event, _ := json.Marshal(map[string]any{"type": "request_finished", "request_id": id, "status": status, "attempts": json.RawMessage(b)})
-		_, err := appendTx(tx, session, turn, actor, "status", "", false, event, 0)
+		entry, err := appendTx(tx, session, turn, actor, "status", "", false, event, 0)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO request_observations(completion_entry_id,request_id,admission_entry_id,system_prompt_entry_id,status,usage_json,checkpoint_json)
+			SELECT ?,id,admission_entry_id,system_prompt_entry_id,?,?,json_extract(input_json,'$.input_estimate') FROM model_requests WHERE id=?`, entry, completion.Status, usageJSON, id)
 		return err
 	})
 }
@@ -783,6 +806,11 @@ func (s *Store) RecordSystemPrompt(session, turn, actor string, request int64, p
 		id, e = appendTx(tx, session, turn, actor, "status", "", false, content, 0)
 		if e != nil {
 			return e
+		}
+		if request > 0 {
+			if _, e = tx.Exec("UPDATE model_requests SET system_prompt_entry_id=? WHERE id=?", id, request); e != nil {
+				return e
+			}
 		}
 		_, e = tx.Exec("UPDATE sessions SET redo_entry_id=? WHERE id=?", redo, session)
 		return e

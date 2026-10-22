@@ -151,15 +151,26 @@ admission and handoff inequalities, retention defaults and failure behavior.
   safety margin: `Context n.n%` for directly reported input,
   `Context (est.) n.n%` for calibrated growth or local estimates. Compaction
   refreshes occupancy immediately while prior reported usage remains visible.
-  Explicit session changes other than `/new` clear parent context usage, not
-  all-agent run totals (including `/clear`). Never rebuild those totals from
-  history. Provider usage remains saved in each request's attempt records, but
-  loads reset the in-memory calibration and reported-usage display. The next
-  input uses a local estimate until compatible new feedback arrives. This can
-  exceed 100% even when the old provider-reported request fit; historical usage
-  describes the old input, not a guarantee for changed model/project input.
-  `/force-compact` can explicitly attempt summary inference despite that
-  estimate.
+  Loads restore the latest successful parent response's reported usage and the
+  latest measured coding input on the selected branch, excluding precompaction
+  calibration. A successful response without usage clears the reported display
+  but preserves an older calibration. New requests save a bounded checkpoint
+  containing local tokens and input fingerprints, not payloads. Typed completion
+  observations provide branch-aware usage without parsing audit diagnostics;
+  startup migration builds these observations for existing histories. Older
+  requests reconstruct their original input using saved instructions and current
+  tool schemas; that calibration is always estimated. Missing historical
+  instruction artifacts leave reported usage available but skip that
+  reconstruction. Changed system instructions or schemas invalidate
+  checkpoint-backed calibration. TTC treats OpenAI `gpt-<numeric-version>-sol`,
+  `-luna`, `-terra` and `-astra` as tokenizer-compatible within the exact
+  version; other model IDs remain separate. Provider, service-tier and
+  reasoning-effort changes still invalidate it. Native replay remains specific
+  to its producing model, even when tokenizers match. Other explicit history
+  resets clear parent context usage. `/new` clears run totals; loads, `/clear`
+  and other session changes never rebuild them from history. Changed input still
+  uses measured input plus a local delta, not an exact count. `/force-compact`
+  can attempt summary inference despite that estimate.
 - Cost needs each producing model/tier's rates: ordinary input × input rate +
   reads × cached-input rate + writes × cache-write rate + output × output rate.
   Mixed-model totals determine neither cost nor a subscription bill. See

@@ -40,7 +40,7 @@ func TestOpenWithProgressReportsOrderedUncommittedUpgrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if reports == 0 || !reflect.DeepEqual(transitions, [][2]int{{5, 6}, {6, 7}, {7, 8}, {8, 9}, {9, 10}, {10, 11}}) {
+	if reports == 0 || !reflect.DeepEqual(transitions, [][2]int{{5, 6}, {6, 7}, {7, 8}, {8, 9}, {9, 10}, {10, 11}, {11, 12}}) {
 		t.Fatalf("unexpected migration reports: count=%d transitions=%v", reports, transitions)
 	}
 	var version int

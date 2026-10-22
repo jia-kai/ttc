@@ -49,6 +49,7 @@ type Event struct {
 type Inference interface {
 	Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
 	EstimateReplay(llm.Message) int
+	TokenizerID(llm.ModelSpec) string
 }
 
 // Runtime owns exactly one main session, and joins transient work before switching it.
@@ -62,6 +63,7 @@ type Runtime struct {
 	pendingModel      *llm.Selection
 	Skills            *skills.Catalog
 	Tools             *tool.Registry
+	defaultTools      []llm.ToolDefinition // Owned immutable default schemas for this runtime config; never aliases Tools.
 	searchConfig      tool.WebSearchConfig // Operator settings, excluded from model context/history.
 	Jobs              *jobs.Manager
 	Emit              func(Event)
@@ -95,11 +97,11 @@ type Runtime struct {
 	questions         questions
 	images            imageInteractions
 	usage             ContextUsage
-	estimator         contextbuild.Estimator // Owns main-request input estimates and provider feedback.
-	reported          *ReportedUsage         // Protected by mu; cleared with the main session's transient state.
-	totals            UsageTotals            // All inference usage since construction or /new, protected by mu.
-	mainContext       contextCursor          // Owned by serial Run/Command; reset on explicit session changes.
-	mainPrefix        []llm.Message          // Latest balanced main request input, immutable after publication under mu.
+	estimator         *contextbuild.Estimator // Owns main-request input estimates and provider feedback.
+	reported          *ReportedUsage          // Protected by mu; loads restore selected parent feedback after reset.
+	totals            UsageTotals             // All inference usage since construction or /new, protected by mu.
+	mainContext       contextCursor           // Owned by serial Run/Command; reset on explicit session changes.
+	mainPrefix        []llm.Message           // Latest balanced main request input, immutable after publication under mu.
 	prefixSelection   llm.Selection
 	prefixTurn        string
 	prefixSession     string // Durable source of mainPrefix, frozen at request admission.
@@ -114,32 +116,22 @@ type Runtime struct {
 // Loaded compaction-boundary notifications are queued before any work starts.
 func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Inference, selection llm.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	persisted := session != ""
-	var notices []llm.Message
-	if persisted {
-		if err := store.RefreshLoadedActivity(ctx, time.Now(), session); err != nil {
-			cancel()
+	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: history.NewID("session"), AutoName: true}
+	r.replaceAccounting(preparedAccounting{})
+	r.resetLiveWork()
+	if session != "" {
+		target, err := r.prepareSession(session, false)
+		if err != nil {
+			r.Close()
 			return nil, err
 		}
-		pending, err := store.PendingRecoveryNotifications(ctx, session)
-		if err == nil {
-			notices, err = recoveredNotificationMessages(pending)
-		}
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("read recovered notifications: %w", err)
-		}
+		r.installSession(target)
 	}
-	if !persisted {
-		session = history.NewID("session")
-	}
-	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: session, persisted: persisted, AutoName: true}
-	r.resetTransient()
-	r.notifications = notices
 	r.activityStop = r.startActivityRefresh()
 	return r, nil
 }
-func (r *Runtime) resetTransient() {
+
+func (r *Runtime) resetLiveWork() {
 	r.resetChildren()
 	r.orderMu.Lock()
 	r.publishedJobs = map[string]jobs.Snapshot{}
@@ -155,9 +147,6 @@ func (r *Runtime) resetTransient() {
 	r.orderMu.Unlock()
 	r.mu.Lock()
 	r.fatalCompaction = ""
-	r.usage = ContextUsage{}
-	r.estimator.Reset()
-	r.reported = nil
 	r.mainContext = contextCursor{}
 	r.mainPrefix = nil
 	r.prefixTurn = ""
@@ -190,26 +179,33 @@ func (r *Runtime) resetTransient() {
 		}
 	})
 	r.Jobs.OnState = r.publishJob
+	w := newWakeups(r.ctx, r.publishTimer)
+	w.release = r.Jobs.ReleaseOwned
+	r.mu.Lock()
+	r.timers = w
+	r.mu.Unlock()
+	r.questions.mu.Lock()
+	r.questions.pending = nil
+	r.questions.mu.Unlock()
 	tool.AddFiles(r.Tools, r.Workspace)
 	tool.AddShell(r.Tools, r.Jobs, r.Workspace, r)
 	tool.AddWatch(r.Tools, r.Jobs, r.Workspace)
 	tool.AddTmuxWatchRun(r.Tools, r.Jobs, r.Workspace)
 	tool.AddWeb(r.Tools, httpClient(), r.searchConfig)
 	tool.AddSkills(r.Tools, r.Skills)
-	w := newWakeups(r.ctx, r.publishTimer)
-	w.release = r.Jobs.ReleaseOwned
-	r.mu.Lock()
-	r.timers = w
-	r.mu.Unlock()
 	r.addWakeupTools()
 	r.addAwaitTool()
 	r.addImageTool()
-	r.questions.mu.Lock()
-	r.questions.pending = nil
-	r.questions.mu.Unlock()
 	r.addQuestionTool()
 	r.addSubagentTool()
 	r.addConversationExportTool()
+	// Definitions copies values, but Parameters still aliases registry storage.
+	// Freeze defaults only after constructing real handlers against fresh live
+	// managers. Preparation reuses this snapshot, not a customized active registry.
+	r.defaultTools = r.Tools.Definitions()
+	for i := range r.defaultTools {
+		r.defaultTools[i].Parameters = append(json.RawMessage(nil), r.defaultTools[i].Parameters...)
+	}
 }
 
 // Current returns the conversation pointer used by completion writers.
@@ -557,7 +553,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		r.emit(Event{Kind: "tool_stream_end", PendingKey: pendingToolKey(request, ""), Text: streamState(streamErr)})
 		elapsed := time.Since(requestStart)
 		modelTime += elapsed
-		if usage == nil {
+		if !usage.Usable() {
 			haveUsage = false
 		} else {
 			outputTokens += usage.OutputTokens
@@ -566,15 +562,15 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		if streamErr != nil {
 			requestStatus = "failed"
 		}
-		attempt := map[string]any{"duration_ms": elapsed.Milliseconds(), "response_id": responseID, "service_tier": serviceTier, "usage": usage, "status": requestStatus}
+		attempt := history.RequestAttempt{DurationMS: elapsed.Milliseconds(), ResponseID: responseID, ServiceTier: serviceTier, Usage: usage, Status: requestStatus}
 		if streamErr != nil {
-			attempt["error"] = streamErr.Error()
+			attempt.Error = streamErr.Error()
 		}
-		if e = r.Store.FinishRequest(request, requestStatus, []any{attempt}); e != nil {
+		if e = r.Store.FinishRequest(request, history.RequestCompletion{Status: requestStatus, Attempts: []history.RequestAttempt{attempt}}); e != nil {
 			return e
 		}
 		if streamErr == nil {
-			if usage != nil {
+			if usage.Usable() {
 				if result, ok := r.estimator.ObserveUsage(request, usage.InputTokens); ok {
 					r.mu.Lock()
 					r.usage = usageFromEstimate(selection, result)
@@ -583,7 +579,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			}
 			r.mu.Lock()
 			r.reported = nil
-			if usage != nil {
+			if usage.Usable() {
 				r.reported = copyReported(&ReportedUsage{Model: selection.Model.ID + " · " + selection.Variant, Tokens: *usage})
 			}
 			r.mu.Unlock()
@@ -686,10 +682,7 @@ func (r *Runtime) Command(text string) (string, error) {
 	}
 	switch parts[0] {
 	case "/new", "/clear":
-		r.stopNaming()
-		r.Jobs.Close()
-		r.timers.close()
-		r.clearImages()
+		r.stopLiveWork()
 		r.mu.Lock()
 		r.current = history.NewID("session")
 		r.persisted = false
@@ -699,71 +692,19 @@ func (r *Runtime) Command(text string) (string, error) {
 			r.totals = UsageTotals{}
 		}
 		r.mu.Unlock()
-		r.resetTransient()
+		r.resetLiveWork()
+		r.replaceAccounting(preparedAccounting{})
 		return "New session · " + r.Current(), nil
 	case "/load":
-		v, e := r.Store.Session(arg)
-		if e != nil {
-			return "", e
-		}
-		if v.WorkspaceID != "" {
-			path, err := r.Store.WorkspacePath(r.ctx, v.WorkspaceID)
-			if err != nil {
-				return "", err
-			}
-			if path != r.Workspace.Root {
-				return "", errors.New("session belongs to another workspace")
-			}
-		}
-		// Prepare an independent snapshot before canceling the current runtime.
-		v, e = r.Store.Load(arg)
-		if e != nil {
-			return "", e
-		}
-		pending, e := r.Store.PendingRecoveryNotifications(r.ctx, v.ID)
-		if e != nil {
-			return "", fmt.Errorf("read recovered notifications: %w", e)
-		}
-		notices, e := recoveredNotificationMessages(pending)
-		if e != nil {
-			return "", fmt.Errorf("read recovered notifications: %w", e)
-		}
-		selection := r.CurrentSelection()
-		var switchEntry int64
-		switchText := ""
-		if v.ReadOnly {
-			selection = v.Model
-		} else if v.Model.Provider != selection.Provider || v.Model.Model.ID != selection.Model.ID || v.Model.Variant != selection.Variant {
-			switchText = fmt.Sprintf("Model switched · %s · %s", selection.Model.ID, selection.Variant)
-			switchEntry, e = r.Store.SwitchModel(v.ID, "", v.Model, selection, switchText)
-			if e != nil {
-				return "", e
-			}
-		}
-		r.stopNaming()
-		r.Jobs.Close()
-		r.timers.close()
-		r.clearImages()
-		r.mu.Lock()
-		r.current = v.ID
-		r.persisted = true
-		r.selection = selection
-		r.mu.Unlock()
-		r.resetTransient()
-		r.orderMu.Lock()
-		r.notifications = notices
-		r.orderMu.Unlock()
-
-		if switchEntry != 0 {
-			r.emit(Event{Kind: "status", Text: switchText, EntryID: switchEntry, SessionID: v.ID})
+		v, err := r.load(arg)
+		if err != nil {
+			return "", err
 		}
 		return "Loaded · " + v.Name, nil
 	case "/undo", "/redo":
-		r.stopNaming()
-		r.Jobs.Close()
-		r.timers.close()
-		r.clearImages()
-		r.resetTransient()
+		r.stopLiveWork()
+		r.resetLiveWork()
+		r.replaceAccounting(preparedAccounting{})
 		var target history.RestoreTarget
 		var e error
 		if parts[0] == "/undo" {

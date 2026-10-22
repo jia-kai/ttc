@@ -163,6 +163,7 @@ func deleteLineage(ctx context.Context, tx *sql.Tx, id string) error {
 	const sessions = "SELECT id FROM sessions WHERE lineage_id=?"
 	queries := []string{
 		"DELETE FROM compactions WHERE continuation_id IN (" + sessions + ")",
+		"DELETE FROM request_observations WHERE request_id IN (SELECT id FROM model_requests WHERE session_id IN (" + sessions + "))",
 		"DELETE FROM tool_records WHERE entry_id IN (SELECT id FROM entries WHERE session_id IN (" + sessions + "))",
 		"DELETE FROM file_changes WHERE session_id IN (" + sessions + ")",
 		"DELETE FROM tool_calls WHERE session_id IN (" + sessions + ")",
@@ -198,6 +199,10 @@ var cleanupReferenceIndexes = [...]struct{ name, table, column string }{
 	{"cleanup_compaction_source", "compactions", "source_tip_id"},
 	{"cleanup_compaction_summary", "compactions", "summary_entry_id"},
 	{"cleanup_request_session", "model_requests", "session_id"},
+	{"cleanup_request_admission", "model_requests", "admission_entry_id"},
+	{"cleanup_request_prompt", "model_requests", "system_prompt_entry_id"},
+	{"cleanup_observation_admission", "request_observations", "admission_entry_id"},
+	{"cleanup_observation_prompt", "request_observations", "system_prompt_entry_id"},
 }
 
 func indexCleanupReferences(ctx context.Context, tx *sql.Tx) error {
