@@ -96,7 +96,7 @@ func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefini
 
 func usageFromEstimate(selection llm.Selection, result contextbuild.Result) ContextUsage {
 	b := selection.Model.Budget
-	return ContextUsage{Model: selection.Model.ID + " · " + selection.Variant, Limit: b.ContextLimit, Input: result.Input, Estimated: result.Estimated, Reserved: b.OutputAllowance + b.EstimationMargin}
+	return ContextUsage{Model: selection.Model.ID + " · " + selection.Variant, Limit: b.ContextLimit, Input: result.Input, Estimated: result.Estimated, Reserved: b.OutputAllowance + b.EstimationMargin + b.SummaryOutputAllowance + compactionInstructionTokens()}
 }
 
 // contextMessages copies the selected provider projection and annotates replay

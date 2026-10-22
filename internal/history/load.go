@@ -27,7 +27,7 @@ func (s *Store) Load(id string) (Session, error) {
 		if readOnly {
 			return nil
 		}
-		entries, err := branchWith(tx, id, 0)
+		entries, err := branchWith(tx, id, 0, false)
 		if err != nil {
 			return err
 		}

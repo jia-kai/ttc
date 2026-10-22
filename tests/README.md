@@ -84,6 +84,13 @@ the PTY byte stream. Its artifacts include raw `terminal.log`, rendered
 `failure.txt` on failure. Failed requests and early process exits are reported
 immediately.
 
+`pty_force_compaction.py` reloads an oversized offline fixture with saved child
+completions and runtime notices. It checks that normal compaction pauses at its
+local size guard, then `/force-compact` uses the shared summary path and resumes
+exactly-once delivery. Only its stopped private fixture database is seeded;
+source history snapshots, full terminal output and failure diagnostics are
+saved.
+
 `pty_await.py --binary /path/to/ttc` uses socket-free scripted inference in a
 plain PTY. It verifies main timer/input wakeups, coding-child timer/shell
 wakeups, no completed turn while awaiting, and cancellation of a persistent
@@ -106,6 +113,7 @@ python3 tests/pty_parallel.py       # shared data/workspace, independent loads, 
 python3 tests/pty_await.py          # offline main/child awaiting, input wakeup, owned timer cleanup
 python3 tests/pty_compaction.py     # offline context handoff and ancestor discovery
 python3 tests/pty_compaction_reload.py # offline CLI/TUI: boundary reload and automatic pending delivery
+python3 tests/pty_force_compaction.py # offline forced recovery after an inflated size estimate
 python3 tests/pty_partial_retry.py # mock SSE: partial recovery after one edit, warning, undo
 python3 tests/pty_subagent.py       # mock HTTP: disposable child, low variant, direct answer
 python3 tests/pty_subagent.py --failure # bounded retry exhaustion, partial answer, warning and transcripts

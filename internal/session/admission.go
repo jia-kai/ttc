@@ -113,7 +113,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		r.mu.Lock()
 		r.usage = usageFromEstimate(selection, result)
 		r.mu.Unlock()
-		if !contextbuild.FitsInput(result.Input, selection.Model.Budget, false) {
+		if !codingInputFits(result.Input, selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
 		admitted, e = r.Store.AdmitRequest(r.Current(), turn, "main", selection, cm, r.notifications, nil, steers...)
@@ -129,7 +129,9 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 	return admitted, cm, err
 }
 
-func (r *Runtime) checkContext() error {
+// checkContext uses one metadata snapshot for shared usability checks. Mutation
+// commands also require writability before their handlers can alter live state.
+func (r *Runtime) checkContext(requireWritable bool) error {
 	r.mu.Lock()
 	fatal := r.fatalCompaction
 	r.mu.Unlock()
@@ -142,6 +144,9 @@ func (r *Runtime) checkContext() error {
 	}
 	if v.CompactionError != "" {
 		return fmt.Errorf(prompts.SessionUnusableAfterCompaction, v.CompactionError)
+	}
+	if requireWritable && v.ReadOnly {
+		return errors.New(prompts.HistorySessionReadOnly)
 	}
 	return nil
 }

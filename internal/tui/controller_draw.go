@@ -141,7 +141,7 @@ func (c *frontendController) drawFrame() error {
 		if c.busy {
 			indicator = fmt.Sprintf("%s · %d queued · Esc Esc interrupt · Ctrl+C clear/exit", c.activity.indicator(time.Now(), c.started), len(c.queue)+steerCount)
 		} else if c.notificationPaused {
-			indicator = "Auto-wake paused · send a prompt or /compact /load /new /model to resume"
+			indicator = "Auto-wake paused · prompt, /compact, /force-compact, /load or session/model change resumes"
 		}
 		if err := draw(c.screen, c.displayView(), c.sidebar, c.fullscreen, c.modal.preview, c.renderer, drawFocus, c.draft, len(c.attachments), c.queue, steers, indicator, c.modal.window, c.frontend.Runtime.CurrentSelection()); err != nil {
 			return err

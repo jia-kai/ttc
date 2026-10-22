@@ -27,6 +27,7 @@ integration: build
 	python3 tests/pty_parallel.py
 	python3 tests/pty_compaction.py
 	python3 tests/pty_compaction_reload.py
+	python3 tests/pty_force_compaction.py
 	python3 tests/pty_e2e.py
 	python3 tests/pty_partial_retry.py
 	python3 tests/pty_await.py

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"ttc/internal/historytest"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/providers/openai"
 )
@@ -180,7 +181,8 @@ func TestHTTPMockNamingAndCompactionShareDefaultRetries(t *testing.T) {
 					t.Fatal("naming did not recover with the unified default", session.Name, err)
 				}
 			} else {
-				text, err := r.summarize(context.Background(), "main", "", r.CurrentSelection(), "Research transcript", "")
+				snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "Research conversation"}}, Lineage: r.Current()}
+				text, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false)
 				if err != nil || text != "Recovered Research Session" {
 					t.Fatal("compaction summary did not recover", text, err)
 				}
@@ -215,7 +217,8 @@ func TestHTTPMockPrivatePartialFailuresPersistAfterExhaustion(t *testing.T) {
 			if purpose == "naming" {
 				r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Type: llm.TypeUserInput, Content: "Research task"}, llm.Message{Type: llm.TypeAssistant, Content: "Research completed"})
 			} else {
-				text, err := r.summarize(context.Background(), "main", "", r.CurrentSelection(), "Research transcript", "")
+				snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "Research conversation"}}, Lineage: r.Current()}
+				text, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false)
 				if err == nil || text != "" || !recoverableCompaction(err) {
 					t.Fatal("private reply exhaustion invalidated usable context or leaked text", text, err)
 				}

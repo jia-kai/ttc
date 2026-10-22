@@ -11,6 +11,7 @@ import (
 	"ttc/internal/historytest"
 
 	"ttc/internal/history"
+	"ttc/internal/history/migrate"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 	"ttc/internal/workspace"
@@ -112,7 +113,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 			}
 			t.Cleanup(func() { store.Close() })
 			var version int
-			if err := historytest.DB(t, store).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 10 {
+			if err := historytest.DB(t, store).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != migrate.CurrentVersion {
 				t.Fatalf("automatic migration version=%d: %v", version, err)
 			}
 			state := tc.state

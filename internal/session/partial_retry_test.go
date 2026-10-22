@@ -559,7 +559,7 @@ func TestPartialRetryCompactionPreservesExactDeveloperWarning(t *testing.T) {
 					if err := historytest.DB(t, r.Store).QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
 						return err
 					}
-					if err := partialRetryText(emit, strings.Repeat("Oversized partial research output. ", 400)); err != nil {
+					if err := partialRetryText(emit, strings.Repeat("Oversized partial research output. ", 250)); err != nil {
 						return err
 					}
 					return partialRetryFailure(req)

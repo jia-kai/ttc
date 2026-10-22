@@ -16,7 +16,7 @@ func fixture(t *testing.T) string {
 	for path, text := range map[string]string{
 		"prompt/system.yaml":           fixtureSystem,
 		"prompt/child-messages.yaml":   "ChildMessageNonempty: message must be nonempty UTF-8\n",
-		"prompt/compaction.yaml":       "instructions: Summarize.\ninput: 'Focus: %s %s'\nhandoff: '%s Export earlier history on demand.'\n",
+		"prompt/compaction.yaml":       "instructions: Summarize.\nfocus: 'Compaction focus: %s'\ncontext: '%s Export earlier history on demand.'\n",
 		"prompt/naming.md":             "Name it.\r\n\n",
 		"prompt/tools.yaml":            "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
 		"prompt/runtime.yaml":          "RuntimeWarning: 'Synthetic warning: %s'\n",
@@ -93,7 +93,7 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	put(t, root, "prompt/system.yaml", strings.Replace(fixtureSystem,
 		"Child: \"Child instructions.\\n\"\n",
 		"Child: >\n  First wrapped\n  paragraph.\n\n  Second paragraph.\n", 1))
-	put(t, root, "prompt/compaction.yaml", "instructions: Summary.\ninput: |-\n  Focus: %s\n\n  %s\nhandoff: |-\n  %s\n\n  Export earlier history on demand.\n")
+	put(t, root, "prompt/compaction.yaml", "instructions: >-\n  Summarize the\n  conversation.\n\n  Return only the handoff.\nfocus: >-\n  Compaction focus:\n  %s\ncontext: >-\n  %s\n\n  Export earlier history\n  on demand.\n")
 	if err := generate(root, "generated.go"); err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +103,9 @@ func TestGenerationPreservesYAMLBlockSemantics(t *testing.T) {
 	}
 	for _, want := range []string{
 		`const Child = "First wrapped paragraph.\nSecond paragraph.\n"`,
-		`const CompactionInput = "Focus: %s\n\n%s"`,
-		`const CompactionHandoff = "%s\n\nExport earlier history on demand."`,
+		`const Compaction = "Summarize the conversation.\nReturn only the handoff."`,
+		`const CompactionFocus = "Compaction focus: %s"`,
+		`const CompactionContext = "%s\nExport earlier history on demand."`,
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("generated output missing %s", want)
@@ -133,9 +134,12 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"empty naming", "prompt/naming.md", "", "nonempty UTF-8"},
 		{"naming encoding", "prompt/naming.md", "\xff", "UTF-8"},
 		{"naming nul", "prompt/naming.md", "Name\x00it.", "NUL"},
-		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\ninput: '%s %s'\nhandoff: '%s'", "nonempty"},
-		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\ninput: '%s %s'\nhandoff: '%s'\ntypo: bad", "field typo"},
-		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\ninput: Focus %s\nhandoff: '%s'", "format"},
+		{"empty compaction", "prompt/compaction.yaml", "instructions: ''\nfocus: '%s'\ncontext: '%s'", "nonempty"},
+		{"unknown compaction field", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\ncontext: '%s'\ntypo: bad", "field typo"},
+		{"invalid template", "prompt/compaction.yaml", "instructions: Summary.\nfocus: Focus\ncontext: '%s'", "format"},
+		{"obsolete focus slot", "prompt/compaction.yaml", "instructions: 'Summary %s'\nfocus: '%s'\ncontext: '%s'", "format"},
+		{"obsolete compaction input", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\ninput: '%s %s'\ncontext: '%s'", "field input"},
+		{"obsolete handoff field", "prompt/compaction.yaml", "instructions: Summary.\nfocus: '%s'\nhandoff: '%s'", "field handoff"},
 		{"empty messages", "prompt/runtime.yaml", "{}", "model-facing messages"},
 		{"empty message", "prompt/runtime.yaml", "RuntimeWarning: ''", "nonempty"},
 		{"message nul", "prompt/runtime.yaml", "RuntimeWarning: \"bad\\0text\"", "NUL"},

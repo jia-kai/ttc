@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 )
 
@@ -228,12 +229,57 @@ func toolMarkdownWith(q historyReader, id int64) (*render.Markdown, error) {
 	return &md, nil
 }
 
-// RequestMessage records internal naming/summary messages outside the coding
-// context, attributed to the owning request actor. Purpose controls inspection.
-func (s *Store) RequestMessage(session, turn, purpose, role string, request int64, message llm.Message) (int64, error) {
-	var actor string
-	if err := s.db.QueryRow("SELECT actor_id FROM model_requests WHERE id=?", request).Scan(&actor); err != nil {
-		return 0, err
+// RequestMessages atomically records an ordered internal request input batch as
+// hidden request_message status entries attributed to the owning request actor.
+// Turn and purpose must match the request; session must be its owning session or
+// a same-workspace, same-lineage continuation. Canonical messages are saved
+// unchanged, with inspection roles derived from Message.Role. Recording does not
+// add coding context or acknowledge runtime events. IDs follow input order; errors
+// return no IDs and leave history unchanged. An empty batch validates ownership
+// without adding entries.
+func (s *Store) RequestMessages(session, turn, purpose string, request int64, messages []llm.Message) ([]int64, error) {
+	ids := make([]int64, 0, len(messages))
+	err := s.transact(func(tx *sql.Tx) error {
+		var ownerSession, ownerTurn, actor, ownerPurpose string
+		if err := tx.QueryRow("SELECT session_id,coalesce(turn_id,''),actor_id,purpose FROM model_requests WHERE id=?", request).Scan(&ownerSession, &ownerTurn, &actor, &ownerPurpose); err != nil {
+			return err
+		}
+		if turn != ownerTurn || purpose != ownerPurpose {
+			return fmt.Errorf(prompts.HistoryRequestMessageOwner, request)
+		}
+		if session != ownerSession {
+			// In-flight child requests retain their owner when main compaction
+			// moves subsequent records into the writable continuation.
+			var successor bool
+			if err := tx.QueryRow(`WITH RECURSIVE successors(id,workspace_id,lineage_id) AS (
+				SELECT id,workspace_id,lineage_id FROM sessions WHERE id=? UNION ALL
+				SELECT s.id,s.workspace_id,s.lineage_id FROM sessions s JOIN successors p
+				ON s.predecessor_id=p.id AND s.workspace_id=p.workspace_id AND s.lineage_id=p.lineage_id
+			) SELECT EXISTS(SELECT 1 FROM successors WHERE id=?)`, ownerSession, session).Scan(&successor); err != nil {
+				return err
+			}
+			if !successor {
+				return fmt.Errorf(prompts.HistoryRequestMessageSession, request)
+			}
+		}
+		for i, message := range messages {
+			if err := message.Validate(); err != nil {
+				return fmt.Errorf(prompts.HistoryRequestMessage, i, err)
+			}
+			data, err := json.Marshal(map[string]any{"type": "request_message", "purpose": purpose, "request_id": request, "role": message.Role(), "message": message})
+			if err != nil {
+				return fmt.Errorf(prompts.HistoryRequestMessage, i, err)
+			}
+			id, err := appendTx(tx, session, turn, actor, "status", "", false, data, 0)
+			if err != nil {
+				return fmt.Errorf(prompts.HistoryRequestMessage, i, err)
+			}
+			ids = append(ids, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return s.Append(session, turn, actor, "status", "", false, map[string]any{"type": "request_message", "purpose": purpose, "request_id": request, "role": role, "message": message})
+	return ids, nil
 }

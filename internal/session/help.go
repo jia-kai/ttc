@@ -80,6 +80,7 @@ These commands require an idle turn.
 ## Context
 
 - **/compact [FOCUS]** — Summarize earlier context while idle, optionally focusing on a topic.
+- **/force-compact [FOCUS]** — Explicitly attempt the same provider summary while idle, bypassing only the summary input-size estimate guard. The provider may still reject it; retention, output limits and handoff checks remain unchanged.
 - **Automatic compaction** — Summarize older context before a request exceeds its budget.
 - **Compaction retention** — Preserve the last two admitted normal/queued prompts and last two committed steers, with original text/attachments and source/age metadata. Recent complete model/tool cycles have a separate token cap; oversized cycles enter the summary.
 

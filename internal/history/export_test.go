@@ -104,14 +104,18 @@ func TestChildMessageStatusExportsAndArchives(t *testing.T) {
 }
 
 func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
-	s, v, turn, request := historyFixture(t)
+	s, v, turn, _ := historyFixture(t)
 	content := "## Handoff\n\n- Keep the current experiment.\n"
 	for _, purpose := range []string{"compaction", "naming"} {
-		id, err := s.RequestMessage(v.ID, turn, purpose, "assistant", request, llm.Message{Type: llm.TypeAssistant, Content: content})
+		request, err := s.StartRequest(v.ID, turn, "main", purpose, v.Model)
 		if err != nil {
 			t.Fatal(err)
 		}
-		inspection, err := s.ReadInspection(context.Background(), id)
+		ids, err := s.RequestMessages(v.ID, turn, purpose, request, []llm.Message{{Type: llm.TypeAssistant, Content: content}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inspection, err := s.ReadInspection(context.Background(), ids[0])
 		if err != nil {
 			t.Fatal(err)
 		}

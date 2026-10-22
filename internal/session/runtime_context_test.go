@@ -440,7 +440,7 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 	coding := 0
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
-			if req.ConversationID != r.Current()+"/compaction" {
+			if req.ConversationID != r.Current() {
 				t.Fatal("incorrect compaction identity", req.ConversationID)
 			}
 			return emit(llm.StreamEvent{Kind: "text", Text: "Continue with the retained task."})

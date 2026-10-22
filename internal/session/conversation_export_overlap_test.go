@@ -79,7 +79,7 @@ func TestConversationExportAsideFrozenPrefixBehindMainHandoff(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "MAIN_HANDOFF_NOT_ADMITTED_TO_ASIDE"})
 	}}
-	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil); err != nil {
+	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.Current() == frozen.ID {
@@ -176,7 +176,7 @@ func TestConversationExportChildCompactionOverlapsMainHandoff(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("child summary did not start", ctx.Err())
 	}
-	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil); err != nil {
+	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.Current() == before {

@@ -16,6 +16,7 @@ import sqlite3
 import struct
 import subprocess
 import tempfile
+import textwrap
 import termios
 import time
 import traceback
@@ -170,6 +171,31 @@ def seed_boundary(db, status):
     return source, {finish: 'child_turn_finished', pending: 'job_exit'}, delivered, result, answer
 
 
+def verify_compaction_context(db, session, summary):
+    """Check the canonical handoff separately from the raw assistant audit reply."""
+    rows = db.execute(
+        'SELECT role,content_json FROM entries WHERE session_id=? AND model_visible=1 ORDER BY id',
+        (session,)).fetchall()
+    messages = [(role, json.loads(raw)) for role, raw in rows]
+    assert messages and messages[0][0] == 'developer', messages[:1]
+    context = messages[0][1]
+    assert context['type'] == 'compaction_context', context
+    assert sum(message['type'] == 'compaction_context' for _, message in messages) == 1, messages
+    assert not any(role == 'assistant' and message.get('content') in (summary, context['content'])
+                   for role, message in messages), 'Summary leaked into ordinary assistant history'
+    # Fold the repository asset with the same paragraph semantics as YAML >-.
+    lines = (Path(__file__).resolve().parents[1] / 'prompt' / 'compaction.yaml').read_text().splitlines()
+    start = lines.index('context: >-') + 1
+    end = next((i for i in range(start, len(lines))
+                if lines[i] and not lines[i].startswith(' ')), len(lines))
+    body = textwrap.dedent('\n'.join(lines[start:end])).strip()
+    framing = '\n'.join(' '.join(paragraph.splitlines()) for paragraph in body.split('\n\n'))
+    prefix, suffix = framing.split('%s')
+    assert context['content'].startswith(prefix) and context['content'].endswith(suffix), context
+    quoted = context['content'][len(prefix):len(context['content']) - len(suffix) if suffix else None]
+    assert json.loads(quoted) == summary, context
+
+
 def verify_recovery(db, source, before, wanted, delivered, result, answer):
     assert source_state(db, source) == before, 'Recovery changed source history'
     recovered = db.execute(
@@ -221,6 +247,20 @@ def verify_recovery(db, source, before, wanted, delivered, result, answer):
     assert context['live_jobs'] == [] and context['children'] == [] and context['live_timers'] == [], context
     # The interrupted source request survives; the fresh snapshot compacts once.
     assert db.execute("SELECT count(*) FROM model_requests WHERE purpose='compaction' AND status='completed'").fetchone() == (1,)
+    summary_messages = [json.loads(row[0]) for row in db.execute(
+        "SELECT e.content_json FROM entries e JOIN model_requests r "
+        "ON r.id=json_extract(e.content_json,'$.request_id') "
+        "WHERE r.purpose='compaction' AND r.status='completed' "
+        "AND json_extract(e.content_json,'$.type')='request_message' ORDER BY e.id")]
+    directive = summary_messages[-2]
+    assert directive['role'] == 'developer' and directive['message']['type'] == 'runtime_instruction', directive
+    assert directive['message']['content'].startswith('This conversation is about to be compacted.'), directive
+    assert 'Do not execute tools' in directive['message']['content'], directive
+    assert summary_messages[-1]['role'] == 'assistant', summary_messages[-1]
+    assert summary_messages[-1]['message']['type'] == 'assistant', summary_messages[-1]
+    verify_compaction_context(db, session, summary_messages[-1]['message']['content'])
+    assert any(item['role'] == 'assistant' and 'Seed complete.' in item['message'].get('content', '')
+               for item in summary_messages[:-2]), 'Summary request lost structured historical evidence'
     predecessor, source_tip = db.execute(
         'SELECT predecessor_id,source_tip_id FROM compactions WHERE continuation_id=?', (session,)).fetchone()
     assert db.execute('SELECT session_id FROM entries WHERE id=?', (source_tip,)).fetchone() == (predecessor,)
@@ -233,10 +273,11 @@ def run_case(root, mode, status, binary):
     project.mkdir(mode=0o700)
     data = root / 'data'
     script = root / 'seed.json'
-    # Fits the summarizer, but exceeds coding headroom once tools and the system
-    # prompt are included. Its oversized completed cycle must be summarized.
+    # With the scripted 32768-token budget, exceed coding's proactive trigger
+    # but leave room for the structured prefix, fixed system/tools and summary
+    # directive/output. The oversized completed cycle must be summarized.
     script.write_text(json.dumps([{'prefix': 'user: Seed completed history',
-                                  'text': 'Earlier evidence. ' * 4400 + '\nSeed complete.'}]))
+                                  'text': 'Earlier evidence. ' * 3500 + '\nSeed complete.'}]))
     base = [binary, '--data-dir', str(data), '--workdir', str(project), '--auto-name=false']
     terminal = None
     try:
@@ -254,7 +295,9 @@ def run_case(root, mode, status, binary):
             before = source_state(db, source)
         script = root / 'resume.json'
         script.write_text(json.dumps([
-            {'prefix': 'user: Focus:', 'text': '## Offline checkpoint\nEarlier evidence summarized.'},
+            # Prefix matching skips the final developer directive; inspect the
+            # durable structured request in verify_recovery instead.
+            {'text': '## Offline checkpoint\nEarlier evidence summarized.'},
             {'prefix': 'user: {', 'text': 'Automatic recovery continuation verified.'},
         ]))
         command = base + ['--offline-script', str(script)]
@@ -302,8 +345,9 @@ def main():
     root = Path(tempfile.mkdtemp(prefix='pty-compaction-reload-', dir=private_scratch()))
     print(f'Artifacts: {root}', flush=True)
     try:
-        run_case(root / 'startup-running', 'session', 'running', binary)
-        run_case(root / 'load-failed', 'load', 'failed', binary)
+        for mode, label in [('session', 'startup'), ('load', 'load')]:
+            for status in ('running', 'failed'):
+                run_case(root / f'{label}-{status}', mode, status, binary)
     except BaseException:
         (root / 'failure.txt').write_text(traceback.format_exc())
         print(f'FAIL; complete artifacts: {root}', flush=True)

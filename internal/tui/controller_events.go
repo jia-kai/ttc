@@ -181,13 +181,13 @@ func (c *frontendController) handleOperationResult(result operationResult) {
 	c.commandBusy = false
 	if result.err != nil {
 		c.add("Error: "+result.err.Error(), 0)
-		if result.command == "" || result.command == "/compact" {
+		if result.command == "" || result.command == "/compact" || result.command == "/force-compact" {
 			c.notificationPaused = true
-			c.add("Auto-wake paused after failure/interruption; pending notifications remain queued. Send a prompt, successfully /compact or /load, or change session/model to resume.", 0)
+			c.add("Auto-wake paused after failure/interruption; pending notifications remain queued. Send a prompt, successfully /compact, /force-compact or /load, or change session/model to resume.", 0)
 		}
 	} else if result.command != "" {
 		switch result.command {
-		case "/compact", "/load", "/new":
+		case "/compact", "/force-compact", "/load", "/new":
 			c.notificationPaused = false
 		}
 		c.replay()
@@ -195,7 +195,7 @@ func (c *frontendController) handleOperationResult(result operationResult) {
 			c.add(result.text, 0)
 		} else {
 			switch result.command {
-			case "/jobs", "/timers", "/compact":
+			case "/jobs", "/timers", "/compact", "/force-compact":
 				if c.modal.empty() {
 					c.modal.window = &Window{Title: "Command result", Text: result.text, Markdown: result.markdown}
 				}

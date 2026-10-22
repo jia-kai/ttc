@@ -40,7 +40,7 @@ func TestChildAdmissionUsesReportedInput(t *testing.T) {
 			if err := r.Store.FinishRequest(admitted.RequestID, "completed", nil); err != nil {
 				t.Fatal(err)
 			}
-			task.selection.Model.Budget.ContextLimit = local + task.selection.Model.Budget.OutputAllowance + task.selection.Model.Budget.EstimationMargin + 500
+			task.selection.Model.Budget.ContextLimit = local + task.selection.Model.Budget.OutputAllowance + task.selection.Model.Budget.EstimationMargin + task.selection.Model.Budget.SummaryOutputAllowance + compactionInstructionTokens() + 500
 			if _, _, err := r.admitChild(context.Background(), task, messages, contextCursor{}); !errors.Is(err, errNeedsCompaction) {
 				t.Fatal("reported input should require compaction", err)
 			}
@@ -67,7 +67,7 @@ func TestChildCompactionResetsEstimatorOnlyOnSuccess(t *testing.T) {
 					t.Fatal(err)
 				}
 				task := childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
-				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Research task", InputTimeMS: 1000}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)}}
+				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Research task", InputTimeMS: 1000}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)}}
 				seedIsolatedHistory(t, r, actor, turn, messages)
 				snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: childSystemTemplate, Tools: task.tools.Definitions(), Messages: messages, Lineage: actor, ReplayEstimator: r.Provider}
 				observation := task.estimator.Prepare(snapshot)

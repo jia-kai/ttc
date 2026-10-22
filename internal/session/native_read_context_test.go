@@ -162,7 +162,7 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				r, _ := runtimeFixture(t, nil)
 				compactionBudget(t, r)
-				seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 700))
+				seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 500))
 				selection := r.selection
 				_, cursor, err := r.runtimeContext(context.Background(), actor, selection, contextCursor{})
 				if err != nil {
@@ -180,7 +180,7 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_"), estimator: &contextbuild.Estimator{}}
 				messages := []llm.Message{
 					{Type: llm.TypeUserInput, Content: "Research", InputTimeMS: time.Now().UnixMilli()},
-					{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)},
+					{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)},
 				}
 				if actor != "main" {
 					seedIsolatedHistory(t, r, actor, turn, messages)
@@ -188,7 +188,7 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				// An unsuccessful handoff must leave the original cursor intact.
 				r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { return context.Canceled }}
 				if actor == "main" {
-					_, err = r.compactContext(context.Background(), "", selection, nil)
+					_, err = r.compactContext(context.Background(), "", selection, nil, false)
 					if !reflect.DeepEqual(r.mainContext, cursor) {
 						t.Fatal("failed main compaction reset cursor")
 					}
@@ -207,7 +207,7 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				}}
 				var result []llm.Message
 				if actor == "main" {
-					_, err = r.compactContext(context.Background(), "", selection, nil)
+					_, err = r.compactContext(context.Background(), "", selection, nil, false)
 					cursor = r.mainContext
 					if err == nil {
 						result, err = r.Store.Messages(r.Current())

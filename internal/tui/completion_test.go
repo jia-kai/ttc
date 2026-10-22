@@ -82,6 +82,40 @@ func TestCompletionTokensAndCursorReplacement(t *testing.T) {
 	}
 }
 
+func TestForceCompactCompletionAndCommandMenuShareDescription(t *testing.T) {
+	draft := newComposer("/force-c")
+	q, ok := completionAt(draft, "", 1)
+	if !ok {
+		t.Fatal("force-compaction prefix did not activate command completion")
+	}
+	result := commandCompletions(q)
+	if len(result.items) != 1 || result.items[0].value != "/force-compact" {
+		t.Fatalf("force-compaction completion = %+v", result.items)
+	}
+	item := result.items[0]
+	if !strings.Contains(item.description, "input estimate") || !strings.Contains(item.description, "provider may reject") {
+		t.Fatal("completion implies guaranteed or unbounded compaction", item.description)
+	}
+	completion := completionMenu{result: result}
+	if _, ok := completion.accept(&draft); !ok || strings.TrimSpace(draft.text) != "/force-compact" {
+		t.Fatal("force-compaction completion was not accepted", draft.text)
+	}
+	menu := newCommandMenu()
+	if !strings.Contains(menu.Window.Text, item.value+" · "+item.description) {
+		t.Fatal("command menu omitted force-compaction or changed its description")
+	}
+	for i, command := range slashCommands {
+		if command.value == item.value {
+			menu.selected = i
+			break
+		}
+	}
+	command, closed := menu.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10)
+	if command != "/force-compact" || !closed {
+		t.Fatal("menu did not select force-compaction", command, closed)
+	}
+}
+
 func TestCompletionModifiedNavigationAndNewline(t *testing.T) {
 	for _, text := range []string{"/he", "draft @fi"} {
 		t.Run(text, func(t *testing.T) {

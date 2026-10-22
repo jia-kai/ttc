@@ -18,6 +18,7 @@ const (
 	TypeSystemInstruction    MessageType = "system_instruction"
 	TypeDeveloperInstruction MessageType = "developer_instruction"
 	TypeRuntimeContext       MessageType = "runtime_context"
+	TypeCompactionContext    MessageType = "compaction_context"
 	TypeRuntimeNotification  MessageType = "runtime_notification"
 	TypeRuntimeInstruction   MessageType = "runtime_instruction"
 	TypeChildGuidance        MessageType = "child_guidance"
@@ -48,7 +49,7 @@ func (t MessageType) policy() (string, PresentationCategory) {
 		return "system", PresentationInstruction
 	case TypeDeveloperInstruction:
 		return "developer", PresentationInstruction
-	case TypeRuntimeContext:
+	case TypeRuntimeContext, TypeCompactionContext:
 		return "developer", PresentationContext
 	case TypeRuntimeNotification:
 		return "user", PresentationNotification
@@ -64,7 +65,7 @@ func (t MessageType) policy() (string, PresentationCategory) {
 // Validate rejects unknown types at persistence and provider boundaries.
 func (t MessageType) Validate() error {
 	switch t {
-	case TypeUserInput, TypeAssistant, TypeToolResult, TypeSystemInstruction, TypeDeveloperInstruction, TypeRuntimeContext, TypeRuntimeNotification, TypeRuntimeInstruction, TypeChildGuidance:
+	case TypeUserInput, TypeAssistant, TypeToolResult, TypeSystemInstruction, TypeDeveloperInstruction, TypeRuntimeContext, TypeCompactionContext, TypeRuntimeNotification, TypeRuntimeInstruction, TypeChildGuidance:
 		return nil
 	default:
 		return fmt.Errorf(prompts.LLMInvalidMessageType, t)
@@ -76,7 +77,7 @@ func (t MessageType) IsInput() bool { return t == TypeUserInput }
 
 // IsRuntime reports whether TTC authored this message rather than a human/model.
 func (t MessageType) IsRuntime() bool {
-	return t == TypeRuntimeContext || t == TypeRuntimeNotification || t == TypeRuntimeInstruction || t == TypeChildGuidance
+	return t == TypeRuntimeContext || t == TypeCompactionContext || t == TypeRuntimeNotification || t == TypeRuntimeInstruction || t == TypeChildGuidance
 }
 
 // Role returns the model-facing authority derived from the semantic type.

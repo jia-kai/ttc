@@ -39,7 +39,7 @@ func TestPrepareCompactionSeparatesHighContextPrefixFromFreshBatch(t *testing.T)
 			if err != nil || prepared.retention.Start != 2 || len(prepared.inputs) != 1 || prepared.inputs[0].InputSource != "task" {
 				t.Fatal("incorrect protected cycle or input source", prepared.retention, err)
 			}
-			if strings.Contains(prepared.transcript, "fresh ") || !strings.Contains(prepared.transcript, "older fact") || prepared.messages[2].State != nil || !reflect.DeepEqual(original, messages) {
+			if !reflect.DeepEqual(prepared.prefix, messages[:2]) || compactionMessagesContain(prepared.prefix, "fresh ") || !compactionMessagesContain(prepared.prefix, "older fact") || prepared.messages[2].State != nil || !reflect.DeepEqual(original, messages) {
 				t.Fatal("summary consumed fresh output or preparation mutated admitted input")
 			}
 			if !reflect.DeepEqual(prepared.messages[3:], messages[3:]) {
@@ -50,20 +50,20 @@ func TestPrepareCompactionSeparatesHighContextPrefixFromFreshBatch(t *testing.T)
 			requests := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
-				if strings.Contains(req.Messages[0].Content, "fresh ") {
+				if compactionMessagesContain(req.Messages, "fresh ") {
 					t.Fatal("fresh batch reached summarizer")
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Older facts summarized."})
 			}}
-			// The old behavior included the fresh batch and overflowed before inference.
-			full, err := summaryTranscript(canonicalCompaction(messages))
-			if err != nil {
-				t.Fatal(err)
+			// The full structured request does not fit, but the prefix does.
+			// Fresh results must remain available for the next coding request.
+			snapshot := contextbuild.InputSnapshot{Selection: selection, Messages: messages, Lineage: r.Current()}
+			estimator := &contextbuild.Estimator{}
+			if _, err := r.summarize(context.Background(), "main", "", snapshot, estimator, "", false); err == nil || !strings.Contains(err.Error(), "estimated input") || requests != 0 {
+				t.Fatal("fixture did not exceed full-summary capacity", err, requests)
 			}
-			if _, err := r.summarize(context.Background(), "main", "", selection, full, ""); err == nil || !strings.Contains(err.Error(), "estimated input") || requests != 0 {
-				t.Fatal("fixture did not reproduce pre-summary capacity failure", err, requests)
-			}
-			if _, err := r.summarize(context.Background(), "main", "", selection, prepared.transcript, ""); err != nil || requests != 1 {
+			snapshot.Messages = prepared.prefix
+			if _, err := r.summarize(context.Background(), "main", "", snapshot, estimator, "", false); err != nil || requests != 1 {
 				t.Fatal("older prefix did not fit separately from fresh batch", err, requests)
 			}
 		})
@@ -90,7 +90,7 @@ func TestCompactionWithoutOlderWorkPreservesFreshResults(t *testing.T) {
 	}
 	requests := 0
 	r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { requests++; return nil }}
-	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil); err != contextbuild.ErrNoCompactableHistory || !recoverableCompaction(err) || requests != 0 || r.Current() != before || r.checkContext() != nil {
+	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false); err != contextbuild.ErrNoCompactableHistory || !recoverableCompaction(err) || requests != 0 || r.Current() != before || r.checkContext(false) != nil {
 		t.Fatal("no-progress compaction consumed fresh results or invalidated context", err, requests)
 	}
 	retained, err := r.Store.Messages(before)

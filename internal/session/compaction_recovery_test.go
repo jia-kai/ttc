@@ -23,7 +23,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 				r, _ := runtimeFixture(t, nil)
 				r.Emit = nil
 				compactionBudget(t, r)
-				seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 700))
+				seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 500))
 				source := r.Current()
 				var finish, result int64
 				ctx, cancel := context.WithCancel(context.Background())
@@ -45,7 +45,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 					}
 					return ctx.Err()
 				}}
-				if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil); !errors.Is(err, context.Canceled) {
+				if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil, false); !errors.Is(err, context.Canceled) {
 					t.Fatal(err)
 				}
 				if startup {
@@ -142,7 +142,7 @@ func TestLoadCompactionBoundaryBeforeSummaryAdmission(t *testing.T) {
 	r.namingDone = make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil, false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
 	var count int

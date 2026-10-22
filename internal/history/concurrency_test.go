@@ -176,7 +176,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(a.ID, "copy handoff", cut.EntryTip, a.UndoFloor, nil, time.Now(), nil)
+	next, err := s.Continue(a.ID, llm.NewCompactionContext("copy handoff"), cut.EntryTip, a.UndoFloor, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

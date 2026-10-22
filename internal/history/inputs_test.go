@@ -39,7 +39,7 @@ func TestHumanProvenanceQueryCountIsConstant(t *testing.T) {
 			check := func(reader historyReader) []llm.Message {
 				t.Helper()
 				q := &countingHistoryReader{historyReader: reader}
-				messages, err := messagesWith(q, session.ID)
+				messages, err := messagesWith(q, session.ID, 0)
 				if err != nil || len(messages) != count {
 					t.Fatal(len(messages), err)
 				}
@@ -93,7 +93,7 @@ func TestBatchedHumanProvenanceSeesUncommittedAdmissions(t *testing.T) {
 			return err
 		}
 		q := &countingHistoryReader{historyReader: tx}
-		messages, err := messagesWith(q, session.ID)
+		messages, err := messagesWith(q, session.ID, 0)
 		if err != nil || len(messages) != len(before)+1 {
 			t.Fatal(messages, err)
 		}

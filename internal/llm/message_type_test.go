@@ -20,6 +20,7 @@ func TestMessageTypePolicies(t *testing.T) {
 		{TypeSystemInstruction, "system", PresentationInstruction, false},
 		{TypeDeveloperInstruction, "developer", PresentationInstruction, false},
 		{TypeRuntimeContext, "developer", PresentationContext, true},
+		{TypeCompactionContext, "developer", PresentationContext, true},
 		{TypeRuntimeNotification, "user", PresentationNotification, true},
 		{TypeRuntimeInstruction, "developer", PresentationInstruction, true},
 		{TypeChildGuidance, "user", PresentationGuidance, true},
@@ -55,6 +56,10 @@ func TestMessageSemanticsRejectUnknownAndIncompatibleInputs(t *testing.T) {
 		{Type: TypeAssistant, CallID: "call"},
 		{Type: TypeRuntimeNotification, InputSource: "steer"},
 		{Type: TypeToolResult, State: &ReplayState{}},
+		{Type: TypeCompactionContext, Calls: []ToolCall{{ID: "call"}}},
+		{Type: TypeCompactionContext, CallID: "call"},
+		{Type: TypeCompactionContext, State: &ReplayState{}},
+		{Type: TypeCompactionContext, InputSource: "normal"},
 	} {
 		if m.Validate() == nil {
 			t.Fatal("accepted incompatible message", m)
@@ -87,7 +92,7 @@ func TestModelContentMarksOnlyTrustedNotificationsAndGuidance(t *testing.T) {
 			t.Fatal("payload/provenance changed", projected, m)
 		}
 	}
-	for _, typ := range []MessageType{TypeUserInput, TypeAssistant, TypeToolResult, TypeSystemInstruction, TypeDeveloperInstruction, TypeRuntimeContext, TypeRuntimeInstruction} {
+	for _, typ := range []MessageType{TypeUserInput, TypeAssistant, TypeToolResult, TypeSystemInstruction, TypeDeveloperInstruction, TypeRuntimeContext, TypeCompactionContext, TypeRuntimeInstruction} {
 		m := Message{Type: typ, Content: payload}
 		got, err := m.ModelContent()
 		if err != nil || got != payload {

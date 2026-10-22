@@ -7,8 +7,10 @@
   the `System` section in [system.yaml](../prompt/system.yaml). Main adds
   `Coding` then `Main`; coding children add `Coding` then `Child`, separated by
   newlines. Read-only asides receive only `System`, with `Btw` as a separate
-  developer message. Naming/compaction requests use their own assets; dynamic
-  identity belongs in runtime context, not those stable instructions.
+  developer message. Naming uses its own instructions. Compaction preserves the
+  actor's system/history prefix and appends a temporary developer instruction
+  from `compaction.yaml`. Dynamic identity belongs in runtime context, not those
+  stable instructions.
 - Preserve exact per-request instructions through the
   [inspection/artifact contract](design.md#inspectable-request-messages).
   OpenAI's local replay, storage and cache-affinity behavior is defined in
@@ -19,7 +21,9 @@
 Messages store one canonical semantic `Type`, not independent role/runtime
 flags. Model role and presentation derive from that type: human input, runtime
 notifications and child guidance use `user`; assistant/tool messages use their
-corresponding roles; runtime context/instructions use `developer`. System and
+corresponding roles; runtime context/instructions and compaction context use
+`developer`. Compaction context frames its JSON-quoted generated summary as
+reference data, not developer instructions or verified facts. System and
 developer instructions retain their respective roles. See
 [message semantics](design.md#message-semantics) for the central mapping and
 persistence contract.

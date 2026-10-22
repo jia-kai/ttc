@@ -483,15 +483,25 @@ func (s *Store) Append(session, turn, actor, kind, role string, visible bool, da
 
 // Branch returns selected ancestry through tip (zero means the session's tip).
 func (s *Store) Branch(session string, tip int64) ([]Entry, error) {
-	return branchWith(s.db, session, tip)
+	return branchWith(s.db, session, tip, false)
 }
-func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
+
+// branchWith traverses lightweight ancestry links before acquiring entry bodies.
+// visibleOnly filters the final acquisition, never the ancestry traversal. The
+// CROSS JOIN keeps acquisition driven by ancestry IDs, not a scan of all entries.
+func branchWith(q historyReader, session string, tip int64, visibleOnly bool) ([]Entry, error) {
 	if tip == 0 {
 		if e := q.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); e != nil {
 			return nil, e
 		}
 	}
-	rows, e := q.Query(`WITH RECURSIVE ancestry AS (SELECT * FROM entries WHERE id=? AND session_id=? UNION ALL SELECT e.* FROM entries e JOIN ancestry a ON e.id=a.parent_id) SELECT id,coalesce(parent_id,0),coalesce(source_id,0),coalesce(file_tip_id,0),session_id,coalesce(turn_id,''),actor_id,kind,coalesce(role,''),model_visible,content_json,created_ms,coalesce(main_turn_id,''),coalesce(undo_owner_turn_id,'') FROM ancestry ORDER BY id`, tip, session)
+	rows, e := q.Query(`WITH RECURSIVE ancestry(id,parent_id) AS (
+		SELECT id,parent_id FROM entries WHERE id=? AND session_id=?
+		UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id
+	) SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),coalesce(e.file_tip_id,0),
+		e.session_id,coalesce(e.turn_id,''),e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,
+		e.content_json,e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
+		FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND (?=0 OR e.model_visible=1) ORDER BY e.id`, tip, session, visibleOnly)
 	if e != nil {
 		return nil, e
 	}
@@ -519,10 +529,21 @@ func branchWith(q historyReader, session string, tip int64) ([]Entry, error) {
 // Main human inputs carry their original admission timestamp and source, including
 // across continuations; runtime notices and immutable stored entries are unchanged.
 func (s *Store) Messages(session string) ([]llm.Message, error) {
-	return messagesWith(s.db, session)
+	return messagesWith(s.db, session, 0)
 }
-func messagesWith(q historyReader, session string) ([]llm.Message, error) {
-	entries, e := branchWith(q, session, 0)
+
+// MessagesAt projects the immutable ancestry ending at tip, excluding later
+// arrivals even if the session advances before projection. Zero selects the
+// current tip, as in Messages; negative tips are rejected.
+func (s *Store) MessagesAt(session string, tip int64) ([]llm.Message, error) {
+	if tip < 0 {
+		return nil, errors.New(prompts.HistoryTranscriptNegativeTip)
+	}
+	return messagesWith(s.db, session, tip)
+}
+
+func messagesWith(q historyReader, session string, tip int64) ([]llm.Message, error) {
+	entries, e := branchWith(q, session, tip, true)
 	if e != nil {
 		return nil, e
 	}

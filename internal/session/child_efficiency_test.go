@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -77,85 +78,93 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 }
 
 func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	r.Emit = nil
-	r.selection.Model.Budget.RecentTokensMin = 0
-	r.selection.Model.Budget.RecentTokensMax = 256
-	seedCompactionHistory(t, r, strings.Repeat("Earlier research context. ", 100))
-	started, release := make(chan struct{}), make(chan struct{})
-	const answer = "The audit found one actionable issue."
-	mainCalls, delivered := 0, 0
-	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		text := "Parent is waiting for the child."
-		if req.NoTools {
-			text = "A disposable audit is running; consume its completion answer."
-		} else if strings.HasPrefix(req.ConversationID, "main/child_") {
-			close(started)
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			text = answer
-		} else {
-			mainCalls++
-			if mainCalls == 1 {
-				call := llm.ToolCall{ID: "background", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false,"background":true}`)}
-				if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
-					return err
-				}
-				text = ""
-			}
-			for _, m := range req.Messages {
-				if m.Role() != "user" || !m.Type.IsRuntime() {
-					continue
-				}
-				var finish childNotification
-				if json.Unmarshal([]byte(m.Content), &finish) == nil && finish.Type == "child_turn_finished" {
-					if finish.Answer == nil || *finish.Answer != answer || finish.Persistent || finish.Truncated || m.EventSeq == 0 {
-						t.Error("invalid child completion", finish, m.EventSeq)
+	for _, command := range []string{"/compact", "/force-compact"} {
+		t.Run(command, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			r.Emit = nil
+			r.selection.Model.Budget.RecentTokensMin = 0
+			r.selection.Model.Budget.RecentTokensMax = 256
+			seedCompactionHistory(t, r, strings.Repeat("Earlier research context. ", 100))
+			started, release := make(chan struct{}), make(chan struct{})
+			const answer = "The audit found one actionable issue."
+			mainCalls, delivered := 0, 0
+			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+				text := "Parent is waiting for the child."
+				if req.NoTools {
+					text = "A disposable audit is running; consume its completion answer."
+				} else if strings.HasPrefix(req.ConversationID, "main/child_") {
+					close(started)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return ctx.Err()
 					}
-					delivered++
-					text = "Parent consumed the child answer directly."
+					text = answer
+				} else {
+					mainCalls++
+					if mainCalls == 1 {
+						call := llm.ToolCall{ID: "background", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":false,"background":true}`)}
+						if err := emit(llm.StreamEvent{Kind: "call", Call: &call}); err != nil {
+							return err
+						}
+						text = ""
+					}
+					for _, m := range req.Messages {
+						if m.Role() != "user" || !m.Type.IsRuntime() {
+							continue
+						}
+						var finish childNotification
+						if json.Unmarshal([]byte(m.Content), &finish) == nil && finish.Type == "child_turn_finished" {
+							if finish.Answer == nil || *finish.Answer != answer || finish.Persistent || finish.Truncated || m.EventSeq == 0 {
+								t.Error("invalid child completion", finish, m.EventSeq)
+							}
+							delivered++
+							text = "Parent consumed the child answer directly."
+						}
+					}
 				}
+				if text != "" {
+					if err := emit(llm.StreamEvent{Kind: "text", Text: text}); err != nil {
+						return err
+					}
+				}
+				return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
+			}}
+			m := llm.Message{Type: llm.TypeUserInput, Content: "Launch an audit"}
+			if err := r.Run(&m); err != nil {
+				t.Fatal(err)
 			}
-		}
-		if text != "" {
-			if err := emit(llm.StreamEvent{Kind: "text", Text: text}); err != nil {
-				return err
+			receive(t, started)
+			views := r.ChildViews("main")
+			if len(views) != 1 {
+				t.Fatal(views)
 			}
-		}
-		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
-	}}
-	m := llm.Message{Type: llm.TypeUserInput, Content: "Launch an audit"}
-	if err := r.Run(&m); err != nil {
-		t.Fatal(err)
-	}
-	receive(t, started)
-	views := r.ChildViews("main")
-	if len(views) != 1 {
-		t.Fatal(views)
-	}
-	if _, err := r.Command("/compact"); err != nil {
-		t.Fatal(err)
-	}
-	close(release)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if _, err := r.Jobs.Wait(ctx, "main", views[0].JobID, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !r.HasNotifications() {
-		t.Fatal("missing background completion")
-	}
-	if err := r.Run(nil); err != nil {
-		t.Fatal(err)
-	}
-	if delivered != 1 || mainCalls != 3 || r.HasNotifications() || len(r.ChildViews("main")) != 0 {
-		t.Fatal("completion duplicated or required retrieval", delivered, mainCalls)
-	}
-	if totals := r.UsageSnapshot().Totals; totals.Requests != 5 || totals.ReportedRequests != 5 || totals.Tokens.InputTokens != 500 {
-		t.Fatal("usage lost across compaction/child delivery", totals)
+			if _, err := r.Command(command); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := r.Store.Messages(r.Current())
+			if err != nil || len(messages) == 0 || !reflect.DeepEqual(messages[0], llm.NewCompactionContext("A disposable audit is running; consume its completion answer.")) {
+				t.Fatal("normal/forced handoff did not persist the exact typed context", messages, err)
+			}
+			close(release)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if _, err := r.Jobs.Wait(ctx, "main", views[0].JobID, nil); err != nil {
+				t.Fatal(err)
+			}
+			if !r.HasNotifications() {
+				t.Fatal("missing background completion")
+			}
+			if err := r.Run(nil); err != nil {
+				t.Fatal(err)
+			}
+			if delivered != 1 || mainCalls != 3 || r.HasNotifications() || len(r.ChildViews("main")) != 0 {
+				t.Fatal("completion duplicated or required retrieval", delivered, mainCalls)
+			}
+			if totals := r.UsageSnapshot().Totals; totals.Requests != 5 || totals.ReportedRequests != 5 || totals.Tokens.InputTokens != 500 {
+				t.Fatal("usage lost across compaction/child delivery", totals)
+			}
+		})
 	}
 }
 

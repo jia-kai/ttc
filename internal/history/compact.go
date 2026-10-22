@@ -12,8 +12,11 @@ import (
 )
 
 // Continue atomically freezes a predecessor and copies a retained visible suffix.
+// handoff is the exact checked compaction context, persisted without reframing.
 // sourceTip is the original selected cut summarized before inference, not the
 // predecessor tip at handoff; actor commits after that cut remain copied tails.
+// Hidden main compaction request-message bodies stay in the predecessor; small
+// lifecycle and instruction metadata remains in the copied tail.
 // Callers pause main model work and serialize this handoff against child/file commits.
 // inputIDs selects sorted, unique visible main human entries strictly before
 // retainFrom: at most two normal/queued inputs combined and two steers. Each copy
@@ -22,7 +25,17 @@ import (
 // identify an active-branch entry, or the final entry ID plus one for an empty suffix.
 // pending preserves an already-persisted runtime recovery warning, with its
 // original request/source identity, if it is not in the copied visible suffix.
-func (s *Store) Continue(session, summary string, sourceTip, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
+func (s *Store) Continue(session string, handoff llm.Message, sourceTip, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
+	if handoff.Type != llm.TypeCompactionContext || handoff.Content == "" {
+		return Session{}, errors.New(prompts.HistoryContinuation)
+	}
+	if e := handoff.Validate(); e != nil {
+		return Session{}, e
+	}
+	data, e := json.Marshal(handoff)
+	if e != nil {
+		return Session{}, e
+	}
 	old, e := s.Session(session)
 	if e != nil {
 		return Session{}, e
@@ -31,7 +44,7 @@ func (s *Store) Continue(session, summary string, sourceTip, retainFrom int64, i
 	if e != nil {
 		return Session{}, e
 	}
-	if old.ReadOnly || summary == "" || len(entries) == 0 {
+	if old.ReadOnly || len(entries) == 0 {
 		return Session{}, errors.New(prompts.HistoryContinuation)
 	}
 	if retainFrom <= 0 || compactedAt.IsZero() || len(inputIDs) > 4 {
@@ -79,6 +92,10 @@ func (s *Store) Continue(session, summary string, sourceTip, retainFrom int64, i
 	id := NewID("session")
 	e = s.transact(func(tx *sql.Tx) error {
 		metadata, e := inputMetadataWith(tx, entries)
+		if e != nil {
+			return e
+		}
+		audit, e := mainCompactionMessagesWith(tx, session, retainFrom, entries[len(entries)-1].ID)
 		if e != nil {
 			return e
 		}
@@ -141,15 +158,14 @@ func (s *Store) Continue(session, summary string, sourceTip, retainFrom int64, i
 		if _, e = tx.Exec("UPDATE sessions SET file_tip_id=? WHERE id=?", n(baseline), id); e != nil {
 			return e
 		}
-		data, _ := json.Marshal(llm.Message{Type: llm.TypeAssistant, Content: summary})
-		summaryID, e := appendTx(tx, id, "", "main", "summary", "assistant", true, data, 0)
+		summaryID, e := appendTx(tx, id, "", "main", "summary", handoff.Role(), true, data, 0)
 		if e != nil {
 			return e
 		}
 		mapping := map[int64]int64{}
 		pendingCopied := false
 		for _, entry := range entries {
-			if entry.ID < retainFrom && !selected[entry.ID] {
+			if (entry.ID < retainFrom && !selected[entry.ID]) || audit[entry.ID] {
 				continue
 			}
 			fileTip := entry.FileTip
@@ -260,4 +276,31 @@ func (s *Store) Continue(session, summary string, sourceTip, retainFrom int64, i
 		return Session{}, e
 	}
 	return s.Session(id)
+}
+
+// mainCompactionMessagesWith bounds audit acquisition by the indexed session
+// tail. RequestMessages records the owning actor and purpose on each entry,
+// including copies inherited from an older continuation.
+func mainCompactionMessagesWith(tx *sql.Tx, session string, from, tip int64) (map[int64]bool, error) {
+	rows, err := tx.Query(`SELECT id FROM entries
+		WHERE session_id=? AND id BETWEEN ? AND ? AND kind='status'
+		AND model_visible=0 AND actor_id='main'
+		AND json_extract(content_json,'$.type')='request_message'
+		AND json_extract(content_json,'$.purpose')='compaction'`, session, from, tip)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	audit := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		audit[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return audit, rows.Close()
 }

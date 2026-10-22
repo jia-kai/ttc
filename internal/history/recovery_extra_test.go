@@ -143,7 +143,7 @@ func TestLoadRecoveryRetainedCopiesUseOriginalDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(source.ID, "retained handoff", cut.EntryTip, delivered, nil, time.Now(), nil)
+	next, err := s.Continue(source.ID, llm.NewCompactionContext("retained handoff"), cut.EntryTip, delivered, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

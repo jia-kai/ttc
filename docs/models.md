@@ -147,21 +147,31 @@ admission and handoff inequalities, retention defaults and failure behavior.
 - Copy counters under the runtime mutex. Match parent reported input/cache and
   frozen model to the producing request ID. Admission and the sidebar share one
   input estimate, calibrated by compatible provider input feedback. Occupancy
-  includes output allowance and safety margin: `Context n.n%` for directly
-  reported input, `Context (est.) n.n%` for calibrated growth or local
-  estimates. Compaction refreshes occupancy immediately while prior reported
-  usage remains visible. Explicit session changes other than `/new` clear parent
-  context usage, not all-agent run totals (including `/clear`). Never rebuild
-  those totals from history.
+  includes coding/summary output allowances, summary instruction tokens and
+  safety margin: `Context n.n%` for directly reported input,
+  `Context (est.) n.n%` for calibrated growth or local estimates. Compaction
+  refreshes occupancy immediately while prior reported usage remains visible.
+  Explicit session changes other than `/new` clear parent context usage, not
+  all-agent run totals (including `/clear`). Never rebuild those totals from
+  history. Provider usage remains saved in each request's attempt records, but
+  loads reset the in-memory calibration and reported-usage display. The next
+  input uses a local estimate until compatible new feedback arrives. This can
+  exceed 100% even when the old provider-reported request fit; historical usage
+  describes the old input, not a guarantee for changed model/project input.
+  `/force-compact` can explicitly attempt summary inference despite that
+  estimate.
 - Cost needs each producing model/tier's rates: ordinary input × input rate +
   reads × cached-input rate + writes × cache-write rate + output × output rate.
   Mixed-model totals determine neither cost nor a subscription bill. See
   [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 - Send stable `prompt_cache_key` and matching `session-id`: main uses its local
   session ID through turns/tools/reloads, continuations get new IDs, children
-  keep actor IDs through parent compaction. Naming/compaction suffix the source
-  session ID with purpose. Identities expose no paths/credentials; OpenAI
-  rejects empty, whitespace/control/non-ASCII IDs before auth/network.
+  keep actor IDs through parent compaction. Compaction reuses the compacting
+  actor's coding identity, system instructions, schemas and structured history
+  prefix; tools are disabled and the summary instruction is appended at the end.
+  Naming uses a purpose-suffixed identity. Identities expose no
+  paths/credentials; OpenAI rejects empty, whitespace/control/non-ASCII IDs
+  before auth/network.
 - `store:false` disables server response storage, not caching. Replay locally,
   without `previous_response_id`; stable prefixes/affinity cannot guarantee
   hits. Codex 0.159.2 shares storage, affinity and

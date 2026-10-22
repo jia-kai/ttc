@@ -27,11 +27,18 @@ func TestStartupIndexesMigrationProgressAndEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkProgress(t, events, 9)
-	want := []string{"index_entry_created", "index_prompt_recall", "index_workspace_sessions", "remove_global_session_index", "update_schema_version", "complete"}
-	if len(events) != len(want) {
-		t.Fatalf("progress %+v, want phases %v", events, want)
+	// Keep the index assertions specific to the historical 9 -> 10 step.
+	var indexEvents []Progress
+	for _, event := range events {
+		if event.FromVersion == 9 {
+			indexEvents = append(indexEvents, event)
+		}
 	}
-	for i, event := range events {
+	want := []string{"index_entry_created", "index_prompt_recall", "index_workspace_sessions", "remove_global_session_index", "update_schema_version", "complete"}
+	if len(indexEvents) != len(want) {
+		t.Fatalf("progress %+v, want phases %v", indexEvents, want)
+	}
+	for i, event := range indexEvents {
 		if event.Phase != want[i] || event.Completed != int64(i) || event.Total != 5 {
 			t.Fatalf("wrong phase or SQL operation count at %d: %+v", i, event)
 		}

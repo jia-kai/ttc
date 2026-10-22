@@ -56,6 +56,7 @@ sequence, request identity and input source remain separate metadata.
 | `system_instruction`    | `system`    | Inspectable instructions                |
 | `developer_instruction` | `developer` | Inspectable instructions                |
 | `runtime_context`       | `developer` | Compact runtime context                 |
+| `compaction_context`    | `developer` | Inspectable quoted compaction context   |
 | `runtime_notification`  | `user`      | Runtime notice; attributed child result |
 | `runtime_instruction`   | `developer` | Inspectable runtime instructions        |
 | `child_guidance`        | `user`      | Main-agent assignment guidance          |
@@ -360,8 +361,9 @@ provider-specific flags rather than silently ignoring them.
   argument event and completed output item compare as exact strings; streamed
   fragments do not. `ContextFor` strips foreign state from request copies,
   preserving originals under
-  [model compatibility](models.md#switching-and-replay). Compaction drops
-  replay. Unsupported codecs/representations fail.
+  [model compatibility](models.md#switching-and-replay). Compaction preserves
+  compatible replay for summary inference, then drops it from replacement coding
+  input. Unsupported codecs/representations fail.
 - Endpoint `Usage` remains separate from input estimates. The runtime owns
   copied counters; [usage accounting](models.md#usage-accounting) defines their
   subsets, response identity, coverage and reset rules.
@@ -433,6 +435,12 @@ workers.
 - Save exact coding, naming and compaction instructions in private lineage
   artifacts per request. The TUI has one coding placeholder per actor pointing
   to its latest snapshot; internal request prompts remain distinct.
+- Compaction keeps the actor's coding system instructions and saves its frozen
+  structured prefix plus final summary instruction as internal request messages
+  in one transaction, outside live coding input and without acknowledging
+  events. Publish only the instruction and reply as live UI rows. Main-summary
+  input/reply bodies stay in the predecessor; small lifecycle metadata follows
+  the continuation tail. Coding input acquisition skips hidden entry bodies.
 - Click a placeholder to open the shared scrollable `tui.Window`; plain output
   uses `/inspect <entry-id>`. Internal inputs/replies remain inspectable outside
   coding context. Authentication tokens, device codes and login steps never
@@ -533,13 +541,13 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 10;
-  startup supports schemas 5–10 and runs ordered, adjacent upgrades (5 → 6 → 7 →
-  8 → 9 → 10) in one transaction, validating before commit. Each step reports
-  its own progress; completion of a step is not a committed upgrade. Rebuilding
-  entries temporarily indexes all incoming foreign-key lookups to avoid
-  per-entry table scans. Schemas below 5, nonempty unversioned databases and
-  unknown newer versions fail explicitly; no automatic resets or credential
+- Empty databases initialize in one immediate transaction. Current schema is 11;
+  startup supports schemas 5–11 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9 → 10 → 11) in one transaction, validating before commit. Each step
+  reports its own progress; completion of a step is not a committed upgrade.
+  Rebuilding entries temporarily indexes all incoming foreign-key lookups to
+  avoid per-entry table scans. Schemas below 5, nonempty unversioned databases
+  and unknown newer versions fail explicitly; no automatic resets or credential
   deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
@@ -567,7 +575,9 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   only their own recorded entries, without reconstructing the frozen main
   prefix. Historical main cuts remain available in `compactions`. The 9 → 10
   step adds oldest-entry and authored-prompt indexes and prefixes the session
-  listing index with workspace identity.
+  listing index with workspace identity. The 10 → 11 step is a version-only
+  compatibility fence for the `compaction_context` message vocabulary; it does
+  not rewrite historical records or table definitions.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting
@@ -602,8 +612,9 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   compaction successor chain.
 - Use keyset pagination, indexed tool lookup and recursive ancestry/change CTEs.
   Export the latest saved tool record at/before its cut. Persist compact final
-  request metadata/usage/response IDs and linked retry notices, not full
-  duplicated prompts. Session lists/inspectors require no full transcript scan.
+  request metadata/usage/response IDs and linked retry notices. Save inspectable
+  internal request inputs separately as described above. Session
+  lists/inspectors require no full transcript scan.
 - Artifacts are private, lineage-owned and referenced by relative paths/hashes;
   deduplicate only within the lineage. No global durable blob table or durable
   job/timer/inbox table. Enforce the

@@ -234,7 +234,7 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 		"transcript.go": {"validateTranscriptTip", "recordActorBoundary", "selectedActorEntries", "WriteActorTranscript", "ActorCompactionTip"},
 		"history.go":    {"appendTx", "Append", "Messages", "messagesWith", "StartRequest", "FinishRequest", "CallIntent", "CallResult", "Artifact", "RecordSystemPrompt", "Assistant"},
 		"inputs.go":     {"inputMetadataWith", "enrichInput"},
-		"inspect.go":    {"RequestMessage"},
+		"inspect.go":    {"RequestMessages"},
 		"projection.go": {"projectInspectionText", "projectExportText"},
 		"mutations.go":  {"CommitChange"},
 	}

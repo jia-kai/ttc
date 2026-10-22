@@ -259,9 +259,21 @@ work that needs to outlive TTC, with the `tmux_watch_run` tool.
 
 Main, child and aside compaction have a **10-minute timeout** and remain
 cancelable. A failed or interrupted main turn pauses automatic notification
-turns; pending messages stay queued. Send a prompt, successfully `/compact` or
+turns; pending messages stay queued. Send a prompt, successfully compact or
 `/load`, or change session/model to resume. `/compact [focus]` while idle uses
-the same handoff as automatic compaction.
+the same handoff as automatic compaction. `/force-compact [focus]` attempts the
+summary despite the local input-size estimate, useful when an estimate is too
+high after loading. It does not bypass provider limits, summary validation or
+the final handoff budget check. Provider context-length rejection alone leaves
+the existing context and pending notifications intact; persistence or invariant
+failures still follow the compaction failure policy.
+
+Main, children and asides share one compaction engine. Resumed input starts with
+a TTC developer context message that quotes the generated summary as reference
+data, rather than presenting it as a previous assistant reply. This uses history
+schema 11, a version-only compatibility fence. Stop all TTC instances sharing
+the data directory for the first upgrade; existing history records are not
+rewritten.
 
 Original `read()` image bytes and rendered thumbnails/formulas share a
 disposable filesystem cache at `${XDG_CACHE_HOME:-~/.cache}/ttc/assets`: **4 GiB

@@ -69,33 +69,11 @@ func TestSessionNamingScaffoldBytes(t *testing.T) {
 	}
 }
 
-func TestSessionSummaryScaffoldPreservesRawBytes(t *testing.T) {
-	messages := []llm.Message{
-		{Type: llm.TypeAssistant, Content: "raw %s\nπ", Calls: []llm.ToolCall{{ID: "c%1", Name: "read", Arguments: json.RawMessage("{\"path\": \"a%b\"}")}}},
-		{Type: llm.TypeToolResult, CallID: "c%1", Content: "  {\"ok\":true}\n", Files: []llm.BinaryFile{{MIMEType: "image/png", Path: "/raw %s.png"}}},
-	}
-	want := "\n### assistant\nraw %s\nπ\nTool call c%1 · read\n{\"path\": \"a%b\"}\n\n### tool · c%1\n  {\"ok\":true}\n\nBinary attachment (image/png): /raw %s.png\n"
-	if got, err := summaryTranscript(messages); err != nil || got != want {
-		t.Fatalf("summary transcript bytes changed:\ngot  %q\nwant %q", got, want)
-	}
-}
-
-func TestSummaryTranscriptUsesSemanticNotificationProjection(t *testing.T) {
-	input := llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit","job_id":"j"}`}
-	transcript, err := summaryTranscript([]llm.Message{input})
-	if err != nil || !strings.Contains(transcript, `"message_type":"runtime_notification"`) || !strings.Contains(transcript, `"type":"job_exit"`) {
-		t.Fatal(transcript, err)
-	}
-	if _, err := summaryTranscript([]llm.Message{{Type: "unknown"}}); err == nil {
-		t.Fatal("invalid semantic message summarized")
-	}
-}
-
 func TestSessionUnusableContextMessagePreservesDiagnostic(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.fatalCompaction = "raw %w\nπ failure"
 	want := "session unusable after compaction: raw %w\nπ failure; inspect/export history or start/load another session"
-	if err := r.checkContext(); err == nil || err.Error() != want {
+	if err := r.checkContext(false); err == nil || err.Error() != want {
 		t.Fatalf("got %v, want %q", err, want)
 	}
 	result := failedTool(llm.ToolCall{Name: "read"}, "interrupted", prompts.SessionToolInterrupted)
@@ -116,6 +94,7 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 		event         llm.StreamEvent
 	}{
 		{"tool call", prompts.SessionCompactionNoTools, llm.StreamEvent{Kind: "call"}},
+		{"tool start", prompts.SessionCompactionNoTools, llm.StreamEvent{Kind: "call_start"}},
 		{"oversized", prompts.SessionCompactionSummaryTooLarge, llm.StreamEvent{Kind: "text", Text: strings.Repeat("x", (1<<20)+1)}},
 		{"empty", prompts.SessionCompactionEmptySummary, llm.StreamEvent{Kind: "text", Text: " \n"}},
 	} {
@@ -125,7 +104,8 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 				return emit(test.event)
 			}}
-			_, err := r.summarize(context.Background(), "main/child_fixture", "", r.CurrentSelection(), "raw input", "")
+			snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: childSystemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "raw input"}}, Lineage: "main/child_fixture"}
+			_, err := r.summarize(context.Background(), "main/child_fixture", "", snapshot, &contextbuild.Estimator{}, "", false)
 			if err == nil || err.Error() != test.message {
 				t.Fatalf("got %v, want %q", err, test.message)
 			}
@@ -138,5 +118,32 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 	}
 	if got := fmt.Sprintf(prompts.SessionCompactionInputTooLarge, 1, 2, 3); got != "compaction input exceeds model context (estimated input 1 + output/margin reserve 2, limit 3 tokens); no summary was requested" {
 		t.Fatal(got)
+	}
+}
+
+func TestCompactionInstructionKeepsHandoffFocused(t *testing.T) {
+	for _, text := range []string{"Keep the handoff reasonably short", "Omit irrelevant details", "## Goal and constraints", "## Decisions", "## Progress and evidence", "## Next steps"} {
+		if !strings.Contains(prompts.Compaction, text) {
+			t.Fatalf("compaction instruction lost required guidance %q", text)
+		}
+	}
+	for _, text := range []string{"## Continuation details", "Additional summary focus", "%s"} {
+		if strings.Contains(prompts.Compaction, text) {
+			t.Fatalf("static compaction instruction contains obsolete section or focus template %q", text)
+		}
+	}
+}
+
+func TestSummaryRequestRejectsInvalidSemanticMessage(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Compact this session")
+	requests := 0
+	r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error {
+		requests++
+		return nil
+	}}
+	snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: "unknown"}}, Lineage: r.Current()}
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false); err == nil || requests != 0 {
+		t.Fatal("invalid semantic message reached summary provider", err, requests)
 	}
 }

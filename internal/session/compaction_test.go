@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -23,7 +24,7 @@ import (
 func TestCompactionIgnoresUIOnlyHistoryWithoutEagerArchives(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedCompactionHistory(t, r, strings.Repeat("Old coding facts. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Old coding facts. ", 500))
 	before := r.Current()
 	hidden := strings.Repeat("UI_ONLY_CHILD_DIAGNOSTIC ", 10000)
 	if _, err := r.Store.Append(before, "", "main/child_fixture", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: hidden}); err != nil {
@@ -35,13 +36,12 @@ func TestCompactionIgnoresUIOnlyHistoryWithoutEagerArchives(t *testing.T) {
 	calls := 0
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		calls++
-		input := req.Messages[0].Content
-		if !strings.Contains(input, "Old coding facts.") || strings.Contains(input, "UI_ONLY_CHILD_DIAGNOSTIC") {
+		if !compactionMessagesContain(req.Messages, "Old coding facts.") || compactionMessagesContain(req.Messages, "UI_ONLY_CHILD_DIAGNOSTIC") {
 			t.Fatal("summary does not match main model projection")
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
-	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil); err != nil || calls != 1 || r.Current() == before {
+	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false); err != nil || calls != 1 || r.Current() == before {
 		t.Fatal("UI-only records prevented handoff", err, calls)
 	}
 	files, err := filepath.Glob(filepath.Join(r.Store.Root, "lineages", before, "compactions", "*"))
@@ -60,7 +60,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
 			seedRuntime(t, r, "Research arrays.")
-			payload := "[" + strings.Repeat("0,", 7000) + "0]"
+			payload := "[" + strings.Repeat("0,", 5000) + "0]"
 			messages := []llm.Message{
 				{Type: llm.TypeUserInput, Content: "Inspect this array.", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "array", Name: "read", Arguments: json.RawMessage(`{"path":"data.json"}`)}}},
@@ -71,7 +71,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 			calls := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				calls++
-				if !strings.Contains(req.Messages[0].Content, payload) || !strings.Contains(req.Messages[0].Content, `{"path":"data.json"}`) {
+				if !compactionMessagesContain(req.Messages, payload) || !compactionMessagesContain(req.Messages, `{"path":"data.json"}`) {
 					t.Fatal("tool payload was expanded or omitted")
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Array inspected."})
@@ -91,7 +91,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 						t.Fatal(e)
 					}
 				}
-				_, err = r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
+				_, err = r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false)
 			}
 			if err != nil || calls != 1 {
 				t.Fatal("raw tool result did not fit", err, calls)
@@ -117,7 +117,7 @@ func TestCompactionPreservesOversizedFreshToolCycle(t *testing.T) {
 			requests := 0
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				requests++
-				if !req.NoTools || strings.Contains(req.Messages[0].Content, payload) || strings.Contains(req.Messages[0].Content, `{"path":"fixture.txt"}`) || !strings.Contains(req.Messages[0].Content, "Earlier result") {
+				if !req.NoTools || compactionMessagesContain(req.Messages, payload) || compactionMessagesContain(req.Messages, `{"path":"fixture.txt"}`) || !compactionMessagesContain(req.Messages, "Earlier result") {
 					t.Fatal("summary must cover older work, not fresh results")
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Recent output was inspected; continue the task."})
@@ -142,7 +142,7 @@ func TestCompactionPreservesOversizedFreshToolCycle(t *testing.T) {
 				seedIsolatedHistory(t, r, id, turn, messages)
 				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw", estimator: &contextbuild.Estimator{}}, messages, contextCursor{}, nil)
 			}
-			if err != nil || requests != 1 || r.checkContext() != nil {
+			if err != nil || requests != 1 || r.checkContext(false) != nil {
 				t.Fatal("oversized cycle prevented handoff", err, requests)
 			}
 			foundInstruction, foundCall, foundResult := false, false, false
@@ -178,8 +178,8 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	}
 	calls := 0
 	r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error { calls++; return nil }}
-	_, err = r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
-	if err == nil || !strings.Contains(err.Error(), "estimated input") || calls != 0 || r.Current() != before || r.checkContext() != nil || !recoverableCompaction(err) {
+	_, err = r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false)
+	if err == nil || !strings.Contains(err.Error(), "estimated input") || calls != 0 || r.Current() != before || r.checkContext(false) != nil || !recoverableCompaction(err) {
 		t.Fatal("oversized canonical input was admitted", err, calls)
 	}
 	if live := r.Jobs.Live(); len(live) != 1 || live[0].ID != job {
@@ -295,7 +295,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 		t.Run(fmt.Sprint(fatal), func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
-			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
+			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 400))
 			if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."}); err != nil {
 				t.Fatal(err)
 			}
@@ -308,7 +308,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 				}
 				return &llm.TransientError{Err: errors.New("fixture transport interrupted")}
 			}}
-			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
+			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false)
 			if err == nil || requests != 1 || r.Current() != before {
 				t.Fatal("unexpected handoff", err, requests, r.Current())
 			}
@@ -319,7 +319,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 			if (loaded.CompactionError != "") != fatal || loaded.ReadOnly {
 				t.Fatal("invalid persisted context policy", loaded)
 			}
-			if got := r.checkContext(); (got != nil) != fatal {
+			if got := r.checkContext(false); (got != nil) != fatal {
 				t.Fatal("runtime guard", got)
 			}
 			if fatal {
@@ -352,11 +352,11 @@ func TestCompactionRejectsOversizedPendingSteerBeforeHandoff(t *testing.T) {
 		r.orderMu.Unlock()
 		return emit(llm.StreamEvent{Kind: "text", Text: "Concise handoff."})
 	}}
-	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
+	_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false)
 	if err == nil || !strings.Contains(err.Error(), "/model") || strings.Contains(err.Error(), prompts.SessionCompactionHeadroom) || r.Current() != before || summaries != 1 {
 		t.Fatal("oversized steer caused an unusable handoff", err, r.Current(), summaries)
 	}
-	if r.checkContext() != nil || !recoverableCompaction(err) {
+	if r.checkContext(false) != nil || !recoverableCompaction(err) {
 		t.Fatal("unfittable compaction invalidated unchanged context")
 	}
 }
@@ -385,6 +385,8 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 				t.Fatal(err)
 			}
 			binary := llm.BinaryFile{Path: filepath.Join(r.Workspace.Root, "earlier.pdf"), SHA256: strings.Repeat("a", 64), MIMEType: "application/pdf", Bytes: 100}
+			// A consumed original is still native input to the summarizer.
+			r.selection.Model.Budget.ContextLimit += binary.EstimatedTokens()
 			messages := []llm.Message{
 				{Type: llm.TypeUserInput, Content: "Earlier child task", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
 				{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "old_read", Name: "read", Arguments: json.RawMessage(`{"path":"earlier.pdf"}`)}}},
@@ -399,7 +401,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 			seedIsolatedHistory(t, r, actor, turn, messages)
 			exactOriginal, _ := json.Marshal(messages)
 			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-				if !req.NoTools || len(req.Tools) != 0 || !strings.Contains(req.Messages[0].Content, "Old child research notes") {
+				if !req.NoTools || len(req.Tools) == 0 || !compactionMessagesContain(req.Messages, "Old child research notes") {
 					t.Fatal("invalid summarization request", req)
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Useful child handoff."})
@@ -413,7 +415,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 			if aside {
 				expected = 6
 			}
-			if cursor.snapshot != nil || len(result) != expected || !strings.HasPrefix(result[0].Content, "Useful child handoff.") {
+			if cursor.snapshot != nil || len(result) != expected || !reflect.DeepEqual(result[0], llm.NewCompactionContext("Useful child handoff.")) {
 				t.Fatal("incorrect retained child projection", cursor, result)
 			}
 			for _, message := range result {
@@ -497,7 +499,7 @@ func TestFatalCompactionGuardSurvivesFailedInvalidationWrite(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "persist unusable context") {
 		t.Fatal("missing persistence failure", err)
 	}
-	if r.checkContext() == nil {
+	if r.checkContext(false) == nil {
 		t.Fatal("failed invalidation write reopened inference")
 	}
 	if _, err := r.Store.Transcript(r.Current(), 0); err != nil {
@@ -518,7 +520,7 @@ func TestCanceledChildCompactionPreservesCursorAndPublishesNothing(t *testing.T)
 	r.orderMu.Lock()
 	n := len(r.notifications)
 	r.orderMu.Unlock()
-	if n != 0 || r.checkContext() != nil {
+	if n != 0 || r.checkContext(false) != nil {
 		t.Fatal("canceled child invalidated parent or published event")
 	}
 }

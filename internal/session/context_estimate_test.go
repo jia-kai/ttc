@@ -36,7 +36,8 @@ func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
 	}
 	base := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []llm.Message{messages[0], *cm})
 	r.selection.Model.Budget.ContextLimit = base.Input + base.Reserved + 3000
-	if contextbuild.Fits(r.selection, systemTemplate, r.Tools.Definitions(), append(messages, *cm), false) {
+	transportInput := contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: append(messages, *cm)}).Input
+	if codingInputFits(transportInput, r.selection.Model.Budget, false) {
 		t.Fatal("fixture did not expose transport inflation")
 	}
 	turn := admissionTurn(t, r)
@@ -79,7 +80,15 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	predecessorInput := budget.ContextLimit - budget.OutputAllowance - budget.EstimationMargin - budget.NextTurnInputReserve
 	r.usage = ContextUsage{Input: predecessorInput, Limit: budget.ContextLimit}
 	r.reported = &ReportedUsage{Model: "previous", Tokens: llm.Usage{InputTokens: predecessorInput, OutputTokens: 50}}
-	oldSnapshot := contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Lineage: r.Current(), ReplayEstimator: r.Provider}
+	original, err := r.Store.Messages(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot := contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: append(original, *runtime), Lineage: r.Current(), ReplayEstimator: r.Provider}
 	r.estimator.ObserveRequest(87, r.estimator.Prepare(oldSnapshot))
 	r.estimator.ObserveUsage(87, predecessorInput)
 	r.recordUsage(&r.reported.Tokens)
@@ -89,7 +98,7 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 		}
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 4000, OutputTokens: 80}})
 	}}
-	if _, err := r.compact(""); err != nil {
+	if _, err := r.compact("", false); err != nil {
 		t.Fatal(err)
 	}
 	u := r.UsageSnapshot()

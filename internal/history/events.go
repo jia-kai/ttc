@@ -151,7 +151,7 @@ func (s *Store) AdmitRequest(session, turn, actor string, model llm.Selection, c
 			return err
 		}
 		if actor == "main" {
-			v.Messages, err = messagesWith(tx, session)
+			v.Messages, err = messagesWith(tx, session, 0)
 		} else {
 			v.Messages = append([]llm.Message(nil), childInput...)
 			v.Messages = append(v.Messages, notices...)

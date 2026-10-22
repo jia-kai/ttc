@@ -77,7 +77,7 @@ func recoveryAncestryWith(q historyReader, session string, entries []Entry) ([]E
 			return nil, errors.New("cyclic compaction ancestry")
 		}
 		seen[predecessor] = true
-		branch, err := branchWith(q, predecessor, tip)
+		branch, err := branchWith(q, predecessor, tip, false)
 		if err != nil {
 			return nil, err
 		}

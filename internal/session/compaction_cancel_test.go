@@ -17,7 +17,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 			t.Run(actor+"/"+mode, func(t *testing.T) {
 				r, _ := runtimeFixture(t, nil)
 				compactionBudget(t, r)
-				seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 700))
+				seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 500))
 				before := r.Current()
 				messages, err := r.Store.Messages(before)
 				if err != nil {
@@ -61,7 +61,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 					return emit(llm.StreamEvent{Kind: "completed"})
 				}}
 				if actor == "main" {
-					_, err = r.compactContext(ctx, "", r.CurrentSelection(), nil)
+					_, err = r.compactContext(ctx, "", r.CurrentSelection(), nil, false)
 				} else {
 					id := "main/" + actor + "_cancel"
 					turn, e := r.Store.BeginChildTurn(before, id, r.CurrentSelection())
@@ -75,7 +75,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 					t.Fatal("expected one summary request", calls)
 				}
 				if mode == "cancel" {
-					if !errors.Is(err, context.Canceled) || r.Current() != before || r.checkContext() != nil || r.HasNotifications() {
+					if !errors.Is(err, context.Canceled) || r.Current() != before || r.checkContext(false) != nil || r.HasNotifications() {
 						t.Fatal("cancellation committed a handoff or invalidated context", err)
 					}
 				} else if err != nil {
@@ -91,7 +91,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 500))
 	before := r.Current()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -99,7 +99,7 @@ func TestCanceledCompactionCanReloadCompactAndContinue(t *testing.T) {
 		cancel()
 		return ctx.Err()
 	}}
-	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil); !errors.Is(err, context.Canceled) {
+	if _, err := r.compactContext(ctx, "", r.CurrentSelection(), nil, false); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := r.Command("/load " + before); err != nil {

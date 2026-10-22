@@ -286,7 +286,7 @@ func TestContinuationRebasesRetainedUndoWithoutArchiveDependency(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	continuation, e := s.Continue(v.ID, "summary", cut.EntryTip, retained, nil, time.Now(), nil)
+	continuation, e := s.Continue(v.ID, llm.NewCompactionContext("summary"), cut.EntryTip, retained, nil, time.Now(), nil)
 	if e != nil {
 		t.Fatal(e)
 	}

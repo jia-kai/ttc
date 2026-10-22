@@ -43,7 +43,7 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(initial.ID, "Main summary omits child details", cut.EntryTip, retained, nil, time.Now(), nil)
+	continued, err := s.Continue(initial.ID, llm.NewCompactionContext("Main summary omits child details"), cut.EntryTip, retained, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestArchiveActorTranscriptIncludesOriginalCompactionAncestryAndPreviousAssi
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err = s.Continue(continued.ID, "Second main summary", cut.EntryTip, continued.EntryTip+1, nil, time.Now(), nil)
+	continued, err = s.Continue(continued.ID, llm.NewCompactionContext("Second main summary"), cut.EntryTip, continued.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestArchiveActorTranscriptFollowsSelectedCutsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(initial.ID, "Main summary", cut.EntryTip, tip+1, nil, time.Now(), nil)
+	continued, err := s.Continue(initial.ID, llm.NewCompactionContext("Main summary"), cut.EntryTip, tip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func BenchmarkArchiveActorTranscriptUnrelatedPayload(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					continued, err := s.Continue(session, "Main summary", cut.EntryTip, child, nil, time.Now(), nil)
+					continued, err := s.Continue(session, llm.NewCompactionContext("Main summary"), cut.EntryTip, child, nil, time.Now(), nil)
 					if err != nil {
 						b.Fatal(err)
 					}

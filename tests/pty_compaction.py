@@ -18,6 +18,7 @@ import traceback
 
 from scratch import private_scratch
 from pty_screen import Screen
+from pty_compaction_reload import verify_compaction_context
 
 
 def export_responses(root):
@@ -75,12 +76,17 @@ def main():
     skill.parent.mkdir(parents=True, mode=0o700)
     skill.write_text('---\nname: fixture\ndescription: Inspect the reproducible fixture.\n---\nKeep experiment units explicit.\n')
     script = root / 'script.json'
+    # Three rounds cross coding's proactive trigger only before grow 4, while
+    # leaving summary capacity for the original prefix plus system/tools and
+    # the final developer directive in the scripted 32768-token context.
     responses = [
-        {'prefix': f'user: grow {i}', 'text': 'earlier evidence ' * 1600 + f'\nGrowth {i} complete.'}
+        {'prefix': f'user: grow {i}', 'text': 'earlier evidence ' * 1200 + f'\nGrowth {i} complete.'}
         for i in range(1, 4)
     ]
     responses.extend([
-        {'prefix': 'user: Focus:', 'text': '## Research checkpoint\n\nThree earlier research rounds completed; continue.'},
+        # The summary directive is developer guidance; the offline prefix
+        # matcher skips it. Verify its actual persisted request below instead.
+        {'text': '## Research checkpoint\n\nThree earlier research rounds completed; continue.'},
         {'prefix': 'user: {"type":"retained_inputs",', 'text': 'Automatic continuation verified.'},
     ])
     responses.extend(export_responses(root))
@@ -177,6 +183,20 @@ def main():
             assert len(sessions) == 2 and sum(row[1] for row in sessions) == 1, sessions
             current = next(row[0] for row in sessions if not row[1])
             assert db.execute("SELECT count(*) FROM model_requests WHERE purpose='compaction'").fetchone()[0] == 1
+            summary_messages = [json.loads(row[0]) for row in db.execute(
+                "SELECT e.content_json FROM entries e JOIN model_requests r "
+                "ON r.id=json_extract(e.content_json,'$.request_id') "
+                "WHERE r.purpose='compaction' AND json_extract(e.content_json,'$.type')='request_message' "
+                "ORDER BY e.id")]
+            directive = summary_messages[-2]
+            assert directive['role'] == 'developer' and directive['message']['type'] == 'runtime_instruction', directive
+            assert directive['message']['content'].startswith('This conversation is about to be compacted.'), directive
+            assert 'Do not execute tools' in directive['message']['content'], directive
+            assert summary_messages[-1]['role'] == 'assistant', summary_messages[-1]
+            assert summary_messages[-1]['message']['type'] == 'assistant', summary_messages[-1]
+            verify_compaction_context(db, current, summary_messages[-1]['message']['content'])
+            assert any(item['role'] == 'assistant' and 'Growth 1 complete.' in item['message'].get('content', '')
+                       for item in summary_messages[:-2]), 'Summary request lost structured historical evidence'
             assert db.execute("SELECT count(*) FROM turns WHERE status='completed'").fetchone()[0] == 4
             retained = db.execute("SELECT content_json FROM entries WHERE session_id=? AND role='user' AND json_extract(content_json,'$.content')='grow 4'", (current,)).fetchall()
             assert len(retained) == 1, retained

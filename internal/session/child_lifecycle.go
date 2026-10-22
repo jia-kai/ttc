@@ -275,6 +275,23 @@ func childFailureMetadata(finish *history.ChildFinish, inherited bool, transcrip
 	}
 }
 
+// childNoticeBatchLocked projects queued guidance and the bounded runtime batch
+// identically for admission and handoff, without consuming either. Caller owns
+// orderMu; the count identifies runtime references to acknowledge on admission.
+func (r *Runtime) childNoticeBatchLocked(assignment *childAssignment) ([]llm.Message, int, error) {
+	if assignment == nil {
+		return nil, 0, nil
+	}
+	notices := append([]llm.Message(nil), assignment.queued...)
+	runtimeNotices, count, err := r.runtimeNoticeBatch(assignment)
+	if err != nil {
+		return nil, 0, err
+	}
+	notices = append(notices, runtimeNotices...)
+	sort.Slice(notices, func(i, j int) bool { return notices[i].EventSeq < notices[j].EventSeq })
+	return notices, count, nil
+}
+
 func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor) (admitted history.Admission, next contextCursor, err error) {
 	next = cursor
 	err = r.Workspace.Admit(ctx, func() error {
@@ -291,17 +308,9 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		if task.aside {
 			system = asideSystemTemplate
 		}
-		var notices []llm.Message
-		runtimeCount := 0
-		if task.assignment != nil {
-			notices = append([]llm.Message(nil), task.assignment.queued...)
-			runtimeNotices, count, e := r.runtimeNoticeBatch(task.assignment)
-			if e != nil {
-				return e
-			}
-			runtimeCount = count
-			notices = append(notices, runtimeNotices...)
-			sort.Slice(notices, func(i, j int) bool { return notices[i].EventSeq < notices[j].EventSeq })
+		notices, runtimeCount, e := r.childNoticeBatchLocked(task.assignment)
+		if e != nil {
+			return e
 		}
 		input := append(append([]llm.Message(nil), messages...), notices...)
 		if cm != nil {
@@ -309,7 +318,7 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		}
 		snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, Lineage: task.actor, ReplayEstimator: r.Provider}
 		observation := task.estimator.Prepare(snapshot)
-		if !contextbuild.FitsInput(observation.Input, task.selection.Model.Budget, false) {
+		if !codingInputFits(observation.Input, task.selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
 		admitted, e = r.Store.AdmitRequest(r.Current(), task.turn, task.actor, task.selection, cm, notices, messages)

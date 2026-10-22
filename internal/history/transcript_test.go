@@ -47,7 +47,7 @@ func TestActorTranscriptMainAncestryFrozenCutAndLoadCopies(t *testing.T) {
 	cut := add(v.ID, "main", "Frozen main cut")
 	sibling := add(v.ID, "main/child_other", "Never export sibling")
 	late := add(v.ID, "main", "Later arrival retained but not summarized")
-	next, err := s.Continue(v.ID, "Selected summary", cut, cut, nil, time.Now(), nil)
+	next, err := s.Continue(v.ID, llm.NewCompactionContext("Selected summary"), cut, cut, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestActorTranscriptMultipleCompactionsAcrossLoadCopies(t *testing.T) {
 	}
 	first := appendMessage(original.ID, "First original evidence")
 	firstCut := appendMessage(original.ID, "First frozen cut")
-	continued, err := s.Continue(original.ID, "First handoff", firstCut, firstCut, nil, time.Now(), nil)
+	continued, err := s.Continue(original.ID, llm.NewCompactionContext("First handoff"), firstCut, firstCut, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestActorTranscriptMultipleCompactionsAcrossLoadCopies(t *testing.T) {
 	second := appendMessage(loaded.ID, "Second original evidence")
 	secondCut := appendMessage(loaded.ID, "Second frozen cut")
 	late := appendMessage(loaded.ID, "After second frozen cut")
-	continuedAgain, err := s.Continue(loaded.ID, "Second handoff", secondCut, secondCut, nil, time.Now(), nil)
+	continuedAgain, err := s.Continue(loaded.ID, llm.NewCompactionContext("Second handoff"), secondCut, secondCut, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

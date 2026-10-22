@@ -23,7 +23,7 @@ const btwInstruction = prompts.Btw
 // Context and model selection freeze at admission. A blank session is rejected;
 // session changes and exit cancel and join the task through the job supervisor.
 func (r *Runtime) StartBTW(question string) (string, error) {
-	if err := r.checkContext(); err != nil {
+	if err := r.checkContext(false); err != nil {
 		return "", err
 	}
 	// Keep the frozen source and its descriptor on the same selected continuation

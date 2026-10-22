@@ -173,10 +173,11 @@ func Retain(messages []llm.Message, minTokens, maxTokens int) (Retention, error)
 	// copied a second time as independently selected human instructions.
 	inputs = inputs[:sort.SearchInts(inputs, cut)]
 	// Selected inputs and runtime metadata alone are not a useful summary prefix.
-	// An unselected older human input does make progress, even without model work.
+	// A previous summary or unselected older human input does make progress,
+	// even without newer model work.
 	for i, message := range messages[:cut] {
 		selected := sort.SearchInts(inputs, i)
-		if message.Type == llm.TypeAssistant || message.Type.IsInput() && (selected == len(inputs) || inputs[selected] != i) {
+		if message.Type == llm.TypeAssistant || message.Type == llm.TypeCompactionContext || message.Type.IsInput() && (selected == len(inputs) || inputs[selected] != i) {
 			return Retention{Start: cut, Inputs: inputs}, nil
 		}
 	}

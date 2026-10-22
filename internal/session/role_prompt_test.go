@@ -155,7 +155,8 @@ func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
 	// Keep all schemas identical here to isolate the system contribution. A
 	// main-sized prompt must fail while the actual aside prompt just fits.
 	r.selection.Model.Budget.ContextLimit = usage.Input + usage.Reserved + 1
-	if !contextbuild.Fits(r.selection, asideSystemTemplate, r.Tools.Definitions(), input, false) || contextbuild.Fits(r.selection, systemTemplate, r.Tools.Definitions(), input, false) {
+	mainUsage := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), input)
+	if !codingInputFits(usage.Input, r.selection.Model.Budget, false) || codingInputFits(mainUsage.Input, r.selection.Model.Budget, false) {
 		t.Fatal("fixture does not distinguish shared-only from main prompt budgeting")
 	}
 	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: true, estimator: &contextbuild.Estimator{}}, messages, contextCursor{}); err != nil {

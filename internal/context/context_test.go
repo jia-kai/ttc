@@ -57,7 +57,7 @@ func TestRetentionKeepsFittingRecentCyclesAndBalancedParallelTools(t *testing.T)
 func TestRetentionCompactsEarlierHistoryWhenNewestTurnHasNoOlderCycle(t *testing.T) {
 	for _, cycles := range []int{0, 1, 2} {
 		for _, summary := range []bool{false, true} {
-			prefix := []llm.Message{{Type: llm.TypeAssistant, Content: "Continuation summary"}}
+			prefix := []llm.Message{llm.NewCompactionContext("Earlier work")}
 			if !summary {
 				prefix = []llm.Message{{Type: llm.TypeUserInput, Content: "Earlier task"}, {Type: llm.TypeAssistant, Content: "Earlier result"}}
 			}

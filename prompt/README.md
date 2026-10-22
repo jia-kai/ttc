@@ -23,9 +23,11 @@ fixtures.
 - `retained-inputs.md`: `RetainedInputs` format guidance for the grouped
   model-facing projection. Provenance is typed message metadata, not prompt
   prose; legacy marker decoding belongs only in `internal/history/migrate`.
-- `compaction.yaml`: summary instructions, input with two `%s` slots
-  (focus/transcript), and handoff with one (summary plus on-demand history
-  export guidance).
+- `compaction.yaml`: a static final summary instruction, a separate one-slot
+  focus message included only for nonempty focus, and a one-slot developer
+  context wrapper. The wrapper receives a JSON-quoted summary as reference data;
+  TTC's framing and history-retrieval guidance stay outside the quote. The focus
+  message precedes the final summary instruction; history remains structured.
 - `naming.md`: title instructions. Token/deadline limits belong to session code.
 - `tools.yaml`: descriptions keyed by tool name, with reusable notes.
 - `tool-messages.yaml`: tool validation/recovery text, including shell output,
@@ -45,9 +47,9 @@ fixtures.
 ## Build and validation
 
 Use folded YAML blocks (`>`) for source-wrapped prose. Use literal blocks (`|`)
-when line breaks are part of the template or structured content; compaction
-input and handoff templates use `|-` to preserve layout without a trailing
-newline. The generator embeds decoded YAML strings without extra normalization.
+when line breaks are part of the template or structured content. Compaction
+instructions, focus and context all use `>-`, omitting the final newline. The
+generator embeds decoded YAML strings without extra normalization.
 
 Edit assets, then run `make prompts`. `make build`, `make test` and `make check`
 generate git-ignored `internal/prompts/assets_generated.go` before compiling.

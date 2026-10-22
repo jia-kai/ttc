@@ -21,7 +21,10 @@ import (
 // just human text. Canonical retained metadata supplies the frozen cut time.
 func assertRetainedProjection(t *testing.T, original, got []llm.Message, selection llm.Selection) {
 	t.Helper()
-	canonical := canonicalCompaction(original)
+	canonical := append([]llm.Message(nil), original...)
+	for i := range canonical {
+		canonical[i].State = nil
+	}
 	retention, err := contextbuild.Retain(canonical, selection.Model.Budget.RecentTokensMin, selection.Model.Budget.RecentTokensMax)
 	if err != nil || len(retention.Inputs) != 4 || len(got) < 2 {
 		t.Fatal("invalid four-input projection", retention, got, err)
@@ -34,9 +37,9 @@ func assertRetainedProjection(t *testing.T, original, got []llm.Message, selecti
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append([]llm.Message{got[0]}, inputs...)
+	want := append([]llm.Message{llm.NewCompactionContext("Policy handoff.")}, inputs...)
 	want = append(want, canonical[retention.Start:]...)
-	if !strings.HasPrefix(got[0].Content, "Policy handoff.") || !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("assembled and persisted projections differ:\ngot %#v\nwant %#v", got, want)
 	}
 	projected, err := contextbuild.ProjectRetainedInputs(got)
@@ -212,7 +215,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					usage := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), append(canonicalCompaction(original), *fresh))
+					usage := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), append(append([]llm.Message(nil), original...), *fresh))
 					r.selection.Model.Budget.ContextLimit = usage.Input + usage.Reserved - 1000
 				}
 				selection := r.selection

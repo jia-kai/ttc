@@ -29,6 +29,7 @@ func TestPureMessageViewAndInspection(t *testing.T) {
 		label string
 	}{
 		{llm.TypeRuntimeContext, "Runtime context · inspect"},
+		{llm.TypeCompactionContext, "Compaction context · inspect"},
 		{llm.TypeSystemInstruction, "Instructions · inspect"},
 		{llm.TypeDeveloperInstruction, "Instructions · inspect"},
 		{llm.TypeRuntimeInstruction, "Runtime instructions · inspect"},

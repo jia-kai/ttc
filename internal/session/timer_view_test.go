@@ -237,13 +237,13 @@ func TestTimerDetailOwnsStartupParameters(t *testing.T) {
 func TestTimerDetailSurvivesCompaction(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Earlier research completed."}})
 	compactionBudget(t, r)
-	seedCompactionHistory(t, r, strings.Repeat("Old experiment notes. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Old experiment notes. ", 450))
 	before, generation := r.Current(), r.Generation()
 	input := map[string]any{"name": "keep-inspectable", "message": "Review experiment progress", "delay_seconds": 3600, "repeat_seconds": 60}
 	actor := "main/child_experiment"
 	result := invokeTimerTool(t, r, actor, "wakeup_schedule", input)
 	id := result["wakeup_id"].(string)
-	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil); err != nil {
+	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.Current() == before || r.Generation() != generation {

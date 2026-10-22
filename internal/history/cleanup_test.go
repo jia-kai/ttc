@@ -32,7 +32,7 @@ func retainedContinuation(t *testing.T, s *Store, v Session) Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(v.ID, "Saved research handoff.", cut.EntryTip, saved.EntryTip, nil, time.Now(), nil)
+	next, err := s.Continue(v.ID, llm.NewCompactionContext("Saved research handoff."), cut.EntryTip, saved.EntryTip, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,11 @@ func TestCleanupDeletesWholeLineageAndPreservesUserState(t *testing.T) {
 	if _, err := s.RecordSystemPrompt(v.ID, turn, "main", req, "Exact instructions."); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RequestMessage(v.ID, turn, "main/child", "assistant", req, llm.Message{Type: llm.TypeAssistant, Content: "Child output"}); err != nil {
+	childRequest, err := s.StartRequest(v.ID, turn, "main/child", "compaction", v.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RequestMessages(v.ID, turn, "compaction", childRequest, []llm.Message{{Type: llm.TypeAssistant, Content: "Child output"}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, category := range []string{"snapshots", "images", "attachments", "details"} {

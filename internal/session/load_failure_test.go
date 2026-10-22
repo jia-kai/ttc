@@ -33,7 +33,7 @@ func TestFailedHistoryLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			target, err := r.Store.Continue(targetID, "Research handoff", retained, retained, nil, time.Now(), nil)
+			target, err := r.Store.Continue(targetID, llm.NewCompactionContext("Research handoff"), retained, retained, nil, time.Now(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +98,7 @@ func TestLoadContinuationWithoutArchiveFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := r.Store.Continue(before, "Research handoff", retained, retained, nil, time.Now(), nil)
+	continued, err := r.Store.Continue(before, llm.NewCompactionContext("Research handoff"), retained, retained, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

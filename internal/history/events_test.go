@@ -294,7 +294,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(source.ID, "handoff", cut.EntryTip, finish, nil, time.Now(), nil)
+	next, err := s.Continue(source.ID, llm.NewCompactionContext("handoff"), cut.EntryTip, finish, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -175,7 +175,9 @@ func TestPendingImageRemainsReachableAfterUICompaction(t *testing.T) {
 	if err = historytest.DB(t, u.runtime.Store).QueryRow("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='image_show'").Scan(&entry); err != nil {
 		t.Fatal(err)
 	}
-	for _, text := range []string{strings.Repeat("old research result ", 3000), "Continue the pending image interaction."} {
+	// Both human inputs survive the handoff independently of the recent tail;
+	// keep them within the coding budget including summary/next-turn reserves.
+	for _, text := range []string{strings.Repeat("old research result ", 300), "Continue the pending image interaction."} {
 		if _, err = u.runtime.Store.Append(u.runtime.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 			t.Fatal(err)
 		}

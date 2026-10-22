@@ -75,10 +75,8 @@ SessionUnusableAfterCompaction:
   another session"
 SessionNamingTruncated: "\n[truncated]"
 SessionNamingTool: "\nTool: "
-SessionSummaryMessageHeader: "\n### %s"
-SessionSummaryCallID: " · %s"
-SessionSummaryToolCall: "Tool call %s · %s\n%s\n"
-SessionSummaryBinaryAttachment: "Binary attachment (%s): %s\n"
+SessionCompactionIdentity:
+  compaction requires the actor's estimator and conversation identity
 SessionCompactionHeadroom: >-
   The child's context is still too large after compaction, so the assignment
   failed and the child is closed. Inspect any returned partial answer and

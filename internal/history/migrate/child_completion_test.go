@@ -137,7 +137,7 @@ func TestSchema7CompletionFormsAndEvidence(t *testing.T) {
 	if got := scalar(t, reopened, "SELECT json_group_array(json_array(id,content_json)) FROM entries"); got != before {
 		t.Fatal("reopen changed entries")
 	}
-	if got := scalar(t, reopened, "PRAGMA user_version"); got != "10" {
+	if got := scalar(t, reopened, "PRAGMA user_version"); got != fmt.Sprint(CurrentVersion) {
 		t.Fatal(got)
 	}
 }

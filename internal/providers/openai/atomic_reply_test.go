@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -36,6 +37,7 @@ func TestNoToolsRepliesRetryAtomicallyAfterPrivatePartialText(t *testing.T) {
 			var completed bool
 			req := partialRequest(0, 0)
 			req.NoTools = true
+			req.Tools = []llm.ToolDefinition{{Name: "read", Description: "Read a file", Parameters: json.RawMessage(`{"type":"object"}`)}}
 			err := a.Stream(context.Background(), req, func(ev llm.StreamEvent) error {
 				switch ev.Kind {
 				case "text":

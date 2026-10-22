@@ -491,11 +491,12 @@ func (c *frontendController) startCommand(text string) {
 	runtime, done := c.frontend.Runtime, c.done
 	go func() {
 		result, err := runtime.Command(text)
-		markdown := text == "/compact" || strings.HasPrefix(text, "/compact ")
+		command := strings.Fields(text)[0]
+		markdown := command == "/compact" || command == "/force-compact"
 		if json.Valid([]byte(result)) {
 			result = render.Fence(result, "json")
 			markdown = true
 		}
-		done <- operationResult{text: result, command: strings.Fields(text)[0], markdown: markdown, err: err}
+		done <- operationResult{text: result, command: command, markdown: markdown, err: err}
 	}()
 }

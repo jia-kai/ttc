@@ -323,7 +323,7 @@ func TestLoadRecoveryFindsSummarizedContinuationAncestors(t *testing.T) {
 		t.Fatal(err)
 	}
 	tip, _ := s.Session(source.ID)
-	first, err := s.Continue(source.ID, "summary one", cut.EntryTip, tip.EntryTip+1, nil, time.Now(), nil)
+	first, err := s.Continue(source.ID, llm.NewCompactionContext("summary one"), cut.EntryTip, tip.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestLoadRecoveryFindsSummarizedContinuationAncestors(t *testing.T) {
 		t.Fatal(err)
 	}
 	tip, _ = s.Session(first.ID)
-	second, err := s.Continue(first.ID, "summary two", cut.EntryTip, tip.EntryTip+1, nil, time.Now(), nil)
+	second, err := s.Continue(first.ID, llm.NewCompactionContext("summary two"), cut.EntryTip, tip.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestLoadRecoveryFindsSummarizedContinuationAncestors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(loaded.ID, "recovered handoff", cut.EntryTip, loaded.EntryTip+1, nil, time.Now(), nil)
+	next, err := s.Continue(loaded.ID, llm.NewCompactionContext("recovered handoff"), cut.EntryTip, loaded.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

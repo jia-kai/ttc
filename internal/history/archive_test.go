@@ -28,7 +28,7 @@ func TestContinuationAndReloadNeedNoArchives(t *testing.T) {
 					}
 				}
 			}
-			next, err := s.Continue(v.ID, "Summary", retained, retained, nil, time.Now(), nil)
+			next, err := s.Continue(v.ID, llm.NewCompactionContext("Summary"), retained, retained, nil, time.Now(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

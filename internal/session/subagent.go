@@ -55,7 +55,7 @@ func (r *Runtime) addSubagentTool() {
 		if x.Actor != "main" {
 			return nil, tool.Fail("ownership", prompts.ChildCannotAssign)
 		}
-		if err := r.checkContext(); err != nil {
+		if err := r.checkContext(false); err != nil {
 			return nil, err
 		}
 		selection, err := r.Store.ToolSelection(ctx, x.CallID)

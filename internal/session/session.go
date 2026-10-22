@@ -291,7 +291,7 @@ func (r *Runtime) Run(message *llm.Message) (err error) {
 func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
-	if e := r.checkContext(); e != nil {
+	if e := r.checkContext(false); e != nil {
 		return e
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
@@ -433,7 +433,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		admitted, _, e := r.admitMain(ctx, turn, selection)
 		if errors.Is(e, errNeedsCompaction) {
 			r.emit(Event{Kind: "status", Text: "Compacting context…"})
-			result, err := r.compactContext(ctx, "", selection, recovery)
+			result, err := r.compactContext(ctx, "", selection, recovery, false)
 			if err != nil {
 				return fmt.Errorf("automatic compaction failed: %w", err)
 			}
@@ -634,8 +634,8 @@ func (r *Runtime) Command(text string) (string, error) {
 		defer func() { r.refreshLoadedActivity(r.ctx, time.Now()) }()
 	}
 	switch parts[0] {
-	case "/undo", "/redo", "/branch", "/compact":
-		if err := r.checkContext(); err != nil {
+	case "/undo", "/redo", "/branch", "/compact", "/force-compact":
+		if err := r.checkContext(true); err != nil {
 			return "", err
 		}
 	}
@@ -648,7 +648,7 @@ func (r *Runtime) Command(text string) (string, error) {
 	r.mu.Unlock()
 	if !persisted {
 		switch parts[0] {
-		case "/undo", "/redo", "/branch", "/compact", "/export", "/rename":
+		case "/undo", "/redo", "/branch", "/compact", "/force-compact", "/export", "/rename":
 			return "", errors.New("session is empty; send a message first")
 		}
 	}
@@ -795,8 +795,8 @@ func (r *Runtime) Command(text string) (string, error) {
 	case "/timers":
 		b, _ := json.MarshalIndent(r.timers.list(), "", "  ")
 		return string(b), nil
-	case "/compact":
-		return r.compact(arg)
+	case "/compact", "/force-compact":
+		return r.compact(arg, parts[0] == "/force-compact")
 	default:
 		return "", fmt.Errorf("unknown command %s", parts[0])
 	}

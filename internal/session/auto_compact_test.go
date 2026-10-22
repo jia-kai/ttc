@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"ttc/internal/historytest"
@@ -44,7 +45,7 @@ func seedCompactionHistory(t *testing.T, r *Runtime, content string) {
 func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	compactionBudget(t, r)
-	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
+	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 400))
 	before, generation := r.Current(), r.Generation()
 	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
 	if err != nil {
@@ -55,7 +56,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		if req.NoTools {
 			summaries++
-			if !strings.Contains(req.Messages[0].Content, "Previous research notes.") {
+			if !compactionMessagesContain(req.Messages, "Previous research notes.") {
 				t.Fatal("summary omitted prefix")
 			}
 			r.routeMu.RLock()
@@ -69,7 +70,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 			}
 		} else {
 			coding++
-			if r.Current() == before || !strings.Contains(req.Messages[0].Content, "Earlier research completed") {
+			if r.Current() == before || !reflect.DeepEqual(req.Messages[0], llm.NewCompactionContext("Earlier research completed; continue the current task.")) {
 				t.Fatal("coding request started before handoff", req.Messages)
 			}
 			if !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
@@ -193,12 +194,12 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 			// compaction of an active turn without first ending that turn.
 			next := req.Selection
 			next.Model.ID = "smaller-context"
-			u := estimateUsage(req.Selection, req.System, req.Tools, req.Messages)
-			next.Model.Budget.ContextLimit = u.Input + u.Reserved + 100
 			next.Model.Budget.RecentTokensMin = 0
 			next.Model.Budget.RecentTokensMax = 700
 			next.Model.Budget.NextTurnInputReserve = 1
 			next.Model.Budget.SummaryOutputAllowance = 512
+			u := estimateUsage(next, req.System, req.Tools, req.Messages)
+			next.Model.Budget.ContextLimit = u.Input + u.Reserved + 100
 			if err := r.RequestModel(next); err != nil {
 				return err
 			}
@@ -264,7 +265,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 			t.Run(fmt.Sprintf("automatic=%v/cycles=%d", automatic, cycles), func(t *testing.T) {
 				r, _ := runtimeFixture(t, nil)
 				compactionBudget(t, r)
-				seedCompactionHistory(t, r, strings.Repeat("Earlier completed research. ", 700))
+				seedCompactionHistory(t, r, strings.Repeat("Earlier completed research. ", 350))
 				before := r.Current()
 				newest := []llm.Message{{Type: llm.TypeUserInput, Content: "Continue with the sidebar widget."}}
 				for i := range cycles {
@@ -283,7 +284,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 					if req.NoTools {
 						summaries++
-						if !strings.Contains(req.Messages[0].Content, "Earlier completed research.") {
+						if !compactionMessagesContain(req.Messages, "Earlier completed research.") {
 							t.Fatal("summary omitted the older prefix")
 						}
 						return emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed."})
@@ -327,7 +328,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				}
 				got, _ := json.Marshal(copied)
 				want, _ := json.Marshal(retained)
-				if string(got) != string(want) || r.checkContext() != nil {
+				if string(got) != string(want) || r.checkContext(false) != nil {
 					t.Fatal("newest turn changed or context was invalidated", string(got))
 				}
 			})
@@ -340,7 +341,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 		t.Run(reason, func(t *testing.T) {
 			r, events := runtimeFixture(t, nil)
 			compactionBudget(t, r)
-			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 700))
+			seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 400))
 			before := r.Current()
 			attempts := 0
 			r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {

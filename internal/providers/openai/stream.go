@@ -188,10 +188,9 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 		}
 	}
 	tools := []any{}
-	if !req.NoTools {
-		for _, t := range req.Tools {
-			tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": false})
-		}
+	// Keep supplied schemas in the cache prefix even when tool choice is disabled.
+	for _, t := range req.Tools {
+		tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": false})
 	}
 	body := map[string]any{"model": req.Selection.Model.RequestID(), "service_tier": "default", "instructions": req.System, "input": input, "tools": tools, "tool_choice": "auto", "parallel_tool_calls": true, "stream": true, "store": false, "prompt_cache_key": req.ConversationID, "include": []string{"reasoning.encrypted_content"}}
 	if req.Selection.Model.ServiceTier != "" {

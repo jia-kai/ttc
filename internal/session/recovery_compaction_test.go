@@ -45,7 +45,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				warning := llm.Message{Type: llm.TypeRuntimeInstruction, RequestID: request, Content: prompts.Recovery}
 				messages := []llm.Message{
 					{Type: llm.TypeUserInput, Content: "Continue research", InputSource: "task", InputTimeMS: time.Now().UnixMilli()},
-					{Type: llm.TypeAssistant, Content: strings.Repeat("Oversized partial evidence. ", 400)},
+					{Type: llm.TypeAssistant, Content: strings.Repeat("Oversized partial evidence. ", 100)},
 					warning,
 				}
 				if actor == "main" {
@@ -70,9 +70,9 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				// Count the same on-demand history guidance as the actual handoff.
+				// Count the exact framed developer context used by the actual handoff.
 				summary := "Partial evidence summarized; continue carefully."
-				baseline := []llm.Message{{Type: llm.TypeAssistant, Content: compactionHandoff(summary)}}
+				baseline := []llm.Message{llm.NewCompactionContext(summary)}
 				baseline = append(baseline, retained...)
 				system := childSystemTemplate
 				if actor == "main" {
@@ -98,25 +98,26 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err := b.Validate(); err != nil {
 					t.Fatal("fixture budget is invalid", err)
 				}
-				if !contextbuild.Fits(r.selection, system, r.Tools.Definitions(), input, true) {
+				if !compactionFits(r.selection, system, r.Tools.Definitions(), baseline, nil, runtime) {
 					t.Fatal("baseline without warning does not fit")
 				}
 				withWarning, _ := contextbuild.AppendPendingMessage(baseline, &warning)
 				withWarning = append(withWarning, *runtime)
-				if contextbuild.Fits(r.selection, system, r.Tools.Definitions(), withWarning, true) != fits {
+				withWarningEstimate := contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: r.selection, System: system, Tools: r.Tools.Definitions(), Messages: withWarning})
+				if codingInputFits(withWarningEstimate.Input, r.selection.Model.Budget, true) != fits {
 					t.Fatal("fixture does not straddle the mandatory warning budget")
 				}
 				summaries := 0
 				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 					summaries++
-					if !req.NoTools || !strings.Contains(req.Messages[0].Content, prompts.Recovery) {
+					if !req.NoTools || !compactionMessagesContain(req.Messages, prompts.Recovery) {
 						t.Fatal("summary must consume the original warning")
 					}
 					return emit(llm.StreamEvent{Kind: "text", Text: summary})
 				}}
 				var result []llm.Message
 				if actor == "main" {
-					_, err = r.compactContext(context.Background(), "", r.selection, &warning)
+					_, err = r.compactContext(context.Background(), "", r.selection, &warning, false)
 					if err == nil {
 						result, err = r.Store.Messages(r.Current())
 					}
@@ -212,7 +213,7 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 				if strings.Contains(req.ConversationID, actor) {
 					// Main archives the child warning while its isolated summary
 					// is in flight; the durable entry is not in the new branch.
-					if _, err := r.compactContext(ctx, "", r.selection, nil); err != nil {
+					if _, err := r.compactContext(ctx, "", r.selection, nil, false); err != nil {
 						return err
 					}
 				}
@@ -250,6 +251,12 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 			if err := r.selection.Model.Budget.Validate(); err != nil {
 				t.Fatal(err)
 			}
+			partialRepeats := 250
+			if strings.Contains(actor, "/btw_") {
+				// The aside system is smaller; keep its partial output large
+				// enough to trigger compaction while the structured prefix fits.
+				partialRepeats = 350
+			}
 			coding, summaries := 0, 0
 			var failedRequest int64
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
@@ -273,7 +280,7 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 					if err := historytest.DB(t, r.Store).QueryRow("SELECT max(id) FROM model_requests WHERE actor_id=? AND purpose='coding'", actor).Scan(&failedRequest); err != nil {
 						return err
 					}
-					if err := partialRetryText(emit, strings.Repeat("Oversized partial research output. ", 400)); err != nil {
+					if err := partialRetryText(emit, strings.Repeat("Oversized partial research output. ", partialRepeats)); err != nil {
 						return err
 					}
 					return partialRetryFailure(req)

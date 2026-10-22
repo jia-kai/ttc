@@ -101,8 +101,8 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		}
 		message.Content += prompts.SessionNamingTool + render.Clean(call.Name)
 	}
-	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "user", request, message); e == nil {
-		r.emit(Event{Kind: "message_placeholder", Text: "Session naming input · inspect", EntryID: id})
+	if ids, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{message}); e == nil {
+		r.emit(Event{Kind: "message_placeholder", Text: "Session naming input · inspect", EntryID: ids[0]})
 	} else {
 		r.namingFailure(ownerCtx, sessionID, turn, "save input: "+e.Error())
 		return
@@ -124,8 +124,8 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		return nil
 	})
 	r.recordUsage(usage)
-	if id, e := r.Store.RequestMessage(sessionID, turn, "naming", "assistant", request, llm.Message{Type: llm.TypeAssistant, Content: title.String()}); e == nil {
-		r.emit(Event{Kind: "message_placeholder", Text: "Session naming reply · inspect", EntryID: id})
+	if ids, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{{Type: llm.TypeAssistant, Content: title.String()}}); e == nil {
+		r.emit(Event{Kind: "message_placeholder", Text: "Session naming reply · inspect", EntryID: ids[0]})
 	} else {
 		r.namingFailure(ownerCtx, sessionID, turn, "save reply: "+e.Error())
 		return
@@ -150,19 +150,25 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		r.namingFailure(ownerCtx, sessionID, turn, reason)
 	}
 }
-func (r *Runtime) compact(focus string) (string, error) {
+
+// compact runs manual compaction after Command checks context writability.
+func (r *Runtime) compact(focus string, force bool) (string, error) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	r.mu.Lock()
 	r.activeCancel = cancel
 	r.mu.Unlock()
 	defer func() { cancel(); r.mu.Lock(); r.activeCancel = nil; r.mu.Unlock() }()
-	return r.compactContext(ctx, focus, r.CurrentSelection(), nil)
+	if force {
+		r.emit(Event{Kind: "status", Text: "Forcing compaction: local summary input-size check disabled; provider limits and handoff checks still apply."})
+	}
+	return r.compactContext(ctx, focus, r.CurrentSelection(), nil, force)
 }
 
 // compactContext shares the manual and automatic handoff. The main loop is
 // paused, but live children/jobs can append a tail until routeMu locks commit.
 // pending is a persisted recovery warning required until coding succeeds.
-func (r *Runtime) compactContext(ctx context.Context, focus string, selection llm.Selection, pending *llm.Message) (result string, err error) {
+// force is a manual override of summary input-size preflight only.
+func (r *Runtime) compactContext(ctx context.Context, focus string, selection llm.Selection, pending *llm.Message, force bool) (result string, err error) {
 	session := r.Current()
 	defer func() { err = r.compactionFailure(session, err) }()
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
@@ -172,7 +178,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	}
 	// Record the boundary before naming/summary preparation so a process killed
 	// before summary-request admission can still recover pending messages.
-	if _, err := r.Store.Append(session, "", "main", "status", "", false, map[string]string{"type": "compaction_started"}); err != nil {
+	if _, err := r.Store.Append(session, "", "main", "status", "", false, map[string]any{"type": "compaction_started", "force": force}); err != nil {
 		return "", fmt.Errorf("record compaction boundary: %w", err)
 	}
 	if r.namingDone != nil {
@@ -185,48 +191,51 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	messages, e := r.Store.Messages(r.Current())
-	if e != nil {
-		return "", e
-	}
-	prepared, e := prepareCompaction(messages, selection)
-	if e != nil {
-		return "", e
-	}
-	retention := prepared.retention
-	entries, e := r.Store.Branch(r.Current(), 0)
+	// Freeze the durable tip before projection. Later visible arrivals must be
+	// checked as committed tail, not silently included only in persistence.
+	entries, e := r.Store.Branch(session, 0)
 	if e != nil {
 		return "", e
 	}
 	if len(entries) == 0 {
 		return "", errors.New("nothing to compact")
 	}
-	visible := 0
-	retainFrom := entries[len(entries)-1].ID + 1
-	inputIDs := make([]int64, 0, len(retention.Inputs))
-	for _, v := range entries {
-		if !v.Visible {
-			continue
-		}
-		if len(inputIDs) < len(retention.Inputs) && visible == retention.Inputs[len(inputIDs)] {
-			inputIDs = append(inputIDs, v.ID)
-		}
-		if visible == retention.Start {
-			retainFrom = v.ID
-			break
-		}
-		visible++
-	}
-	if visible < retention.Start || len(inputIDs) != len(retention.Inputs) {
-		return "", errors.New("no safe compaction cut")
-	}
-	// Summarize the same actor projection used for admission and retention.
-	// UI-only child records and expanded tool presentations remain in history.
-	text, e := r.summarize(ctx, "main", "", selection, prepared.transcript, focus)
+	sourceTip := entries[len(entries)-1].ID
+	messages, e := r.Store.MessagesAt(session, sourceTip)
 	if e != nil {
 		return "", e
 	}
-	text = compactionHandoff(text)
+	var retainFrom int64 // Zero until an actual retained branch entry is known.
+	var inputIDs []int64
+	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: messages, Lineage: session}
+	compacted, e := r.compactInput(ctx, compactionInput{
+		actor: "main", snapshot: snapshot, estimator: &r.estimator, focus: focus, force: force,
+		freeze: func(prepared preparedCompaction) error {
+			retention := prepared.retention
+			inputIDs = make([]int64, 0, len(retention.Inputs))
+			visible := 0
+			for _, entry := range entries {
+				if !entry.Visible {
+					continue
+				}
+				if len(inputIDs) < len(retention.Inputs) && visible == retention.Inputs[len(inputIDs)] {
+					inputIDs = append(inputIDs, entry.ID)
+				}
+				if visible == retention.Start {
+					retainFrom = entry.ID
+					break
+				}
+				visible++
+			}
+			if visible < retention.Start || len(inputIDs) != len(retention.Inputs) {
+				return errors.New("no safe compaction cut")
+			}
+			return nil
+		},
+	})
+	if e != nil {
+		return "", e
+	}
 	r.routeMu.Lock()
 	defer r.routeMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -238,13 +247,26 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if e != nil {
 		return "", e
 	}
+	if retainFrom == 0 {
+		if len(currentEntries) == 0 {
+			return "", errors.New("compaction history changed during projection")
+		}
+		// IDs are global across sessions. An empty frozen suffix starts at
+		// this branch's first post-cut entry, not necessarily sourceTip+1.
+		retainFrom = currentEntries[len(currentEntries)-1].ID + 1
+		for _, entry := range currentEntries {
+			if entry.ID > sourceTip {
+				retainFrom = entry.ID
+				break
+			}
+		}
+	}
 	currentMessages, e := r.Store.Messages(r.Current())
 	if e != nil {
 		return "", e
 	}
-	assembled := []llm.Message{{Type: llm.TypeAssistant, Content: text}}
-	assembled = append(assembled, prepared.inputs...)
-	visible = 0
+	assembled := append([]llm.Message(nil), compacted.messages...)
+	visible := 0
 	for _, entry := range currentEntries {
 		if !entry.Visible {
 			continue
@@ -255,7 +277,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		message := currentMessages[visible]
 		message.State = nil
 		visible++
-		if entry.ID >= retainFrom {
+		if entry.ID > sourceTip {
 			assembled = append(assembled, message)
 		}
 	}
@@ -278,7 +300,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		v, e := r.Store.Continue(r.current, text, entries[len(entries)-1].ID, retainFrom, inputIDs, prepared.at, pending)
+		v, e := r.Store.Continue(r.current, compacted.messages[0], sourceTip, retainFrom, inputIDs, compacted.prepared.at, pending)
 		if e != nil {
 			return e
 		}
@@ -297,7 +319,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		return "", e
 	}
 	r.emit(Event{Kind: "usage"})
-	return "## Compacted · " + name + "\n\n" + text, nil
+	return "## Compacted · " + name + "\n\n" + compacted.summary, nil
 }
 
 func (r *Runtime) stopNaming() {

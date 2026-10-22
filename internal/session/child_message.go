@@ -45,7 +45,7 @@ func (r *Runtime) addChildMessageTool() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := r.checkContext(); err != nil {
+		if err := r.checkContext(false); err != nil {
 			return nil, err
 		}
 		r.childStartMu.Lock()

@@ -141,7 +141,7 @@ func TestUsageLifetimeCompactionPreservesEveryCounter(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			r.Emit = nil
 			compactionBudget(t, r)
-			seedCompactionHistory(t, r, strings.Repeat("Earlier research notes. ", 700))
+			seedCompactionHistory(t, r, strings.Repeat("Earlier research notes. ", 400))
 			if !automatic {
 				if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 					t.Fatal(err)
@@ -181,7 +181,8 @@ func TestCompactionUsageCountsOnlyAttemptedInferenceDespitePersistenceFailure(t 
 	}{
 		{"system prompt", `CREATE TRIGGER fail_compaction BEFORE INSERT ON entries WHEN json_extract(NEW.content_json,'$.type')='system_prompt' BEGIN SELECT RAISE(ABORT, 'fixture compaction persistence failure'); END`, 0},
 		{"input", `CREATE TRIGGER fail_compaction BEFORE INSERT ON entries WHEN json_extract(NEW.content_json,'$.type')='request_message' AND json_extract(NEW.content_json,'$.role')='user' BEGIN SELECT RAISE(ABORT, 'fixture compaction persistence failure'); END`, 0},
-		{"reply", `CREATE TRIGGER fail_compaction BEFORE INSERT ON entries WHEN json_extract(NEW.content_json,'$.type')='request_message' AND json_extract(NEW.content_json,'$.role')='assistant' BEGIN SELECT RAISE(ABORT, 'fixture compaction persistence failure'); END`, 1},
+		{"instruction", `CREATE TRIGGER fail_compaction BEFORE INSERT ON entries WHEN json_extract(NEW.content_json,'$.type')='request_message' AND json_extract(NEW.content_json,'$.message.type')='runtime_instruction' BEGIN SELECT RAISE(ABORT, 'fixture compaction persistence failure'); END`, 0},
+		{"reply", `CREATE TRIGGER fail_compaction BEFORE INSERT ON entries WHEN json_extract(NEW.content_json,'$.type')='request_message' AND json_extract(NEW.content_json,'$.message.content')='Earlier research completed.' BEGIN SELECT RAISE(ABORT, 'fixture compaction persistence failure'); END`, 1},
 		{"handoff", `CREATE TRIGGER fail_compaction BEFORE INSERT ON sessions WHEN NEW.predecessor_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'fixture compaction persistence failure'); END`, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -207,7 +208,7 @@ func TestCompactionUsageCountsOnlyAttemptedInferenceDespitePersistenceFailure(t 
 			if _, err := historytest.DB(t, r.Store).Exec(test.trigger); err != nil {
 				t.Fatal(err)
 			}
-			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil)
+			_, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false)
 			if err == nil || !strings.Contains(err.Error(), "fixture compaction persistence failure") || calls != test.calls || r.Current() != before {
 				t.Fatal("wrong failure boundary or provider attempts", err, calls)
 			}

@@ -114,7 +114,7 @@ func TestApplyStartsAtSchema6(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if got := scalar(t, db, "PRAGMA user_version"); got != "10" {
+	if got := scalar(t, db, "PRAGMA user_version"); got != fmt.Sprint(CurrentVersion) {
 		t.Fatal(got)
 	}
 }

@@ -38,7 +38,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 					r.selection.Model.BinaryFiles = pdfCapability()
 					messages := []llm.Message{
 						{Type: llm.TypeUserInput, Content: "Earlier research instruction", InputTimeMS: time.Now().Add(-time.Minute).UnixMilli()},
-						{Type: llm.TypeAssistant, Content: strings.Repeat("Older completed cycle. ", 1000)},
+						{Type: llm.TypeAssistant, Content: strings.Repeat("Older completed cycle. ", 400)},
 						{Type: llm.TypeUserInput, Content: "Read the original document", InputTimeMS: time.Now().Add(-time.Second).UnixMilli()},
 						{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "unread-document", Name: "read", Arguments: []byte(`{"path":"unread.pdf"}`)}}},
 						{Type: llm.TypeToolResult, CallID: "unread-document", Content: `{"ok":true,"kind":"document"}`, Files: []llm.BinaryFile{file}},
@@ -87,9 +87,8 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 					r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 						if req.NoTools {
 							summaries++
-							input := req.Messages[0].Content
-							if !strings.Contains(input, "Older completed cycle.") || strings.Contains(input, "unread.pdf") || strings.Contains(input, "unread-document") || strings.Contains(input, file.SHA256) {
-								t.Fatal("summary consumed metadata instead of preserving the never-consumed original", input)
+							if !compactionMessagesContain(req.Messages, "Older completed cycle.") || compactionMessagesContain(req.Messages, "unread.pdf") || compactionMessagesContain(req.Messages, "unread-document") || compactionMessagesContain(req.Messages, file.SHA256) {
+								t.Fatal("summary consumed the never-consumed original", req.Messages)
 							}
 							return emit(llm.StreamEvent{Kind: "text", Text: "Earlier research completed; inspect the retained original next."})
 						}
@@ -158,7 +157,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 									found = true
 								}
 							}
-							if !found || r.checkContext() != nil || !recoverableCompaction(err) {
+							if !found || r.checkContext(false) != nil || !recoverableCompaction(err) {
 								t.Fatal("failed handoff lost original or invalidated unchanged context")
 							}
 						}

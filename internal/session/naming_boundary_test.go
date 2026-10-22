@@ -126,7 +126,7 @@ func TestCompactionCancellationDoesNotWaitForBackgroundNaming(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.compactContext(ctx, "", r.CurrentSelection(), nil)
+		_, err := r.compactContext(ctx, "", r.CurrentSelection(), nil, false)
 		done <- err
 	}()
 	select {

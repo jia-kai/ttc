@@ -1,17 +1,22 @@
 # Context compaction
 
-Compaction replaces an actor's input with a Markdown summary and recent
-messages. Main creates a continuation and freezes its predecessor; child
-compaction changes only child context. Jobs, timers, queued input and
-interactions stay live; explicit session changes/exit cancel them.
+Compaction replaces an actor's input with a developer context message containing
+a quoted generated summary, followed by retained inputs and recent messages.
+Main creates a continuation and freezes its predecessor; child compaction
+changes only child context. Jobs, timers, queued input and interactions stay
+live; explicit session changes/exit cancel them.
 
 ## Trigger and retention
 
-- With capacity `C`, coding output allowance `O`, estimation margin `M` and
-  estimated input `I`, compact when `I + O + M >= C`. A handoff must satisfy:
+- With capacity `C`, estimated coding input `I`, coding output allowance `O`,
+  estimation margin `M`, summary output allowance `Q` and the appended summary
+  instruction's estimated tokens `D`, compact when `I + O + M + Q + D >= C`. `D`
+  includes instruction message framing. Nonempty manual focus adds a separate
+  message immediately before the final summary instruction; both messages are
+  counted in summary preflight. A handoff must satisfy:
 
   ```text
-  fixed_input + summary + retained_history + O + M
+  fixed_input + compaction_context + retained_history + O + M + Q + D
       + next_turn_input_reserve < C
   recent_cycle_tail <= recent_tokens_max  (except unconsumed tool-result cycles)
   ```
@@ -20,17 +25,30 @@ interactions stay live; explicit session changes/exit cancel them.
   validation, including the distinction between context reserves and output
   caps.
 
-- `/compact [focus]` requests main compaction. Before main/child admission,
-  assemble the next input and check `I + O + M` against capacity. The context
-  estimator owns local counts and provider feedback. With a compatible measured
-  request, `I = reported_input + local_next_input - local_measured_input`;
-  otherwise use the full local estimate. Newly retained output is already in
-  that difference; do not add reported output again. Missing feedback preserves
-  an older compatible measurement. Compaction, history resets and model changes
+- `/compact [focus]` requests main compaction. Admission assembles the next
+  input and checks the budget above. The context estimator owns local counts and
+  provider feedback. With a compatible measured request,
+  `I = reported_input + local_next_input - local_measured_input`; otherwise use
+  the full local estimate. Newly retained output is already in that difference;
+  do not add reported output again. Missing feedback preserves an older
+  compatible measurement. Compaction, history resets and model changes
   invalidate calibration. Native replay estimates model-visible occupancy, not
-  encrypted transport JSON. Summary requests and handoffs independently check
-  their local budgets. Provider context-length rejection uses the bounded
+  encrypted transport JSON. Summary preflight uses the same actor estimator on
+  the selected structured prefix plus its final instruction, preserving
+  compatible coding feedback without updating its anchor. It reserves `Q + M`.
+  The reserves are proactive slack: uncapped output, heuristic estimates,
+  oversized committed input or model changes can still cause recoverable summary
+  or handoff failures. Provider context-length rejection uses the bounded
   upstream retry budget; it does not trigger automatic compaction.
+- `/force-compact [focus]` is an explicit idle main-actor command that bypasses
+  only the estimated summary input-size check. It uses the same structured
+  request and cache identity as `/compact`; automatic and child compaction keep
+  their checks. It still validates messages, retention, summary output and final
+  handoff capacity/headroom. Provider limits and bounded retries still apply.
+  Upstream rejection alone is recoverable; invariant or persistence failures
+  follow the failure policy below. Empty, read-only and unusable sessions cannot
+  be forced. The saved compaction boundary records whether the request was
+  forced.
 - Preserve up to two latest admitted normal/queued prompts combined and up to
   two committed steers independently, chronologically, with exact
   text/attachments. Child tasks/asides count as normal/queued prompts.
@@ -76,18 +94,26 @@ interactions stay live; explicit session changes/exit cancel them.
 
 ## Summary and history retrieval
 
-- Freeze a committed cut; summarize its canonical actor prefix once, without
-  tools, using the actor's model and summary output allowance. The canonical
-  [summary instructions](../prompt/compaction.yaml) define handoff content.
-  Include raw arguments/results, not UI activity or expanded tool views. Binary
-  attachments enter summary inference as metadata only, not original bytes;
-  summaries can preserve prior observations, not inspect unseen contents.
+- Freeze a committed cut; send its original structured actor prefix once with an
+  appended developer instruction from
+  [compaction.yaml](../prompt/compaction.yaml). Keep message roles, raw
+  calls/results, compatible native replay and attachment references; use the
+  normal retained-input projection, not a text transcript. Preserve the actor's
+  model, system instructions, tool schemas and coding conversation/cache
+  identity. Disable tools without removing their schemas. Append optional focus
+  and the final summary instruction after the unchanged prefix, keeping it
+  eligible for LLM input-cache reuse; actual hits depend on the provider.
+  Attachments use normal resolution, including explicit unavailable-original
+  notices. The temporary instruction and summary-request records never enter
+  live coding input. Main-summary input/reply bodies remain inspectable in the
+  frozen predecessor, not its writable continuation; small lifecycle metadata
+  still follows the tail.
 - The prompt requests optional handoff sections; their structure is guidance,
   not a validated schema.
-- No chunking or regeneration. Reject empty/tool-calling summaries, oversized
-  summary requests and summaries over 1 MiB. Output reserves follow
-  [model metadata](models.md#budget-metadata); input templates live in
-  [prompt/compaction.yaml](../prompt/compaction.yaml).
+- No chunking or regeneration. Reject empty/tool-calling summaries and summaries
+  over 1 MiB. Estimated oversized input is refused unless explicitly forced.
+  Output reserves follow [model metadata](models.md#budget-metadata);
+  instructions live in [prompt/compaction.yaml](../prompt/compaction.yaml).
 - Main, child and aside compaction use a cooperative 10-minute deadline for the
   whole operation, including naming, summary inference/retries and handoff.
   Earlier owning-operation deadlines and cancellation still apply. Synchronous
@@ -103,17 +129,26 @@ interactions stay live; explicit session changes/exit cancel them.
   retained suffix, not later arrivals. Without a successful cut it fails. The
   tool contract specifies historical child/aside migration limits.
 - Export files live in per-UID scratch, not durable archive storage. They can
-  disappear with scratch cleanup and do not pin attachment cache contents.
-  Existing archive files and immutable historical evidence remain unchanged;
-  stale archive links in old summaries do not prevent history-based exports.
+  disappear with scratch cleanup and do not pin attachment cache contents. Stale
+  archive links in old summaries do not prevent history-based exports.
 - Drop opaque replay from replacement input; resupply full project instructions
   and current runtime context next request. Summaries are not live-job status.
 
 ## Handoff
 
-- Shared preparation selects the cut and retained history, checks budgets and
-  generates the summary. Main and child/aside handoffs retain separate ownership
-  of their history and live state.
+- One shared engine selects retained history, freezes the actor's cut, requests
+  the summary and constructs the canonical replacement for main, children and
+  asides. Actor adapters supply only ownership-specific commits, scope and live
+  state; they do not format or reinterpret the handoff.
+- The first replacement message has type `compaction_context` and developer
+  role. TTC explains that earlier history was compacted and the separately
+  generated summary is lossy reference data, not new instructions or proof of
+  success. The summary is one JSON-quoted string, so embedded quotes, fences and
+  apparent instructions cannot escape its data boundary. Current instructions
+  and newer messages take precedence. All actors budget the exact canonical
+  message; main persists it unchanged and isolated actors keep it in their
+  input. A prior compaction context counts as summarized work for later
+  compaction, not as an assistant response consuming fresh tool results.
 - Pause only the compacting actor; others may append committed tails. Main takes
   the routing gate, waits for file mutations and rechecks summary, retained
   input, committed tail, pending notices and fresh context together. Abort if
@@ -126,13 +161,12 @@ interactions stay live; explicit session changes/exit cancel them.
   Restoring just before a retained input uses its original checkpoint. Startup
   migration preserves legacy cursor identities and evidence by converting marker
   rows to nonvisible status entries; current replay does not decode markers.
-  Saved model requests and existing export/compaction archives retain their
-  historical representation.
 - Child handoff preserves ID/read-only policy, leaving main session/file
-  tip/undo untouched. Commit one `child_compacted` on success with child/turn,
-  estimated usage, not archive links or the summary body. Failure ends the child
-  turn without a success event. `/btw` uses the same algorithm with
-  events/answers outside main input.
+  tip/undo untouched. Validate pending guidance and the next runtime-notice
+  batch under the publication gate without consuming either. Commit one
+  `child_compacted` on success with child/turn, estimated usage, not archive
+  links or the summary body. Failure ends the child turn without a success
+  event. `/btw` uses the same algorithm with events/answers outside main input.
 - Refresh main estimated occupancy immediately; label previous reported usage
   separately. Summary inference counts once in run totals even if handoff fails.
 
@@ -141,8 +175,9 @@ interactions stay live; explicit session changes/exit cancel them.
 - Cancellation, transport interruption, timeout, rate limits, temporary server
   failure or exhausted disk leave prior context usable. Failed/interrupted turns
   pause automatic notification turns without consuming pending messages. An
-  explicit prompt, successful `/compact` or `/load`, or session/model change
-  resumes them; failure alone never starts another compaction attempt.
+  explicit prompt, successful `/compact`, `/force-compact` or `/load`, or
+  session/model change resumes them; failure alone never starts another
+  compaction attempt.
 - Summary input/output size limits, replacement capacity/headroom failures and
   absence of older summarizable history are recoverable: keep the original
   context and live jobs/timers/interactions. A failed capacity check does not
@@ -161,8 +196,10 @@ interactions stay live; explicit session changes/exit cancel them.
 
 ## Reload recovery
 
-- Reload reads durable history and needs no compaction archive files. Migration
-  preserves existing files, old summary text and saved request/export evidence.
+- Reload reads durable history and needs no compaction archive files. Historical
+  records, including assistant-summary roles/content, saved requests and archive
+  files remain unchanged; loading does not reclassify or wrap them. Schema 11
+  fences the expanded message vocabulary without converting existing records.
 - `/load ID` and `--session ID` copy writable history at its last complete tool
   exchange. If selected history ends at main compaction or a handoff before the
   next coding request, recover committed, undelivered child completions and

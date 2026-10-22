@@ -35,6 +35,9 @@ func messageLine(item line, message llm.Message) line {
 		}
 	case llm.PresentationContext:
 		item.text, item.system = "Runtime context · inspect", true
+		if message.Type == llm.TypeCompactionContext {
+			item.text = "Compaction context · inspect"
+		}
 	case llm.PresentationNotification:
 		item = notificationLine(item, message.Content)
 	case llm.PresentationGuidance:

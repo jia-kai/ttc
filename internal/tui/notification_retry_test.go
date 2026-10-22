@@ -75,7 +75,7 @@ func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionT
 		if oversized {
 			for _, message := range []llm.Message{
 				{Type: llm.TypeUserInput, Content: "Older research task"},
-				{Type: llm.TypeAssistant, Content: strings.Repeat("older evidence ", 6000)},
+				{Type: llm.TypeAssistant, Content: compactionFixtureEvidence(t, p.snapshot()[0])},
 			} {
 				if _, err := r.Store.Append(r.Current(), "", "main", "message", message.Role(), true, message); err != nil {
 					t.Fatal(err)
@@ -139,7 +139,7 @@ func assertNotificationDelivered(t *testing.T, u *questionTestUI, req llm.Reques
 }
 
 func TestNotificationCompactionFailurePausesAutomaticRetryAndExplicitRecoveryResumes(t *testing.T) {
-	for _, recovery := range []string{"compact", "prompt", "model", "load"} {
+	for _, recovery := range []string{"compact", "force-compact", "prompt", "model", "load"} {
 		t.Run(recovery, func(t *testing.T) {
 			u, p := newNotificationRetryUI(t, true, false)
 			id := queueTestNotification(t, u, "original completion")
@@ -158,8 +158,8 @@ func TestNotificationCompactionFailurePausesAutomaticRetryAndExplicitRecoveryRes
 			assertNotificationRetryPaused(t, u, p, 2)
 			before := u.runtime.Current()
 			switch recovery {
-			case "compact":
-				u.typeText("/compact")
+			case "compact", "force-compact":
+				u.typeText("/" + recovery)
 			case "prompt":
 				u.typeText("Retry the research")
 			case "model":
@@ -168,7 +168,7 @@ func TestNotificationCompactionFailurePausesAutomaticRetryAndExplicitRecoveryRes
 				u.typeText("/load " + before)
 			}
 			u.key(tcell.KeyEnter)
-			if recovery == "compact" {
+			if recovery == "compact" || recovery == "force-compact" {
 				u.wait(t, "Command result")
 				u.key(tcell.KeyEscape)
 			}
@@ -211,25 +211,29 @@ func TestNotificationCompactionInterruptionDoesNotStarveQueuedPrompt(t *testing.
 }
 
 func TestFailedManualCompactionKeepsAutomaticNotificationsPaused(t *testing.T) {
-	u, p := newNotificationRetryUI(t, true, false)
-	// Both automatic and first manual compaction fail; only the second manual
-	// attempt succeeds. Failed recovery must not reopen notification-only turns.
-	p.failures[3] = true
-	id := queueTestNotification(t, u, "pending manual recovery")
-	waitNotificationRetryRequest(t, p.ready)
-	close(p.release)
-	assertNotificationRetryPaused(t, u, p, 2)
-	u.typeText("/compact")
-	u.key(tcell.KeyEnter)
-	u.wait(t, "Error: context deadline exceeded")
-	assertNotificationRetryPaused(t, u, p, 3)
-	u.typeText("/compact")
-	u.key(tcell.KeyEnter)
-	u.wait(t, "Command result")
-	u.key(tcell.KeyEscape)
-	u.wait(t, "Pending notices delivered.")
-	u.wait(t, "Turn complete")
-	assertNotificationDelivered(t, u, p.snapshot()[4], id)
+	for _, command := range []string{"/compact", "/force-compact"} {
+		t.Run(command, func(t *testing.T) {
+			u, p := newNotificationRetryUI(t, true, false)
+			// Both automatic and first manual compaction fail; only the second manual
+			// attempt succeeds. Failed recovery must not reopen notification-only turns.
+			p.failures[3] = true
+			id := queueTestNotification(t, u, "pending manual recovery")
+			waitNotificationRetryRequest(t, p.ready)
+			close(p.release)
+			assertNotificationRetryPaused(t, u, p, 2)
+			u.typeText(command)
+			u.key(tcell.KeyEnter)
+			u.wait(t, "Error: context deadline exceeded")
+			assertNotificationRetryPaused(t, u, p, 3)
+			u.typeText(command)
+			u.key(tcell.KeyEnter)
+			u.wait(t, "Command result")
+			u.key(tcell.KeyEscape)
+			u.wait(t, "Pending notices delivered.")
+			u.wait(t, "Turn complete")
+			assertNotificationDelivered(t, u, p.snapshot()[4], id)
+		})
+	}
 }
 
 func TestForegroundFailurePausesFreshNotificationsUntilUserPrompt(t *testing.T) {
@@ -259,6 +263,31 @@ func TestForegroundFailurePausesFreshNotificationsUntilUserPrompt(t *testing.T) 
 			assertNotificationDelivered(t, u, requests[2], id)
 		})
 	}
+}
+
+func TestInterruptedForceCompactKeepsNotificationsUntilSuccessfulRecovery(t *testing.T) {
+	u, p := newNotificationRetryUI(t, true, true)
+	u.typeText("/force-compact research focus")
+	u.key(tcell.KeyEnter)
+	waitNotificationRetryRequest(t, p.ready)
+	if !p.snapshot()[1].NoTools {
+		t.Fatal("manual force-compaction did not request a summary")
+	}
+	id := queueTestNotification(t, u, "completion during forced summary")
+	u.key(tcell.KeyEscape)
+	u.key(tcell.KeyEscape)
+	assertNotificationRetryPaused(t, u, p, 2)
+	u.typeText("/force-compact")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Command result")
+	u.key(tcell.KeyEscape)
+	u.wait(t, "Pending notices delivered.")
+	u.wait(t, "Turn complete")
+	requests := p.snapshot()
+	if len(requests) != 4 || !requests[2].NoTools || requests[3].NoTools {
+		t.Fatal("forced recovery failed to summarize once before delivering notifications", len(requests))
+	}
+	assertNotificationDelivered(t, u, requests[3], id)
 }
 
 func TestAutomaticNotificationsContinueNormallyAfterSuccessfulTurn(t *testing.T) {

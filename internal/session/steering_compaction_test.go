@@ -21,7 +21,7 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	compactionBudget(t, r)
 	// Leave room for an immutable image as well as pending text instructions.
 	r.selection.Model.Budget.ContextLimit += 8192
-	seedCompactionHistory(t, r, strings.Repeat("Earlier research notes. ", 1800))
+	seedCompactionHistory(t, r, strings.Repeat("Earlier research notes. ", 1500))
 	before, generation := r.Current(), r.Generation()
 	path := filepath.Join(r.Workspace.Root, "steering.txt")
 	if err := os.WriteFile(path, []byte("ORIGINAL STEERING SNAPSHOT"), 0600); err != nil {

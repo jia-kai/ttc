@@ -164,7 +164,7 @@ func TestToolDeliveryCompactsEarlierHistoryBeforeFreshBatch(t *testing.T) {
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.NoTools {
 					summaries++
-					if !strings.Contains(req.Messages[0].Content, "Older checkpoint") || strings.Contains(req.Messages[0].Content, "fresh evidence") {
+					if !compactionMessagesContain(req.Messages, "Older checkpoint") || compactionMessagesContain(req.Messages, "fresh evidence") {
 						t.Fatal("summarizer did not isolate preceding history")
 					}
 					return emit(llm.StreamEvent{Kind: "text", Text: "Older checkpoint summarized; compare the fresh results."})
@@ -209,7 +209,7 @@ func TestToolDeliveryCompactsEarlierHistoryBeforeFreshBatch(t *testing.T) {
 			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Compare source files."}); err != nil {
 				t.Fatal(err)
 			}
-			if coding != 2 || summaries != 1 || r.checkContext() != nil {
+			if coding != 2 || summaries != 1 || r.checkContext(false) != nil {
 				t.Fatal("continuation failed", coding, summaries)
 			}
 			view, err := r.Jobs.View("main", job)

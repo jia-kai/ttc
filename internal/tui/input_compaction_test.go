@@ -15,6 +15,7 @@ import (
 	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/session"
 )
 
@@ -52,20 +53,17 @@ func (p *inputCompactionProvider) Stream(ctx context.Context, req llm.Request, e
 	if step == 0 {
 		selection := req.Selection
 		selection.Model.ID = "input-compaction-small-context"
-		base := contextbuild.Estimate(req.System) + selection.Model.Budget.OutputAllowance + selection.Model.Budget.EstimationMargin
-		for _, tool := range req.Tools {
-			base += contextbuild.Estimate(tool.Description) + contextbuild.Estimate(string(tool.Parameters)) + 16
-		}
-		for _, message := range req.Messages {
-			if message.Type != llm.TypeUserInput {
-				base += contextbuild.Tokens([]llm.Message{message})
-			}
-		}
-		selection.Model.Budget.ContextLimit = base + 3000
 		selection.Model.Budget.RecentTokensMin = 0
 		selection.Model.Budget.RecentTokensMax = 700
 		selection.Model.Budget.NextTurnInputReserve = 512
 		selection.Model.Budget.SummaryOutputAllowance = 512
+		base := contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: selection, System: req.System, Tools: req.Tools, Messages: req.Messages}).Input
+		oldOutput := contextbuild.Tokens([]llm.Message{{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier research notes. ", 700)}})
+		directive := contextbuild.Tokens([]llm.Message{{Type: llm.TypeRuntimeInstruction, Content: prompts.Compaction}})
+		// Cross the coding trigger with the seeded output, but keep room for
+		// the structured summary request's original system/tools and directive.
+		b := &selection.Model.Budget
+		b.ContextLimit = base + oldOutput + directive + b.SummaryOutputAllowance + b.EstimationMargin + b.OutputAllowance/2
 		p.selection = selection
 	}
 	p.mu.Unlock()

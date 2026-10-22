@@ -380,7 +380,7 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			setupRoleSkills(t, r)
 			compactionBudget(t, r)
-			seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 700))
+			seedCompactionHistory(t, r, strings.Repeat("Earlier evidence. ", 500))
 			selection := r.selection
 			initial, cursor, err := r.runtimeContext(context.Background(), actor, selection, contextCursor{})
 			if err != nil {
@@ -396,7 +396,7 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 			}}
 			if actor == "main" {
 				r.mainContext = cursor
-				_, err = r.compactContext(context.Background(), "", selection, nil)
+				_, err = r.compactContext(context.Background(), "", selection, nil, false)
 				cursor = r.mainContext
 			} else {
 				turn, beginErr := r.Store.BeginChildTurn(r.Current(), actor, selection)
@@ -404,7 +404,7 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 					t.Fatal(beginErr)
 				}
 				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: role == skills.Aside, estimator: &contextbuild.Estimator{}}
-				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 700)}}
+				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)}}
 				seedIsolatedHistory(t, r, actor, turn, messages)
 				_, cursor, err = r.compactChild(context.Background(), task, messages, cursor, nil)
 			}

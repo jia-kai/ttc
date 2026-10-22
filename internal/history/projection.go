@@ -162,6 +162,9 @@ func projectLabel(data entryPresentation) string {
 		m := data.Message
 		switch m.Type.Presentation() {
 		case llm.PresentationContext:
+			if m.Type == llm.TypeCompactionContext {
+				return "Compaction context · inspect"
+			}
 			return "Runtime context · inspect"
 		case llm.PresentationInstruction:
 			if m.Type == llm.TypeRuntimeInstruction {

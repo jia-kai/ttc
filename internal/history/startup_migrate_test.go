@@ -9,6 +9,7 @@ import (
 	"context"
 	"path/filepath"
 	"ttc/internal/filelock"
+	"ttc/internal/history/migrate"
 	"ttc/internal/privatefile"
 )
 
@@ -16,7 +17,7 @@ import (
 var schema5Fixture string
 
 func TestUnsupportedVersionRejectedBeforeLifetimeLock(t *testing.T) {
-	for _, version := range []int{4, 99} {
+	for _, version := range []int{4, schemaVersion + 1, 99} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "data")
 			if err := privatefile.PrivateDir(root); err != nil {
@@ -77,6 +78,15 @@ func TestOpenMigratesSchema5AndIsIdempotent(t *testing.T) {
 }
 
 func TestOpenDoesNotMigrateWithActiveLifetimeReader(t *testing.T) {
+	for _, version := range []int{5, 10} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			testOpenWaitsForLifetimeReader(t, version)
+		})
+	}
+}
+
+func testOpenWaitsForLifetimeReader(t *testing.T, oldVersion int) {
+	t.Helper()
 	root := filepath.Join(t.TempDir(), "data")
 	if err := privatefile.PrivateDir(root); err != nil {
 		t.Fatal(err)
@@ -86,7 +96,11 @@ func TestOpenDoesNotMigrateWithActiveLifetimeReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err = db.Exec(schema5Fixture); err != nil {
+	fixture := schema5Fixture
+	if oldVersion == 10 {
+		fixture = schema + "\nPRAGMA user_version=10;"
+	}
+	if _, err = db.Exec(fixture); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := filelock.AcquireShared(context.Background(), filepath.Join(root, "history-use.lock"))
@@ -94,7 +108,9 @@ func TestOpenDoesNotMigrateWithActiveLifetimeReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	store, err := Open(root)
+	store, err := OpenWithProgress(root, func(progress migrate.Progress) {
+		t.Errorf("blocked migration reported progress: %+v", progress)
+	})
 	if store != nil {
 		store.Close()
 	}
@@ -102,7 +118,33 @@ func TestOpenDoesNotMigrateWithActiveLifetimeReader(t *testing.T) {
 		t.Fatalf("upgrade with live reader: %v", err)
 	}
 	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 5 {
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != oldVersion {
 		t.Fatalf("blocked migration changed version %d: %v", version, err)
 	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var transitions [][2]int
+	store, err = OpenWithProgress(root, func(progress migrate.Progress) {
+		if progress.Phase == "complete" {
+			transitions = append(transitions, [2]int{progress.FromVersion, progress.ToVersion})
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("unblocked migration version %d: %v", version, err)
+	}
+	if oldVersion == 10 && (len(transitions) != 1 || transitions[0] != [2]int{10, 11}) {
+		t.Fatalf("version-only upgrade ran unexpected steps: %v", transitions)
+	}
+	second, err := OpenWithProgress(root, func(progress migrate.Progress) {
+		t.Errorf("current startup reported progress: %+v", progress)
+	})
+	if err != nil {
+		t.Fatalf("same-version store cannot share upgraded history: %v", err)
+	}
+	second.Close()
 }

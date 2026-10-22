@@ -213,7 +213,7 @@ func (r *Runtime) RedirectDismissedQuestion(input contextbuild.Input) (bool, err
 	if err := validateSteeringInput(input); err != nil {
 		return false, err
 	}
-	if err := r.checkContext(); err != nil {
+	if err := r.checkContext(false); err != nil {
 		return false, err
 	}
 	r.steers = append(r.steers, input)

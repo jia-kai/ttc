@@ -37,15 +37,19 @@ func TestTypedViewsCarryCanonicalMessagesAndRequestMessages(t *testing.T) {
 			t.Fatal(inspection, err)
 		}
 	}
-	id, err := s.RequestMessage(v.ID, turn, "compaction", "assistant", request, llm.Message{Type: llm.TypeAssistant, Content: "## Summary"})
+	request, err := s.StartRequest(v.ID, turn, "main", "compaction", v.Model)
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := s.ReadEntryView(ctx, id)
+	ids, err := s.RequestMessages(v.ID, turn, "compaction", request, []llm.Message{{Type: llm.TypeAssistant, Content: "## Summary"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := s.ReadEntryView(ctx, ids[0])
 	if err != nil || view.StatusType != "request_message" || view.Message != nil || view.Label != "compaction assistant · inspect" {
 		t.Fatal(view, err)
 	}
-	inspection, err := s.ReadInspection(ctx, id)
+	inspection, err := s.ReadInspection(ctx, ids[0])
 	if err != nil || inspection.Text != "## Summary" || !inspection.System || !inspection.Markdown {
 		t.Fatal(inspection, err)
 	}

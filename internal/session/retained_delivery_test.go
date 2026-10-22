@@ -17,16 +17,52 @@ import (
 	"ttc/internal/prompts"
 )
 
-func TestSummaryTranscriptPreservesRetainedProvenance(t *testing.T) {
-	input := llm.Message{Type: llm.TypeUserInput, InputSource: "task", InputTimeMS: 1000, RetainedAtMS: 9000, Content: "Original child task."}
-	transcript, err := summaryTranscript([]llm.Message{input})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{input.Content, `"input_source":"task"`, `"input_time_ms":1000`, `"retained_at_ms":9000`} {
-		if !strings.Contains(transcript, want) {
-			t.Fatalf("summary transcript lost retained provenance %q: %s", want, transcript)
+func TestSummaryRequestPreservesRetainedProvenance(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Main task")
+	r.selection.Model.Budget.RecentTokensMin = 0
+	r.selection.Model.Budget.RecentTokensMax = 100
+	r.selection.Model.Images = true
+	file := llm.BinaryFile{Path: "/snapshot/original.png", MIMEType: "image/png", Bytes: 20}
+	input := llm.Message{Type: llm.TypeUserInput, InputSource: "queue", InputTimeMS: 1000, RetainedAtMS: 9000, Content: "Original queued task.", Files: []llm.BinaryFile{file}}
+	requests := 0
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+		requests++
+		found := 0
+		for i, message := range req.Messages {
+			if message.Type != llm.TypeUserInput || !strings.Contains(message.Content, `"retained_inputs"`) {
+				continue
+			}
+			found++
+			if i == 0 || req.Messages[i-1].Role() != "developer" || req.Messages[i-1].Content != prompts.RetainedInputs || !reflect.DeepEqual(message.Files, input.Files) {
+				t.Fatal("summary lost retained-input developer format or native attachment", req.Messages)
+			}
+			var group struct {
+				Type   string `json:"type"`
+				Inputs []struct {
+					Type      string `json:"type"`
+					Source    string `json:"source"`
+					Timestamp string `json:"timestamp"`
+					Content   string `json:"content"`
+					Indices   []int  `json:"attachment_indices"`
+				} `json:"inputs"`
+			}
+			if err := json.Unmarshal([]byte(message.Content), &group); err != nil || group.Type != "retained_inputs" || len(group.Inputs) != 1 {
+				t.Fatal("invalid retained-input summary projection", message, err)
+			}
+			got := group.Inputs[0]
+			if got.Type != "queued_user_input" || got.Source != "queue" || got.Timestamp != "8.00 seconds before compaction" || got.Content != input.Content || !reflect.DeepEqual(got.Indices, []int{0}) {
+				t.Fatal("summary changed original retained provenance", got)
+			}
 		}
+		if found != 1 {
+			t.Fatal("summary must use the coding retained-input projection exactly once", found)
+		}
+		return emit(llm.StreamEvent{Kind: "text", Text: "Retained task handoff."})
+	}}
+	snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{input}, Lineage: r.Current()}
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, &r.estimator, "", false); err != nil || requests != 1 {
+		t.Fatal("retained-input summary failed", requests, err)
 	}
 }
 
@@ -66,7 +102,7 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 			}
 			task.prefix = []llm.Message{
 				{Type: llm.TypeUserInput, InputSource: "normal", InputTimeMS: 500, Content: "Older unselected task"},
-				{Type: llm.TypeAssistant, Content: strings.Repeat("Old child research notes. ", 700)},
+				{Type: llm.TypeAssistant, Content: strings.Repeat("Old child research notes. ", 400)},
 				{Type: llm.TypeUserInput, InputSource: "queue", InputTimeMS: 1000, Content: queueText, Files: []llm.BinaryFile{shared, image}},
 				{Type: llm.TypeUserInput, InputSource: "steer", InputTimeMS: 2000, Content: steerText, Files: []llm.BinaryFile{other}},
 				{Type: llm.TypeUserInput, InputSource: "steer", InputTimeMS: 3000, Content: lastSteer, Files: []llm.BinaryFile{shared}},
@@ -76,13 +112,13 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				if req.NoTools {
 					summaries++
-					if !strings.Contains(req.Messages[0].Content, "Old child research notes.") {
+					if !compactionMessagesContain(req.Messages, "Old child research notes.") {
 						return fmt.Errorf("summary omitted isolated old work")
 					}
 					return emit(llm.StreamEvent{Kind: "text", Text: "Isolated handoff."})
 				}
 				coding++
-				if summaries != 1 || !strings.HasPrefix(req.Messages[0].Content, "Isolated handoff.") {
+				if summaries != 1 || !reflect.DeepEqual(req.Messages[0], llm.NewCompactionContext("Isolated handoff.")) {
 					return fmt.Errorf("coding started without one compaction handoff")
 				}
 				formatIndex, formats, human := -1, 0, 0
