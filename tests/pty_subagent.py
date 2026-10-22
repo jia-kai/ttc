@@ -285,17 +285,22 @@ def main():
             if args.failure:
                 expected_requests -= 1  # Last two pre-output attempts share one request record.
             assert len(meters) == expected_requests
-            usage = [json.loads(attempts)[-1]['usage'] for status, attempts in meters if status == 'completed']
+            completed = [json.loads(attempts)[-1] for status, attempts in meters if status == 'completed']
             completed_requests = expected_requests - (2 if args.failure else 0)
-            assert len(usage) == completed_requests
-            if not args.offline:
+            assert len(completed) == completed_requests
+            assert all(attempt['status'] == 'completed' for attempt in completed)
+            if args.offline:
+                # Scripted responses complete without provider-measured token usage.
+                assert all('usage' not in attempt for attempt in completed)
+            else:
+                usage = [attempt['usage'] for attempt in completed]
                 assert sum(u['input_tokens'] for u in usage) == 100 * completed_requests
                 assert sum(u['cached_input_tokens'] for u in usage) == 32 * completed_requests
             if args.failure:
                 retries = db.execute("SELECT content_json FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='model_retry'", (finish['child_id'],)).fetchall()
                 assert len(retries) == 2
                 assert [json.loads(row[0])['retry']['attempt'] for row in retries] == [2, 3]
-        coverage = ('offline foreground disposal, UTF-8 bounded answer, exact durable reply, three metered requests'
+        coverage = ('offline foreground disposal, UTF-8 bounded answer, exact durable reply, three completed requests without usage'
                     if args.offline else 'HTTP low-variant child, isolated read, background answer delivered once, metering')
         if args.failure:
             coverage = 'bounded child retry exhaustion, partial answer, caller warning, durable full transcripts'
