@@ -84,6 +84,7 @@ type Authenticator struct {
 	CredentialPath string
 	authGate       chan struct{} // Serializes credential changes; waiters can cancel independently.
 	credentials    *Credentials
+	idleTimeout    time.Duration // Response inactivity interval; zero selects the provider default.
 }
 
 // NewAuthenticator constructs an authenticator for an explicit private credential path.
@@ -398,7 +399,7 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 		return result, errors.New(prompts.OpenAIInvalidAuthHTTPConfiguration)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, e := a.Client.Do(req)
+	resp, e := doIdleHTTP(a.Client, req, a.idleTimeout)
 	if e != nil {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -413,6 +414,10 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 		// rejects the request. Repeating that local policy cannot recover.
 		if resp != nil {
 			return result, errors.New(prompts.OpenAIAuthRedirectPolicyFailed)
+		}
+		var idle *idleHTTPError
+		if errors.As(e, &idle) {
+			return result, result.failure(idle)
 		}
 		return result, result.failure(errors.New(prompts.OpenAIAuthTransportFailed))
 	}
@@ -432,6 +437,9 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 		}
 		diagnostic := authHTTPFailure(resp.StatusCode, raw, readErr, func(text string) string { return a.redactAuthTokens(text, b, raw) })
 		result.requestID = a.redactAuthTokens(result.requestID, raw)
+		if readErr != nil && !json.Valid(raw) {
+			result.requestID = ""
+		}
 		return result, result.failure(diagnostic)
 	}
 	raw, e := io.ReadAll(io.LimitReader(resp.Body, maxCredentialBytes+1))
@@ -445,6 +453,15 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 		return result, errors.New(prompts.OpenAIAuthCertificateFailed)
 	}
 	result.requestID = a.redactAuthTokens(result.requestID, raw)
+	var idle *idleHTTPError
+	if errors.As(e, &idle) {
+		// Incomplete JSON can contain newly issued credentials that cannot yet
+		// be parsed for redaction. Do not publish an unverified header value.
+		if !json.Valid(raw) {
+			result.requestID = ""
+		}
+		return result, result.failure(idle)
+	}
 	if e != nil || len(raw) > maxCredentialBytes || json.Unmarshal(raw, out) != nil {
 		return result, result.failure(fmt.Errorf(prompts.OpenAIInvalidAuthResponse, resp.StatusCode))
 	}
@@ -521,10 +538,14 @@ func (a *Authenticator) Login(ctx context.Context, ui auth.UI) error {
 			return e
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		resp, e := a.Client.Do(req)
+		resp, e := doIdleHTTP(a.Client, req, a.idleTimeout)
 		if e != nil {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			var idle *idleHTTPError
+			if errors.As(e, &idle) {
+				return idle
 			}
 			return errors.New("token exchange transport failed")
 		}
@@ -537,6 +558,10 @@ func (a *Authenticator) Login(ctx context.Context, ui auth.UI) error {
 		resp.Body.Close()
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		var idle *idleHTTPError
+		if errors.As(e, &idle) {
+			return idle
 		}
 		if resp.StatusCode != 200 || e != nil {
 			return fmt.Errorf("token exchange failed (HTTP %d)", resp.StatusCode)

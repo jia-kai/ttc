@@ -41,6 +41,10 @@ func invalidCertificate(err error) bool {
 // transportFailure retains safe error categories, not raw errors that can embed
 // request URLs, credentials or private proxy details.
 func transportFailure(err error) error {
+	var idle *idleHTTPError
+	if errors.As(err, &idle) {
+		return idle
+	}
 	detail := fmt.Sprintf(prompts.OpenAITransportErrorType, err)
 	var dns *net.DNSError
 	var network net.Error

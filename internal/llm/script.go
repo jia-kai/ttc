@@ -23,6 +23,9 @@ type Script struct {
 	next      int
 }
 
+// Cancel is a no-op because offline scripts have no remote inference operation.
+func (s *Script) Cancel(context.Context, string) error { return nil }
+
 // EstimateReplay uses a conservative transport estimate for synthetic codecs.
 func (s *Script) EstimateReplay(m Message) int { return ReplayTokens(m.State) }
 

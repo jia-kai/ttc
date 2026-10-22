@@ -37,11 +37,12 @@ func (a *Adapter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 	}
 	headers(req, tokens)
 	var resp *http.Response
+	var raw []byte
 	for attempt := 0; attempt < catalogMaxAttempts; attempt++ {
 		if err = ctx.Err(); err != nil {
 			return nil, err
 		}
-		resp, err = a.Client.Do(req.Clone(ctx))
+		resp, err = doIdleHTTP(a.Client, req.Clone(ctx), a.idleTimeout)
 		header := ""
 		if err != nil {
 			if ctx.Err() != nil {
@@ -52,7 +53,20 @@ func (a *Adapter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 			}
 			err = fmt.Errorf("model catalog transport failed (attempt %d/%d): %w", attempt+1, catalogMaxAttempts, err)
 		} else if resp.StatusCode == http.StatusOK {
-			break
+			header = resp.Header.Get("Retry-After")
+			raw, err = io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes+1))
+			resp.Body.Close()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if err == nil {
+				break
+			}
+			var idle *idleHTTPError
+			if !errors.As(err, &idle) {
+				return nil, err
+			}
+			err = fmt.Errorf("model catalog response inactive (attempt %d/%d): %w", attempt+1, catalogMaxAttempts, idle)
 		} else {
 			status := resp.StatusCode
 			header = resp.Header.Get("Retry-After")
@@ -69,7 +83,6 @@ func (a *Adapter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 			return nil, err
 		}
 	}
-	defer resp.Body.Close()
 	var catalog struct {
 		Models []struct {
 			Slug       string `json:"slug"`
@@ -87,13 +100,6 @@ func (a *Adapter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 			Modalities []string                                 `json:"input_modalities"`
 			Tiers      []struct{ ID, Name, Description string } `json:"service_tiers"`
 		} `json:"models"`
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes+1))
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, err
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err

@@ -48,6 +48,11 @@ type Event struct {
 // only a backend PartialError authorizes an application continuation request.
 type Inference interface {
 	Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
+	// Cancel is attempt-scoped best-effort remote cancellation by response ID.
+	// Stream owns cleanup with a fresh bounded context, independently of local
+	// transport abort. Missing identity/unsupported APIs must no-op, never cancel
+	// another attempt; implementations must honor context and concurrency.
+	Cancel(context.Context, string) error
 	EstimateReplay(llm.Message) int
 	TokenizerID(llm.ModelSpec) string
 }

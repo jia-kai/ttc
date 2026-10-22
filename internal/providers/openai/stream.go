@@ -284,26 +284,34 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 				}
 			}
 		}
-		resp, upstreamErr := a.Client.Do(h)
+		exchange := newResponseExchange(ctx, a.Cancel, a.idleTimeout)
+		resp, upstreamErr := a.Client.Do(h.WithContext(exchange.ctx))
+		if resp != nil && upstreamErr == nil {
+			exchange.setBody(resp.Body)
+		}
+		upstreamErr = exchange.watch.failure(upstreamErr)
 		committed, callbackFailed := false, false
 		retryAfter := ""
 		if upstreamErr != nil {
+			exchange.finish(false)
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return exchange.withCleanupError(ctx.Err())
 			}
 			if final := finalSubscriptionFailure(upstreamErr); final != nil {
-				return final
+				return exchange.withCleanupError(final)
 			}
 			// A response alongside an error means Client.Do rejected a redirect
 			// through local policy; retrying that policy cannot recover.
-			if resp != nil {
-				return errors.New(prompts.OpenAIRedirectPolicyFailed)
+			var idle *idleHTTPError
+			if resp != nil && !errors.As(upstreamErr, &idle) {
+				return exchange.withCleanupError(errors.New(prompts.OpenAIRedirectPolicyFailed))
 			}
 			upstreamErr = transportFailure(upstreamErr)
 		} else if resp.StatusCode != http.StatusOK {
 			retryAfter = resp.Header.Get("Retry-After")
 			upstreamErr = httpFailure(tokens.Access, resp)
-			resp.Body.Close()
+			upstreamErr = exchange.watch.failure(upstreamErr)
+			exchange.finish(false)
 		} else {
 			retryAfter = resp.Header.Get("Retry-After")
 			// Naming and compaction publish only complete no-tools replies.
@@ -311,7 +319,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			// rather than requiring a coding continuation or mixing two replies.
 			var privateText strings.Builder
 			var privateEvents []llm.StreamEvent
-			committed, upstreamErr = parseStream(tokens.Access, resp.Body, func(event llm.StreamEvent) error {
+			committed, upstreamErr = parseStreamWithWatch(tokens.Access, resp.Body, func(event llm.StreamEvent) error {
 				if req.NoTools && (event.Kind == "call" || event.Kind == "call_start") {
 					return errors.New(prompts.OpenAINoToolsReturnedTool)
 				}
@@ -326,8 +334,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 				err := emit(event)
 				callbackFailed = callbackFailed || err != nil
 				return finalCallbackError(err)
-			})
-			resp.Body.Close()
+			}, exchange.watch, exchange.identify)
+			if !callbackFailed {
+				upstreamErr = exchange.watch.failure(upstreamErr)
+			}
+			exchange.finish(upstreamErr == nil)
+			if !callbackFailed {
+				upstreamErr = exchange.watch.failure(upstreamErr)
+			}
 			if upstreamErr == nil {
 				if req.NoTools {
 					if privateText.Len() != 0 {
@@ -351,14 +365,15 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			}
 		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return exchange.withCleanupError(ctx.Err())
 		}
 		if callbackFailed {
-			return upstreamErr
+			return exchange.withCleanupError(upstreamErr)
 		}
 		if final := finalSubscriptionFailure(upstreamErr); final != nil {
-			return final
+			return exchange.withCleanupError(final)
 		}
+		upstreamErr = exchange.withCleanupError(upstreamErr)
 		// Every upstream failure shares this budget, regardless of its code or
 		// whether it came from HTTP, SSE, transport or response validation.
 		err := &llm.TransientError{Err: fmt.Errorf(prompts.OpenAIUpstreamAttemptFailed, attempt+1, maxAttempts, upstreamErr)}
@@ -393,6 +408,10 @@ func finalSubscriptionFailure(err error) error {
 }
 
 func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent) error) (bool, error) {
+	return parseStreamWithWatch(accessToken, reader, emit, nil, nil)
+}
+
+func parseStreamWithWatch(accessToken string, reader io.Reader, emit func(llm.StreamEvent) error, watch *idleHTTPWatch, identify func(string)) (bool, error) {
 	scan := bufio.NewScanner(reader)
 	scan.Buffer(make([]byte, 4096), 8<<20)
 	data := []string{}
@@ -405,6 +424,11 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 	var streamedText strings.Builder
 	eventBytes := 0
 	consume := func() error {
+		if watch != nil {
+			if err := watch.failure(nil); err != nil {
+				return err
+			}
+		}
 		if len(data) == 0 {
 			return nil
 		}
@@ -427,8 +451,10 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 			return errors.New(prompts.OpenAIInvalidStreamJSON)
 		}
 		var out *llm.StreamEvent
+		recognized := true
 		switch event.Type {
 		case "response.output_text.delta", "response.refusal.delta":
+			recognized = event.Delta != ""
 			retainedBytes += len(event.Delta)
 			streamedText.WriteString(event.Delta)
 			out = &llm.StreamEvent{Kind: "text", Text: event.Delta}
@@ -448,6 +474,8 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 				itemIDs[item.ID] = true
 				retainedBytes += len(item.Arguments) + len(item.ID) + len(item.CallID) + len(item.Name)
 				out = &llm.StreamEvent{Kind: "call_start", CallStart: &llm.ToolStart{ID: item.CallID, Name: item.Name}}
+			} else {
+				recognized = (item.Type == "reasoning" || item.Type == "message") && item.ID != "" && event.OutputIndex != nil && *event.OutputIndex >= 0
 			}
 		case "response.function_call_arguments.delta", "response.function_call_arguments.done":
 			if event.OutputIndex == nil {
@@ -512,6 +540,9 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 			// Native items stay private until response.completed. In particular,
 			// buffered reasoning alone must not prevent a safe transport retry.
 		case "response.completed":
+			if identify != nil {
+				identify(event.Response.ID)
+			}
 			indices := make([]int, 0, len(calls))
 			for _, c := range calls {
 				if !c.finished {
@@ -531,6 +562,15 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 			}
 			if len(indices) > 0 || reply.Content != "" || len(calls) > 0 {
 				if _, err := replayItems(reply); err != nil {
+					return err
+				}
+			}
+			// The complete model response is now validated. Delivery callbacks
+			// may take time, but that is not model inactivity. Keep local abort
+			// available for callback/user failures without timing out delivery.
+			if watch != nil {
+				watch.completeResponse()
+				if err := watch.failure(nil); err != nil {
 					return err
 				}
 			}
@@ -566,9 +606,22 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 			out = &llm.StreamEvent{Kind: "completed", Usage: event.Response.Usage.normalized(), ResponseID: event.Response.ID, ServiceTier: event.Response.ServiceTier}
 		case "response.failed", "response.incomplete", "error":
 			return streamFailure(accessToken, []byte(b), event.Type)
+		default:
+			recognized = recognizedModelActivity(event, []byte(b))
+			if recognized && identify != nil && (event.Type == "response.created" || event.Type == "response.in_progress") {
+				identify(event.Response.ID)
+			}
 		}
 		if retainedBytes > 32<<20 {
 			return errors.New(prompts.OpenAIOutputLimit)
+		}
+		if watch != nil {
+			if err := watch.failure(nil); err != nil {
+				return err
+			}
+			if recognized {
+				watch.activity()
+			}
 		}
 		if out != nil {
 			committed = true
@@ -604,6 +657,10 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 		if errors.Is(e, bufio.ErrTooLong) {
 			return committed, errors.New(prompts.OpenAIStreamLineLimit)
 		}
+		var idle *idleHTTPError
+		if errors.As(e, &idle) {
+			return committed, idle
+		}
 		return committed, errStreamLost
 	}
 	if e := consume(); e != nil {
@@ -613,6 +670,45 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 		return committed, errStreamLost
 	}
 	return committed, nil
+}
+
+// recognizedModelActivity covers protocol progress that is intentionally not
+// published as assistant output. Require the event's identifying payload, not
+// merely a recognized type string; arbitrary envelopes cannot keep a response
+// alive. Output/tool events are validated by the main parser before activity.
+func recognizedModelActivity(event wireEvent, data []byte) bool {
+	switch event.Type {
+	case "response.created", "response.in_progress":
+		return event.Response.ID != ""
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		return event.Delta != "" && event.ItemID != "" && event.OutputIndex != nil && *event.OutputIndex >= 0
+	case "response.output_text.done", "response.refusal.done", "response.reasoning_text.done", "response.reasoning_summary_text.done",
+		"response.content_part.added", "response.content_part.done", "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
+		if event.ItemID == "" || event.OutputIndex == nil || *event.OutputIndex < 0 {
+			return false
+		}
+		var fields struct {
+			Text    *string `json:"text"`
+			Refusal *string `json:"refusal"`
+			Part    *struct {
+				Type string `json:"type"`
+			} `json:"part"`
+		}
+		if json.Unmarshal(data, &fields) != nil {
+			return false
+		}
+		switch event.Type {
+		case "response.refusal.done":
+			return fields.Refusal != nil
+		case "response.content_part.added", "response.content_part.done":
+			return fields.Part != nil && (fields.Part.Type == "output_text" || fields.Part.Type == "refusal")
+		case "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
+			return fields.Part != nil && fields.Part.Type == "summary_text"
+		default:
+			return fields.Text != nil
+		}
+	}
+	return false
 }
 
 type functionItem struct {

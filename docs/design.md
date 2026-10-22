@@ -418,6 +418,29 @@ workers.
 
 ### Request retries
 
+- Each model HTTP attempt has a 90-second model-response inactivity watchdog
+  starting before the request is sent, covering headers and the first model
+  event. Only recognized model-response events refresh it, including reasoning,
+  text, tool-call progress and relevant lifecycle events; raw bytes, partial SSE
+  frames, comments, pings and unknown events do not. Malformed events do not
+  refresh the watchdog; parser validation errors terminate the attempt. This is
+  not a total-duration limit; a healthy but silent generation can time out.
+  Shorter caller deadlines still win. Expiry is a retryable upstream timeout,
+  not user cancellation; committed output follows partial-response recovery
+  below.
+- Cancellation is scoped to one request attempt, never shared mutable provider
+  state. Abandonment immediately cancels the local request and closes its body,
+  then invokes best-effort remote cancellation with a fresh bounded context
+  before retry or return. Normal completion releases local resources without
+  remote cancellation. Cleanup failure must not replace the original request
+  error. Codex subscription remote cancellation is a no-op: no supported
+  endpoint is verified, and requests remain foreground streams, not background
+  responses. Local abort does not guarantee upstream inference or billing stops.
+- Catalog and authorization HTTP exchanges retain the raw-response inactivity
+  watchdog: first response bytes, informational/final headers and nonempty body
+  reads refresh a 90-second interval. Each exchange owns its timer and
+  cancelable context, released on EOF, body close, failure or caller
+  cancellation. These operations retain their existing retry policies.
 - Main steering waits for a model boundary; children accept idle follow-ups
   only. Native steering and resuming the same partial stream are outside v1.
   Providers retry upstream HTTP, transport, stream and protocol failures

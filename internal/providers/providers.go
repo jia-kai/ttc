@@ -48,6 +48,14 @@ type Components struct {
 // runtime interfaces accept it structurally without adapters.
 type Inference interface {
 	Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
+	// Cancel best-effort cancels only the attempt identified by the remote
+	// response ID, never a conversation or the provider's latest request. An
+	// empty ID means no remote identity is available; backends unable to address
+	// that attempt must no-op. Stream owns invocation on abandonment, after
+	// immediate local abort, with a fresh bounded context and before retrying.
+	// Implementations must honor the context and support concurrent attempts.
+	// Unsupported remote cancellation is a no-op, never a local-abort substitute.
+	Cancel(context.Context, string) error
 	EstimateReplay(llm.Message) int
 	TokenizerID(llm.ModelSpec) string
 }
