@@ -15,7 +15,7 @@ import (
 func enableCancelTestSteering(r *Runtime) {
 	r.mu.Lock()
 	r.activeTurn = "cancel-test"
-	_, r.activeCancel = context.WithCancel(r.ctx)
+	_, r.activeCancel = context.WithCancelCause(r.ctx)
 	r.mu.Unlock()
 }
 

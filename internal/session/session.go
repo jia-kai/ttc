@@ -15,6 +15,7 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/render"
 	"ttc/internal/skills"
 	"ttc/internal/tool"
@@ -52,7 +53,7 @@ type Inference interface {
 
 // Runtime owns exactly one main session, and joins transient work before switching it.
 // Run, RunInput, and Command are called serially by the frontend;
-// Interrupt and RequestModel are concurrent-safe.
+// Interrupt, CancelForeground and RequestModel are concurrent-safe.
 type Runtime struct {
 	Store             *history.Store
 	Workspace         *workspace.Manager
@@ -85,7 +86,7 @@ type Runtime struct {
 	current           string
 	persisted         bool   // False until the first user turn/message is committed atomically.
 	generation        uint64 // Advances on explicit transient resets, never compaction.
-	activeCancel      context.CancelFunc
+	activeCancel      context.CancelCauseFunc
 	notifications     []llm.Message
 	steers            []contextbuild.Input // Original transient human inputs, admitted only at a model boundary.
 	activeTurn        string               // Main inference turn, distinct from steering undo checkpoints.
@@ -252,11 +253,23 @@ func (r *Runtime) emit(e Event) {
 	}
 }
 
-// Interrupt cancels foreground request/tools, leaving independent jobs until runtime exit.
+// Interrupt cancels foreground request/tools, leaving independent jobs until runtime
+// exit. An admitted main turn that stops records a developer interruption notice
+// after its tool results settle; calling Interrupt while idle records nothing.
 func (r *Runtime) Interrupt() {
+	r.cancelForeground(errUserInterrupted)
+}
+
+// CancelForeground cancels foreground work for cleanup without attributing the
+// cancellation to the user. Independent jobs remain alive until runtime exit.
+func (r *Runtime) CancelForeground() {
+	r.cancelForeground(context.Canceled)
+}
+
+func (r *Runtime) cancelForeground(cause error) {
 	r.mu.Lock()
 	if r.activeCancel != nil {
-		r.activeCancel()
+		r.activeCancel(cause)
 	}
 	r.mu.Unlock()
 }
@@ -269,7 +282,7 @@ func (r *Runtime) Close() {
 		r.activityStop = nil
 	}
 	r.cancel()
-	r.Interrupt()
+	r.CancelForeground()
 	r.stopNaming()
 	r.Jobs.Close()
 	r.timers.close()
@@ -288,14 +301,18 @@ func (r *Runtime) Run(message *llm.Message) (err error) {
 	return r.run(message, nil)
 }
 
+// errUserInterrupted distinguishes an explicit foreground interruption from
+// provider failures and cancellation inherited from the runtime's parent.
+var errUserInterrupted = errors.New("user interrupted turn")
+
 func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
 	if e := r.checkContext(false); e != nil {
 		return e
 	}
-	ctx, cancel := context.WithCancel(r.ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(r.ctx)
+	defer cancel(nil)
 	defer func() {
 		r.orderMu.Lock()
 		delete(r.awaitRequests, "main")
@@ -370,6 +387,21 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 	defer func() {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			status = "interrupted"
+		}
+		if err != nil && context.Cause(ctx) == errUserInterrupted {
+			// Run and Command are serialized. Commit after tool settlement so
+			// the next input or wakeup follows a balanced exchange and this notice.
+			message := llm.Message{Type: llm.TypeRuntimeInstruction, Content: prompts.SessionUserInterrupted}
+			id, e := r.Store.Append(r.Current(), turn, "main", "message", message.Role(), true, message)
+			if e != nil {
+				failure := fmt.Errorf("record user interruption: %w", e)
+				r.orderMu.Lock()
+				r.orderError = errors.Join(r.orderError, failure)
+				r.orderMu.Unlock()
+				err = errors.Join(err, failure)
+			} else {
+				r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: id, MessageType: message.Type})
+			}
 		}
 		if e := r.Store.FinishTurn(turn, status); err == nil && e != nil {
 			err = e

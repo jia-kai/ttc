@@ -103,7 +103,7 @@ func TestSteeringRejectedAdmissionRetainsInputAndCheckpoint(t *testing.T) {
 	seedRuntime(t, r, "Initial instruction")
 	r.mu.Lock()
 	r.activeTurn = "test-running"
-	_, r.activeCancel = context.WithCancel(r.ctx)
+	_, r.activeCancel = context.WithCancelCause(r.ctx)
 	r.mu.Unlock()
 	if err := r.Steer(contextbuild.Input{Text: "Queued human steer"}); err != nil {
 		t.Fatal(err)

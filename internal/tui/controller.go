@@ -276,7 +276,7 @@ func (c *frontendController) stopInteractions() {
 
 func (c *frontendController) stopForeground() {
 	if c.busy {
-		c.frontend.Runtime.Interrupt()
+		c.frontend.Runtime.CancelForeground()
 		waitForTurn(c.done, c.frontend.Events)
 	}
 }

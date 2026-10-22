@@ -153,11 +153,11 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 
 // compact runs manual compaction after Command checks context writability.
 func (r *Runtime) compact(focus string, force bool) (string, error) {
-	ctx, cancel := context.WithCancel(r.ctx)
+	ctx, cancel := context.WithCancelCause(r.ctx)
 	r.mu.Lock()
 	r.activeCancel = cancel
 	r.mu.Unlock()
-	defer func() { cancel(); r.mu.Lock(); r.activeCancel = nil; r.mu.Unlock() }()
+	defer func() { cancel(nil); r.mu.Lock(); r.activeCancel = nil; r.mu.Unlock() }()
 	if force {
 		r.emit(Event{Kind: "status", Text: "Forcing compaction: local summary input-size check disabled; provider limits and handoff checks still apply."})
 	}

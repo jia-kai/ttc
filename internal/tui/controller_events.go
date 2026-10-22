@@ -452,7 +452,7 @@ func (c *frontendController) receive() (next frontendSubmission, stop bool, err 
 }
 
 func (c *frontendController) receiveCanceled() (frontendSubmission, bool, error) {
-	c.frontend.Runtime.Interrupt()
+	c.frontend.Runtime.CancelForeground()
 	if c.busy {
 		waitForTurn(c.done, c.frontend.Events)
 		c.busy = false

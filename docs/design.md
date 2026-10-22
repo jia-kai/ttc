@@ -233,6 +233,13 @@ remain in the
   in observed completion order. Canonical input reconstructs results in call
   order. Deltas/progress update live UI objects without allocating history
   events.
+- Explicit user interruption persists a model-visible runtime developer
+  instruction after tool settlement and before subsequent input or wakeup
+  admission. Provider failures and frontend/runtime cleanup do not create this
+  notice. Failed notice persistence blocks later inference through the existing
+  admission-error guard. The notice neither starts inference nor changes the
+  auto-wake pause policy. Normal compaction may summarize it; loads hide it like
+  other runtime instructions.
 - Human-turn admission and complete local file apply/history commits share the
   workspace gate. Save input and its file checkpoint before releasing it. Edits
   use the current main inference turn and latest human undo owner at commit;

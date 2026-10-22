@@ -56,6 +56,11 @@ WakeupCancelNotFound:
   no scheduled reminder matches; use wakeup_list and choose an active wakeup_id
   or name
 SessionToolInterrupted: stream did not complete; tool was not executed
+SessionUserInterrupted: >-
+  The user interrupted the previous turn. Its unfinished reply is not a
+  completed answer. Earlier tool actions may have completed or had side effects;
+  check recorded outcomes before repeating them. Independent background work was
+  not stopped by the interruption.
 SessionToolIntentMismatch: tool call/intent count mismatch
 SessionToolResultBudget: >-
   Result delivery withheld: this result or the aggregate tool-result batch

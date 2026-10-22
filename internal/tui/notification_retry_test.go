@@ -12,6 +12,7 @@ import (
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/session"
 )
 
@@ -261,6 +262,27 @@ func TestForegroundFailurePausesFreshNotificationsUntilUserPrompt(t *testing.T) 
 				t.Fatal("explicit foreground retry did not run", len(requests))
 			}
 			assertNotificationDelivered(t, u, requests[2], id)
+			notice, input, wakeup, count := -1, -1, -1, 0
+			for i, message := range requests[2].Messages {
+				if message.Type == llm.TypeRuntimeInstruction && message.Content == prompts.SessionUserInterrupted {
+					notice, count = i, count+1
+					if message.Role() != "developer" {
+						t.Fatal("interruption notice has wrong role", message.Role())
+					}
+				}
+				if message.Type == llm.TypeUserInput && message.Content == "Explicit retry" {
+					input = i
+				}
+				if message.Type == llm.TypeRuntimeNotification && strings.Contains(message.Content, id) {
+					wakeup = i
+				}
+			}
+			if interrupt && (count != 1 || notice >= input || notice >= wakeup) {
+				t.Fatal("interruption notice must precede retry input and wakeup", count, notice, input, wakeup)
+			}
+			if !interrupt && count != 0 {
+				t.Fatal("provider failure claimed user interruption")
+			}
 		})
 	}
 }
