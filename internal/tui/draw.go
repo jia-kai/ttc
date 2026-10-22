@@ -24,6 +24,17 @@ func put(s tcell.Screen, x, y, width int, text string, style tcell.Style) {
 		width -= cells
 	}
 }
+
+// drawInputCursor overlays a native cursor without consuming a text cell.
+// Coordinates are relative to the input's visible content rectangle.
+func drawInputCursor(s tcell.Screen, left, top, width, height int, cursor *cellPosition) {
+	if cursor == nil || cursor.x < 0 || cursor.x >= width || cursor.y < 0 || cursor.y >= height {
+		s.HideCursor()
+		return
+	}
+	s.ShowCursor(left+cursor.x, top+cursor.y)
+}
+
 func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue []contextbuild.Input, steers []string, indicator string, window *Window, selection llm.Selection) error {
 	s.Clear()
 	w, h := s.Size()
@@ -139,10 +150,9 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	} else if window != nil {
 		s.HideCursor()
 		drawWindow(s, window)
-	} else if w > 0 && geometry.input.cursorY >= 0 {
-		s.ShowCursor(min(2+geometry.input.cursorX, w-1), geometry.inputY+geometry.input.cursorY)
 	} else {
-		s.HideCursor()
+		drawInputCursor(s, 2, geometry.inputY, max(0, w-2), len(geometry.input.rows),
+			&cellPosition{geometry.input.cursorX, geometry.input.cursorY})
 	}
 	s.Show()
 	return nil
@@ -229,6 +239,11 @@ func drawWindow(s tcell.Screen, window *Window) {
 	progress := window.Progress(bodyHeight, width-2)
 	put(s, left+width-1-runewidth.StringWidth(progress), top+height-1, width-2, progress, style.Bold(true))
 	drawScrollBar(s, left+width-1, top+1+len(header), bodyHeight, len(window.cachedLines), window.Scroll, style)
+	var cursor *cellPosition
+	if window.body.cursor != nil {
+		cursor = &cellPosition{window.body.cursor.x, window.body.cursor.y - window.Scroll}
+	}
+	drawInputCursor(s, left+1, top+1+len(header), innerWidth, bodyHeight, cursor)
 }
 
 // windowContentSize accounts for the border and fixed headers in every caller.

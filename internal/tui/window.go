@@ -36,7 +36,18 @@ type Window struct {
 	assets              []displayRow // Parallel to cachedLines; only viewport assets are requested.
 	renderer            *imageRenderer
 	cachedRevision      uint64
-	pages               *inspectionPages // Optional retained history pager; only the current page is rendered.
+	pages               *inspectionPages           // Optional retained history pager; only the current page is rendered.
+	layoutBody          func(width int) windowBody // Optional prewrapped interactive body; invalidated by its owner.
+	body                windowBody
+}
+
+type cellPosition struct{ x, y int }
+
+// windowBody uses body-relative display cells, before viewport scrolling.
+type windowBody struct {
+	lines    []string
+	cursor   *cellPosition // Nil when the body is not accepting text.
+	focusRow int
 }
 
 // HeaderLines wraps the fixed header, leaving layout ownership with the frontend.
@@ -65,7 +76,8 @@ func (w *Window) HeaderLines(width, limit int) []string {
 	return lines
 }
 
-// Lines wraps portable Markdown as readable text within a terminal viewport.
+// Lines returns the scrolled body viewport, wrapping text or using layoutBody.
+// Width is in terminal cells and height is in display rows; Scroll is clamped.
 func (w *Window) Lines(width, height int) []string {
 	height = max(0, height)
 	revision := uint64(0)
@@ -77,7 +89,10 @@ func (w *Window) Lines(width, height int) []string {
 		w.cachedWidth = width
 		w.cachedRevision = revision
 		w.assets = nil
-		if w.Markdown && w.renderer != nil {
+		if w.layoutBody != nil {
+			w.body = w.layoutBody(max(1, width))
+			w.cachedLines = w.body.lines
+		} else if w.Markdown && w.renderer != nil {
 			w.assets = w.renderer.layout(line{text: w.Text, markdown: true}, max(1, width))
 			w.cachedLines = make([]string, len(w.assets))
 			for i, row := range w.assets {

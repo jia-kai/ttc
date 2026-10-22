@@ -18,11 +18,15 @@ func questionFixture() session.QuestionForm {
 	}}
 }
 
+func questionBodyText(d *questionDialog) string {
+	return strings.Join(d.layout(120).lines, "\n")
+}
+
 func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 	d := newQuestionDialog(questionFixture())
 	key := func(k tcell.Key) ([]session.Answer, bool) { return d.key(tcell.NewEventKey(k, "", 0), 8) }
-	if !strings.Contains(d.Window.Text, "> ( ) Second (Recommended)") {
-		t.Fatal(d.Window.Text)
+	if !strings.Contains(questionBodyText(d), "> ( ) Second (Recommended)") {
+		t.Fatal(questionBodyText(d))
 	}
 	if _, missing := d.values(); missing != 0 {
 		t.Fatal("recommendation answered automatically")
@@ -30,7 +34,7 @@ func TestQuestionTabsPreserveAnswersAndRequireFinalSubmit(t *testing.T) {
 	key(tcell.KeyRight)
 	key(tcell.KeyRight)
 	key(tcell.KeyRight)
-	if !strings.Contains(d.Window.Header, "[Submit]") || !strings.Contains(d.Window.Text, "[ Submit answers ]") {
+	if !strings.Contains(d.Window.Header, "[Submit]") || !strings.Contains(questionBodyText(d), "[ Submit answers ]") {
 		t.Fatal(d.Window)
 	}
 	if answers, _ := key(tcell.KeyEnter); answers != nil || d.tab != 0 {
@@ -222,8 +226,9 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 	}
 	d.reveal(12, 3)
 	view := strings.Join(d.Window.Lines(12, 3), "\n")
-	if !strings.Contains(view, "▏") {
-		t.Fatal("text caret outside narrow viewport", view)
+	cursor := d.Window.body.cursor
+	if cursor == nil || cursor.y < d.Window.Scroll || cursor.y >= d.Window.Scroll+3 {
+		t.Fatal("text caret outside narrow viewport", view, cursor)
 	}
 	d.key(tcell.NewEventKey(tcell.KeyTab, "", 0), 8)
 	d.reveal(12, 3)
@@ -256,9 +261,9 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 		t.Helper()
 		end := 0
 		for _, part := range parts {
-			index := strings.Index(d.Window.Text[end:], part)
+			index := strings.Index(questionBodyText(d)[end:], part)
 			if index < 0 {
-				t.Fatalf("missing or misplaced %q:\n%s", part, d.Window.Text)
+				t.Fatalf("missing or misplaced %q:\n%s", part, questionBodyText(d))
 			}
 			end += index + len(part)
 		}
@@ -272,9 +277,9 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 	d.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 8)
 	d.answers[0].custom.set("custom\nanswer")
 	d.update()
-	assertOrder("Which method?", "Other · free-text input", "Text: custom\nanswer▏", "Enter advances", "←/→ cursor", "Tab/Shift+Tab tabs", "Ctrl+X E editor")
-	if strings.Contains(d.Window.Text, "Up/Down choose") {
-		t.Fatal("selection hints shown while editing text", d.Window.Text)
+	assertOrder("Which method?", "Other · free-text input", "Text: custom\n      answer", "Enter advances", "←/→ cursor", "Tab/Shift+Tab tabs", "Ctrl+X E editor")
+	if strings.Contains(questionBodyText(d), "Up/Down choose") {
+		t.Fatal("selection hints shown while editing text", questionBodyText(d))
 	}
 
 	d.tab = len(d.answers)

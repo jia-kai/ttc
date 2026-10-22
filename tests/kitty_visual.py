@@ -22,6 +22,7 @@ import traceback
 from scratch import private_scratch
 from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
 from kitty_composer import check_composer, configure_editor
+from kitty_question import check_question_cursor
 
 def get_version() -> str:
     """an ad-hoc parser of go source to get the version string"""
@@ -41,8 +42,9 @@ def main():
     parser.add_argument('--tmux', action='store_true', help='Test auto-detection through a private tmux with Kitty identity cleared')
     parser.add_argument('--offline', action='store_true', help='Use a short scripted palette/image/math fixture without a TCP server')
     parser.add_argument('--composer-only', action='store_true', help='Run only offline multiline composer checks and screenshots')
+    parser.add_argument('--question-only', action='store_true', help='Run only offline question native-cursor/edit/restore checks')
     args = parser.parse_args()
-    if args.composer_only:
+    if args.composer_only or args.question_only:
         args.offline = True
     scratch = private_scratch()
     root = Path(tempfile.mkdtemp(prefix='kitty-visual-', dir=scratch))
@@ -91,6 +93,17 @@ def main():
                     'The demo is complete. All 20 tool types have been exercised locally.',
                     'Offline palette/image/math demo complete.')},
             ]))
+            if args.question_only:
+                script.write_text(json.dumps([
+                    {'prefix': 'user: Run demo', 'calls': [
+                        {'id': 'question', 'name': 'question', 'arguments': {'questions': [
+                            {'id': 'notes', 'prompt': 'Any notes for the report?',
+                             'options': [{'id': 'brief', 'label': 'Brief'}, {'id': 'detailed', 'label': 'Detailed'}]},
+                            {'id': 'checks', 'prompt': 'Which evidence should be retained?',
+                             'options': [{'id': 'data', 'label': 'Data'}, {'id': 'render', 'label': 'Rendering'}]},
+                        ]}},
+                    ]}, {'text': 'Offline question cursor demo complete.'},
+                ]))
             # ToolCall.arguments is JSON bytes in the Go fixture, rather than a
             # string; RawMessage accepts an ordinary encoded object here.
             command = [binary, '--offline-script', str(script), '--workdir', str(project),
@@ -202,6 +215,28 @@ def main():
             assert difference.getbbox() is None, 'image changed after tmux window return: ' + name
 
         wait('/help')
+        if args.question_only:
+            send('Run demo\r')
+            check_question_cursor(remote, wait, send, key, capture, root)
+            key('enter')
+            wait('Submit answers')
+            capture('question-cursor-submit')
+            key('enter')
+            wait('Offline question cursor demo complete.')
+            wait('Turn complete')
+            with sqlite3.connect(root / 'data/history.sqlite') as db:
+                result = json.loads(db.execute(
+                    "SELECT result_json FROM tool_calls WHERE name='question'").fetchone()[0])
+            (root / 'question-result.json').write_text(json.dumps(result, indent=2) + '\n')
+            assert result['answers'] == [
+                {'id': 'notes', 'values': ['Looks good.'], 'source': 'custom'},
+                {'id': 'checks', 'values': ['data'], 'source': 'option'},
+            ], result
+            key('ctrl+c')
+            terminal.wait(timeout=10)
+            assert terminal.returncode == 0
+            print(f'PASS: offline real Kitty question native cursor/edit/restore; tmux={args.tmux}: {root}')
+            return
         check_composer(remote, wait, send, key, capture, root)
         if args.composer_only:
             key('ctrl+c')
@@ -416,12 +451,7 @@ def main():
         wait('Yes (Recommended)')
         key('enter')
         wait('Any notes for the report?')
-        key('down')
-        key('down')
-        key('enter')
-        send('Looks good.')
-        key('enter')
-        wait('Which evidence should be retained?')
+        check_question_cursor(remote, wait, send, key, capture, root)
         key('enter')
         review_text = wait('Submit answers')
         for item in ('1. Finish the Markdown report?', '2. Any notes for the report?', '3. Which evidence should be retained?'):

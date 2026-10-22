@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"ttc/internal/render"
 	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v3"
@@ -27,11 +28,13 @@ type questionDialog struct {
 	errorText    string
 	focusRow     int
 	rows         []string
+	inputRow     int // Index in rows occupied by the custom answer, or -1.
 	manualScroll bool
 }
 
 func newQuestionDialog(form session.QuestionForm) *questionDialog {
 	d := &questionDialog{form: form, answers: make([]questionAnswer, len(form.Questions))}
+	d.Window.layoutBody = d.layout
 	for i, q := range form.Questions {
 		d.answers[i].selected = -1
 		for j, o := range q.Options {
@@ -197,6 +200,8 @@ func (d *questionDialog) values() ([]session.Answer, int) {
 }
 
 func (d *questionDialog) update() {
+	d.Window.cachedLines = nil
+	d.inputRow = -1
 	d.Window.Title = "Questions"
 	d.Window.HideHint = true
 	var tabs []string
@@ -232,7 +237,7 @@ func (d *questionDialog) update() {
 		d.focusRow = len(rows)
 		rows = append(rows, "> [ Submit answers ]", "", "Review answers · Enter submits · ← returns to a question", "←/→ tabs · Esc dismisses")
 	} else {
-		q, a := d.form.Questions[d.tab], d.answers[d.tab]
+		q, a := d.form.Questions[d.tab], &d.answers[d.tab]
 		rows = append(rows, q.Prompt, "")
 		for i, o := range q.Options {
 			mark := "( )"
@@ -260,13 +265,11 @@ func (d *questionDialog) update() {
 		}
 		rows = append(rows, menuRow(mark+" Other · free-text input", a.choice == len(q.Options)))
 		if a.useCustom || a.custom.text != "" {
-			text := a.custom.text
+			d.inputRow = len(rows) + 1
 			if a.editing {
-				runes := []rune(text)
-				text = string(runes[:a.custom.cursor]) + "▏" + string(runes[a.custom.cursor:])
 				d.focusRow = len(rows) + 1
 			}
-			rows = append(rows, "", "Text: "+text)
+			rows = append(rows, "", "") // The input row is laid out directly from its composer.
 		}
 		rows = append(rows, "")
 		if a.editing {
@@ -275,24 +278,50 @@ func (d *questionDialog) update() {
 			rows = append(rows, "Up/Down choose · Enter selects and advances · Space selects", "←/→ tabs · Esc dismisses")
 		}
 	}
-	d.Window.Text = strings.Join(rows, "\n")
 	d.rows = rows
 }
 
+// layout keeps question navigation in the window while sharing the composer's
+// grapheme wrapping and cursor geometry. The window owns the only viewport.
+func (d *questionDialog) layout(width int) windowBody {
+	var body windowBody
+	for i, row := range d.rows {
+		if i == d.focusRow {
+			body.focusRow = len(body.lines)
+		}
+		if i != d.inputRow {
+			body.lines = append(body.lines, wrap(render.Clean(row), width)...)
+			continue
+		}
+		a := &d.answers[d.tab]
+		prefix := "Text: "
+		if width <= len(prefix) {
+			body.lines = append(body.lines, wrap("Text:", width)...)
+			prefix = ""
+		}
+		layout := a.custom.wrapped(width - len(prefix))
+		if a.editing {
+			x, y := layout.cursorPosition(a.custom.cursor)
+			body.cursor = &cellPosition{x + len(prefix), len(body.lines) + y}
+			body.focusRow = body.cursor.y
+		}
+		for j, line := range layout.rows {
+			label := strings.Repeat(" ", len(prefix))
+			if j == 0 {
+				label = prefix
+			}
+			body.lines = append(body.lines, label+line.text)
+		}
+	}
+	return body
+}
+
 func (d *questionDialog) reveal(width, height int) {
+	d.Window.Lines(width, height)
 	if d.manualScroll || height <= 0 {
 		return
 	}
-	position := 0
-	for _, row := range d.rows[:d.focusRow] {
-		position += len(wrap(row, width))
-	}
-	for i, row := range wrap(d.rows[d.focusRow], width) {
-		if strings.Contains(row, "▏") {
-			position += i
-			break
-		}
-	}
+	position := d.Window.body.focusRow
 	if position < d.Window.Scroll {
 		d.Window.Scroll = position
 	} else if position >= d.Window.Scroll+height {

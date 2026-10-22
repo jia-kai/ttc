@@ -96,20 +96,21 @@ func (c *composer) wrapped(width int) *composerLayout {
 	return layout
 }
 
-func (c *composer) viewport(width, height int) composerViewport {
-	layout := c.wrapped(width)
-	rows := layout.rows
-	cursorRow := max(0, sort.Search(len(rows), func(i int) bool { return rows[i].runeStart > c.cursor })-1)
+// cursorPosition maps a source rune offset to display cells, independently of
+// scrolling. Both the main input and modal editors use this layout.
+func (layout *composerLayout) cursorPosition(cursor int) (x, y int) {
+	rows, width := layout.rows, layout.width
+	cursorRow := max(0, sort.Search(len(rows), func(i int) bool { return rows[i].runeStart > cursor })-1)
 	row := rows[cursorRow]
-	prefix := c.text[row.byteStart:]
-	remaining := c.cursor - row.runeStart
+	prefix := layout.text[row.byteStart:]
+	remaining := cursor - row.runeStart
 	byteEnd := 0
 	for remaining > 0 && byteEnd < len(prefix) {
 		_, size := utf8.DecodeRuneInString(prefix[byteEnd:])
 		byteEnd += size
 		remaining--
 	}
-	x := ansi.StringWidth(visibleInput(prefix[:byteEnd]))
+	x = ansi.StringWidth(visibleInput(prefix[:byteEnd]))
 	if width > 0 && x >= width && cursorRow+1 < len(rows) {
 		// A hard newline after an exactly full row has no cell on that row.
 		// Its insertion point is the following row's start, not the last glyph.
@@ -117,6 +118,13 @@ func (c *composer) viewport(width, height int) composerViewport {
 		x = 0
 	}
 	x = min(x, max(0, width-1))
+	return x, cursorRow
+}
+
+func (c *composer) viewport(width, height int) composerViewport {
+	layout := c.wrapped(width)
+	rows := layout.rows
+	x, cursorRow := layout.cursorPosition(c.cursor)
 	height = min(max(0, height), len(rows))
 	top := max(0, cursorRow-height+1)
 	if c.manualScroll {

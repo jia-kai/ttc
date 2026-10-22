@@ -169,6 +169,7 @@ make kitty-test                    # builds and captures real Kitty under Xvfb
 python3 tests/kitty_visual.py      # reuse the current ./ttc binary
 python3 tests/kitty_visual.py --tmux # private tmux; Kitty identity cleared
 python3 tests/kitty_visual.py --offline --tmux # palette/image/math and highlighted search
+python3 tests/kitty_visual.py --question-only # offline native-cursor regression; also supports --tmux
 python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
 python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
@@ -184,12 +185,13 @@ Submit, and saves PNG/text captures for compact child response/returned-answer
 rows and both inspectors at their full tails, expanded/collapsed live sidebar
 lists, narrow-pane mouse scrolling, full workspace metadata, running states,
 fullscreen, actual formula images, image pan/zoom and confirmed click delivery,
-questions, table headers, shell commands/output with highlighted inspector
-details, and the bordered colored system prompt viewer at both ends. It prints
-its artifact directory under `/tmp/ttc/<uid>/kitty-visual-*`; logs and exception
-context are saved there on failure. The copied demo project/history has its own
-private `demo-*` directory recorded in `demo.json`. The offline fixture also
-captures multi-term Ctrl-R matching and underlined matches.
+question editing with a native cursor and no inserted display gap, table
+headers, shell commands/output with highlighted inspector details, and the
+bordered colored system prompt viewer at both ends. It prints its artifact
+directory under `/tmp/ttc/<uid>/kitty-visual-*`; logs and exception context are
+saved there on failure. The copied demo project/history has its own private
+`demo-*` directory recorded in `demo.json`. The offline fixture also captures
+multi-term Ctrl-R matching and underlined matches.
 
 Pressure tests cover 100,000 conversation messages, huge chunked messages and
 more than 128 formulas without idle rerendering. Regression tests cover a

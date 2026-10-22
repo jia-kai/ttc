@@ -41,13 +41,13 @@ func TestQuestionEditorMultilineAnswersPreserveMainDraft(t *testing.T) {
 	u.typeText("method draft")
 	u.key(tcell.KeyCtrlX)
 	u.typeText("e")
-	u.wait(t, "αβ▏")
+	u.wait(t, "αβ")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Add notes?")
 	u.typeText("notes draft")
 	u.key(tcell.KeyCtrlX)
 	u.typeText("e")
-	u.wait(t, "second line▏")
+	u.wait(t, "second line")
 	for _, want := range []string{"method draft", "notes draft"} {
 		select {
 		case got := <-inputs:
@@ -98,7 +98,7 @@ func TestQuestionEditorRejectedResultPreservesEditingState(t *testing.T) {
 			u.key(tcell.KeyCtrlX)
 			u.typeText("e")
 			frame := u.wait(t, tc.message)
-			if !strings.Contains(frame, "Choose a method?") || !strings.Contains(frame, "Text: keep▏ ") {
+			if !strings.Contains(frame, "Choose a method?") || !strings.Contains(frame, "Text: keep ") {
 				t.Fatalf("error was not shown on the preserved question draft: %s", frame)
 			}
 			select {
@@ -112,7 +112,7 @@ func TestQuestionEditorRejectedResultPreservesEditingState(t *testing.T) {
 			// Insertion and yank prove rejection preserved both cursor and kill buffer.
 			u.typeText("!")
 			u.key(tcell.KeyCtrlY)
-			u.wait(t, "Text: keep!kill▏ ")
+			u.wait(t, "Text: keep!kill ")
 			u.key(tcell.KeyEnter)
 			u.wait(t, "Add notes?")
 			u.typeText("notes")
@@ -190,7 +190,7 @@ func TestQuestionEditorPrefixDoesNotLeakAfterClosure(t *testing.T) {
 	u.key(tcell.KeyEnd)
 	u.key(tcell.KeyEnter)
 	u.typeText("question draft")
-	u.wait(t, "Text: question draft▏")
+	u.wait(t, "Text: question draft")
 	u.key(tcell.KeyCtrlX)
 	// Allow the question prefix to be consumed before closing it externally.
 	time.Sleep(50 * time.Millisecond)
