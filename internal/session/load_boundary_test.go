@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"ttc/internal/tool"
 )
 
-func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
+func TestLoadJoinsLateChildMutation(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Current task")
 	target := history.Session{ID: history.NewID("session")}
@@ -22,13 +23,29 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 	if err = r.Store.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	started, release := make(chan struct{}), make(chan struct{})
+	mainAdmitted := make(chan struct{})
+	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseMutation := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseMutation) // Unblock the worker before runtime cleanup on failure.
 	type empty struct{}
 	tool.Register(r.Tools, "late_change", "Controlled in-flight mutation", nil, nil, func(empty) error { return nil }, func(ctx context.Context, x tool.Execution, _ empty) (any, error) {
+		// The main actor's next request must pass workspace admission before
+		// this worker holds the gate until after Run returns.
+		select {
+		case <-mainAdmitted:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 		var change int64
 		err := r.Workspace.Admit(ctx, func() error {
 			close(started)
-			<-release // Represents a filesystem operation already beyond cancellation.
+			select {
+			case <-ctx.Done():
+				close(canceled)
+				<-release // A filesystem operation already beyond cancellation.
+			case <-release:
+			}
 			var err error
 			change, err = r.Store.CommitChange(x.SessionID, x.CallID, []string{}, false)
 			return err
@@ -49,6 +66,9 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 		if mainStep == 1 {
 			return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "child", Name: "subagent", Arguments: json.RawMessage(`{"persistent":true,"prompt":"Write later","label":"Late mutation","background":true}`)}})
 		}
+		if mainStep == 2 {
+			close(mainAdmitted)
+		}
 		select {
 		case <-started:
 		case <-ctx.Done():
@@ -61,13 +81,20 @@ func TestLoadFloorReflectsJoinedLateChildMutation(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { _, err := r.Command("/load " + target.ID); done <- err }()
-	// Session activation must join the in-flight worker before applying the floor.
+	// Session activation must cancel and join the in-flight worker before returning.
+	select {
+	case <-canceled:
+	case err := <-done:
+		t.Fatal("load crossed live mutation", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("load failed to cancel child")
+	}
 	select {
 	case err := <-done:
 		t.Fatal("load crossed live mutation", err)
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
-	close(release)
+	releaseMutation()
 	select {
 	case err := <-done:
 		if err != nil {
