@@ -1,4 +1,5 @@
-# Summary captions deliberately delivered to parent models through child stderr.
+# Summary captions retained in child diagnostics; parent models receive them only
+# through an explicit stderr read, never an automatic child-result handoff.
 ToolSummaryExit: " · exit %d"
 ToolSummaryError: " · error"
 ToolSummaryOutputOmitted: " · output omitted"

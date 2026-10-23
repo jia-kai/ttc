@@ -89,12 +89,11 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 			r.namingFailure(ownerCtx, sessionID, turn, "record result: "+err.Error())
 		}
 	}()
-	id, e := r.Store.RecordSystemPrompt(sessionID, turn, "main", request, system)
+	_, e = r.Store.RecordSystemPrompt(sessionID, turn, "main", request, system)
 	if e != nil {
 		r.namingFailure(ownerCtx, sessionID, turn, "save instructions: "+e.Error())
 		return
 	}
-	r.emit(Event{Kind: "system_prompt", Text: "System prompt · session naming", EntryID: id})
 	message := llm.Message{Type: llm.TypeUserInput, Content: text(user.Content) + "\n\n" + text(assistant.Content)}
 	for i, call := range assistant.Calls {
 		if i == 4 {
@@ -102,14 +101,12 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		}
 		message.Content += prompts.SessionNamingTool + render.Clean(call.Name)
 	}
-	if ids, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{message}); e == nil {
-		r.emit(Event{Kind: "message_placeholder", Text: "Session naming input · inspect", EntryID: ids[0]})
-	} else {
+	if _, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{message}); e != nil {
 		r.namingFailure(ownerCtx, sessionID, turn, "save input: "+e.Error())
 		return
 	}
 	var title strings.Builder
-	e = r.Provider.Stream(ctx, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: namingOutputTokens}, func(ev llm.StreamEvent) error {
+	e = r.stream(ctx, turn, "main", request, llm.Request{ConversationID: sessionID + "/naming", Selection: selection, System: system, Messages: []llm.Message{message}, NoTools: true, OutputTokens: namingOutputTokens}, func(ev llm.StreamEvent) error {
 		if ev.Kind == "completed" {
 			usage = ev.Usage
 		}
@@ -125,9 +122,7 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		return nil
 	})
 	r.recordUsage(usage)
-	if ids, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{{Type: llm.TypeAssistant, Content: title.String()}}); e == nil {
-		r.emit(Event{Kind: "message_placeholder", Text: "Session naming reply · inspect", EntryID: ids[0]})
-	} else {
+	if _, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{{Type: llm.TypeAssistant, Content: title.String()}}); e != nil {
 		r.namingFailure(ownerCtx, sessionID, turn, "save reply: "+e.Error())
 		return
 	}

@@ -99,6 +99,7 @@ type idleHTTPWatch struct {
 	cancel           context.CancelFunc
 	interval         time.Duration
 	deadline         time.Time
+	pausedAt         time.Time // Local boundary observation; excluded from inactivity accounting.
 	timer            *time.Timer
 	stopParent       func() bool
 	stopped, expired bool
@@ -116,7 +117,7 @@ func (w *idleHTTPWatch) activity() {
 
 func (w *idleHTTPWatch) expire() {
 	w.mu.Lock()
-	if w.stopped {
+	if w.stopped || !w.pausedAt.IsZero() {
 		w.mu.Unlock()
 		return
 	}
@@ -131,6 +132,34 @@ func (w *idleHTTPWatch) expire() {
 	w.expired = true
 	w.mu.Unlock()
 	w.stop()
+}
+
+// pause excludes synchronous local work without canceling transport or changing
+// validated completion. It cannot revive a stopped or already overdue watch.
+// A successful pause must be paired with resume by the same synchronous owner.
+func (w *idleHTTPWatch) pause() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now()
+	if w.stopped || !w.pausedAt.IsZero() || !now.Before(w.deadline) {
+		return false
+	}
+	w.pausedAt = now
+	w.timer.Stop()
+	return true
+}
+
+func (w *idleHTTPWatch) resume() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pausedAt.IsZero() {
+		return
+	}
+	w.deadline = w.deadline.Add(time.Since(w.pausedAt))
+	w.pausedAt = time.Time{}
+	if !w.stopped {
+		w.timer.Reset(time.Until(w.deadline))
+	}
 }
 
 func (w *idleHTTPWatch) stop() {

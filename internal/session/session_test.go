@@ -64,7 +64,7 @@ func seedRuntime(t *testing.T, r *Runtime, content string) {
 	r.mu.Unlock()
 }
 func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
-	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"verified\n"}`)}}}, {Text: "Saved result."}})
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"verified\n"}`)}}}, {Text: "Saved result."}})
 	m := llm.Message{Type: llm.TypeUserInput, Content: "Write a result"}
 	if e := r.Run(&m); e != nil {
 		t.Fatal(e)
@@ -78,14 +78,17 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 		t.Fatal(messages, e)
 	}
 	prompts := 0
-	for len(events) > 0 {
-		event := <-events
-		if event.Kind == "system_prompt" {
+	entries, e := r.Store.Branch(r.Current(), 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, entry := range entries {
+		view, e := r.Store.ReadEntryView(context.Background(), entry.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if view.StatusType == "system_prompt" {
 			prompts++
-			entry, e := r.Store.Entry(event.EntryID)
-			if e != nil {
-				t.Fatal(e)
-			}
 			text, e := r.Store.ReadInspection(context.Background(), entry.ID)
 			if e != nil || !strings.Contains(text.Text, "You are TTC") {
 				t.Fatal(text.Text, e)

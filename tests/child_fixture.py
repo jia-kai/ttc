@@ -49,6 +49,8 @@ def compact_rows(text, narrow=False):
             continue
         if not narrow and CHILD_PREFIX not in row:
             continue
+        if not (response or completion) and ('Request #' in row or ' · Inspect' in row):
+            continue  # Native boundary previews may contain the same answer prefix.
         assert '...' in row or '…' in row, row
         if response:
             responses.append(number)
@@ -58,6 +60,27 @@ def compact_rows(text, narrow=False):
             raise AssertionError('child prefix outside compact response/completion row: ' + row)
     assert responses and completions, text
     return responses[0], completions[0]
+
+
+def child_response_target(db):
+    """Return the child request's latest immutable inspection revision and title."""
+    row = db.execute("""SELECT id,json_extract(content_json,'$.item.title') FROM entries
+        WHERE actor_id != 'main' AND kind='status'
+          AND json_extract(content_json,'$.type')='presentation_stream'
+          AND json_extract(content_json,'$.direction') IN ('response','outcome')
+          AND json_extract(content_json,'$.purpose')='coding'
+        ORDER BY id DESC LIMIT 1""").fetchone()
+    assert row is not None, 'missing child request capture'
+    return row
+
+
+def child_response_row(text, title):
+    """Find the target boundary even when the terminal clips its semantic suffix."""
+    marker = title.split(' · attempt ', 1)[0]
+    matches = [number for number, row in enumerate(text.splitlines(), 1)
+               if '[Sub Fixture check]' in row and marker in row]
+    assert len(matches) == 1, (marker, text)
+    return matches[0]
 
 
 def demo_completed(database, markdown):

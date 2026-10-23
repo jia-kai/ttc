@@ -3,10 +3,10 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/gdamore/tcell/v3"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"ttc/internal/historytest"
 	"ttc/internal/llm"
@@ -48,7 +48,7 @@ func TestAwaitingToolInspectorAndTransition(t *testing.T) {
 	u := newQuestionTestUI(t, p)
 	u.typeText("write a streamed file")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "awaiting write (2seg/9bytes) ...")
+	frame := u.wait(t, "awaiting write (2seg/9bytes) ...")
 	var count int
 	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT count(*) FROM tool_calls").Scan(&count); err != nil {
 		t.Fatal(err)
@@ -63,8 +63,16 @@ func TestAwaitingToolInspectorAndTransition(t *testing.T) {
 	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	u.typeText(fmt.Sprintf("/inspect %d", id))
-	u.key(tcell.KeyEnter)
+	if id <= 0 {
+		t.Fatal("missing persisted tool announcement")
+	}
+	for y, row := range strings.Split(frame, "\n") {
+		if strings.Contains(row, "awaiting write") {
+			u.screen.EventQ() <- tcell.NewEventMouse(3, y, tcell.Button1, 0)
+			break
+		}
+	}
+	u.wait(t, "Execution details")
 	u.wait(t, "call_id")
 	close(p.release)
 	u.wait(t, "assembled") // The open announcement inspector refreshes to exact tool details.

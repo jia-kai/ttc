@@ -23,6 +23,7 @@ type InspectionPage struct {
 	Title, Text                       string
 	Offset, Total, Limit              int
 	Supported, Markdown, JSON, System bool
+	Structured                        bool // Readable provider inspection generated from typed IR.
 	LargeEnvelope                     bool // Avoid loading omitted attachment/replay data even when displayed text is short.
 }
 
@@ -68,6 +69,18 @@ func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (I
 			return page, err
 		}
 		page.Text, page.Total, page.Supported = text, total, true
+	}
+	if typ == "presentation_stream" {
+		var path string
+		if err := s.db.QueryRowContext(ctx, `SELECT json_extract(content_json,'$.readable'),json_extract(content_json,'$.item.title'),coalesce(json_extract(content_json,'$.readable_version'),0)>0 FROM entries WHERE id=?`, id).Scan(&path, &page.Title, &page.Structured); err != nil {
+			return page, err
+		}
+		text, total, err := s.boundaryGroupPage(ctx, id, offset, limit)
+		if err != nil {
+			return page, err
+		}
+		page.Text, page.Total, page.Supported, page.Markdown, page.JSON = text, total, true, false, false
+		page.LargeEnvelope = true // Never fall back to loading the full artifact.
 	}
 	return page, nil
 }

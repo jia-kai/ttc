@@ -60,6 +60,9 @@ func TestTurnBoundaryLiveReplay(t *testing.T) {
 	mu.Unlock()
 	count := 0
 	for _, item := range c.view.lines {
+		if (item.human || item.speaker != "") && (item.action != actionNone || item.inspectID != 0) {
+			t.Fatalf("uncaptured conversation replay granted payload inspection: %+v", item)
+		}
 		if !item.human {
 			continue
 		}

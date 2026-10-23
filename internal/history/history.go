@@ -40,10 +40,12 @@ const schemaVersion = migrate.CurrentVersion
 
 // Store serializes commits; callers must close it after stopping runtime workers.
 type Store struct {
-	db      *sql.DB
-	Root    string
-	mu      sync.Mutex
-	useLock *os.File // Shared until Close; startup migration holds it exclusively.
+	db              *sql.DB
+	Root            string
+	mu              sync.Mutex
+	useLock         *os.File            // Shared until Close; startup migration holds it exclusively.
+	boundaryLayouts boundaryLayoutCache // Immutable readable indexes, separately synchronized.
+	boundaryItems   boundaryItemCache   // Immutable per-item projection metadata.
 }
 
 // NewID returns a readable prefix and 16 URL-safe characters encoding 96 random bits.
@@ -755,11 +757,17 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 	if e != nil {
 		return "", e
 	}
+	return s.artifactInLineage(v.LineageID, category, data)
+}
+
+// artifactInLineage avoids a database lookup while publishing prepared metadata
+// inside a transaction. Callers must have validated the session lineage.
+func (s *Store) artifactInLineage(lineage, category string, data []byte) (string, error) {
 	if strings.ContainsAny(category, "/\\.") {
 		return "", errors.New(prompts.HistoryArtifactCategory)
 	}
-	dir := filepath.Join(s.Root, "lineages", v.LineageID, category)
-	if e = privatefile.PrivateDir(dir); e != nil {
+	dir := filepath.Join(s.Root, "lineages", lineage, category)
+	if e := privatefile.PrivateDir(dir); e != nil {
 		return "", e
 	}
 	h := sha256.Sum256(data)
@@ -772,7 +780,7 @@ func (s *Store) Artifact(session, category string, data []byte) (string, error) 
 	} else if !os.IsNotExist(e) {
 		return "", fmt.Errorf(prompts.HistoryArtifactRead, e)
 	}
-	if e = privatefile.AtomicFile(p, data, 0600); e != nil {
+	if e := privatefile.AtomicFile(p, data, 0600); e != nil {
 		return "", e
 	}
 	return p, nil

@@ -416,14 +416,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		})
-	contextUpdates := 0
 	r.Emit = func(e Event) {
-		if e.Kind == "runtime_context" {
-			contextUpdates++
-			if e.EntryID == 0 {
-				t.Error("empty child context UI row")
-			}
-		}
 		if e.Kind != "tool" {
 			return
 		}
@@ -461,8 +454,9 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools, estimator: &contextbuild.Estimator{}}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if contextUpdates != 1 {
-		t.Fatal("unchanged child snapshot generated UI updates", contextUpdates)
+	var contextRecords int
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE actor_id=? AND kind='message' AND json_extract(content_json,'$.type')='runtime_context'", "main/child_test").Scan(&contextRecords); err != nil || contextRecords != 1 {
+		t.Fatal("unchanged child snapshot generated context records", contextRecords, err)
 	}
 	rows, err := historytest.DB(t, r.Store).Query("SELECT c.provider_call_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id ORDER BY r.entry_id")
 	if err != nil {

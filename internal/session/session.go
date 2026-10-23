@@ -15,6 +15,7 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/messagestream"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
 	"ttc/internal/skills"
@@ -22,24 +23,26 @@ import (
 	"ttc/internal/workspace"
 )
 
-// Event contains a view update, never authentication state. EntryID makes every record inspectable.
+// Event contains a view update, never authentication state. Inspection actions
+// belong to stream items; EntryID also identifies direct execution records.
 type Event struct {
 	Generation  uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
 	Kind, Text  string
 	SessionID   string // Runtime conversation at emission; the frontend discards stale-view events.
 	EntryID     int64
-	RequestID   int64           // Producing model request for streamed/completed assistant text.
-	Actor       string          // Producing actor for any event; empty means the main actor.
-	CallID      string          // Stable tool-card identity across transient updates and the final record.
-	PendingKey  string          // Request-scoped streamed announcement to replace when intent is committed.
-	JobID       string          // Optional live job for bounded inspector polling; never revived from history.
-	Detail      string          // Bounded detail for a transient tool update; final detail is loaded from history.
-	MessageType llm.MessageType // Canonical semantics for message events; zero for transient events.
-	InputSource string          // Human input source (normal, queue or steer); empty for non-input events.
-	InputTimeMS int64           // Original human-input commit time in Unix milliseconds; zero for non-input events.
-	Image       *ImageSnapshot  // Immutable image_show snapshot, not a live interaction handle.
-	Question    *QuestionForm   // Snapshot for question lifecycle events; never persisted as a live handle.
-	Retry       *llm.Retry      // Foreground retry backoff metadata; nil for background session naming.
+	RequestID   int64               // Producing model request for streamed/completed assistant text.
+	Actor       string              // Producing actor for any event; empty means the main actor.
+	CallID      string              // Stable tool-card identity across transient updates and the final record.
+	PendingKey  string              // Request-scoped streamed announcement to replace when intent is committed.
+	JobID       string              // Optional live job for bounded inspector polling; never revived from history.
+	Detail      string              // Bounded detail for a transient tool update; final detail is loaded from history.
+	MessageType llm.MessageType     // Canonical semantics for message events; zero for transient events.
+	InputSource string              // Human input source (normal, queue or steer); empty for non-input events.
+	InputTimeMS int64               // Original human-input commit time in Unix milliseconds; zero for non-input events.
+	Image       *ImageSnapshot      // Immutable image_show snapshot, not a live interaction handle.
+	Question    *QuestionForm       // Snapshot for question lifecycle events; never persisted as a live handle.
+	Retry       *llm.Retry          // Foreground retry backoff metadata; nil for background session naming.
+	StreamItem  *messagestream.Item // Provider-boundary presentation item; never model context.
 }
 
 // Inference is the protocol dependency consumed by sessions. Catalog discovery,
@@ -77,6 +80,7 @@ type Runtime struct {
 	mu                sync.Mutex
 	runMu             sync.Mutex // Serializes main foreground turns and idle lifecycle commands.
 	orderMu           sync.Mutex // Serializes event publication and immutable request admission.
+	boundaryMu        sync.Mutex // Orders boundary batches; never acquired by frontend/runtime state reads.
 	fatalCompaction   string     // Main context failure, including a failed invalidation write.
 	orderError        error      // Persistence failure prevents inference on an incomplete live snapshot.
 	publishedJobs     map[string]jobs.Snapshot
@@ -170,7 +174,9 @@ func (r *Runtime) resetLiveWork() {
 		r.orderMu.Lock()
 		sessionID := r.Current()
 		entry, e := r.Store.Append(sessionID, "", v.Owner, "status", "", false, map[string]any{"type": "job_completion", "job": v, "markdown": md})
-		if e == nil && v.WakeOnExit && r.ctx.Err() == nil {
+		// Child assignments use the canonical answer/failure handoff rather than
+		// duplicate generic job notifications. Diagnostics remain opt-in.
+		if e == nil && v.WakeOnExit && v.Kind != "subagent" && r.ctx.Err() == nil {
 			e = r.queueActorNotificationLocked(v.Owner, jobExitContent(v))
 		}
 		r.orderMu.Unlock()
@@ -478,9 +484,6 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		}
 		request, messages := admitted.RequestID, admitted.Messages
 		defs := r.Tools.Definitions()
-		if admitted.ContextEntry != 0 {
-			r.emit(Event{Kind: "runtime_context", MessageType: llm.TypeRuntimeContext, EntryID: admitted.ContextEntry})
-		}
 		for _, entry := range admitted.SteerEntries {
 			v, e := r.Store.Entry(entry)
 			if e != nil {
@@ -495,11 +498,10 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		if e = r.deliverNoticeEntries("main", admitted.NoticeEntries); e != nil {
 			return e
 		}
-		promptEntry, e := r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
+		_, e = r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
 		if e != nil {
 			return e
 		}
-		r.emit(Event{Kind: "system_prompt", Text: "System prompt · inspect", EntryID: promptEntry})
 		reply := llm.Message{Type: llm.TypeAssistant}
 		var text strings.Builder
 		var usage *llm.Usage
@@ -516,7 +518,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			return e
 		}
 		callbackFailed := false
-		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event llm.StreamEvent) (err error) {
+		streamErr := r.stream(ctx, turn, "main", request, llm.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if e := ctx.Err(); e != nil {
 				return e

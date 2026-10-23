@@ -95,25 +95,3 @@ func TestInspectorDoesNotFallThroughAfterPageError(t *testing.T) {
 		t.Fatal("page failure was not presented without a full read")
 	}
 }
-
-func TestPromptPlaceholdersUseTypedActorPurposeGroups(t *testing.T) {
-	c := inspectionController(nil)
-	c.seenPrompts = map[string]int64{}
-	prompt := func(actor, purpose string) *history.PromptMetadata {
-		return &history.PromptMetadata{Actor: actor, Purpose: purpose, Path: "snapshot"}
-	}
-	coding := prompt("main", "coding")
-	if !c.showPromptMetadata(10, coding) {
-		t.Fatal("first prompt was hidden")
-	}
-	c.view.append(line{id: 10, text: "System prompt · inspect"})
-	if c.showPromptMetadata(20, coding) || c.view.lines[0].id != 20 {
-		t.Fatal("newer prompt did not replace the group's inspection identity")
-	}
-	if c.showPromptMetadata(15, coding) || c.view.lines[0].id != 20 {
-		t.Fatal("older prompt replaced the latest snapshot")
-	}
-	if !c.showPromptMetadata(30, prompt("main", "naming")) || !c.showPromptMetadata(40, prompt("main/child_one", "coding")) {
-		t.Fatal("distinct actors or request purposes shared a placeholder")
-	}
-}

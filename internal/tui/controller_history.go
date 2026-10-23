@@ -5,39 +5,9 @@ import (
 	"strings"
 	"ttc/internal/history"
 	"ttc/internal/llm"
+	"ttc/internal/messagestream"
 	"ttc/internal/render"
 )
-
-func (c *frontendController) showPrompt(id int64) bool {
-	view, err := c.history.ReadEntryView(c.ctx, id)
-	if err != nil {
-		return true // Keep the placeholder available to reveal the inspection error.
-	}
-	return c.showPromptMetadata(id, view.Prompt)
-}
-
-func (c *frontendController) showPromptMetadata(id int64, prompt *history.PromptMetadata) bool {
-	if prompt == nil || prompt.Path == "" {
-		return true
-	}
-	key := prompt.GroupKey()
-	if previous, ok := c.seenPrompts[key]; ok {
-		// One placeholder per actor/purpose, inspecting its latest snapshot.
-		if id <= previous {
-			return false
-		}
-		for i, item := range c.view.lines {
-			if item.id == previous {
-				item.id = id
-				c.view.replace(i, item)
-				c.seenPrompts[key] = id
-				return false
-			}
-		}
-	}
-	c.seenPrompts[key] = id
-	return true
-}
 
 func (c *frontendController) add(text string, id int64) {
 	c.view.append(line{text: text, id: id})
@@ -96,13 +66,17 @@ func (c *frontendController) plainActor(actor, text string) string {
 func (c *frontendController) addActor(item line, actor string) {
 	c.view.append(c.attribute(item, actor))
 	if c.frontend.Plain {
-		fmt.Fprintln(c.frontend.Output, c.plainActor(actor, item.text))
+		text := item.text
+		if item.brief && !item.markdown {
+			text = render.ResponsePrefix(text)
+		}
+		fmt.Fprintln(c.frontend.Output, c.plainActor(actor, text))
 	}
 }
 
 // inspectionShowsSource applies the same provenance policy to small and paged records.
 func inspectionShowsSource(kind, eventType string) bool {
-	return kind == "tool_call" || kind == "tool_result" || eventType == "job_completion"
+	return kind == "tool_call" || kind == "tool_result" || eventType == "job_completion" || eventType == "presentation_stream"
 }
 
 func (c *frontendController) inspectSaved(id int64) {
@@ -111,12 +85,8 @@ func (c *frontendController) inspectSaved(id int64) {
 	c.modal.clear()
 	c.modal.history = historyView
 	c.modal.generation = c.frontend.Runtime.Generation()
-	if id < 0 {
-		if index, found := c.view.requests[-id]; found {
-			item := c.view.lines[index]
-			c.modal.window = &Window{Title: "assistant", Text: item.text, Markdown: true, requestID: -id}
-			c.attributeWindow(c.modal.window, item.actor)
-		}
+	if id <= 0 {
+		c.add("Inspection failed: entry ID must be positive", 0)
 		return
 	}
 	if !c.frontend.Plain {
@@ -158,7 +128,7 @@ func (c *frontendController) inspectSaved(id int64) {
 	if c.frontend.Plain {
 		fmt.Fprintln(c.frontend.Output, render.Clean(inspection.Text))
 	} else {
-		c.modal.window = &Window{Title: inspection.Title, Text: inspection.Text, System: inspection.System, Markdown: inspection.Markdown}
+		c.modal.window = &Window{Title: inspection.Title, Text: inspection.Text, System: inspection.System, Markdown: inspection.Markdown, Structured: inspection.Structured}
 		if inspectionShowsSource(inspection.Kind, inspection.Type) {
 			c.sourceWindow(c.modal.window, inspection.Actor)
 		} else {
@@ -212,8 +182,153 @@ func (c *frontendController) inspect(id int64) {
 	}
 }
 
+// openRow dispatches only the interaction explicitly offered by a transcript row.
+func (c *frontendController) openRow(item line) {
+	switch item.action {
+	case actionInspect:
+		c.inspectSaved(item.inspectID)
+		c.modal.requestHeader = item.id
+		if c.modal.window != nil && item.rawID > 0 {
+			c.modal.window.Title = requestWindowTitle(c.modal.window.Title)
+			c.modal.window.boundaryRaw = item.rawID
+			c.modal.window.Hint = "E expand · R raw · [ ] pages"
+		}
+	case actionExecution:
+		c.inspectExecution(item.inspectID)
+	case actionQuestion:
+		if form := c.frontend.Runtime.PendingQuestion(); form != nil && form.ID == item.questionID {
+			c.openQuestions(item.questionID)
+		} else if item.inspectID != 0 {
+			c.inspectSaved(item.inspectID)
+		}
+	}
+}
+
+func (c *frontendController) inspectExecution(id int64) {
+	c.inspect(id)
+	if c.modal.window != nil {
+		c.modal.window.Title = "Execution details · " + c.modal.window.Title
+	}
+}
+
+// refreshRequestInspection keeps an open readable request in sync as native
+// response items complete. Raw captures are immutable and are not refreshed.
+func (c *frontendController) refreshRequestInspection(header, target int64) {
+	w := c.modal.window
+	if w == nil || c.modal.requestHeader != header || c.modal.raw != nil || w.pages == nil || target <= 0 {
+		return
+	}
+	expanded := c.modal.expanded
+	page, err := c.requestInspectionPage(target, expanded, w.pages.page.Offset)
+	if err != nil {
+		w.Header = "Inspection refresh failed: " + render.Clean(err.Error())
+		return
+	}
+	scroll := w.Scroll
+	w.pages.load = func(offset int) (history.InspectionPage, error) {
+		return c.requestInspectionPage(target, expanded, offset)
+	}
+	// A new revision may insert readable response text before its JSON tail.
+	// Syntax hints from the old page offsets no longer identify the same source.
+	w.pages.fences = map[int]inspectionFence{0: {}}
+	w.pages.structured = map[int]render.StructuredState{0: {}}
+	w.setPage(page)
+	w.Title, w.boundaryRaw = requestWindowTitle(page.Title), target
+	w.Header = ""
+	w.Scroll = scroll
+}
+
+func (c *frontendController) requestInspectionPage(id int64, expanded bool, offset int) (history.InspectionPage, error) {
+	if expanded {
+		return c.history.BoundaryExpandedPage(c.ctx, id, offset, history.InspectionPageChars)
+	}
+	return c.history.InspectPage(c.ctx, id, offset, history.InspectionPageChars)
+}
+
+func (c *frontendController) toggleRequestExpansion() {
+	old := c.modal.window
+	if old == nil || old.boundaryRaw == 0 || c.modal.raw != nil {
+		return
+	}
+	id, expanded := old.boundaryRaw, !c.modal.expanded
+	page, err := c.requestInspectionPage(id, expanded, 0)
+	if err != nil {
+		old.Header = "Inspection failed: " + render.Clean(err.Error())
+		return
+	}
+	w := NewPagedWindow(page, func(offset int) (history.InspectionPage, error) {
+		return c.requestInspectionPage(id, expanded, offset)
+	})
+	w.Title = requestWindowTitle(page.Title)
+	w.boundaryRaw = id
+	mode := "expand"
+	if expanded {
+		mode = "compact"
+	}
+	w.Hint = "E " + mode + " · R raw · [ ] pages"
+	c.modal.window, c.modal.expanded = w, expanded
+	c.sourceWindow(w, page.Actor)
+}
+
+// The row already carries attempt/state. Keep the inspector heading short
+// enough that its action hints remain visible in a narrow terminal pane.
+func requestWindowTitle(title string) string {
+	prefix, suffix, found := strings.Cut(title, " · attempt ")
+	if !found {
+		return title
+	}
+	attempt, _, _ := strings.Cut(suffix, " · ")
+	if attempt == "1" {
+		return prefix
+	}
+	return prefix + " · attempt " + attempt
+}
+
+func (c *frontendController) openBoundaryRaw(id int64) {
+	c.modal.raw = &rawBoundaryState{header: id}
+	c.navigateBoundaryRaw(0)
+}
+
+func (c *frontendController) navigateBoundaryRaw(delta int) {
+	state := c.modal.raw
+	if state == nil {
+		return
+	}
+	captures, err := c.history.BoundaryCaptures(c.ctx, state.header)
+	if err != nil || len(captures) == 0 {
+		if err == nil {
+			err = fmt.Errorf("request has no captured payloads")
+		}
+		c.add("Raw boundary inspection failed: "+err.Error(), 0)
+		return
+	}
+	index := 0
+	for i, capture := range captures {
+		if capture.ID == state.capture {
+			index = i
+			break
+		}
+	}
+	index = max(0, min(len(captures)-1, index+delta))
+	id := captures[index].ID
+	page, err := c.history.BoundaryRawPage(c.ctx, id, 0, history.InspectionPageChars)
+	if err != nil {
+		c.add("Raw boundary inspection failed: "+err.Error(), 0)
+		return
+	}
+	c.modal.window = NewPagedWindow(page, func(offset int) (history.InspectionPage, error) {
+		return c.history.BoundaryRawPage(c.ctx, id, offset, history.InspectionPageChars)
+	})
+	requestTitle, _, _ := strings.Cut(page.Title, " · attempt ")
+	c.modal.window.Title = "Exact raw JSON · " + requestTitle + " · " + captures[index].Label
+	c.modal.window.Hint = fmt.Sprintf("%d/%d · N/P capture · [ ] pages", index+1, len(captures))
+	state.capture = id
+	c.sourceWindow(c.modal.window, page.Actor)
+}
+
 func (c *frontendController) replay() {
 	c.view.reset()
+	c.streamRows = map[int64]int{}
 	loaded, err := c.history.SubagentNames(c.ctx, c.frontend.Runtime.Current())
 	if err != nil {
 		c.add("Subagent names failed: "+err.Error(), 0)
@@ -226,13 +341,40 @@ func (c *frontendController) replay() {
 		return
 	}
 	c.sidebar.sessionName = saved.Name
-	c.seenPrompts = map[string]int64{}
 	entries, e := c.frontend.Runtime.Entries()
 	if e != nil {
 		c.add("Error: "+e.Error(), 0)
 		return
 	}
+	var stream []messagestream.Item
+	if saved.EntryTip != 0 {
+		stream, err = c.history.StreamItems(c.ctx, c.frontend.Runtime.Current())
+		if err != nil {
+			c.add("Stream presentation failed: "+err.Error(), 0)
+			return
+		}
+	}
+	for i, item := range stream {
+		if item.ID <= 0 || i > 0 && item.ID <= stream[i-1].ID {
+			c.add("Stream presentation failed: items must have increasing saved entry IDs", 0)
+			return
+		}
+	}
+	nextStream := 0
 	for _, v := range entries {
+		for nextStream < len(stream) && stream[nextStream].ID < v.ID {
+			item := stream[nextStream]
+			c.streamRows[item.ID] = len(c.view.lines)
+			c.view.append(c.attribute(streamLine(item), item.Actor))
+			nextStream++
+		}
+		if nextStream < len(stream) && stream[nextStream].ID == v.ID {
+			item := stream[nextStream]
+			c.streamRows[item.ID] = len(c.view.lines)
+			c.view.append(c.attribute(streamLine(item), item.Actor))
+			nextStream++
+			continue
+		}
 		if v.InternalEvent() {
 			continue
 		}
@@ -241,21 +383,27 @@ func (c *frontendController) replay() {
 			c.add("History presentation failed: "+err.Error(), 0)
 			return
 		}
-		if entryView.StatusType == "system_prompt" && !c.showPromptMetadata(v.ID, entryView.Prompt) {
+		if entryView.StatusType == "system_prompt" || entryView.StatusType == "request_message" {
 			continue
 		}
-		item := c.attribute(line{text: entryView.Label, id: v.ID, system: v.Kind == "status" || v.Role == "system"}, v.Actor)
+		item := c.attribute(line{text: strings.TrimSuffix(entryView.Label, " · inspect"), id: v.ID, system: v.Kind == "status" || v.Role == "system"}, v.Actor)
+		if v.Kind == "tool_call" || v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
+			item.action, item.inspectID = actionExecution, v.ID
+		}
 		if v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
 			item.markdown, item.brief, item.system = true, true, false
 		}
 		if (v.Kind == "message" || v.Kind == "summary") && entryView.Message != nil {
 			message := *entryView.Message
+			if message.Type == llm.TypeRuntimeContext || message.Type == llm.TypeCompactionContext || message.Type == llm.TypeSystemInstruction || message.Type == llm.TypeDeveloperInstruction {
+				continue // Synthetic model-input snapshots are visible at the boundary.
+			}
 			if v.Kind == "message" && message.Type == llm.TypeUserInput {
 				// Original inputs take their commit time from the entry, not
 				// caller-supplied message metadata.
 				message.InputTimeMS = v.CreatedMS
 			}
-			item = messageLine(item, message)
+			item = directMessageLine(item, message)
 			item = c.attribute(item, item.actor)
 		}
 		if v.Kind == "tool_result" && c.renderer != nil {
@@ -265,6 +413,11 @@ func (c *frontendController) replay() {
 			}
 		}
 		c.view.append(item)
+	}
+	for ; nextStream < len(stream); nextStream++ {
+		item := stream[nextStream]
+		c.streamRows[item.ID] = len(c.view.lines)
+		c.view.append(c.attribute(streamLine(item), item.Actor))
 	}
 	if c.renderer != nil {
 		cards, err := c.frontend.Runtime.PendingImages()
@@ -279,14 +432,14 @@ func (c *frontendController) replay() {
 					break
 				}
 				if item.id == card.EntryID {
-					item = c.attribute(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}, card.Snapshot.Actor)
+					item = c.attribute(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, action: actionExecution, inspectID: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}, card.Snapshot.Actor)
 					c.view.replace(i, item)
 					present = true
 					break
 				}
 			}
 			if !present {
-				c.view.append(c.attribute(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}, card.Snapshot.Actor))
+				c.view.append(c.attribute(line{text: "**image_show** · " + render.Inline(card.Snapshot.Path), id: card.EntryID, action: actionExecution, inspectID: card.EntryID, callID: card.Snapshot.ID, markdown: true, brief: true, image: &card.Snapshot}, card.Snapshot.Actor))
 			}
 		}
 	}

@@ -29,6 +29,35 @@ func headers(req *http.Request, t AccessTokens) {
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
 }
 
+// Give observers their own bytes: mutating a capture must not alter transport
+// input or replay state. Callback errors are local, even when typed retryable.
+func (a *Adapter) observeBoundary(req llm.Request, attempt int, direction string, payload []byte) error {
+	if req.Observe == nil {
+		return nil
+	}
+	document, err := a.InspectBoundary(direction, payload)
+	if err != nil {
+		// Inspection is a readable projection, not protocol validation. Preserve
+		// malformed native values for raw inspection and let the stream validator
+		// retain its normal retry/partial-error semantics. Never expose decoder
+		// diagnostics: they may contain fragments of arbitrary upstream data.
+		document = llm.InspectionDocument{Sections: []llm.InspectionSection{{
+			Title: "Inspection unavailable",
+			Fields: []llm.InspectionField{{Name: "reason", Value: llm.InspectionValue{
+				Kind: llm.InspectionKindString,
+				Text: "Provider payload could not be interpreted; use raw JSON.",
+			}}},
+		}}}
+	}
+	err = req.Observe(llm.BoundaryEvent{
+		Attempt: attempt, Direction: direction, Payload: append(json.RawMessage(nil), payload...), Inspection: &document,
+	})
+	if err != nil {
+		return &callbackError{err: err}
+	}
+	return nil
+}
+
 // binaryPart degrades only unavailable original bytes, not invalid references,
 // cancellation or cache failures. Canonical messages remain unchanged.
 func binaryPart(ctx context.Context, file llm.BinaryFile, model llm.ModelSpec, textKind string, resolve func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)) (map[string]any, error) {
@@ -284,8 +313,44 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 				}
 			}
 		}
+		if err := a.observeBoundary(req, attempt+1, "request", body); err != nil {
+			return err
+		}
 		exchange := newResponseExchange(ctx, a.Cancel, a.idleTimeout)
 		resp, upstreamErr := a.Client.Do(h.WithContext(exchange.ctx))
+		transportFailed := upstreamErr != nil
+		outcomeObserved := false
+		observeOutcome := func(err error, callbackFailed bool) error {
+			if req.Observe == nil || outcomeObserved {
+				return nil
+			}
+			outcomeObserved = true
+			status, category, httpStatus := "success", "completed", 0
+			if resp != nil {
+				httpStatus = resp.StatusCode
+			}
+			if err != nil {
+				status = "failure"
+				switch {
+				case callbackFailed:
+					category = "callback_error"
+				case ctx.Err() != nil || errors.Is(err, context.Canceled):
+					category = "canceled"
+				case transportFailed:
+					category = "transport_error"
+				case httpStatus != http.StatusOK:
+					category = "http_error"
+				default:
+					category = "response_error"
+				}
+			}
+			payload, _ := json.Marshal(struct {
+				Status     string `json:"status"`
+				Category   string `json:"category"`
+				HTTPStatus int    `json:"http_status,omitempty"`
+			}{status, category, httpStatus})
+			return a.observeBoundary(req, attempt+1, "outcome", payload)
+		}
 		if resp != nil && upstreamErr == nil {
 			exchange.setBody(resp.Body)
 		}
@@ -294,6 +359,9 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 		retryAfter := ""
 		if upstreamErr != nil {
 			exchange.finish(false)
+			if err := observeOutcome(upstreamErr, false); err != nil {
+				return err
+			}
 			if ctx.Err() != nil {
 				return exchange.withCleanupError(ctx.Err())
 			}
@@ -319,7 +387,15 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			// rather than requiring a coding continuation or mixing two replies.
 			var privateText strings.Builder
 			var privateEvents []llm.StreamEvent
-			committed, upstreamErr = parseStreamWithWatch(tokens.Access, resp.Body, func(event llm.StreamEvent) error {
+			var observeItem func(json.RawMessage) error
+			if req.Observe != nil {
+				observeItem = func(item json.RawMessage) error {
+					err := a.observeBoundary(req, attempt+1, "response", item)
+					callbackFailed = callbackFailed || err != nil
+					return err
+				}
+			}
+			committed, upstreamErr = parseStreamObserved(tokens.Access, resp.Body, func(event llm.StreamEvent) error {
 				if req.NoTools && (event.Kind == "call" || event.Kind == "call_start") {
 					return errors.New(prompts.OpenAINoToolsReturnedTool)
 				}
@@ -334,7 +410,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 				err := emit(event)
 				callbackFailed = callbackFailed || err != nil
 				return finalCallbackError(err)
-			}, exchange.watch, exchange.identify)
+			}, exchange.watch, exchange.identify, observeItem)
 			if !callbackFailed {
 				upstreamErr = exchange.watch.failure(upstreamErr)
 			}
@@ -346,16 +422,22 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 				if req.NoTools {
 					if privateText.Len() != 0 {
 						if err := emit(llm.StreamEvent{Kind: "text", Text: privateText.String()}); err != nil {
+							if captureErr := observeOutcome(err, true); captureErr != nil {
+								return captureErr
+							}
 							return finalCallbackError(err)
 						}
 					}
 					for _, event := range privateEvents {
 						if err := emit(event); err != nil {
+							if captureErr := observeOutcome(err, true); captureErr != nil {
+								return captureErr
+							}
 							return finalCallbackError(err)
 						}
 					}
 				}
-				return nil
+				return observeOutcome(nil, false)
 			}
 			if req.NoTools {
 				committed = false // Buffered output has not reached a consumer.
@@ -363,6 +445,9 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			if !callbackFailed {
 				upstreamErr = failureWithRequestID(upstreamErr, redactAccessToken(resp.Header.Get("x-request-id"), tokens.Access))
 			}
+		}
+		if err := observeOutcome(upstreamErr, callbackFailed); err != nil {
+			return err
 		}
 		if ctx.Err() != nil {
 			return exchange.withCleanupError(ctx.Err())
@@ -412,6 +497,10 @@ func parseStream(accessToken string, reader io.Reader, emit func(llm.StreamEvent
 }
 
 func parseStreamWithWatch(accessToken string, reader io.Reader, emit func(llm.StreamEvent) error, watch *idleHTTPWatch, identify func(string)) (bool, error) {
+	return parseStreamObserved(accessToken, reader, emit, watch, identify, nil)
+}
+
+func parseStreamObserved(accessToken string, reader io.Reader, emit func(llm.StreamEvent) error, watch *idleHTTPWatch, identify func(string), observeItem func(json.RawMessage) error) (bool, error) {
 	scan := bufio.NewScanner(reader)
 	scan.Buffer(make([]byte, 4096), 8<<20)
 	data := []string{}
@@ -513,6 +602,18 @@ func parseStreamWithWatch(accessToken string, reader io.Reader, emit func(llm.St
 				}
 			}
 		case "response.output_item.done":
+			// Capture the actual assembled item, before replay validation or
+			// no-tools buffering can reject or discard it.
+			if observeItem != nil {
+				paused := watch != nil && watch.pause()
+				err := observeItem(event.Item)
+				if paused {
+					watch.resume()
+				}
+				if err != nil {
+					return err
+				}
+			}
 			var item functionItem
 			if e := json.Unmarshal(event.Item, &item); e != nil {
 				return errors.New(prompts.OpenAIInvalidCompletedItem)

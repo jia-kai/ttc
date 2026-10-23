@@ -165,7 +165,10 @@ func (s *Store) Continue(session string, handoff llm.Message, sourceTip, retainF
 		mapping := map[int64]int64{}
 		pendingCopied := false
 		for _, entry := range entries {
-			if (entry.ID < retainFrom && !selected[entry.ID]) || audit[entry.ID] {
+			var marker struct{ Type string }
+			stream := entry.Kind == "status" && json.Unmarshal(entry.Content, &marker) == nil && marker.Type == "presentation_stream"
+			// Presentation audit survives summarization independently of model context.
+			if !stream && ((entry.ID < retainFrom && !selected[entry.ID]) || audit[entry.ID]) {
 				continue
 			}
 			fileTip := entry.FileTip

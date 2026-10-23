@@ -76,8 +76,8 @@ replaces or changes model-facing results.
   bytes). Applied mutations add at most six diff lines, each at most 120
   characters. Shell rows show the final 64 UTF-8 bytes per stream, collapsed and
   labeled stdout/stderr; model shell results use a separate configurable byte
-  budget. Child assistant and final-answer rows use clipped response prefixes,
-  with full messages in dialogs.
+  budget. Child assistant and final-answer rows use clipped response prefixes;
+  inspect the corresponding Request row for the captured full response.
 - `detail`: paths and highlighted immutable snapshot diffs precede labeled
   supplied parameters/results. GNU diff has a shared 256 KiB capture and
   five-second deadline per call; disclose failures/truncation and show only
@@ -448,10 +448,14 @@ Input: `{path, format?, scope?}`.
 - Output and lifetime: terminal answers replace the stdout preview to avoid
   repetition. Raw captured stdout remains available in inspection and
   `job_read`. Each assignment owns fresh bounded stdout/stderr captures: replies
-  go to stdout, tool summaries/errors to stderr. Final results reference
-  immutable retained output, never a later assignment's buffers. Live child
-  handles survive main compaction but not explicit session changes, restoration
-  or exit. Reloading history cannot resume a child.
+  go to stdout, tool summaries/errors to stderr. Automatic foreground results,
+  progress updates and background completion notifications omit captured stderr
+  and edit-history logs. Diagnostics remain in execution inspectors and explicit
+  `job_read(stream="stderr")`; errors, warnings and failure-artifact references
+  remain delivered. Final results reference immutable retained output, never a
+  later assignment's buffers. Live child handles survive main compaction but not
+  explicit session changes, restoration or exit. Reloading history cannot resume
+  a child.
 
 ### `child_message`
 

@@ -71,3 +71,25 @@ func TestOutputSelectionLeavesCompactStreamingPreviews(t *testing.T) {
 		t.Fatal(len(got.Stdout), got.Truncated)
 	}
 }
+
+func TestStdoutTruncationDoesNotIncludeStderr(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		for _, largeStdout := range []bool{false, true} {
+			p := capture.NewPool(1 << 20)
+			j := &job{stdout: p.NewBuffer(1 << 16), stderr: p.NewBuffer(1 << 16)}
+			if selected {
+				j.output = &capture.OutputOptions{Bytes: 64}
+			}
+			stdout := "short"
+			if largeStdout {
+				stdout = strings.Repeat("x", 9000)
+			}
+			j.stdout.Write([]byte(stdout))
+			j.stderr.Write([]byte(strings.Repeat("diagnostic", 900)))
+			got := preview(j)
+			if !got.Truncated || got.StdoutTruncated != largeStdout {
+				t.Fatalf("selected=%t large_stdout=%t: %+v", selected, largeStdout, got)
+			}
+		}
+	}
+}

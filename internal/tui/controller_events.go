@@ -215,6 +215,11 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 	}
 	c.activity.observe(event, time.Now())
 	switch event.Kind {
+	case "stream_item":
+		if event.StreamItem == nil || event.StreamItem.ID <= 0 {
+			return fmt.Errorf("stream_item event is missing its saved item identity")
+		}
+		c.publishStream(*event.StreamItem)
 	case "continuation":
 		// Rebuild the committed history before rendering subsequent coding
 		// events. Compaction keeps drafts, queued input and live dialogs.
@@ -248,7 +253,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		}
 		return nil
 	case "tool_pending":
-		c.addActor(line{text: event.Text, id: event.EntryID, callID: event.CallID, awaiting: true, system: true}, event.Actor)
+		c.addActor(line{text: event.Text, id: event.EntryID, action: actionExecution, inspectID: event.EntryID, callID: event.CallID, awaiting: true, system: true}, event.Actor)
 	case "tool_progress":
 		if index, ok := c.view.calls[event.CallID]; ok && c.view.lines[index].awaiting {
 			item := c.view.lines[index]
@@ -275,7 +280,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 			}
 		}
 	case "tool_update", "tool":
-		item := c.attribute(line{text: event.Text, id: event.EntryID, callID: event.CallID, jobID: event.JobID, detail: event.Detail, markdown: true, brief: true, complete: event.Kind == "tool"}, event.Actor)
+		item := c.attribute(line{text: event.Text, id: event.EntryID, action: actionExecution, inspectID: event.EntryID, callID: event.CallID, jobID: event.JobID, detail: event.Detail, markdown: true, brief: true, complete: event.Kind == "tool"}, event.Actor)
 		if !c.view.publish(item, event.PendingKey, false) {
 			break
 		}
@@ -289,7 +294,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		if c.modal.window != nil && c.modal.window.CallID != "" && (c.modal.window.CallID == event.CallID || c.modal.window.CallID == event.PendingKey) {
 			c.modal.window.CallID = event.CallID
 			if event.Kind == "tool" {
-				c.inspect(event.EntryID)
+				c.inspectExecution(event.EntryID)
 			} else {
 				c.modal.window.JobID, c.modal.window.Detail, c.modal.window.Text = event.JobID, event.Detail, event.Detail
 				if c.modal.window.JobID != "" && !c.commandBusy {
@@ -298,7 +303,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 			}
 		}
 	case "job":
-		c.view.append(c.attribute(line{text: event.Text, id: event.EntryID, markdown: true, brief: true}, event.Actor))
+		c.view.append(c.attribute(line{text: event.Text, id: event.EntryID, action: actionExecution, inspectID: event.EntryID, markdown: true, brief: true}, event.Actor))
 		if c.frontend.Plain {
 			brief, err := render.TerminalBriefing(event.Text, 500, false)
 			if err != nil {
@@ -307,22 +312,16 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 			fmt.Fprintln(c.frontend.Output, c.plainActor(event.Actor, brief))
 		}
 	case "delta":
-		item := messageLine(line{}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID})
+		item := directMessageLine(line{}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID})
 		item.complete, item.markdown = false, false
 		item = c.attribute(item, event.Actor)
-		if item.compactResponse {
-			item.id = -event.RequestID // Negative UI-only identity until the saved response arrives.
-		}
 		if c.view.publish(item, "", true) && c.frontend.Plain {
 			if !item.compactResponse {
 				fmt.Fprint(c.frontend.Output, event.Text)
 			}
 		}
-		if c.modal.window != nil && c.modal.window.requestID == event.RequestID {
-			c.modal.window.Text = c.view.lines[c.view.requests[event.RequestID]].text
-		}
 	case "assistant":
-		item := c.attribute(messageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID}), event.Actor)
+		item := c.attribute(directMessageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID}), event.Actor)
 		index, streamed := c.view.requests[event.RequestID]
 		streamed = streamed && !c.view.lines[index].complete
 		if c.view.publish(item, "", false) && c.frontend.Plain {
@@ -341,9 +340,6 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 				c.view.append(line{text: "Warning: " + c.graphicsWarning, system: true})
 				c.graphicsWarning = ""
 			}
-		}
-		if c.modal.window != nil && c.modal.window.requestID == event.RequestID {
-			c.inspect(event.EntryID)
 		}
 	case "question":
 		if event.Question == nil {
@@ -368,12 +364,6 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		// Runtime state may already contain the next round. A delayed
 		// closure must not clear that round's activity or dialog.
 		c.syncQuestionState(c.frontend.Runtime.PendingQuestion())
-	case "system_prompt":
-		if c.showPrompt(event.EntryID) {
-			c.addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
-		}
-	case "runtime_context":
-		c.addActor(messageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeRuntimeContext}), event.Actor)
 	case "awaiting":
 		// Input may have entered the FIFO while inference was busy immediately
 		// before it parked. Transfer that input at this serialized transition;
@@ -387,9 +377,12 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 	case "status", "wake", "resumed":
 		c.addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 	default:
+		if event.Kind == "message" && (event.MessageType == llm.TypeSystemInstruction || event.MessageType == llm.TypeDeveloperInstruction || event.MessageType == llm.TypeRuntimeContext || event.MessageType == llm.TypeCompactionContext) {
+			return nil
+		}
 		item := line{text: event.Text, id: event.EntryID, actor: event.Actor}
 		if event.Kind == "message" {
-			item = messageLine(item, llm.Message{Type: event.MessageType, Content: event.Text, InputSource: event.InputSource, InputTimeMS: event.InputTimeMS})
+			item = directMessageLine(item, llm.Message{Type: event.MessageType, Content: event.Text, InputSource: event.InputSource, InputTimeMS: event.InputTimeMS})
 		}
 		item = c.attribute(item, item.actor)
 		c.view.append(item)

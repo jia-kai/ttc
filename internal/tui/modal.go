@@ -5,17 +5,24 @@ import "ttc/internal/session"
 // modalState owns one foreground view and its asynchronous image load.
 // Clearing it discards late source results without using window titles as state.
 type modalState struct {
-	window     *Window
-	menu       *modelMenu
-	commands   *commandMenu
-	sessions   *sessionMenu
-	history    *historyMenu
-	prompts    *promptSearch
-	background *backgroundMenu
-	question   *questionDialog
-	preview    *imagePreview
-	loading    *previewLoad
-	generation uint64
+	window        *Window
+	menu          *modelMenu
+	commands      *commandMenu
+	sessions      *sessionMenu
+	history       *historyMenu
+	prompts       *promptSearch
+	background    *backgroundMenu
+	question      *questionDialog
+	preview       *imagePreview
+	loading       *previewLoad
+	raw           *rawBoundaryState
+	requestHeader int64 // Live request row whose readable inspector is open; zero for snapshots.
+	expanded      bool  // Full readable request view; raw captures have their own mode.
+	generation    uint64
+}
+
+type rawBoundaryState struct {
+	header, capture int64 // Group revision snapshot and currently selected immutable capture.
 }
 type previewLoad struct {
 	snapshot   session.ImageSnapshot

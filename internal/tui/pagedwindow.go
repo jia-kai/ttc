@@ -9,9 +9,10 @@ import (
 )
 
 type inspectionPages struct {
-	page   history.InspectionPage
-	load   func(int) (history.InspectionPage, error)
-	fences map[int]inspectionFence // Bounded fence/partial-row hints, never cached body pages.
+	page       history.InspectionPage
+	load       func(int) (history.InspectionPage, error)
+	fences     map[int]inspectionFence        // Bounded fence/partial-row hints, never cached body pages.
+	structured map[int]render.StructuredState // Bounded | block and split-row hints, not body pages.
 }
 
 type inspectionFence struct {
@@ -22,7 +23,7 @@ type inspectionFence struct {
 // NewPagedWindow displays retained history without loading or wrapping the whole
 // record. Load returns one bounded Unicode-character page at the given offset.
 func NewPagedWindow(page history.InspectionPage, load func(int) (history.InspectionPage, error)) *Window {
-	w := &Window{Title: page.Title, Markdown: page.Markdown, System: page.System, Hint: "[ ] pages · arrows scroll · Esc closes", pages: &inspectionPages{page: page, load: load, fences: map[int]inspectionFence{0: {}}}}
+	w := &Window{Title: page.Title, Markdown: page.Markdown, System: page.System, Hint: "[ ] pages · arrows scroll · Esc closes", pages: &inspectionPages{page: page, load: load, fences: map[int]inspectionFence{0: {}}, structured: map[int]render.StructuredState{0: {}}}}
 	w.setPage(page)
 	return w
 }
@@ -33,6 +34,18 @@ func (w *Window) setPage(page history.InspectionPage) {
 	w.Scroll = 0
 	w.Text = page.Text
 	w.Markdown = page.Markdown
+	w.Structured = page.Structured
+	w.structuredState = render.StructuredState{}
+	if page.Structured {
+		state, known := p.structured[page.Offset]
+		if !known && page.Offset > 0 {
+			state.MidRow = true
+		}
+		w.structuredState = state
+		_, next := render.StructuredPage(page.Text, state, false)
+		p.structured[page.Offset+page.Limit] = next
+		return
+	}
 	if page.JSON {
 		w.Text = render.Fence(page.Text, "json")
 		w.Markdown = true
@@ -124,20 +137,27 @@ func (w *Window) pageKey(key string) bool {
 	if w.pages == nil || key != "[" && key != "]" {
 		return false
 	}
+	w.movePage(key == "]")
+	return true
+}
+
+// movePage commits only successfully loaded pages; explicit page keys and scroll
+// continuation share offsets, error reporting, and page initialization.
+func (w *Window) movePage(forward bool) bool {
 	p := w.pages
 	offset := p.page.Offset
-	if key == "[" {
+	if !forward {
 		offset = max(0, offset-p.page.Limit)
 	} else {
 		offset += p.page.Limit
 	}
-	if offset == p.page.Offset || offset >= p.page.Total {
-		return true
+	if p.page.Limit <= 0 || offset == p.page.Offset || offset >= p.page.Total {
+		return false
 	}
 	page, err := p.load(offset)
 	if err != nil {
 		w.Header = "Inspection failed: " + render.Clean(err.Error())
-		return true
+		return false
 	}
 	w.Header = ""
 	w.setPage(page)

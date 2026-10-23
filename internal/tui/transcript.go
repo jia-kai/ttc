@@ -45,6 +45,9 @@ func newTranscript() *transcript {
 }
 func layoutText(v line, width int) []string {
 	if !v.markdown {
+		if v.brief {
+			return []string{ansi.Truncate(render.ResponsePrefix(v.text), max(1, width), "…")}
+		}
 		return wrap(render.Clean(v.text), width)
 	}
 	var text string

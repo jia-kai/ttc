@@ -34,38 +34,43 @@ tools. The final notebook demonstrates headings, tables, emphasis, quotes,
 nested and ordered lists, checkboxes, code, links, Unicode, and inline/block TeX
 math. The reusable child returns deterministic multiline evidence exceeding 8
 KiB, beginning `CHILD-PREVIEW 4.0` and ending `CHILD-FULL-TAIL`. Its assistant
-responses and final answers returned to main occupy single clipped rows, not
-expanded bodies or answer JSON. Click either row to inspect the complete answer;
-End reveals the distinctive tail, and Esc closes the dialog. On a
-returned-answer row, D switches from the full response to completion tool
-details. Kitty displays images and formula images with Unicode placeholders;
-unsupported TeX stays readable. Click the field thumbnail for pan/zoom and
-coordinate selection. In a graphics-capable interactive demo, OK sends the
-requested point to the mock server; Esc sends cancellation. Ctrl+X F toggles
-fullscreen copy mode, hiding conversation scroll decorations and disabling mouse
-capture; select/copy with the terminal and scroll by Ctrl+U/D. The display
-freezes while runtime work continues; periodic redraws and automatic question
-dialogs pause until exit. Esc or Ctrl+X F restores normal mouse behavior. Ctrl+X
-S opens the sidebar overlay; click headers to expand lists and wheel-scroll each
-independently.
+responses and final answers returned to main occupy single clipped direct rows,
+without payload inspection. Open the child's Request row to inspect its inputs
+and answer. E expands readable delta items; continued bottom/top scrolling or [
+/ ] changes pages, and End scrolls to the current page's tail. Esc closes the
+dialog. Direct tool rows open execution details separately. Kitty displays
+images and formula images with Unicode placeholders; unsupported TeX stays
+readable. Click the field thumbnail for pan/zoom and coordinate selection. In a
+graphics-capable interactive demo, OK sends the requested point to the mock
+server; Esc sends cancellation. Ctrl+X F toggles fullscreen copy mode, hiding
+conversation scroll decorations and disabling mouse capture; select/copy with
+the terminal and scroll by Ctrl+U/D. The display freezes while runtime work
+continues; periodic redraws and automatic question dialogs pause until exit. Esc
+or Ctrl+X F restores normal mouse behavior. Ctrl+X S opens the sidebar overlay;
+click headers to expand lists and wheel-scroll each independently.
 
-Inspect any message/tool by clicking its row, or use Alt+Up/Down to focus a row
-and Tab on an empty composer. The system-prompt placeholder opens the exact
-prompt used by that actor. Each actor has one prompt placeholder showing its
-latest snapshot; exact snapshots are retained for every request without adding
-model calls. Tool briefings normally use one clipped row with short
-arguments/status and labeled output excerpts; clicking opens full saved details
-with readable parameters/results. File mutations add short diff previews, with
-path headers and highlighted diffs in inspectors. Glob shows only its pattern.
-Generated IDs use readable prefixes and a 16-character URL-safe random suffix.
-Inside the shared display window, use Page Up/Down, Ctrl+U/D, Home/End, and Esc.
-Up/Down in the composer recalls prompts and restores drafts. Ctrl+U/D scrolls
-the conversation; Ctrl+D at the bottom follows new output and never exits.
-Ctrl+C clears a nonempty prompt, or exits from any view if the prompt is empty.
-Try `/model` or Ctrl+X, then M to browse model families and variants; Esc
-cancels. Keep Demo Sol/low selected while running the fixed interactive script.
-After completion you can switch models freely, open `/sessions` to select/reload
-a session, inspect history, and quit with `/quit`.
+Open an actionable row by clicking it, or use Alt+Up/Down to focus a row and Tab
+on an empty composer. One boundary row per request attempt opens item-level
+changes to settings, instructions, tool definitions and messages, followed by
+new responses/outcome. Unchanged runs reference the previous selected-branch
+request. Readable fields are highlighted; simple values/lists stay inline.
+Compact text/container summaries retain head/tail entries and omission counts; E
+expands them. Full JSON of changed/appended items follows the readable delta in
+the same window. R opens exact raw JSON, with N/P selecting its individual
+captures. Direct human/assistant rows do not offer Inspect. Tool briefings
+normally use one clipped row with short arguments/status and labeled output
+excerpts; clicking opens full saved details with readable parameters/results.
+File mutations add short diff previews, with path headers and highlighted diffs
+in inspectors. Glob shows only its pattern. Generated IDs use readable prefixes
+and a 16-character URL-safe random suffix. Inside the shared display window, use
+Page Up/Down, Ctrl+U/D, Home/End, and Esc. Up/Down in the composer recalls
+prompts and restores drafts. Ctrl+U/D scrolls the conversation; Ctrl+D at the
+bottom follows new output and never exits. Ctrl+C clears a nonempty prompt, or
+exits from any view if the prompt is empty. Try `/model` or Ctrl+X, then M to
+browse model families and variants; Esc cancels. Keep Demo Sol/low selected
+while running the fixed interactive script. After completion you can switch
+models freely, open `/sessions` to select/reload a session, inspect history, and
+quit with `/quit`.
 
 Each invocation makes a fresh private project copied from
 `tests/fixtures/research` under `/tmp/ttc/<uid>/demo-*`. It prints that
@@ -190,7 +195,8 @@ Fonts cover the math/Unicode/CJK fixture. No desktop, real auth, or inference is
 needed. The driver clears inherited NO_COLOR and TMUX in its new Kitty
 environment, uses a private control socket, drives the three question tabs and
 Submit, and saves PNG/text captures for compact child response/returned-answer
-rows and both inspectors at their full tails, expanded/collapsed live sidebar
+rows, returned-answer execution details, and grouped request inspection with
+compact/expanded views and separately selectable raw captures; live sidebar
 lists, narrow-pane mouse scrolling, full workspace metadata, running states,
 fullscreen, actual formula images, image pan/zoom and confirmed click delivery,
 question editing with a native cursor and no inserted display gap, table

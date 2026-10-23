@@ -39,6 +39,7 @@ type childNotification struct {
 
 // childToolResult adds an explicit allowlist of execution metadata to the child
 // API. New jobs.Snapshot fields cannot leak into this response automatically.
+// Captured stderr remains inspector/job_read data, never an automatic handoff.
 type childToolResult struct {
 	childCompletionFields
 	Kind            string             `json:"kind"`
@@ -49,10 +50,8 @@ type childToolResult struct {
 	ExitCode        *int               `json:"exit_code,omitempty"`
 	Signal          string             `json:"signal,omitempty"`
 	Stdout          *string            `json:"stdout,omitempty"` // Only a running foreground preview, never a background answer.
-	Stderr          string             `json:"stderr"`
 	Truncated       bool               `json:"truncated"`
 	StdoutSelection *capture.Selection `json:"stdout_selection,omitempty"`
-	StderrSelection *capture.Selection `json:"stderr_selection,omitempty"`
 	FinishEventSeq  int64              `json:"finish_event_seq,omitempty"`
 }
 
@@ -85,19 +84,10 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 		},
 		Kind: view.Kind, Owner: view.Owner, Label: view.Label,
 		StartedAt: view.StartedAt, FinishedAt: view.FinishedAt, Signal: view.Signal,
-		Stderr: view.Stderr, Truncated: view.Truncated,
 	}
 	if view.ExitCode != nil {
 		code := *view.ExitCode
 		result.ExitCode = &code
-	}
-	if view.StdoutSelection != nil {
-		selection := *view.StdoutSelection
-		result.StdoutSelection = &selection
-	}
-	if view.StderrSelection != nil {
-		selection := *view.StderrSelection
-		result.StderrSelection = &selection
 	}
 	if finish := assignment.completion; finish.Outcome != "" {
 		// Completion belongs to this assignment even if the context was resumed.
@@ -109,6 +99,13 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 		}
 	} else if !assignment.background {
 		result.Stdout = &view.Stdout
+		// Snapshot.Truncated includes stderr, which is not delivered here.
+		result.Truncated = view.StdoutTruncated
+		if view.StdoutSelection != nil {
+			selection := *view.StdoutSelection
+			result.StdoutSelection = &selection
+			result.Truncated = selection.OmittedBytes > 0 || selection.CleaningError != ""
+		}
 	}
 	return result
 }

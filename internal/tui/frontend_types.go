@@ -2,12 +2,25 @@ package tui
 
 import "ttc/internal/session"
 
+type rowAction uint8
+
+const (
+	actionNone rowAction = iota
+	actionInspect
+	actionExecution
+	actionQuestion
+)
+
 type line struct {
 	actor, subagentName string // Presentation attribution; never part of the model message.
 	text                string
 	speaker             string // Separate left-aligned label; its body is indented by two cells.
 	requestID           int64  // Stable assistant-block identity, including replayed completions.
 	id                  int64
+	revision            int64     // Latest source revision for a grouped request row.
+	action              rowAction // Explicit interaction; a saved identity alone never grants inspection.
+	inspectID           int64     // Inspection target, independent of the row's correlation identity.
+	rawID               int64     // Optional separate exact-wire action for boundary rows.
 	human               bool
 	turnTime            string // Local HH:MM for an idle-submitted user input; empty for in-turn inputs.
 	boundary            bool   // Synthetic divider/spacing row, not part of the highlighted input.

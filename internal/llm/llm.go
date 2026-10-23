@@ -256,8 +256,24 @@ type Request struct {
 	Tools          []ToolDefinition
 	NoTools        bool
 	OutputTokens   int
-	MaxAttempts    int // Zero selects DefaultMaxAttempts; positive values bound the entire response/recovery sequence.
-	PriorAttempts  int // Failed attempts already used in that sequence; nonnegative and less than the resolved MaxAttempts.
+	MaxAttempts    int                       // Zero selects DefaultMaxAttempts; positive values bound the entire response/recovery sequence.
+	PriorAttempts  int                       // Failed attempts already used in that sequence; nonnegative and less than the resolved MaxAttempts.
+	Observe        func(BoundaryEvent) error // Optional synchronous provider-boundary capture; failures abort without retry.
+}
+
+// BoundaryEvent captures one provider-native boundary value, independently of
+// canonical stream/replay events. Payload is owned by the receiver and contains
+// no transport headers. Response items may belong to a subsequently failed reply.
+// Only assembled native output items are captured, not incomplete text/tool
+// deltas. A failure outcome can therefore follow a request with no response items.
+// OpenAI outcomes have status success/failure, a fixed category (completed,
+// canceled, callback_error, transport_error, http_error or response_error), and
+// an optional numeric http_status; they never include arbitrary error strings.
+type BoundaryEvent struct {
+	Attempt    int                 // Absolute attempt number, starting at one (including prior attempts).
+	Direction  string              // "request", "response" (one complete native output item), or "outcome".
+	Payload    json.RawMessage     // Exact request body/native item JSON, or safe outcome status/category JSON.
+	Inspection *InspectionDocument // Optional provider-parsed readable view, owned by the receiver.
 }
 
 // Usage reports endpoint input/output tokens; output includes reasoning when reported.

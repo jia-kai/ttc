@@ -20,7 +20,7 @@ import traceback
 
 
 from scratch import private_scratch
-from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
+from child_fixture import CHILD_PREFIX, CHILD_TAIL, child_response_row, child_response_target, compact_rows, demo_completed, verify_child_answers
 from kitty_composer import check_composer, configure_editor
 from kitty_question import check_question_cursor
 
@@ -283,10 +283,10 @@ def main():
             for _ in range(30):
                 key('ctrl+u')
                 last_text = remote('get-text', '--extent', 'screen')
-                if 'image_show' in last_text and '\U0010eeee' in last_text and 'System prompt' in last_text:
+                if 'image_show' in last_text and '\U0010eeee' in last_text:
                     break
             assert 'image_show' in last_text and '\U0010eeee' in last_text
-            assert last_text.count('System prompt') == 1, last_text
+            assert 'System prompt' not in last_text, last_text
             capture('tools-palette')
             rows = last_text.splitlines()
             image_row = next(i for i,row in enumerate(rows,1) if '\U0010eeee' in row)
@@ -316,9 +316,13 @@ def main():
         mouse(3, pending_row)
         wait('call_id')
         capture('awaiting-tool-inspector')
-        key('esc')
         demo_root = Path(json.loads((root / 'demo.json').read_text())['root'])
         (demo_root / 'project/stream.ready').touch()
+        wait('Execution details')
+        wait('Parameters:')
+        capture('awaiting-tool-settled-details')
+        key('esc')
+        wait('┌', present=False)
         wait('● agent')
         wait('Fixture check')
         capture('running-agent')
@@ -370,30 +374,100 @@ def main():
                 time.sleep(0.05)
         else:
             raise AssertionError('wide compact rows not restored: ' + last_text)
-        for kind, row in zip(('response', 'completion'), child_rows):
-            mouse(8, row)
-            wait('┌')
-            wait(CHILD_PREFIX)
-            capture('child-' + kind + '-inspector-start')
-            key('end')
-            wait(CHILD_TAIL)
-            capture('child-' + kind + '-inspector-tail')
-            if kind == 'completion':
-                send('d')
-                wait('Parameters:')
-                capture('child-completion-details')
-            key('esc')
-            wait('┌', present=False)
-            compact_rows(remote('get-text', '--extent', 'screen'))
+        response, completion = child_rows
+        mouse(8, response)
+        time.sleep(0.2)
+        direct_text = remote('get-text', '--extent', 'screen')
+        assert '┌' not in direct_text, 'direct assistant row opened payload inspection'
+        compact_rows(direct_text)
+        capture('child-direct-no-inspect')
+        mouse(8, completion)
+        wait('Execution details')
+        wait(CHILD_PREFIX)
+        capture('child-completion-inspector-start')
+        key('end')
+        wait(CHILD_TAIL)
+        capture('child-completion-inspector-tail')
+        send('d')
+        wait('Parameters:')
+        capture('child-completion-details')
+        key('esc')
+        wait('┌', present=False)
         with sqlite3.connect(demo_root / 'data/history.sqlite') as db:
-            child_entry = db.execute("SELECT id FROM entries WHERE actor_id != 'main' AND role='assistant' AND kind='message' AND json_extract(content_json,'$.content') = ? ORDER BY id LIMIT 1", (CHILD_ANSWER,)).fetchone()[0]
+            child_entry, child_title = child_response_target(db)
             answers = [json.loads(row[0])['result'] for row in db.execute(
                 "SELECT record_json FROM tool_records WHERE json_extract(record_json,'$.name')='subagent'")]
             verify_child_answers(db, answers)
+        key('esc')  # Start the native-row search from the tail.
+        for _ in range(80):
+            last_text = remote('get-text', '--extent', 'screen')
+            try:
+                response_row = child_response_row(last_text, child_title)
+                break
+            except AssertionError:
+                key('ctrl+u')
+        else:
+            raise AssertionError('native child response not visible: ' + last_text)
+        capture('child-native-response-row')
+        mouse(8, response_row)
+        wait('R raw')
+        capture('child-native-response-start')
+        remote('resize-os-window', '--width', '80', '--height', '28', '--unit', 'cells')
+        wait('Items:')  # Unchanged settings are absent from this request delta.
+        time.sleep(0.15)
+        capture('request-compact-narrow')
+        remote('resize-os-window', '--width', '120', '--height', '38', '--unit', 'cells')
+        # A pre-resize frame already contains the delta header. Wait for TTC's wider
+        # border/footer before capturing expansion, not merely Kitty's canvas.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            frame = remote('get-text', '--extent', 'screen')
+            if max(map(len, frame.splitlines()), default=0) >= 110:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('request inspector did not reflow to wide pane')
+        send('e')
+        wait('E compact')
+        capture('request-expanded-start')
+        send('e')
+        wait('E expand')
+        capture('request-compact-start')
+
+        for _ in range(100):
+            frame = remote('get-text', '--extent', 'screen')
+            if 'Prettified raw JSON' in frame:
+                capture('request-readable-then-json')
+                break
+            key('page_down')
+            time.sleep(0.04)
+        else:
+            raise AssertionError('prettified native JSON section not reachable after readable view')
+
+        def reveal_request_tail():
+            nonlocal last_text
+            for _ in range(240):
+                last_text = remote('get-text', '--extent', 'screen')
+                if CHILD_TAIL in last_text:
+                    return
+                key('page_down')
+                time.sleep(0.06)
+            capture('request-tail-failure')
+            raise AssertionError('child tail not reachable in grouped request inspection')
+
+        reveal_request_tail()
+        capture('child-native-response-tail')
+        send('r')
+        wait('Exact raw JSON')
+        capture('child-request-raw-start')
+        send('n')  # Raw response is separate from the outgoing request.
+        reveal_request_tail()
+        capture('child-native-response-raw-tail')
+        key('esc')
+        wait('┌', present=False)
         send(f'/inspect {child_entry}\r')
         wait('┌')
-        key('end')
-        wait(CHILD_TAIL)
+        reveal_request_tail()
         capture('child-keyboard-inspector-tail')
         key('esc')
         wait('┌', present=False)
@@ -427,13 +501,13 @@ def main():
         sidebar_text = wait('Context usage')
         narrow_context_row = next(i for i, row in enumerate(sidebar_text.splitlines(), 1) if 'Context usage' in row)
         # Small panes expose only a few context rows; scroll within that list
-        # until its tool breakdown is visible rather than assuming one notch.
+        # until its run-wide output totals are visible rather than assuming one notch.
         for _ in range(12):
-            if 'Tool results' in remote('get-text', '--extent', 'screen'):
+            if 'Run output · all agents' in remote('get-text', '--extent', 'screen'):
                 break
             mouse(70, narrow_context_row + 1, 65)
             time.sleep(0.1)
-        wait('Tool results')
+        wait('Run output · all agents')
         capture('sidebar-narrow-scroll')
         key('esc')
         remote('resize-os-window', '--width', '120', '--height', '38', '--unit', 'cells')
@@ -484,12 +558,14 @@ def main():
                 break
         assert 'Sample' in last_text and 'Value' in last_text, 'table was not visible'
         capture('table-headers')
-        for _ in range(20):
+        for _ in range(80):
             key('ctrl+u')
             last_text = remote('get-text', '--extent', 'screen')
-            if 'glob' in last_text and '**/*.py' in last_text:
+            direct_glob = any(row.lstrip().startswith('glob ·') and '**/*.py' in row
+                              for row in last_text.splitlines())
+            if direct_glob and '\U0010eeee' in last_text:
                 break
-        assert 'glob' in last_text and '**/*.py' in last_text, 'compact glob briefing was not visible'
+        assert direct_glob and '\U0010eeee' in last_text, 'direct glob briefing and image thumbnail were not visible'
         capture('tool-briefings')
         thumbnail = remote('get-text', '--extent', 'screen').splitlines()
         image_row = next(i for i, row in enumerate(thumbnail) if '\U0010eeee' in row)
@@ -506,7 +582,7 @@ def main():
         wait('Image point confirmed.')
         capture('image-click-notification')
         # Inspect the exact recorded prompt using a local command. No extra
-        # inference request is needed, and the placeholder remains inspectable.
+        # inference request is needed; the saved audit stays explicitly inspectable.
         demo_root = Path(json.loads((root / 'demo.json').read_text())['root'])
         with sqlite3.connect(demo_root / 'data/history.sqlite') as db:
             prompt = db.execute("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='system_prompt' ORDER BY id LIMIT 1").fetchone()[0]

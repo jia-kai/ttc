@@ -246,24 +246,19 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 		}
 	}()
 	r.routeMu.RLock()
-	id, err := r.Store.RecordSystemPrompt(r.Current(), turn, actor, request, snapshot.System)
+	_, err = r.Store.RecordSystemPrompt(r.Current(), turn, actor, request, snapshot.System)
 	r.routeMu.RUnlock()
 	if err != nil {
 		return "", err
 	}
-	r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · compaction", EntryID: id})
 	r.routeMu.RLock()
-	ids, err := r.Store.RequestMessages(r.Current(), turn, "compaction", request, snapshot.Messages)
+	_, err = r.Store.RequestMessages(r.Current(), turn, "compaction", request, snapshot.Messages)
 	r.routeMu.RUnlock()
 	if err != nil {
 		return "", err
 	}
-	// The full structured batch is durable, but only the final instruction needs
-	// a UI row. Publishing every historical message would backpressure inference
-	// on terminal redraws for large conversations.
-	r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Compaction instruction · inspect", EntryID: ids[len(ids)-1]})
 	var summary strings.Builder
-	err = r.Provider.Stream(ctx, llm.Request{ConversationID: snapshot.Lineage, Selection: selection, System: snapshot.System, Tools: snapshot.Tools, Messages: snapshot.Messages, NoTools: true, OutputTokens: selection.Model.Budget.SummaryOutputAllowance}, func(ev llm.StreamEvent) error {
+	err = r.stream(ctx, turn, actor, request, llm.Request{ConversationID: snapshot.Lineage, Selection: selection, System: snapshot.System, Tools: snapshot.Tools, Messages: snapshot.Messages, NoTools: true, OutputTokens: selection.Model.Budget.SummaryOutputAllowance}, func(ev llm.StreamEvent) error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
@@ -284,12 +279,10 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 	})
 	r.recordUsage(usage)
 	r.routeMu.RLock()
-	ids, failure := r.Store.RequestMessages(r.Current(), turn, "compaction", request, []llm.Message{{Type: llm.TypeAssistant, Content: summary.String()}})
+	_, failure := r.Store.RequestMessages(r.Current(), turn, "compaction", request, []llm.Message{{Type: llm.TypeAssistant, Content: summary.String()}})
 	r.routeMu.RUnlock()
 	if failure != nil {
 		err = errors.Join(err, failure)
-	} else {
-		r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Compaction reply · inspect", EntryID: ids[0]})
 	}
 	if err != nil {
 		return "", err

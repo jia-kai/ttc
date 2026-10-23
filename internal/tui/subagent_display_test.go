@@ -122,17 +122,15 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 					break
 				}
 			}
-			u.wait(t, "D completion details")
-			u.key(tcell.KeyEnd)
-			u.wait(t, "FULL ANSWER END")
-			u.typeText("d")
-			if background {
+			if !background {
+				// The foreground completion is a tool row with execution details.
+				u.wait(t, "D completion details")
 				u.key(tcell.KeyEnd)
-				u.wait(t, "child_turn_finished")
-			} else {
+				u.wait(t, "FULL ANSWER END")
+				u.typeText("d")
 				u.wait(t, "Parameters:")
-			}
-			u.key(tcell.KeyEscape)
+				u.key(tcell.KeyEscape)
+			} // Background completion is direct runtime text, without an Inspect action.
 			var id int64
 			if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT id FROM entries WHERE actor_id LIKE 'main/child_%' AND role='assistant' AND kind='message' ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
 				t.Fatal(err)
@@ -186,9 +184,14 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 					break
 				}
 			}
-			// The replay barrier drained every earlier inspector frame, so this
-			// readiness acknowledgement must come from the new mouse click.
-			u.wait(t, "D completion details")
+			if background {
+				// Direct runtime completions remain non-inspectable after reload;
+				// an explicit legacy entry command is still available.
+				u.typeText(fmt.Sprintf("/inspect %d", id))
+				u.key(tcell.KeyEnter)
+			} else {
+				u.wait(t, "D completion details")
+			}
 			u.key(tcell.KeyEnd)
 			u.wait(t, "FULL ANSWER END")
 		})
@@ -221,7 +224,7 @@ func TestChildTaskPromptCannotImpersonateRuntimeCompletion(t *testing.T) {
 	}
 }
 
-func TestCompactSubagentStreamingMouseInspectorSettlesToFullSavedSource(t *testing.T) {
+func TestCompactSubagentStreamingPreviewDoesNotOpenPayloadInspector(t *testing.T) {
 	p := &childAnswerProvider{answer: "Streaming prefix\n" + strings.Repeat("stream body\n", 20) + "STREAM FULL END", release: make(chan struct{}), Script: llm.Script{Responses: []llm.ScriptResponse{
 		{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":false,"prompt":"answer","label":"stream helper"}`)}}},
 		{Text: "Parent finished"},
@@ -241,10 +244,9 @@ func TestCompactSubagentStreamingMouseInspectorSettlesToFullSavedSource(t *testi
 			break
 		}
 	}
-	u.wait(t, "STREAM FULL END")
+	// Clicking a live assistant preview is not a payload inspection action.
+	u.key(tcell.KeyTab)
 	close(p.release)
-	u.wait(t, "SETTLED END")
-	u.key(tcell.KeyEscape)
 	frame = u.wait(t, "final answer Streaming prefix")
 	if strings.Contains(frame, "SETTLED END") {
 		t.Fatal("settled source leaked", frame)
@@ -343,7 +345,7 @@ func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "[Sub one two three four] Tool announced")
 	close(p.release)
-	u.wait(t, "[Sub one two three four] read")
+	u.wait(t, "[Sub one two three four] Execution details · read")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "Child handled missing file")
 }
@@ -389,7 +391,7 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	// An empty assistant block may precede its tool calls. Wait for the settled
 	// child answer before asserting that the write tool row is present.
 	frame := u.wait(t, "Named child answer")
-	if strings.Contains(frame, "main/child_") || !strings.Contains(frame, "[Sub research helper] Runtime context") || !strings.Contains(frame, "[Sub research helper] write") {
+	if strings.Contains(frame, "main/child_") || strings.Contains(frame, "Runtime context · inspect") || !strings.Contains(frame, "[Sub research helper] write") {
 		t.Fatal(frame)
 	}
 	names, err := u.runtime.Store.SubagentNames(context.Background(), u.runtime.Current())

@@ -9,11 +9,16 @@ import (
 	"time"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/messagestream"
 	"ttc/internal/session"
 )
 
-// Blank runtime replay needs only names; all other history reads should stay unused.
+// Blank runtime replay needs names and stream rows; other reads stay unused.
 type compactControllerHistory struct{ historyReader }
+
+func (compactControllerHistory) StreamItems(context.Context, string) ([]messagestream.Item, error) {
+	return nil, nil
+}
 
 func (compactControllerHistory) SubagentNames(context.Context, string) (map[string]string, error) {
 	return nil, nil

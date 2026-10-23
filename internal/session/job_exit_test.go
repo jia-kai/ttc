@@ -6,8 +6,26 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/capture"
+	"ttc/internal/jobs"
 	"ttc/internal/tool"
 )
+
+func TestGenericChildJobExitCannotExposeDiagnostics(t *testing.T) {
+	var value map[string]any
+	err := json.Unmarshal([]byte(jobExitContent(jobs.Snapshot{
+		ID: "child-job", Kind: "subagent", Status: "failed", Stdout: "partial evidence",
+		Stderr: "PRIVATE_STDERR_SENTINEL", Truncated: true,
+		StderrSelection: &capture.Selection{OmittedBytes: 12, CleaningError: "PRIVATE_STDERR_SENTINEL"},
+	})), &value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := requireNoChildDiagnostics(t, value)
+	if string(object["truncated"]) != "false" || string(object["status"]) != `"failed"` || string(object["stdout"]) != `"partial evidence"` {
+		t.Fatal("suppression lost delivered evidence or retained stderr truncation", object)
+	}
+}
 
 func TestBackgroundCompletionDeliversSelectedOutputAndExitCode(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)

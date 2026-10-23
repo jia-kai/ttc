@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"ttc/internal/render"
 
@@ -13,32 +14,37 @@ import (
 
 // Window displays messages, tool records, system prompts, and command results using the same widget.
 type Window struct {
-	actor, subagentName string // Same attribution as the conversation card.
-	Title, Text         string
-	SourceAgent         string // Display name in a fixed provenance row, separate from view-specific headers.
-	Header              string // Optional fixed view metadata or question tabs above scrolling content.
-	HeaderFocus         string // Compact view summary shown when the whole header cannot fit.
-	Hint                string // Optional title-bar key hint; empty uses "Esc closes".
-	HideHint            bool   // Suppress title-bar hints when controls are described in the body.
-	Scroll              int
-	System              bool   // Distinct color for inspected system prompts/runtime messages.
-	Markdown            bool   // Render portable Markdown for messages, tool details and command results.
-	Styled              bool   // Trusted frontend SGR; source text must be sanitized before styling.
-	CallID              string // Transient tool-card identity; cleared when its final record arrives.
-	requestID           int64  // Live compact assistant inspector; final publication switches to saved entry.
-	completionEntry     int64  // Original final-result envelope; D opens its status/warning/tool metadata.
-	JobID               string // Live inspector capture; never set when replaying stored history.
-	TimerID             string // Live timer inspector; never recreated from stored history.
-	Detail              string // Base transient detail, without the expanded capture tail.
-	cachedText          string
-	cachedWidth         int
-	cachedLines         []string
-	assets              []displayRow // Parallel to cachedLines; only viewport assets are requested.
-	renderer            *imageRenderer
-	cachedRevision      uint64
-	pages               *inspectionPages           // Optional retained history pager; only the current page is rendered.
-	layoutBody          func(width int) windowBody // Optional prewrapped interactive body; invalidated by its owner.
-	body                windowBody
+	actor, subagentName   string // Same attribution as the conversation card.
+	Title, Text           string
+	SourceAgent           string // Display name in a fixed provenance row, separate from view-specific headers.
+	Header                string // Optional fixed view metadata or question tabs above scrolling content.
+	HeaderFocus           string // Compact view summary shown when the whole header cannot fit.
+	Hint                  string // Optional title-bar key hint; empty uses "Esc closes".
+	HideHint              bool   // Suppress title-bar hints when controls are described in the body.
+	Scroll                int
+	System                bool                   // Distinct color for inspected system prompts/runtime messages.
+	Markdown              bool                   // Render portable Markdown for messages, tool details and command results.
+	Styled                bool                   // Trusted frontend SGR; source text must be sanitized before styling.
+	Structured            bool                   // Plain inspection source; highlighted transiently, never Markdown-interpreted.
+	structuredState       render.StructuredState // Source syntax hints at this page's start.
+	CallID                string                 // Transient tool-card identity; cleared when its final record arrives.
+	completionEntry       int64                  // Original final-result envelope; D opens its status/warning/tool metadata.
+	boundaryRaw           int64                  // Explicit alternate raw-wire action for a readable boundary inspector.
+	JobID                 string                 // Live inspector capture; never set when replaying stored history.
+	TimerID               string                 // Live timer inspector; never recreated from stored history.
+	Detail                string                 // Base transient detail, without the expanded capture tail.
+	cachedText            string
+	cachedWidth           int
+	cachedLines           []string
+	cachedMode            uint8
+	cachedColors          bool
+	cachedStructuredState render.StructuredState
+	assets                []displayRow // Parallel to cachedLines; only viewport assets are requested.
+	renderer              *imageRenderer
+	cachedRevision        uint64
+	pages                 *inspectionPages           // Optional retained history pager; only the current page is rendered.
+	layoutBody            func(width int) windowBody // Optional prewrapped interactive body; invalidated by its owner.
+	body                  windowBody
 }
 
 type cellPosition struct{ x, y int }
@@ -80,11 +86,31 @@ func (w *Window) HeaderLines(width, limit int) []string {
 // Width is in terminal cells and height is in display rows; Scroll is clamped.
 func (w *Window) Lines(width, height int) []string {
 	height = max(0, height)
+	lines := w.currentLines(width)
+	w.Scroll = min(max(0, w.Scroll), max(0, len(lines)-height))
+	return lines[w.Scroll:min(len(lines), w.Scroll+height)]
+}
+
+// currentLines refreshes the current page's render cache without loading pages.
+func (w *Window) currentLines(width int) []string {
+	mode := uint8(0)
+	if w.Markdown {
+		mode |= 1
+	}
+	if w.Styled {
+		mode |= 2
+	}
+	if w.Structured {
+		mode |= 4
+	}
+	colors := os.Getenv("NO_COLOR") == ""
 	revision := uint64(0)
 	if w.renderer != nil {
 		revision = w.renderer.revision
 	}
-	if w.cachedLines == nil || w.cachedText != w.Text || w.cachedWidth != width || w.cachedRevision != revision {
+	if w.cachedLines == nil || w.cachedText != w.Text || w.cachedWidth != width || w.cachedRevision != revision || w.cachedMode != mode || w.cachedColors != colors || w.cachedStructuredState != w.structuredState {
+		w.cachedMode, w.cachedColors = mode, colors
+		w.cachedStructuredState = w.structuredState
 		w.cachedText = w.Text
 		w.cachedWidth = width
 		w.cachedRevision = revision
@@ -92,6 +118,15 @@ func (w *Window) Lines(width, height int) []string {
 		if w.layoutBody != nil {
 			w.body = w.layoutBody(max(1, width))
 			w.cachedLines = w.body.lines
+		} else if w.Structured {
+			if colors {
+				text, _ := render.StructuredPage(w.Text, w.structuredState, true)
+				w.cachedLines = wrapStyled(text, width)
+			} else {
+				// styledRows restores its pen after each newline, including an
+				// empty pen's reset. Keep the no-color source fully control-free.
+				w.cachedLines = wrap(render.Clean(w.Text), width)
+			}
 		} else if w.Markdown && w.renderer != nil {
 			w.assets = w.renderer.layout(line{text: w.Text, markdown: true}, max(1, width))
 			w.cachedLines = make([]string, len(w.assets))
@@ -111,43 +146,62 @@ func (w *Window) Lines(width, height int) []string {
 			w.cachedLines = wrap(render.Clean(w.Text), width)
 		}
 	}
-	lines := w.cachedLines
-	if w.Scroll < 0 {
-		w.Scroll = 0
+	return w.cachedLines
+}
+
+// ScrollBy scrolls by display rows using the most recently rendered width.
+// For paged windows, continuing at a boundary loads at most one adjacent page:
+// forwards starts at its top; backwards ends at its bottom. It returns true only
+// when a page was loaded. Failures retain the old page and appear in Header.
+// A zero delta or nonpositive viewport height never loads a page.
+func (w *Window) ScrollBy(delta, height int) bool {
+	if w.pages == nil {
+		w.Scroll += delta
+		return false
 	}
-	max := len(lines) - height
-	if max < 0 {
-		max = 0
+	if delta == 0 || height <= 0 {
+		return false
 	}
-	if w.Scroll > max {
-		w.Scroll = max
+	width := max(1, w.cachedWidth)
+	bottom := max(0, len(w.currentLines(width))-height)
+	w.Scroll = min(max(0, w.Scroll), bottom)
+	if delta > 0 && w.Scroll == bottom || delta < 0 && w.Scroll == 0 {
+		if !w.movePage(delta > 0) {
+			return false
+		}
+		if delta < 0 {
+			w.Scroll = max(0, len(w.currentLines(width))-height)
+		}
+		return true
 	}
-	end := w.Scroll + height
-	if end > len(lines) {
-		end = len(lines)
+	// Bound the delta before adding so even very large input cannot overflow
+	// or skip a page. Reaching the boundary is not itself a page transition.
+	if delta > 0 {
+		w.Scroll += min(delta, bottom-w.Scroll)
+	} else {
+		w.Scroll += max(delta, -w.Scroll)
 	}
-	return lines[w.Scroll:end]
+	return false
 }
 
 // Key handles scrolling; false means the caller should handle the key.
 func (w *Window) Key(ev *tcell.EventKey, height int) bool {
-	height = max(1, height)
 	if ev.Key() == tcell.KeyRune && w.pageKey(ev.Str()) {
 		return true
 	}
 	switch {
 	case ev.Key() == tcell.KeyUp:
-		w.Scroll--
+		w.ScrollBy(-1, height)
 	case ev.Key() == tcell.KeyDown:
-		w.Scroll++
+		w.ScrollBy(1, height)
 	case ev.Key() == tcell.KeyPgUp:
-		w.Scroll -= height
+		w.ScrollBy(-max(1, height), height)
 	case ev.Key() == tcell.KeyPgDn:
-		w.Scroll += height
+		w.ScrollBy(max(1, height), height)
 	case isCtrl(ev, "u"):
-		w.Scroll -= max(1, height/2)
+		w.ScrollBy(-max(1, height/2), height)
 	case isCtrl(ev, "d"):
-		w.Scroll += max(1, height/2)
+		w.ScrollBy(max(1, height/2), height)
 	case ev.Key() == tcell.KeyHome:
 		w.Scroll = 0
 	case ev.Key() == tcell.KeyEnd:

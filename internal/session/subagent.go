@@ -266,15 +266,11 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		compactedForAdmission = false
 		cursor = nextContext
 		messages = admitted.Messages
-		if admitted.ContextEntry != 0 {
-			r.emit(Event{Kind: "runtime_context", Actor: actor, Text: "Runtime context · inspect", EntryID: admitted.ContextEntry, SessionID: r.Current()})
-		}
-		entry, err = r.Store.RecordSystemPrompt(r.Current(), turn, actor, request, system)
+		_, err = r.Store.RecordSystemPrompt(r.Current(), turn, actor, request, system)
 		r.routeMu.RUnlock()
 		if err != nil {
 			return err
 		}
-		r.emit(Event{Kind: "system_prompt", Actor: actor, Text: "System prompt · inspect", EntryID: entry})
 		if err := r.deliverNoticeEntries(actor, admitted.NoticeEntries); err != nil {
 			return err
 		}
@@ -288,7 +284,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			return err
 		}
 		callbackFailed := false
-		streamErr := r.Provider.Stream(ctx, llm.Request{ConversationID: actor, Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev llm.StreamEvent) (err error) {
+		streamErr := r.stream(ctx, turn, actor, request, llm.Request{ConversationID: actor, Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if err := ctx.Err(); err != nil {
 				return err
@@ -371,9 +367,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		if err != nil {
 			return err
 		}
-		if task.aside {
-			r.emit(Event{Kind: "message_placeholder", Actor: actor, Text: "Reply · inspect", EntryID: entry})
-		} else {
+		if !task.aside {
 			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: entry, RequestID: request, Actor: actor})
 		}
 		messages = append(messages, reply)

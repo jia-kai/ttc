@@ -174,7 +174,21 @@ func (s *Store) ReadInspection(ctx context.Context, id int64) (inspection Inspec
 	if err != nil {
 		return Inspection{}, err
 	}
-	return projectInspection(data)
+	if data.Status.Type == "presentation_stream" {
+		data.PromptText, err = s.boundaryGroupAll(ctx, id)
+		if err != nil {
+			return Inspection{}, err
+		}
+	}
+	inspection, err = projectInspection(data)
+	if data.Status.Type == "presentation_stream" {
+		var record boundaryRecord
+		if decodeErr := json.Unmarshal(entry.Content, &record); decodeErr != nil {
+			return Inspection{}, decodeErr
+		}
+		inspection.Structured = record.ReadableVersion > 0
+	}
+	return inspection, err
 }
 
 func loadInspectionPresentation(ctx context.Context, q historyReader, entry Entry) (entryPresentation, error) {

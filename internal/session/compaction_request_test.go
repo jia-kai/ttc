@@ -249,7 +249,7 @@ func TestSummaryRequestExcludesIncompatibleReplayWithoutFlattening(t *testing.T)
 	}
 }
 
-func TestCompactionPublishesOneInstructionRowForLargePrefix(t *testing.T) {
+func TestCompactionDoesNotPublishCanonicalAuditRowsForLargePrefix(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Research task")
 	r.selection.Model.Budget.ContextLimit = 1 << 20
@@ -270,20 +270,10 @@ func TestCompactionPublishesOneInstructionRowForLargePrefix(t *testing.T) {
 	if _, err := r.compactContext(context.Background(), "", r.CurrentSelection(), nil, false); err != nil {
 		t.Fatal(err)
 	}
-	instructions, historicalRows := 0, 0
 	for len(events) > 0 {
 		event := <-events
-		if event.Kind != "message_placeholder" {
-			continue
+		if event.Kind == "message_placeholder" || event.Kind == "system_prompt" || event.Kind == "runtime_context" {
+			t.Fatal("compaction published obsolete audit placeholder", event)
 		}
-		switch event.Text {
-		case "Compaction instruction · inspect":
-			instructions++
-		case "Compaction input · inspect":
-			historicalRows++
-		}
-	}
-	if instructions != 1 || historicalRows != 0 {
-		t.Fatal("compaction replayed historical messages into the UI", instructions, historicalRows)
 	}
 }

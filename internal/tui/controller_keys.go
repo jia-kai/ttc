@@ -25,6 +25,24 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 		c.inspectSaved(c.modal.window.completionEntry)
 		return next
 	}
+	if c.modal.window != nil && c.modal.window.boundaryRaw != 0 && ev.Key() == tcell.KeyRune && (ev.Str() == "r" || ev.Str() == "R") && ev.Modifiers() == 0 {
+		c.openBoundaryRaw(c.modal.window.boundaryRaw)
+		return next
+	}
+	if c.modal.window != nil && c.modal.window.boundaryRaw != 0 && ev.Key() == tcell.KeyRune && (ev.Str() == "e" || ev.Str() == "E") && ev.Modifiers() == 0 {
+		c.toggleRequestExpansion()
+		return next
+	}
+	if c.modal.window != nil && c.modal.raw != nil && ev.Key() == tcell.KeyRune && ev.Modifiers() == 0 {
+		switch ev.Str() {
+		case "n", "N":
+			c.navigateBoundaryRaw(1)
+			return next
+		case "p", "P":
+			c.navigateBoundaryRaw(-1)
+			return next
+		}
+	}
 	ev = normalizeFrontendKey(ev)
 	if isCtrl(ev, "c") {
 		if c.draft.text != "" {
@@ -103,7 +121,8 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 			return next
 		}
 		w, h := c.screen.Size()
-		_, height := windowContentSize(w, h, c.modal.window)
+		width, height := windowContentSize(w, h, c.modal.window)
+		c.modal.window.currentLines(width)
 		if c.modal.window.Key(ev, height) {
 			return next
 		}
@@ -326,8 +345,8 @@ func (c *frontendController) handleComposerKey(ev *tcell.EventKey) (next fronten
 		if c.fullscreen {
 			target = c.copyFocused
 		}
-		if target >= 0 && target < len(c.displayView().lines) && c.displayView().lines[target].id != 0 {
-			c.inspect(c.displayView().lines[target].id)
+		if target >= 0 && target < len(c.displayView().lines) {
+			c.openRow(c.displayView().lines[target])
 		}
 	case ev.Key() == tcell.KeyEnter:
 		if c.attaching {
@@ -338,8 +357,8 @@ func (c *frontendController) handleComposerKey(ev *tcell.EventKey) (next fronten
 		if c.fullscreen {
 			target = c.copyFocused
 		}
-		if c.draft.text == "" && target >= 0 && target < len(c.displayView().lines) && c.displayView().lines[target].id != 0 {
-			c.inspect(c.displayView().lines[target].id)
+		if c.draft.text == "" && target >= 0 && target < len(c.displayView().lines) && c.displayView().lines[target].action != actionNone {
+			c.openRow(c.displayView().lines[target])
 		} else {
 			next.text = c.draft.text
 			next.steering = c.busy && !c.commandBusy && ev.Modifiers()&tcell.ModAlt == 0
@@ -487,14 +506,19 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 			w, h := c.screen.Size()
 			c.modal.sessions.mouse(ev, w, h)
 		}
+		delta := 0
 		if ev.Buttons()&tcell.WheelUp != 0 {
-			c.modal.window.Scroll = max(0, c.modal.window.Scroll-3)
-			if c.modal.question != nil {
-				c.modal.question.manualScroll = true
-			}
+			delta = -3
+		} else if ev.Buttons()&tcell.WheelDown != 0 {
+			delta = 3
 		}
-		if ev.Buttons()&tcell.WheelDown != 0 {
-			c.modal.window.Scroll += 3
+		if delta != 0 {
+			w, h := c.screen.Size()
+			width, height := windowContentSize(w, h, c.modal.window)
+			c.modal.window.currentLines(width)
+			c.modal.window.ScrollBy(delta, height)
+			// Preserve the nonpaged wheel's immediate top clamp.
+			c.modal.window.Scroll = max(0, c.modal.window.Scroll)
 			if c.modal.question != nil {
 				c.modal.question.manualScroll = true
 			}
@@ -539,8 +563,8 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 	width, _ := c.screen.Size()
 	width = c.sidebar.bounds(width, c.sidebar.height, c.fullscreen)
 	if ev.Buttons()&tcell.Button1 != 0 && x >= 0 && x < width-1 {
-		if id := c.view.entryAt(y); id != 0 {
-			c.inspect(id)
+		if y >= 0 && y < len(c.view.visible) {
+			c.openRow(c.view.visible[y])
 		}
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
+	"ttc/internal/capture"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
@@ -22,6 +24,71 @@ func childAPIObject(t *testing.T, value any) map[string]json.RawMessage {
 		t.Fatal(err)
 	}
 	return object
+}
+
+func requireNoChildDiagnostics(t *testing.T, value any) map[string]json.RawMessage {
+	t.Helper()
+	object := childAPIObject(t, value)
+	for _, key := range []string{"stderr", "stderr_selection"} {
+		if object[key] != nil {
+			t.Fatalf("child diagnostics leaked through %s: %s", key, object[key])
+		}
+	}
+	body, _ := json.Marshal(object)
+	if strings.Contains(string(body), "PRIVATE_STDERR_SENTINEL") {
+		t.Fatalf("child diagnostics leaked: %s", body)
+	}
+	return object
+}
+
+func TestChildToolResultSuppressesDiagnosticsAcrossLifecycle(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	for _, background := range []bool{false, true} {
+		for _, status := range []string{"running", "completed", "failed", "cancelled"} {
+			for _, stdoutTruncated := range []bool{false, true} {
+				name := status + "/background=" + strconv.FormatBool(background) + "/stdout_truncated=" + strconv.FormatBool(stdoutTruncated)
+				t.Run(name, func(t *testing.T) {
+					child := &codingChild{id: "main/child_test", state: "running"}
+					assignment := &childAssignment{turn: "turn", background: background}
+					view := jobs.Snapshot{
+						ID: "job", Kind: "subagent", Status: status, Stdout: "preview",
+						Stderr: "PRIVATE_STDERR_SENTINEL", Truncated: true, StdoutTruncated: stdoutTruncated,
+						StdoutSelection: &capture.Selection{TotalBytes: 7, HeadBytes: 7},
+						StderrSelection: &capture.Selection{TotalBytes: 9999, OmittedBytes: 9000, CleaningError: "PRIVATE_STDERR_SENTINEL"},
+					}
+					if stdoutTruncated {
+						view.StdoutSelection.OmittedBytes = 1
+					}
+					if status != "running" {
+						assignment.completion = history.ChildFinish{
+							ChildID: child.id, TurnID: "turn", JobID: "job", Outcome: status, ContextState: "closed",
+							Answer: "partial answer", Truncated: true, Error: "actual cause", Warning: "actual warning",
+							TranscriptPath: "evidence.md", TranscriptJSONLPath: "evidence.jsonl", TranscriptExportError: "actual export failure",
+						}
+					}
+					object := requireNoChildDiagnostics(t, r.childResult(child, assignment, view))
+					preview := !background && status == "running"
+					if (object["stdout"] != nil) != preview || (object["stdout_selection"] != nil) != preview {
+						t.Fatal("stdout selection did not follow delivered preview", object)
+					}
+					if string(object["truncated"]) != strconv.FormatBool(preview && stdoutTruncated) {
+						t.Fatal("truncation included suppressed capture", object)
+					}
+					if status != "running" {
+						notice := requireNoChildDiagnostics(t, childCompletionNotification(assignment.completion))
+						if !background {
+							notice = object
+						}
+						for _, key := range []string{"answer", "answer_truncated", "error", "warning", "transcript_path", "transcript_jsonl_path", "transcript_export_error"} {
+							if notice[key] == nil {
+								t.Fatalf("lost completion evidence %s: %v", key, notice)
+							}
+						}
+					}
+				})
+			}
+		}
+	}
 }
 
 func TestChildCompletionStorageAndAPIContractsAreSeparate(t *testing.T) {
@@ -41,6 +108,8 @@ func TestChildCompletionStorageAndAPIContractsAreSeparate(t *testing.T) {
 			}
 			// Storage extensions stay durable data; they are not implicitly public.
 			stored["private_extension"] = json.RawMessage(`{"precise":9007199254740993}`)
+			stored["stderr"] = json.RawMessage(`"PRIVATE_STDERR_SENTINEL"`)
+			stored["stderr_selection"] = json.RawMessage(`{"cleaning_error":"PRIVATE_STDERR_SENTINEL"}`)
 			body, err := json.Marshal(stored)
 			if err != nil {
 				t.Fatal(err)
@@ -61,7 +130,8 @@ func TestChildCompletionStorageAndAPIContractsAreSeparate(t *testing.T) {
 			}
 			delete(recovered, "event_seq")
 			delete(recovered, "recovered_from_event_seq")
-			live := childAPIObject(t, childCompletionNotification(record))
+			live := requireNoChildDiagnostics(t, childCompletionNotification(record))
+			requireNoChildDiagnostics(t, recovered)
 			if !reflect.DeepEqual(live, recovered) {
 				t.Fatal("live/recovered completion projections differ", live, recovered)
 			}

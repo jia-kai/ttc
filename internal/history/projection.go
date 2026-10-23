@@ -133,6 +133,12 @@ func projectLabel(data entryPresentation) string {
 	}
 	if v.Kind == "status" {
 		x := data.Status
+		if x.Type == "presentation_stream" {
+			var record boundaryRecord
+			if json.Unmarshal(v.Content, &record) == nil {
+				return record.Item.Title
+			}
+		}
 		if x.Type == "child_turn_finished" {
 			if finish, err := readChildFinish(v.Content); err == nil {
 				label := "Assignment " + finish.TurnID + " · " + render.Status(finish.Outcome)
@@ -194,6 +200,9 @@ func projectInspection(data entryPresentation) (Inspection, error) {
 	if data.Status.Type == "system_prompt" {
 		inspection.Markdown = false
 	}
+	if data.Status.Type == "presentation_stream" {
+		inspection.Markdown = false
+	}
 	if data.Status.Type == "job_completion" {
 		inspection.System = false
 	}
@@ -211,6 +220,9 @@ func projectInspectionText(data entryPresentation) (string, error) {
 		return render.Tool(data.Call.Name, data.Call.Arguments, data.Call.Result).Detail, nil
 	}
 	if entry.Kind == "status" {
+		if data.Status.Type == "presentation_stream" {
+			return data.PromptText, nil
+		}
 		if data.Status.Type == "job_completion" {
 			md := data.Status.Markdown
 			if md.Revision != 1 || md.Summary == "" {

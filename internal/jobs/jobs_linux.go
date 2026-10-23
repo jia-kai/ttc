@@ -47,6 +47,7 @@ type Snapshot struct {
 	ExitCode        *int               `json:"exit_code,omitempty"`
 	Signal          string             `json:"signal,omitempty"`
 	Truncated       bool               `json:"truncated"`
+	StdoutTruncated bool               `json:"-"` // Per-stream preview state for boundaries that suppress stderr.
 	StdoutSelection *capture.Selection `json:"stdout_selection,omitempty"`
 	StderrSelection *capture.Selection `json:"stderr_selection,omitempty"`
 }
@@ -446,7 +447,8 @@ func preview(j *job) Snapshot {
 	a, b := capture.SelectOutput(j.stdout, j.stderr, *j.output)
 	v.Stdout, v.Stderr = a.Output, b.Output
 	v.StdoutSelection, v.StderrSelection = &a, &b
-	v.Truncated = a.OmittedBytes > 0 || b.OmittedBytes > 0 || a.CleaningError != "" || b.CleaningError != ""
+	v.StdoutTruncated = a.OmittedBytes > 0 || a.CleaningError != ""
+	v.Truncated = v.StdoutTruncated || b.OmittedBytes > 0 || b.CleaningError != ""
 	return v
 }
 
@@ -469,7 +471,8 @@ func compactPreview(j *job) Snapshot {
 		v.Stdout = tail(j.stdout, 5, 512, &v.StdoutSelection)
 		v.Stderr = tail(j.stderr, 5, 512, &v.StderrSelection)
 	}
-	v.Truncated = v.Truncated || a.Truncated || b.Truncated || int64(len(v.Stdout)) < a.End || int64(len(v.Stderr)) < b.End
+	v.StdoutTruncated = a.Truncated || int64(len(v.Stdout)) < a.End || v.StdoutSelection != nil && v.StdoutSelection.CleaningError != ""
+	v.Truncated = v.Truncated || v.StdoutTruncated || b.Truncated || int64(len(v.Stderr)) < b.End
 	return v
 }
 

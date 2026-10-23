@@ -22,7 +22,7 @@ import (
 	"github.com/gdamore/tcell/v3/vt"
 )
 
-func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
+func TestDirectRowsDoNotOpenPayloadWindows(t *testing.T) {
 	if _, err := scratch.Verify(); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +45,8 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	}
 	r.AutoName = false
 	defer r.Close()
-	// Keep a normal startup notice ahead of the turn while exercising
-	// placeholder inspection and keyboard navigation.
+	// Keep a startup notice ahead of the turn while exercising direct-row
+	// mouse and keyboard navigation without granting payload inspection.
 	events <- session.Event{Kind: "status", Text: "Ready for input", Generation: r.Generation()}
 	screen := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,23 +90,24 @@ func TestClickSystemPlaceholderOpensSharedWindow(t *testing.T) {
 	if strings.Contains(latest, "You are TTC") {
 		t.Fatal("system body leaked into main conversation")
 	}
-	placeholderY := -1
+	if strings.Contains(latest, "System prompt") {
+		t.Fatal("duplicate protocol placeholder visible", latest)
+	}
 	for y, row := range strings.Split(latest, "\n") {
-		if strings.Contains(row, "System prompt") {
-			placeholderY = y
+		if strings.Contains(row, "Done.") {
+			screen.EventQ() <- tcell.NewEventMouse(3, y, tcell.Button1, 0)
 			break
 		}
 	}
-	if placeholderY < 0 {
-		t.Fatal("system prompt placeholder not visible", latest)
-	}
-	screen.EventQ() <- tcell.NewEventMouse(3, placeholderY, tcell.Button1, 0)
-	wait("You are TTC")
-	screen.EventQ() <- tcell.NewEventKey(tcell.KeyEscape, "", 0)
-	wait("System prompt")
 	screen.EventQ() <- tcell.NewEventKey(tcell.KeyUp, "", tcell.ModAlt)
 	screen.EventQ() <- tcell.NewEventKey(tcell.KeyTab, "", 0)
-	wait("Message metadata:")
+	for _, ch := range "still composing" {
+		screen.EventQ() <- tcell.NewEventKey(tcell.KeyRune, string(ch), 0)
+	}
+	wait("still composing")
+	if strings.Contains(latest, "Message metadata:") || strings.Contains(latest, "You are TTC") {
+		t.Fatal("direct row opened payload inspector", latest)
+	}
 }
 
 func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {

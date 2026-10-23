@@ -31,7 +31,7 @@ func (c *frontendController) syncQuestionState(form *session.QuestionForm) {
 		}
 	}
 	if form != nil && c.questionRow < 0 {
-		c.view.append(c.attribute(line{text: questionStatus(*form), id: form.EntryID, system: true, questionID: form.ID}, "main"))
+		c.view.append(c.attribute(line{text: questionStatus(*form), id: form.EntryID, action: actionQuestion, inspectID: form.EntryID, system: true, questionID: form.ID}, "main"))
 		c.questionRow = len(c.view.lines) - 1
 	}
 	if c.retainedQuestion != nil && (form == nil || form.ID != c.retainedQuestion.form.ID) {

@@ -69,10 +69,10 @@ sequence, request identity and input source remain separate metadata.
   provenance explicit without elevating payload authority. Provider roles are
   derived from the semantic type; provider-native tool calls, attachments and
   assistant replay state retain their specialized encoding.
-- `session.Event.MessageType` carries canonical identity to live rendering. The
-  TUI uses the same message projection for live delivery and history replay;
-  presentation flags are derived view state, not another message classifier.
-  Full content remains inspectable when a notification is summarized.
+- `session.Event.MessageType` carries canonical identity to direct rendering.
+  Presentation flags are derived view state, not another message classifier.
+  Provider-boundary inspection exposes notifications in their actual
+  model-facing representation, independently of their direct-rendered summaries.
 - Progress, redraws, tool-stream updates and other transient UI events are not
   conversation messages. They keep their own lifecycle rather than entering
   model context merely to share a renderer.
@@ -101,6 +101,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/workspace`         | Runtime-local serialized edits and restore           |
 | `internal/history`           | SQLite branches, artifacts and exports               |
 | `internal/history/migrate`   | Isolated legacy decoding and startup migrations      |
+| `internal/messagestream`     | Request presentation items and readable documents    |
 | `internal/context`           | Request projection and budgets                       |
 | `internal/tui`               | Composer, windows, sidebar and login rendering       |
 | `internal/jobs`              | Process groups, managed tasks and external observers |
@@ -169,6 +170,52 @@ One Go module uses direct construction and small interfaces at their consumers:
   Cancellation, worker joins and generation checks remain explicit. The TUI
   consumes a small history-reader interface and does not decode storage
   envelopes.
+- Model inspection captures provider-formatted request bodies immediately before
+  HTTP attempts and assembled native output items as they complete. Headers and
+  credentials are excluded. Attempts retain distinct outcomes; inspection
+  records never enter model context. Canonical history continues to own context,
+  undo and continuation independently of captured provider data. Interrupted
+  output without a completed native item is not synthesized from text/tool
+  deltas; its failure outcome remains recorded. Raw and readable artifacts are
+  each limited to 256 MiB; capture or persistence failures stop inference rather
+  than silently losing inspection evidence.
+- The presentation stream merges boundary-derived inspection rows with direct
+  human/assistant rendering and tool execution updates. Stable row identities
+  are separate from explicit actions: direct conversation rows do not expose
+  payload inspection, while tool execution details retain live refresh. Boundary
+  rows expose readable structured content and the captured JSON separately.
+- Each attempt has one stable request row, updated as native response items and
+  the outcome arrive. Immutable revision targets keep inspections branch-safe;
+  live delivery and replay share the same projection. Full sent payloads remain
+  exact captures, but default details show item-level deltas against the
+  previous request for the same actor/purpose on selected ancestry.
+  Conversation/cache-key changes do not prevent comparison. Legacy history
+  remains loadable and continuable without fabricated provider captures.
+- Providers expose ordered native inspection items and normalized hashes,
+  excluding display names and input indexes. Prefix/suffix-trimmed, bounded
+  Myers matching suppresses equal middle runs and preserves repeated
+  occurrences. Inspections identify their base and addition/removal/unchanged
+  counts; first requests, previous captures without item references and
+  exhausted diff budgets explicitly reset to a full baseline. Missing/corrupt
+  referenced artifacts fail capture. Only added/changed current-item JSON is
+  displayed, not unchanged definitions, settings or context. Exact full requests
+  remain in R.
+- Providers parse native payloads into `llm.InspectionDocument` sections and
+  typed values. History and the frontend never interpret provider-specific JSON.
+  The generic renderer highlights fields and keeps simple key/value pairs and
+  short scalar lists inline. Compact views shorten long text/containers with
+  counted head/tail summaries; E expands ordinary text and containers.
+  Opaque/deep provider values remain summarized and are available exactly in raw
+  captures. Both readable modes are followed by full prettified JSON of the
+  delta items in the same window, plus newly captured responses/outcome. R opens
+  exact full raw data; N/P selects the request, response items or outcome.
+  Styling is transient and respects no-color; captured bytes are unchanged.
+  Oversized or invalid prettified JSON produces an explicit display notice,
+  without discarding readable details or the exact raw capture.
+- Continued scrolling at an inspection page's bottom/top loads one adjacent
+  page, entering at its top/bottom respectively. Merely reaching a boundary does
+  not change pages; drawing never loads them. Brackets remain explicit page
+  navigation, while Home/End stay within the current page.
 - Tests that assert physical persistence or inject database faults use the
   test-only history helper, not a production database escape hatch.
 
@@ -408,6 +455,10 @@ See `internal/providers/openai/module.go`. For native binaries, inject
 `binaryinput.Resolve` or another resolver returning verified original
 `BinaryPayload` bytes; the transport codec only encodes them.
 
+Emit boundary captures through `Request.Observe`, preserving original payload
+bytes. Implement provider-owned parsing into `llm.InspectionDocument` sections
+and typed values; history and the frontend consume that neutral representation.
+
 Canonical `llm.Message` values intentionally remain shared with history:
 source/request identity, runtime/input provenance, authored display text and
 attachment references support admission, inspection and compaction. They are not
@@ -478,18 +529,16 @@ workers.
 ## Inspectable request messages
 
 - Save exact coding, naming and compaction instructions in private lineage
-  artifacts per request. The TUI has one coding placeholder per actor pointing
-  to its latest snapshot; internal request prompts remain distinct.
+  artifacts per request for canonical audit and accounting provenance.
 - Compaction keeps the actor's coding system instructions and saves its frozen
   structured prefix plus final summary instruction as internal request messages
   in one transaction, outside live coding input and without acknowledging
-  events. Publish only the instruction and reply as live UI rows. Main-summary
-  input/reply bodies stay in the predecessor; small lifecycle metadata follows
-  the continuation tail. Coding input acquisition skips hidden entry bodies.
-- Click a placeholder to open the shared scrollable `tui.Window`; plain output
-  uses `/inspect <entry-id>`. Internal inputs/replies remain inspectable outside
-  coding context. Authentication tokens, device codes and login steps never
-  enter history, logs or inspector artifacts.
+  events. Canonical main-summary input/reply records remain in the predecessor;
+  provider-boundary inspection rows and their artifact references survive in the
+  continuation. Coding input acquisition skips hidden entry bodies.
+- Interactive inspection uses the boundary stream described above. Plain output
+  uses `/inspect <entry-id>` for readable saved records. Authentication tokens,
+  device codes and login steps never enter history, logs or inspector artifacts.
 - Exact JSONL preserves versioned native reasoning/replay items. Markdown omits
   opaque state and summarizes internal requests instead of duplicating their
   inputs. Continuations drop opaque replay from coding requests.
@@ -750,8 +799,8 @@ The concrete boundaries above are TTC decisions, informed by:
   replaces streamed text with Markdown; finalized objects reject late updates.
   Frontend alone owns transcript, screen and Kitty state. Main assistant labels
   align left and bodies indent two cells. Subagent assistant responses and final
-  handoffs use one clipped row with agent name and response prefix; full sources
-  remain available in clickable inspection dialogs. Items own no refresh
+  handoffs use one clipped row with agent name and response prefix; inspect the
+  corresponding Request row for its captured full response. Items own no refresh
   goroutines.
 - Sidebar sections independently scroll/collapse copied request/job/timer
   metadata; job/timer rows open live inspectors with source-agent names. Timer

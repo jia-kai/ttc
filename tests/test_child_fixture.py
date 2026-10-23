@@ -5,7 +5,7 @@ import json
 import sqlite3
 import tempfile
 
-from child_fixture import CHILD_ANSWER, CHILD_ANSWER_CAP, CHILD_BODY, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
+from child_fixture import CHILD_ANSWER, CHILD_ANSWER_CAP, CHILD_BODY, CHILD_PREFIX, CHILD_TAIL, child_response_row, child_response_target, compact_rows, demo_completed, verify_child_answers
 
 
 class ChildFixtureTests(unittest.TestCase):
@@ -20,6 +20,9 @@ class ChildFixtureTests(unittest.TestCase):
         rows = ('header\n[Sub Fixture check] assistant ' + CHILD_PREFIX + ' ...\n'
                 'subagent · done · [Sub Fixture check] final answer ' + CHILD_PREFIX + '…')
         self.assertEqual(compact_rows(rows), (2, 3))
+
+        boundary = '[Sub Fixture check] Request #7 · coding · attempt 1 · Inspect ' + CHILD_PREFIX
+        self.assertEqual(compact_rows(rows + '\n' + boundary), (2, 3))
 
     def test_reject_expanded_or_missing_rows(self):
         valid = ('[Sub Fixture check] assistant ' + CHILD_PREFIX + ' ...\n'
@@ -37,6 +40,28 @@ class ChildFixtureTests(unittest.TestCase):
         for text in (response, completion, response + '\n' + completion + '\n' + CHILD_BODY):
             with self.subTest(text=text), self.assertRaises(AssertionError):
                 compact_rows(text, narrow=True)
+
+    def test_native_response_target_and_clipped_row(self):
+        title = 'Request #7 · coding · attempt 1'
+        with sqlite3.connect(':memory:') as db:
+            db.execute('CREATE TABLE entries(id,actor_id,kind,content_json)')
+            with self.assertRaises(AssertionError):
+                child_response_target(db)
+            for identifier, actor, direction, suffix in (
+                    (1, 'main', 'response', 'assistant message'),
+                    (2, 'main/child_fixture', 'request', 'assistant message'),
+                    (3, 'main/child_fixture', 'response', 'Tool call · read'),
+                    (4, 'main/child_fixture', 'response', 'assistant message')):
+                db.execute('INSERT INTO entries VALUES(?,?,?,?)', (identifier, actor, 'status', json.dumps({
+                    'type': 'presentation_stream', 'direction': direction, 'purpose': 'coding',
+                    'item': {'title': title},
+                })))
+            self.assertEqual(child_response_target(db), (4, title))
+        clipped = '[Sub Fixture check] Request #7 · coding · attempt 1 · com…'
+        self.assertEqual(child_response_row('header\n' + clipped, title), 2)
+        for text in (clipped.replace('coding', 'naming'), clipped + '\n' + clipped):
+            with self.subTest(text=text), self.assertRaises(AssertionError):
+                child_response_row(text, title)
 
     def test_completion_requires_durable_turn_and_answer(self):
         with tempfile.TemporaryDirectory() as root:

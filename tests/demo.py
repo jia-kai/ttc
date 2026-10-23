@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
 from pty_screen import Screen
-from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, compact_rows, demo_completed, verify_child_answers
+from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, child_response_row, child_response_target, compact_rows, demo_completed, verify_child_answers
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -360,6 +360,16 @@ path.write_text('Looks good.')
         return screen.text
 
     def verify_child_inspectors():
+        def reveal_tail():
+            for _ in range(240):
+                before = settled_screen()
+                # Raw JSON strings can wrap the marker across terminal rows.
+                body = ''.join(re.split('[│█]', line)[1] for line in before.splitlines() if '│' in line)
+                if CHILD_TAIL in before or ''.join(CHILD_TAIL.split()) in ''.join(body.split()):
+                    return
+                os.write(master, b'\x1b[6~')
+            raise AssertionError('child tail not reachable in grouped inspection: ' + screen.text)
+
         # The final notebook is long. Scroll up until both compact rows are in
         # the viewport, then test their actual mouse hit targets.
         for _ in range(35):
@@ -376,28 +386,50 @@ path.write_text('Looks good.')
         else:
             raise AssertionError('compact child and returned-answer rows not visible: ' + screen.text)
         (root / 'child-compact.txt').write_text(text)
-        for kind, row in zip(('response', 'completion'), rows):
-            os.write(master, f'\x1b[<0;8;{row}M\x1b[<0;8;{row}m'.encode())
-            screen_expect('┌')
-            screen_expect(CHILD_PREFIX)
-            os.write(master, b'\x1b[F')  # End reveals the retained full answer tail.
-            screen_expect(CHILD_TAIL)
-            (root / f'child-{kind}-inspector.txt').write_text(screen.text)
-            if kind == 'completion':
-                os.write(master, b'd')
-                screen_expect('Parameters:')
-                (root / 'child-completion-details.txt').write_text(screen.text)
-            os.write(master, b'\x1b')
-            screen_expect('┌', present=False)
-            compact_rows(settled_screen())
-        # Keyboard inspection of the same persisted child message is independent
-        # of mouse routing and must retain the full content too.
-        with sqlite3.connect(root / 'data/history.sqlite') as db:
-            entry = db.execute("SELECT id FROM entries WHERE actor_id != 'main' AND role='assistant' AND kind='message' AND json_extract(content_json,'$.content') = ? ORDER BY id LIMIT 1", (CHILD_ANSWER,)).fetchone()[0]
-        send(f'/inspect {entry}')
-        screen_expect('┌')
+        response, completion = rows
+        os.write(master, f'\x1b[<0;8;{response}M\x1b[<0;8;{response}m'.encode())
+        assert '┌' not in settled_screen(), 'direct assistant row opened payload inspection'
+        compact_rows(screen.text)
+        (root / 'child-direct-no-inspect.txt').write_text(screen.text)
+        os.write(master, f'\x1b[<0;8;{completion}M\x1b[<0;8;{completion}m'.encode())
+        screen_expect('Execution details')
+        screen_expect(CHILD_PREFIX)
         os.write(master, b'\x1b[F')
         screen_expect(CHILD_TAIL)
+        (root / 'child-completion-inspector.txt').write_text(screen.text)
+        os.write(master, b'd')
+        screen_expect('Parameters:')
+        (root / 'child-completion-details.txt').write_text(screen.text)
+        os.write(master, b'\x1b')
+        screen_expect('┌', present=False)
+        with sqlite3.connect(root / 'data/history.sqlite') as db:
+            entry, title = child_response_target(db)
+        os.write(master, b'\x1b')  # Follow tail before searching the native response.
+        for _ in range(80):
+            text = settled_screen()
+            try:
+                row = child_response_row(text, title)
+                break
+            except AssertionError:
+                os.write(master, b'\x15')
+        else:
+            raise AssertionError('native child response not visible: ' + screen.text)
+        (root / 'child-native-response-row.txt').write_text(text)
+        os.write(master, f'\x1b[<0;8;{row}M\x1b[<0;8;{row}m'.encode())
+        screen_expect('R raw')
+        reveal_tail()
+        (root / 'child-native-response-tail.txt').write_text(screen.text)
+        os.write(master, b'r')
+        screen_expect('Exact raw JSON')
+        os.write(master, b'n')  # Select the completed response, not the outgoing request.
+        reveal_tail()
+        (root / 'child-native-response-raw-tail.txt').write_text(screen.text)
+        os.write(master, b'\x1b')
+        screen_expect('┌', present=False)
+        # Explicit keyboard inspection of the boundary uses the same readable view.
+        send(f'/inspect {entry}')
+        screen_expect('┌')
+        reveal_tail()
         os.write(master, b'\x1b')
         screen_expect('┌', present=False)
 

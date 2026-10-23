@@ -385,7 +385,7 @@ func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
 }
 
 func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
-	r, events := runtimeFixture(t, nil)
+	r, _ := runtimeFixture(t, nil)
 	var requests []llm.Request
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests = append(requests, req)
@@ -415,18 +415,18 @@ func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 	if contexts != 1 {
 		t.Fatal("unchanged tool boundary appended runtime context", contexts)
 	}
+	stored, err := r.Store.Messages(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
 	updates := 0
-	for len(events) > 0 {
-		event := <-events
-		if event.Kind == "runtime_context" {
+	for _, message := range stored {
+		if message.Type == llm.TypeRuntimeContext {
 			updates++
-			if event.EntryID == 0 {
-				t.Fatal("empty context UI row", event)
-			}
 		}
 	}
 	if updates != 1 {
-		t.Fatal("unchanged snapshot generated UI update", updates)
+		t.Fatal("unchanged snapshot generated a context record", updates)
 	}
 }
 

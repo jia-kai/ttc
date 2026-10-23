@@ -230,7 +230,7 @@ func drawWindow(s tcell.Screen, window *Window) {
 	header := window.HeaderLines(innerWidth, max(0, height-3))
 	view := window.Lines(innerWidth, bodyHeight)
 	for i, text := range append(header, view...) {
-		if (window.Markdown || window.Styled) && i >= len(header) {
+		if (window.Markdown || window.Styled || window.Structured) && i >= len(header) {
 			putStyled(s, left+1, top+1+i, innerWidth, text, style)
 		} else {
 			put(s, left+1, top+1+i, innerWidth, text, style)

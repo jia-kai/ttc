@@ -46,7 +46,7 @@ type frontendController struct {
 	focused     int
 	dirty       bool
 	names       map[string]string
-	seenPrompts map[string]int64
+	streamRows  map[int64]int // Grouped request header IDs to stable transcript positions.
 
 	done        chan operationResult
 	busy        bool
@@ -138,7 +138,6 @@ func (c *frontendController) setup(ctx context.Context) error {
 	c.onClose(c.stopForeground)
 	c.queueGeneration = c.frontend.Runtime.Generation()
 	c.view = newTranscript()
-	c.seenPrompts = map[string]int64{}
 	c.sidebar = newSidebar()
 	c.copyFocused = -1
 	c.dirty = true

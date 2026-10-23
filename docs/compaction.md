@@ -110,9 +110,9 @@ them.
   input-cache reuse; actual hits depend on the provider. Attachments use normal
   resolution, including explicit unavailable-original notices. The temporary
   instruction and summary-request records never enter live coding input.
-  Main-summary input/reply bodies remain inspectable in the frozen predecessor,
-  not its writable continuation; small lifecycle metadata still follows the
-  tail.
+  Canonical main-summary input/reply records remain inspectable in the frozen
+  predecessor. Provider-boundary inspection rows and their artifact references
+  survive in the writable continuation alongside small lifecycle metadata.
 - The prompt requests optional handoff sections; their structure is guidance,
   not a validated schema.
 - No chunking or regeneration. Reject empty/tool-calling summaries and summaries
