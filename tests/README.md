@@ -32,8 +32,14 @@ managed stdio LSP query, background job list/read/stop, local web fetch/search,
 skill loading, a saved image and its dimensions, questions, and three timer
 tools. The final notebook demonstrates headings, tables, emphasis, quotes,
 nested and ordered lists, checkboxes, code, links, Unicode, and inline/block TeX
-math. The reusable child returns deterministic multiline evidence exceeding 8
-KiB, beginning `CHILD-PREVIEW 4.0` and ending `CHILD-FULL-TAIL`. Its assistant
+math. Its mixed-format math table includes a formula in the header, tall
+fractions and matrices, multiple formulas beside bold/emphasis/link/code/Unicode
+text, and an explicit `$$x$$` in a single-line source cell. Short and long prose
+exercise inline wrapping too. Formulas fit their actual cell width and stay
+intact in multirow terminal cells; these are ordinary GFM tables, not new table
+syntax. Inline placement still uses MathJax display-style typesetting. The
+reusable child returns deterministic multiline evidence exceeding 8 KiB,
+beginning `CHILD-PREVIEW 4.0` and ending `CHILD-FULL-TAIL`. Its assistant
 responses and final answers returned to main occupy single clipped direct rows,
 without payload inspection. Open the child's Request row to inspect its inputs
 and answer. E expands readable delta items; continued bottom/top scrolling or [

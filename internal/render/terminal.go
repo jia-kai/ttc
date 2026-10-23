@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 
 	glamouransi "charm.land/glamour/v2/ansi"
@@ -18,8 +19,18 @@ import (
 
 // Terminal formats Markdown for a terminal viewport using a fixed, deterministic
 // style. Table headers use colored strong emphasis. Input controls are removed;
-// math retains readable TeX; graphics frontends replace formulas before rendering.
+// formulas retain readable TeX. Graphics frontends supply boxes with TerminalMath.
 func Terminal(input string, width int) (string, error) {
+	return TerminalMath(input, width, literalMath)
+}
+
+// TerminalMath renders Markdown with atomic formula boxes supplied by layout.
+// Ordinary Markdown keeps Glamour's styling and container layout. Math-bearing
+// prose and tables expand after wrapping, at their actual container width.
+func TerminalMath(input string, width int, layout MathLayout) (string, error) {
+	if layout == nil {
+		return "", fmt.Errorf("Markdown math layout is required")
+	}
 	style := markdownStyle()
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.GFM, extension.DefinitionList),
@@ -30,13 +41,13 @@ func Terminal(input string, width int) (string, error) {
 	md.SetRenderer(renderer.NewRenderer(renderer.WithNodeRenderers(util.Prioritized(
 		glamouransi.NewRenderer(glamouransi.Options{Styles: style, WordWrap: max(8, width), PreserveNewLines: true}), 1000,
 	))))
-	source := []byte(Math(Clean(input), func(tex string, block bool) string {
-		if block {
-			return "\n\n" + Fence(tex, "tex") + "\n\n"
-		}
-		f := backticks(tex, 1)
-		return f + " " + tex + " " + f
-	}))
+	clean := Clean(input)
+	boxes := newMarkdownBoxes(clean, max(1, width), layout)
+	marked, err := boxes.tokenize(clean)
+	if err != nil {
+		return "", err
+	}
+	source := []byte(marked)
 	root := md.Parser().Parse(text.NewReader(source))
 	// Style parsed header cells rather than matching pipe-delimited source lines;
 	// escaped pipes, inline formatting and fenced examples keep their semantics.
@@ -54,11 +65,30 @@ func Terminal(input string, width int) (string, error) {
 	}); err != nil {
 		return "", err
 	}
+	if err := boxes.prepare(root, &source); err != nil {
+		return "", err
+	}
 	var output bytes.Buffer
 	if err := md.Renderer().Render(&output, source, root); err != nil {
 		return "", err
 	}
-	return wrapIndented(output.String(), max(1, width)), nil
+	return boxes.expand(wrapIndented(output.String(), max(1, width)))
+}
+
+func literalMath(tex string, _ bool, width int) FixedBox {
+	return LiteralBox(tex, width)
+}
+
+// LiteralBox folds whitespace and wraps control-safe plain text into a terminal
+// rectangle. It retains the complete text for pending/failed graphics fallbacks.
+// A grapheme wider than width is preserved intact rather than split or dropped.
+func LiteralBox(text string, width int) FixedBox {
+	rows := layoutFlow([]flowItem{{text: strings.Join(strings.Fields(Clean(text)), " ")}}, max(1, width))
+	columns := 1
+	for _, row := range rows {
+		columns = max(columns, ansi.StringWidth(row))
+	}
+	return FixedBox{Rows: rows, Width: columns, Baseline: len(rows) - 1}
 }
 
 // wrapIndented keeps continuation rows aligned with their source row's indent.

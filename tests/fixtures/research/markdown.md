@@ -40,14 +40,36 @@ assert average == 4
 
 Inline math: $\bar{x} = 4$ with $n = 3$ samples.
 
+Short inline prose: **Mean** $\bar{x}=4$, _count_ $n=3$, and `a.u.` for μm-scale
+observations.
+
+Long inline prose: compare $\frac{1}{n}\sum_{i=1}^{n}x_i$ with **the reference**
+$\frac{\sum_{i=1}^{n}(x_i-\bar{x})^2}{n-1}$, then follow
+[the local notes](README.md) and record _uncertainty_ in `a.u.`; the surrounding
+words should wrap around each intact formula in a narrow pane, including Unicode
+labels α, β, and 界.
+
+#### Mixed-format math table
+
+| Quantity $q$     | Formula and context                                                       | Reading                 |
+| ---------------- | ------------------------------------------------------------------------- | ----------------------- |
+| **Mean**         | $\bar{x}=4$ and $n=3$; _samples_ in `a.u.`, [notes](README.md), μm / 界   | Two inline formulas     |
+| _Fraction_       | Before $\frac{\sum_{i=1}^{n}(x_i-\bar{x})^2}{n-1}$ after **variance**     | Tall atomic formula     |
+| Matrix           | $\begin{pmatrix}1 & 2 \\ 3 & 4\end{pmatrix}$ with _basis_ $e_1$ and `2×2` | Multiple terminal rows  |
+| Explicit display | $$x$$ beside **bold**, _emphasis_, and `code`                             | Single-line source cell |
+
+These are ordinary GFM table rows: cells can occupy multiple terminal rows, and
+each formula fits its actual cell width. No new table syntax is needed.
+
 $$
 \bar{x} = \frac{1}{n}\sum_{i=1}^{n} x_i = 4
 $$
 
 Math uses headless formula images placed with Kitty Unicode placeholders.
-Unsupported TeX stays readable; large inline equations can become blocks.
-Inspection renders this Markdown; export preserves its source. Plain terminals
-retain the original TeX.
+Unsupported TeX stays readable; tall inline formulas stay intact beside text,
+occupying multiple terminal rows when needed. MathJax uses display-style
+typesetting even for inline placement. Inspection renders this Markdown; export
+preserves its source. Plain terminals retain the original TeX.
 
 ---
 

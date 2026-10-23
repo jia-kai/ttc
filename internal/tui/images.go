@@ -4,20 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"image"
 	"math"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
 	"ttc/internal/render"
 	"ttc/internal/session"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/gdamore/tcell/v3"
-	"github.com/mattn/go-runewidth"
 )
 
 // displayRow shares the exact rendered cells and assets between draw/hit testing.
@@ -315,69 +315,83 @@ func (r *imageRenderer) layout(v line, width int) []displayRow {
 		return rowsOf(layoutText(v, width))
 	}
 	type replacement struct {
-		asset  placedImage
-		row    string
-		cursor int
+		asset placedImage
+		row   string
 	}
-	replacements := map[rune]*replacement{}
-	marker := rune(0xe000)
-	source := render.Math(v.text, func(tex string, block bool) string {
+	replacements := map[rune]replacement{}
+	occupied := map[rune]bool{}
+	for _, r := range html.UnescapeString(v.text) {
+		if r >= 0xf0000 && r <= 0x10fffd {
+			occupied[r] = true
+		}
+	}
+	// Keep graphics-row tokens separate from the Markdown adapter's BMP
+	// carriers. Supplementary private-use scalars are single terminal cells.
+	marker := rune(0xf0000)
+	var tokenError error
+	text, err := render.TerminalMath(v.text, width, func(tex string, block bool, available int) render.FixedBox {
 		p := placedImage{key: assets.Key("mathjax-hires-v1", r.backend, tex, fmt.Sprint(r.cellHeight), fmt.Sprint(assets.MathRasterScale)), tex: tex}
 		reply := r.cachedMath(p.key)
 		var grid []string
 		if reply.pixels != nil {
 			// Measure the supersampled bitmap in logical terminal pixels. The
 			// upload filters it to this cell grid's measured pixel dimensions.
-			p.columns, p.rows = graphics.Geometry(reply.pixels, r.cellWidth*assets.MathRasterScale, r.cellHeight*assets.MathRasterScale, max(1, min(width-6, 200)), 12)
-			if p.rows > 1 || p.columns > max(8, width/2) {
-				block = true
-			}
+			p.columns, p.rows = graphics.Geometry(reply.pixels, r.cellWidth*assets.MathRasterScale, r.cellHeight*assets.MathRasterScale, max(1, min(available, 200)), 12)
 			grid, _ = r.graphics.Rows(p.key, p.columns, p.rows)
 		} else {
 			literal := strings.Join(strings.Fields(render.Clean(tex)), " ")
 			if reply.err != nil || r.backendError != nil {
 				literal = "[math unavailable] " + literal
 			}
-			p.columns = max(1, min(max(1, width-6), runewidth.StringWidth(literal)))
-			p.rows = 1
-			grid = []string{ansi.Truncate(literal, p.columns, "…")}
+			fallback := render.LiteralBox(literal, available)
+			p.columns, p.rows = fallback.Width, len(fallback.Rows)
+			grid = fallback.Rows
 		}
 		tokens := make([]string, len(grid))
 		for y, row := range grid {
-			for strings.ContainsRune(v.text, marker) {
+			for occupied[marker] || marker == 0xffffe || marker == 0xfffff {
 				marker++
 			}
+			if marker > 0x10fffd {
+				tokenError = fmt.Errorf("too many formula placeholder rows")
+				return render.FixedBox{}
+			}
 			tokens[y] = strings.Repeat(string(marker), p.columns)
-			replacements[marker] = &replacement{asset: p, row: row}
+			replacements[marker] = replacement{asset: p, row: row}
 			marker++
 		}
-		text := strings.Join(tokens, "  \n")
-		if block {
-			return "\n\n" + text + "\n\n"
-		}
-		return text
+		return render.FixedBox{Rows: tokens, Width: p.columns, Baseline: p.rows - 1}
 	})
-	v.text = source
-	out := rowsOf(layoutText(v, width))
+	if tokenError != nil {
+		err = tokenError
+	}
+	if err != nil {
+		return rowsOf(append([]string{"Markdown rendering failed: " + err.Error()}, wrap(render.Clean(v.text), width)...))
+	}
+	out := rowsOf(styledRows(strings.Trim(text, "\n")))
 	for i := range out {
-		for rune, replacement := range replacements {
-			token := string(rune)
-			for {
-				start := strings.Index(out[i].text, token)
-				if start < 0 {
-					break
-				}
-				end := start
-				for strings.HasPrefix(out[i].text[end:], token) {
-					end += len(token)
-				}
-				cells := (end - start) / len(token)
-				fragment := ansi.Cut(replacement.row, replacement.cursor, replacement.cursor+cells)
-				replacement.cursor += cells
-				out[i].text = out[i].text[:start] + fragment + out[i].text[end:]
-				out[i].assets = append(out[i].assets, replacement.asset)
+		var restored strings.Builder
+		for offset := 0; offset < len(out[i].text); {
+			rune, size := utf8.DecodeRuneInString(out[i].text[offset:])
+			replacement, ok := replacements[rune]
+			if !ok {
+				restored.WriteString(out[i].text[offset : offset+size])
+				offset += size
+				continue
 			}
+			token := out[i].text[offset : offset+size]
+			end := offset
+			for strings.HasPrefix(out[i].text[end:], token) {
+				end += size
+			}
+			if (end-offset)/size != replacement.asset.columns {
+				return rowsOf(append([]string{"Markdown rendering failed: formula rectangle was split"}, wrap(render.Clean(v.text), width)...))
+			}
+			restored.WriteString(replacement.row)
+			out[i].assets = append(out[i].assets, replacement.asset)
+			offset = end
 		}
+		out[i].text = restored.String()
 	}
 	return out
 }

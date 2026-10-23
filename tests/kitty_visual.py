@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import time
 import traceback
+import unicodedata
 
 
 from scratch import private_scratch
@@ -262,6 +263,88 @@ def main():
             wait('Turn complete')
             wait('\U0010eeee', timeout=20)
             capture('markdown-math')
+
+            def math_table_frame(text):
+                # Kitty returns the actual placeholder codepoints/coordinates,
+                # not pixels. Check these alongside real screenshots so a tall
+                # image cannot silently erase the following source table row.
+                rows = text.splitlines()
+                header = next((i for i, row in enumerate(rows) if 'Quantity' in row), None)
+                fraction = next((i for i, row in enumerate(rows) if 'Fraction' in row), None)
+                matrix = next((i for i, row in enumerate(rows) if 'Matrix' in row), None)
+                following = next((i for i, row in enumerate(rows) if 'Explicit' in row), None)
+                assert header is not None and fraction is not None and matrix is not None and following is not None, text
+                assert header < fraction < matrix < following, 'math table header/body rows reordered: ' + text
+                header_cells = rows[header].split('│')
+                assert '\U0010eeee' in header_cells[0], 'header q formula did not finish rendering: ' + text
+                assert len(header_cells) >= 3 and 'Formula and context' in header_cells[1], 'math table header clipped: ' + text
+                section = rows[fraction:following + 1]
+                assert not any(token in '\n'.join(section) for token in (r'\frac', r'\begin', '[math unavailable]')), text
+                image_rows = [i for i, row in enumerate(rows) if '\U0010eeee' in row and fraction <= i <= following]
+                assert any(b == a + 1 for a, b in zip(image_rows, image_rows[1:])), 'no intact multirow formula in table: ' + text
+
+                def separator_columns(row):
+                    column, found = 0, []
+                    for char in row:
+                        if char == '│':
+                            found.append(column)
+                        if not unicodedata.combining(char):
+                            column += 2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1
+                    return found
+
+                separators = [separator_columns(row) for row in section]
+                # A transcript scrollbar may add a third vertical rule; only
+                # the two internal table separators belong to this check.
+                assert separators and all(len(cols) >= 2 for cols in separators), 'math escaped three-column table: ' + text
+                assert all(cols[:2] == separators[0][:2] for cols in separators), 'table rules shifted around tall formulas: ' + text
+                assert separator_columns(rows[header])[:2] == separators[0][:2], 'table header rules misaligned: ' + text
+                following_label = ''.join(row.split('│')[0].strip() for row in rows[following:following + 4])
+                assert 'Explicitdisplay' in following_label.replace(' ', ''), 'following display row truncated: ' + text
+                return text
+
+            def capture_math_table(name):
+                nonlocal last_text
+                # Keep scrolling until the header AND following body rows fit;
+                # stopping at Fraction clips the header just above the screen.
+                # Small increments cannot skip a multirow source cell. Readiness
+                # is checked afterwards because only visible assets are requested.
+                for _ in range(120):
+                    last_text = remote('get-text', '--extent', 'screen')
+                    if all(label in last_text for label in ('Quantity', 'Formula and context', 'Fraction', 'Matrix', 'Explicit')):
+                        break
+                    mouse(20, 10, 64)
+                    time.sleep(0.05)
+                else:
+                    raise AssertionError('math table and following rows not visible: ' + last_text)
+                deadline = time.monotonic() + 20
+                while True:
+                    last_text = remote('get-text', '--extent', 'screen')
+                    try:
+                        math_table_frame(last_text)
+                        break
+                    except AssertionError:
+                        if time.monotonic() >= deadline:
+                            capture(name + '-failure')
+                            raise
+                        time.sleep(0.1)
+                capture(name)
+
+            # The shared research fixture's math table contains a fraction,
+            # matrix, multiple formulas, styles and a following display cell.
+            # Use a taller viewport so both tall cells and the next row fit.
+            remote('resize-os-window', '--width', '120', '--height', '44', '--unit', 'cells')
+            time.sleep(0.2)
+            capture_math_table('math-inside-tables')
+            remote('resize-os-window', '--width', '80', '--height', '44', '--unit', 'cells')
+            time.sleep(0.2)
+            for _ in range(30):
+                key('ctrl+d')
+            capture_math_table('math-inside-tables-narrow')
+            remote('resize-os-window', '--width', '120', '--height', '38', '--unit', 'cells')
+            time.sleep(0.2)
+            for _ in range(30):
+                key('ctrl+d')
+            wait('Turn complete')
             key('ctrl+r')
             wait('Prompt history search')
             send('demo run')

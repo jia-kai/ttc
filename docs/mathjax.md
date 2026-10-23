@@ -35,6 +35,17 @@
   labeled literal TeX. Cached PNGs bypass engines;
   [shared image/math asset ownership](design.md#image-and-math-assets) defines
   cache pruning and retained-pixel budgets.
+- Inline formulas are atomic boxes beside formatted text, including in GFM table
+  headers and body cells. Tall formulas occupy multiple terminal rows;
+  surrounding text wraps without splitting the formula. Fit math to the actual
+  available width (the cell width in a table), not the whole viewport. Cells can
+  occupy multiple terminal rows without introducing multiline GFM source syntax;
+  even `$$x$$` can appear in a single-line source cell. When columns and
+  separators cannot fit a tiny pane, cells stack in row order.
+- Inline placement does not imply MathJax inline typography: the backend uses
+  `display: true` for both inline and block formulas. The shared
+  [demo notebook](../tests/fixtures/research/markdown.md) exercises mixed-format
+  tables and short/long inline prose.
 
 | Limit                   | Value            |
 | ----------------------- | ---------------- |
