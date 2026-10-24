@@ -809,6 +809,23 @@ The concrete boundaries above are TTC decisions, informed by:
   scans history or revives job IDs. A cancelable joined worker refreshes
   optional Git root/branch every five seconds with two-second deadlines and
   bounded output. Workspace header uses `Workspace.Root`.
+- `ttc md FILE` opens a standalone Markdown document using the shared terminal,
+  inspection-window layout cache and graphics worker, without a runtime,
+  history, sidebar or composer. It starts at the top and shares window scrolling
+  controls. The complete document is parsed together, preserving references and
+  containers across source chunk boundaries. Redirected output is plain text at
+  80 columns.
+- Markdown layout walks Goldmark's AST and resolves the shared Glamour style
+  configuration into styled text and atomic math/image boxes. Greedy paragraph
+  flow aligns integer-cell baselines; lists and quotes reserve prefix columns
+  before laying out children. All tables share column sizing and cell flow,
+  independent of formula presence. Rasterization is separate from terminal-grid
+  geometry.
+- Local Markdown images share math's box fitting, viewport-only asset work and
+  Kitty placement. Paths resolve from the document directory or chat workspace;
+  remote URLs remain text. Clicking an image opens the same pan/zoom preview as
+  `image_show`, without creating an agent coordinate-selection request. Local
+  thumbnail cache recipes use source bytes, not mutable file paths.
 - Fullscreen uses a frozen transcript snapshot with shared immutable sources and
   independent indices/anchors. Background work still updates the live view;
   periodic status/asset redraws and automatic dialogs pause. Keep keyboard

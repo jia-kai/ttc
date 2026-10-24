@@ -145,7 +145,7 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 	if preview != nil && renderer != nil {
 		s.HideCursor()
 		if err := preview.draw(s, renderer.graphics); err != nil {
-			return err
+			drawWindow(s, &Window{Title: "Image preview", Text: "Image preview failed: " + err.Error()})
 		}
 	} else if window != nil {
 		s.HideCursor()

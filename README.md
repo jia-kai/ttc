@@ -268,6 +268,13 @@ disposable filesystem cache at `${XDG_CACHE_HOME:-~/.cache}/ttc/assets`: **4 GiB
 total**, with least-recently-used eviction and **30-day idle retention**. Active
 images are not pinned.
 
+TTC also supports viewing a Markdown document with math and images using its
+Markdown renderer:
+
+```sh
+ttc md /path/to/notes.md
+```
+
 ## Testing
 
 Markdown and YAML formatting uses the Makefile-pinned Prettier with the

@@ -52,7 +52,8 @@ func TestJSONFormattingPreservesPrecisionAndWrapsValues(t *testing.T) {
 				t.Fatal(width, line)
 			}
 		}
-		if !strings.Contains(ansi.Strip(text), "αβ") {
+		plain := ansi.Strip(text)
+		if !strings.ContainsRune(plain, 'α') || !strings.ContainsRune(plain, 'β') {
 			t.Fatal("lost Unicode", text)
 		}
 	}

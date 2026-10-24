@@ -100,15 +100,30 @@ func (c *frontendController) finishPreview(confirm bool) {
 		if confirm {
 			point = c.modal.preview.point
 		}
-		if err := c.frontend.Runtime.ConfirmImage(c.modal.preview.snapshot.ID, point); err != nil {
+		if err := c.frontend.Runtime.ConfirmImage(c.modal.preview.source.id, point); err != nil {
 			c.add("Error: "+err.Error(), 0)
 		} else {
 			// Confirmation resumes the requesting agent; reveal its incoming reply.
 			c.view.followTail = true
 		}
 	}
+	parent := c.modal.parent
 	c.modal.clear()
+	if parent != nil {
+		c.modal = *parent
+	}
 	c.view.invalidate()
+}
+
+func (c *frontendController) openLocalImage(asset placedImage) {
+	parent := c.modal
+	generation := c.frontend.Runtime.Generation()
+	load, err := c.renderer.loadSource(imageSource{id: asset.key, path: asset.path, file: asset.path})
+	if err != nil {
+		c.modal = modalState{parent: &parent, generation: generation, window: &Window{Title: "Image", Text: "Image preview failed: " + err.Error()}}
+		return
+	}
+	c.modal = modalState{parent: &parent, loading: &previewLoad{imageLoad: load, generation: generation}, generation: generation, window: &Window{Title: "Image", Text: "Loading full image…"}}
 }
 
 func (c *frontendController) openModelMenu() {

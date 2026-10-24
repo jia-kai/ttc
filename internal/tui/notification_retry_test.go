@@ -322,7 +322,9 @@ func TestAutomaticNotificationsContinueNormallyAfterSuccessfulTurn(t *testing.T)
 	u.wait(t, "User turn succeeded.")
 	u.wait(t, "Turn complete")
 	for i, text := range []string{"First notification succeeded.", "Second notification succeeded."} {
-		id := queueTestNotification(t, u, text)
+		// A job label appears before the automatic provider request. Keep it
+		// distinct from the response used to synchronize this assertion.
+		id := queueTestNotification(t, u, fmt.Sprintf("completion %d", i+1))
 		u.wait(t, text)
 		u.wait(t, "Turn complete")
 		requests := p.snapshot()

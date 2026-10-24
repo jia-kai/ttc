@@ -31,6 +31,36 @@ func TestSharedWindowWrapAndScroll(t *testing.T) {
 		t.Fatal("Ctrl+D did not scroll down", w.Scroll)
 	}
 }
+
+func TestLiveWindowTextFollowsOnlyAtBottom(t *testing.T) {
+	for _, atBottom := range []bool{true, false} {
+		w := &Window{Text: "one\ntwo\nthree\nfour\nfive\nsix"}
+		w.Lines(20, 3)
+		w.Key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 3)
+		w.Lines(20, 3)
+		if !atBottom {
+			w.Key(tcell.NewEventKey(tcell.KeyUp, "", 0), 3)
+		}
+		oldScroll := w.Scroll
+		w.updateLiveText(w.Text+"\nnew-output", 20, 3)
+		rows := w.Lines(20, 3)
+		if atBottom {
+			if rows[len(rows)-1] != "new-output" || w.Scroll != oldScroll+1 {
+				t.Fatalf("bottom viewport did not follow: offset=%d rows=%q", w.Scroll, rows)
+			}
+		} else if w.Scroll != oldScroll || strings.Contains(strings.Join(rows, "\n"), "new-output") {
+			t.Fatalf("manual upward scroll was lost: offset=%d rows=%q", w.Scroll, rows)
+		}
+		w.updateLiveText(w.Text, 20, 3)
+		wantScroll := oldScroll
+		if atBottom {
+			wantScroll++
+		}
+		if w.Scroll != wantScroll {
+			t.Fatal("unchanged text moved viewport", w.Scroll)
+		}
+	}
+}
 func TestNarrowScreenDraw(t *testing.T) {
 	s := newTestScreen(t)
 	if e := s.Init(); e != nil {

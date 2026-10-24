@@ -76,6 +76,27 @@ func TestReadRejectsFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
+func TestReadEncodedDefersDecodingAndBoundsSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "source")
+	want := []byte("not an encoded image")
+	if err := os.WriteFile(path, want, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadEncoded(path)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("encoded read: %q, %v", got, err)
+	}
+	if _, _, err := Read(path); err == nil {
+		t.Fatal("decoded read accepted a non-image")
+	}
+	if err := os.Truncate(path, MaxBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadEncoded(path); err == nil {
+		t.Fatal("accepted oversized encoded source")
+	}
+}
+
 func TestCacheReusePruneConcurrencyAndPrivacy(t *testing.T) {
 	c, err := New(filepath.Join(t.TempDir(), "cache"))
 	if err != nil {
@@ -390,9 +411,37 @@ func TestDecodeAndAspectBounds(t *testing.T) {
 	if _, err := Decode(oversized); err == nil || !strings.Contains(err.Error(), "pixels") {
 		t.Fatal("unbounded pixel allocation", err)
 	}
-	resized := Resize(m, 80, 100)
+	resized, err := Resize(context.Background(), m, 80, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resized.Bounds().Dx() != 80 || resized.Bounds().Dy() != 50 {
 		t.Fatal(resized.Bounds())
+	}
+}
+
+func TestResizeReuseCancellationAndAllocationBounds(t *testing.T) {
+	m := image.NewNRGBA(image.Rect(3, 4, 515, 324))
+	ctx := context.Background()
+	unchanged, err := Resize(ctx, m, 512, 320)
+	if err != nil || unchanged != m {
+		t.Fatal("unchanged image was copied", err)
+	}
+	allocations := testing.AllocsPerRun(3, func() {
+		if _, err := Resize(ctx, m, 256, 160); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocations > 10 {
+		t.Fatalf("per-pixel allocation regression: %.0f allocations", allocations)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := Resize(canceled, m, 256, 160); !errors.Is(err, context.Canceled) {
+		t.Fatal("ignored resize cancellation", err)
+	}
+	if _, err := Resize(ctx, nil, 1, 1); err == nil {
+		t.Fatal("accepted missing image")
 	}
 }
 func TestMathInitializationCancellationWithoutHostDependencies(t *testing.T) {

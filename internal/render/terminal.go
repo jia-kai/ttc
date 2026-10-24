@@ -1,82 +1,57 @@
 package render
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 
-	glamouransi "charm.land/glamour/v2/ansi"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
-	extast "github.com/yuin/goldmark/extension/ast"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/text"
-	"github.com/yuin/goldmark/util"
 )
 
-// Terminal formats Markdown for a terminal viewport using a fixed, deterministic
-// style. Table headers use colored strong emphasis. Input controls are removed;
-// formulas retain readable TeX. Graphics frontends supply boxes with TerminalMath.
+// Terminal formats control-safe Markdown for a terminal-cell viewport. Formulas
+// retain readable TeX and images retain their labels/destinations, without I/O.
 func Terminal(input string, width int) (string, error) {
-	return TerminalMath(input, width, literalMath)
+	return TerminalWithAssets(input, width, LiteralAsset)
 }
 
-// TerminalMath renders Markdown with atomic formula boxes supplied by layout.
-// Ordinary Markdown keeps Glamour's styling and container layout. Math-bearing
-// prose and tables expand after wrapping, at their actual container width.
-func TerminalMath(input string, width int, layout MathLayout) (string, error) {
+// TerminalWithAssets lays out Markdown with atomic math and image boxes.
+// Every block, including tables without formulas, shares the same grid layout.
+// Containers reserve their prefixes before laying out their complete contents.
+func TerminalWithAssets(input string, width int, layout AssetLayout) (string, error) {
+	return ParseMarkdown(input).Render(width, layout)
+}
+
+// Document is an immutable, control-safe Markdown syntax tree. Reuse it across
+// viewport resizes and asset revisions; each Render owns its layout state.
+type Document struct {
+	source []byte
+	root   ast.Node
+}
+
+// ParseMarkdown sanitizes input and parses Markdown and container-aware math.
+// Unsupported or unfinished formulas remain literal Markdown text.
+func ParseMarkdown(input string) *Document {
+	source := []byte(Clean(input))
+	return &Document{source: source, root: markdownParser().Parser().Parse(text.NewReader(source))}
+}
+
+// Render lays out the document at width terminal cells using layout for atomic
+// assets. Nonpositive widths become one; indivisible wide graphemes and boxes
+// may overflow intact. A nil layout is an error; use LiteralAsset for text fallback.
+func (d *Document) Render(width int, layout AssetLayout) (string, error) {
 	if layout == nil {
-		return "", fmt.Errorf("Markdown math layout is required")
+		return "", fmt.Errorf("Markdown asset layout is required")
 	}
-	style := markdownStyle()
-	md := goldmark.New(
-		goldmark.WithExtensions(extension.GFM, extension.DefinitionList),
-		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
-	)
-	// Register the ANSI renderer after extensions, so their HTML renderers cannot
-	// override GFM tables, checkboxes or definition lists.
-	md.SetRenderer(renderer.NewRenderer(renderer.WithNodeRenderers(util.Prioritized(
-		glamouransi.NewRenderer(glamouransi.Options{Styles: style, WordWrap: max(8, width), PreserveNewLines: true}), 1000,
-	))))
-	clean := Clean(input)
-	boxes := newMarkdownBoxes(clean, max(1, width), layout)
-	marked, err := boxes.tokenize(clean)
+	if d == nil || d.root == nil {
+		return "", fmt.Errorf("Markdown document is not initialized")
+	}
+	grid := gridRenderer{source: d.source, style: markdownStyle(), assets: layout}
+	rows, err := grid.block(d.root, max(1, width))
 	if err != nil {
 		return "", err
 	}
-	source := []byte(marked)
-	root := md.Parser().Parse(text.NewReader(source))
-	// Style parsed header cells rather than matching pipe-delimited source lines;
-	// escaped pipes, inline formatting and fenced examples keep their semantics.
-	if err := ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if entering && n.Kind() == extast.KindTableHeader {
-			for cell := n.FirstChild(); cell != nil; cell = cell.NextSibling() {
-				strong := ast.NewEmphasis(2)
-				for cell.HasChildren() {
-					strong.AppendChild(strong, cell.FirstChild())
-				}
-				cell.AppendChild(cell, strong)
-			}
-		}
-		return ast.WalkContinue, nil
-	}); err != nil {
-		return "", err
-	}
-	if err := boxes.prepare(root, &source); err != nil {
-		return "", err
-	}
-	var output bytes.Buffer
-	if err := md.Renderer().Render(&output, source, root); err != nil {
-		return "", err
-	}
-	return boxes.expand(wrapIndented(output.String(), max(1, width)))
-}
-
-func literalMath(tex string, _ bool, width int) FixedBox {
-	return LiteralBox(tex, width)
+	return strings.Join(rows.Rows, "\n"), nil
 }
 
 // LiteralBox folds whitespace and wraps control-safe plain text into a terminal
@@ -91,25 +66,6 @@ func LiteralBox(text string, width int) FixedBox {
 	return FixedBox{Rows: rows, Width: columns, Baseline: len(rows) - 1}
 }
 
-// wrapIndented keeps continuation rows aligned with their source row's indent.
-// Wrapping affects presentation only; the JSON/code source remains unchanged.
-func wrapIndented(text string, width int) string {
-	rows := strings.Split(text, "\n")
-	for i, row := range rows {
-		if ansi.StringWidth(row) <= width {
-			continue
-		}
-		plain := ansi.Strip(row)
-		indent := len(plain) - len(strings.TrimLeft(plain, " "))
-		body := ansi.Cut(row, indent, ansi.StringWidth(row))
-		prefix := strings.Repeat(" ", min(indent, width/2))
-		body = ansi.Wrap(body, width-len(prefix), "")
-		rows[i] = prefix + strings.ReplaceAll(body, "\n", "\n"+prefix)
-	}
-	// Wrap can leave styled trailing padding wider than very narrow viewports.
-	return ansi.Hardwrap(strings.Join(rows, "\n"), width, true)
-}
-
 // TerminalBriefing renders portable Markdown as one row, preserving generated
 // highlight styles and clipping by terminal cells. Inspectors retain full text.
 // colors=false returns plain text; width is terminal cells, clamped to at least one.
@@ -120,11 +76,9 @@ func TerminalBriefing(input string, width int, colors bool) (string, error) {
 	}
 	var parts []string
 	for _, row := range strings.Split(text, "\n") {
-		if strings.TrimSpace(ansi.Strip(row)) != "" {
-			// Glamour pads code blocks with styled spaces. Trim by cells while
-			// retaining the SGR sequences needed by command highlighting.
-			plain := ansi.Strip(row)
-			left := len([]rune(plain)) - len([]rune(strings.TrimLeft(plain, " ")))
+		plain := ansi.Strip(row)
+		if strings.TrimSpace(plain) != "" {
+			left := ansi.StringWidth(plain) - ansi.StringWidth(strings.TrimLeft(plain, " "))
 			parts = append(parts, ansi.Cut(row, left, ansi.StringWidth(strings.TrimRight(plain, " "))))
 		}
 	}

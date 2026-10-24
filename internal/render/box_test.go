@@ -18,7 +18,7 @@ func plainBoxRows(rows []string) []string {
 }
 
 func boxItem(rows []string, width, baseline int) flowItem {
-	return flowItem{preferred: width, box: func(int) FixedBox {
+	return flowItem{box: func(int) FixedBox {
 		return FixedBox{Rows: rows, Width: width, Baseline: baseline}
 	}}
 }
@@ -144,7 +144,7 @@ func TestFlowTokensCanonicalSGR(t *testing.T) {
 		"J": {},
 	}
 	seen := 0
-	for _, token := range flowTokens(input) {
+	for token := range flowTokens(input) {
 		var style uv.Style
 		var parser ansi.Parser
 		parser.SetParamsSize(32)
@@ -178,7 +178,7 @@ func TestFlowTokensStyleGrowthIsLinear(t *testing.T) {
 		// No full resets: colors and intensity are repeatedly overwritten.
 		input := strings.Repeat("\x1b[1;31ma \x1b[22;32mb ", count)
 		size := 0
-		for _, token := range flowTokens(input) {
+		for token := range flowTokens(input) {
 			size += len(token.text)
 			if len(token.text) > 64 {
 				t.Fatalf("%d repetitions: unbounded token prefix (%d bytes)", count, len(token.text))
@@ -201,7 +201,8 @@ func BenchmarkFlowTokensRepeatedStyles(b *testing.B) {
 			b.SetBytes(int64(len(input)))
 			b.ReportAllocs()
 			for b.Loop() {
-				flowTokens(input)
+				for range flowTokens(input) {
+				}
 			}
 		})
 	}

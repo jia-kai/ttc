@@ -109,16 +109,20 @@ func (c *frontendController) prepare() (bool, error) {
 
 func (c *frontendController) handleRenderResult(result renderReply) {
 	if result.source {
-		if c.modal.loading != nil && c.modal.loading.snapshot.ID == result.key && c.modal.loading.generation == c.frontend.Runtime.Generation() {
+		if c.modal.loading != nil && c.modal.loading.key == result.key && c.modal.loading.generation == c.frontend.Runtime.Generation() {
+			load := c.modal.loading
+			load.cancel()
 			if result.err != nil {
 				c.modal.window.Text = "Image preview failed: " + result.err.Error()
 			} else {
-				c.modal.preview = newImagePreview(c.modal.loading.snapshot, result.pixels, c.frontend.Runtime.ImageClickPending(result.key), c.renderer.cellWidth, c.renderer.cellHeight)
-				c.attributeWindow(&c.modal.preview.Window, c.modal.loading.snapshot.Actor)
-				inspection, err := c.history.ReadInspection(c.ctx, c.modal.loading.entryID)
-				c.modal.preview.detailText = inspection.Text
-				if err != nil {
-					c.modal.preview.detailText = "Inspection failed: " + err.Error()
+				c.modal.preview = newImagePreview(load.source, result.pixels, load.entryID > 0 && c.frontend.Runtime.ImageClickPending(load.source.id), c.renderer.cellWidth, c.renderer.cellHeight)
+				c.attributeWindow(&c.modal.preview.Window, load.actor)
+				if load.entryID > 0 {
+					inspection, err := c.history.ReadInspection(c.ctx, load.entryID)
+					c.modal.preview.detailText = inspection.Text
+					if err != nil {
+						c.modal.preview.detailText = "Inspection failed: " + err.Error()
+					}
 				}
 				c.modal.window = &c.modal.preview.Window
 			}
@@ -296,9 +300,9 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 			if event.Kind == "tool" {
 				c.inspectExecution(event.EntryID)
 			} else {
-				c.modal.window.JobID, c.modal.window.Detail, c.modal.window.Text = event.JobID, event.Detail, event.Detail
-				if c.modal.window.JobID != "" && !c.commandBusy {
-					c.modal.window.Text = c.frontend.Runtime.JobDetail(c.modal.window.JobID, c.modal.window.Detail)
+				c.modal.window.JobID, c.modal.window.Detail = event.JobID, event.Detail
+				if c.modal.window.JobID == "" {
+					c.modal.window.Text = event.Detail
 				}
 			}
 		}
@@ -430,7 +434,7 @@ func (c *frontendController) receive() (next frontendSubmission, stop bool, err 
 		case <-c.ctx.Done():
 			return c.receiveCanceled()
 		case ev, ok := <-c.keys:
-			next = c.receiveScreenEvent(ev, ok)
+			next, err = c.receiveScreenEvent(ev, ok)
 		case event := <-c.frontend.Events:
 			c.flushPaste()
 			err = c.handleRuntimeEvent(event)
@@ -453,16 +457,19 @@ func (c *frontendController) receiveCanceled() (frontendSubmission, bool, error)
 	return frontendSubmission{}, true, c.ctx.Err()
 }
 
-func (c *frontendController) receiveScreenEvent(ev tcell.Event, ok bool) frontendSubmission {
+func (c *frontendController) receiveScreenEvent(ev tcell.Event, ok bool) (frontendSubmission, error) {
 	if !ok {
 		c.keys = nil
-		return frontendSubmission{}
+		return frontendSubmission{}, nil
+	}
+	if failure, ok := ev.(*tcell.EventError); ok {
+		return frontendSubmission{}, fmt.Errorf("terminal input: %w", failure)
 	}
 	if c.editing {
-		return frontendSubmission{}
+		return frontendSubmission{}, nil
 	}
 	c.dirty = true
-	return c.handleScreenEvent(ev)
+	return c.handleScreenEvent(ev), nil
 }
 
 func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, err error) {
@@ -475,9 +482,8 @@ func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, e
 			c.add("Warning: tmux image recovery observer stopped.", 0)
 			return next, false, nil
 		}
-		c.g.Refresh()
+		refreshTerminalGraphics(c.screen, c.g, c.editorSuspended)
 		if !c.editorSuspended {
-			c.screen.Sync()
 			c.dirty = true
 		}
 	case update, ok := <-c.modelUpdates:
@@ -521,7 +527,8 @@ func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, e
 		next.text = v.text
 		next.ready = true
 	case ev, ok := <-c.keys:
-		return c.receiveScreenEvent(ev, ok), false, nil
+		next, err = c.receiveScreenEvent(ev, ok)
+		return next, false, err
 	case v := <-c.workspaceUpdates:
 		c.sidebar.workspace = v
 	case <-c.ticker.C:

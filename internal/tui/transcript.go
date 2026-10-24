@@ -485,6 +485,9 @@ func (t *transcript) measure(i int) {
 	if v.speaker != "" {
 		for row := range b.rows {
 			b.rows[row].text = strings.Repeat(" ", indent) + b.rows[row].text
+			for asset := range b.rows[row].assets {
+				b.rows[row].assets[asset].column += indent
+			}
 		}
 		if first {
 			label, err := render.TerminalBriefing("**"+render.Inline(v.speaker)+"**", max(1, t.width-badgeWidth), true)
@@ -498,6 +501,9 @@ func (t *transcript) measure(i int) {
 		}
 	} else if badge != "" {
 		b.rows[0].text = ansi.Truncate(badge+" "+b.rows[0].text, max(1, t.width), "…")
+		for asset := range b.rows[0].assets {
+			b.rows[0].assets[asset].column += badgeWidth
+		}
 		b.rows[0].styled = true
 	}
 	if v.turnTime != "" {

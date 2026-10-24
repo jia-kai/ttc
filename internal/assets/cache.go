@@ -35,29 +35,44 @@ func Decode(data []byte) (image.Image, error) {
 
 // Read snapshots a regular PNG/JPEG/GIF using bounded reads, even if it grows.
 func Read(path string) ([]byte, image.Image, error) {
-	// A FIFO must not block before descriptor validation. Linux ignores
-	// O_NONBLOCK for regular files; validate the opened descriptor after it.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !st.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf(prompts.ImageNotRegularFile)
-	}
-	if st.Size() > MaxBytes {
-		return nil, nil, fmt.Errorf(prompts.ImageTooLarge, MaxBytes)
-	}
-	b, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
+	b, err := ReadEncoded(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	m, err := Decode(b)
 	return b, m, err
+}
+
+// ReadEncoded reads a regular file without decoding its pixels. It rejects files
+// larger than MaxBytes, including files that grow during the read. Call Decode
+// before using uncached data as an image; this separation allows content-keyed
+// thumbnail cache hits to avoid decoding the original image again.
+func ReadEncoded(path string) ([]byte, error) {
+	// A FIFO must not block before descriptor validation. Linux ignores
+	// O_NONBLOCK for regular files; validate the opened descriptor after it.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf(prompts.ImageNotRegularFile)
+	}
+	if st.Size() > MaxBytes {
+		return nil, fmt.Errorf(prompts.ImageTooLarge, MaxBytes)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > MaxBytes {
+		return nil, fmt.Errorf(prompts.ImageTooLarge, MaxBytes)
+	}
+	return b, nil
 }
 
 // Cache serializes render creation while sharing disk storage and eviction with
@@ -174,16 +189,40 @@ func (w contextWriter) Write(p []byte) (int, error) {
 }
 
 // Resize fits an image inside pixel bounds, preserving aspect ratio and transparency.
-// Nearest-neighbor sampling keeps the implementation and memory bounds small.
-func Resize(m image.Image, maxWidth, maxHeight int) image.Image {
+// Nearest-neighbor sampling checks cancellation between output rows. An image
+// already inside the bounds is returned unchanged; callers must not mutate it.
+func Resize(ctx context.Context, m image.Image, maxWidth, maxHeight int) (image.Image, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m == nil || m.Bounds().Empty() || maxWidth < 1 || maxHeight < 1 {
+		return nil, fmt.Errorf("image and positive pixel bounds are required")
+	}
 	b := m.Bounds()
-	scale := min(float64(max(1, maxWidth))/float64(b.Dx()), float64(max(1, maxHeight))/float64(b.Dy()), 1)
+	if b.Dx() <= maxWidth && b.Dy() <= maxHeight {
+		return m, nil
+	}
+	scale := min(float64(maxWidth)/float64(b.Dx()), float64(maxHeight)/float64(b.Dy()), 1)
 	w, h := max(1, int(float64(b.Dx())*scale)), max(1, int(float64(b.Dy())*scale))
-	out := image.NewNRGBA(image.Rect(0, 0, w, h))
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
+	fast, _ := m.(image.RGBA64Image)
 	for y := range h {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		sy := b.Min.Y + y*b.Dy()/h
 		for x := range w {
-			out.Set(x, y, m.At(b.Min.X+x*b.Dx()/w, b.Min.Y+y*b.Dy()/h))
+			sx := b.Min.X + x*b.Dx()/w
+			var r, g, blue, a uint32
+			if fast != nil {
+				c := fast.RGBA64At(sx, sy)
+				r, g, blue, a = uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
+			} else {
+				r, g, blue, a = m.At(sx, sy).RGBA()
+			}
+			p := out.Pix[out.PixOffset(x, y):]
+			p[0], p[1], p[2], p[3] = byte(r>>8), byte(g>>8), byte(blue>>8), byte(a>>8)
 		}
 	}
-	return out
+	return out, nil
 }

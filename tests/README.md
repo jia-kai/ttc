@@ -189,9 +189,16 @@ python3 tests/kitty_visual.py      # reuse the current ./ttc binary
 python3 tests/kitty_visual.py --tmux # private tmux; Kitty identity cleared
 python3 tests/kitty_visual.py --offline --tmux # palette/image/math and highlighted search
 python3 tests/kitty_visual.py --question-only # offline native-cursor regression; also supports --tmux
+python3 tests/kitty_markdown.py    # standalone document layout, graphics, scrolling and resize
+python3 tests/kitty_markdown.py --tmux # same viewer through private tmux
 python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
 python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
+
+`kitty_markdown.py` checks `ttc md FILE` without an agent session, including
+loose/nested lists, quoted math, local images and their enlarged previews,
+tables, full-width presentation and all exit keys. Both Kitty suites share
+isolated terminal startup and artifact capture.
 
 Kitty 0.49.2 was verified; the driver requires `kitten @ screenshot`. Most PNGs
 are diagnostic artifacts; tmux-window-return regressions use Pillow to compare

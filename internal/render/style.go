@@ -23,6 +23,8 @@ func markdownStyle() glamouransi.StyleConfig {
 	style.Link.Color, style.LinkText.Color = color(BlueColor), color(BlueColor)
 	style.Image.Color, style.ImageText.Color = color(BlueColor), color(MutedColor)
 	style.Code.Color, style.Code.BackgroundColor = color(BlueColor), nil
+	codeIndent := uint(2)
+	style.CodeBlock.Indent = &codeIndent
 	style.CodeBlock.Theme = ""
 	plain := func(c string) glamouransi.StylePrimitive { return glamouransi.StylePrimitive{Color: color(c)} }
 	style.CodeBlock.Chroma = &glamouransi.Chroma{

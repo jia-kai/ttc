@@ -8,10 +8,8 @@ terminal text, and complete failure logs.
 from pathlib import Path
 import argparse
 import json
-import os
 import re
 import shutil
-import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -21,6 +19,7 @@ import unicodedata
 
 
 from scratch import private_scratch
+from kitty_terminal import KittyTerminal
 from child_fixture import CHILD_PREFIX, CHILD_TAIL, child_response_row, child_response_target, compact_rows, demo_completed, verify_child_answers
 from kitty_composer import check_composer, configure_editor
 from kitty_question import check_question_cursor
@@ -49,37 +48,15 @@ def main():
         args.offline = True
     scratch = private_scratch()
     root = Path(tempfile.mkdtemp(prefix='kitty-visual-', dir=scratch))
-    sock = root / 'control.sock'
-    env = dict(os.environ, LIBGL_ALWAYS_SOFTWARE='1')
-    env.pop('TMUX', None)  # This is a new Kitty PTY, outside the caller's tmux.
-    env.pop('TMUX_PANE', None)
-    # Inherited tmux identity can override Kitty's client identification in a
-    # newly launched private tmux, disabling automatic graphics probing.
-    env.pop('TERM_PROGRAM', None)
-    env.pop('TERM_PROGRAM_VERSION', None)
-    env.pop('NO_COLOR', None)  # Capture the normal colored UI, independent of CI preferences.
+    kitty = KittyTerminal(root, tmux=args.tmux)
+    env = kitty.env
     configure_editor(env, root)
-    read_fd, write_fd = os.pipe()
-    xvfb_log = (root / 'xvfb.log').open('wb')
-    kitty_log = (root / 'kitty.log').open('wb')
-    xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '1280x900x24',
-                             '-nolisten', 'tcp'], pass_fds=[write_fd], stdout=xvfb_log, stderr=xvfb_log)
-    os.close(write_fd)
-    terminal = None
-    tmux_sock = root / 'tmux.sock'
-    tmux_config = root / 'tmux.conf'
-    tmux_config.write_text('set -g default-terminal tmux-256color\nset -g allow-passthrough on\nset -as terminal-features ",xterm-kitty:RGB"\n')
+    tmux_sock = kitty.tmux_sock
+    remote = kitty.remote
+    capture = kitty.capture
     last_text = ''
     try:
-        # displayfd reports readiness and an available display; no fixed display
-        # number or interference with the user's desktop/session is needed.
-        import select
-        if not select.select([read_fd], [], [], 10)[0]:
-            raise RuntimeError('Xvfb did not become ready')
-        display = os.read(read_fd, 64).decode().strip()
-        if not display.isdigit():
-            raise RuntimeError('Xvfb failed to create a display; see xvfb.log')
-        env['DISPLAY'] = ':' + display
+        kitty.start()
         binary = str(Path(args.binary).resolve())
         if args.offline:
             fixture = Path(__file__).with_name('fixtures') / 'research'
@@ -112,33 +89,7 @@ def main():
         else:
             command = ['python3', str(Path(__file__).with_name('demo.py').resolve()), '--interactive',
                        '--visual-hold', '--binary', binary, '--artifacts-file', str(root / 'demo.json')]
-        if args.tmux:
-            command = ['tmux', '-S', str(tmux_sock), '-f', str(tmux_config), 'new-session',
-                       'env', '-u', 'KITTY_WINDOW_ID',
-                       'COLORTERM=truecolor', *command]
-        terminal = subprocess.Popen([
-            'kitty', '--config', 'NONE', '-o', 'linux_display_server=x11',
-            '-o', 'allow_remote_control=socket-only', '-o', 'enable_audio_bell=no',
-            '-o', 'remember_window_size=no', '-o', 'initial_window_width=120c',
-            '-o', 'initial_window_height=38c', '-o', 'font_size=11',
-            '--listen-on', f'unix:{sock}', *command,
-        ], env=env, stdout=kitty_log, stderr=kitty_log, start_new_session=True)
-
-        def remote(command, *arguments, data=None):
-            result = subprocess.run(['kitten', '@', '--to', f'unix:{sock}', command, *arguments],
-                                    env=env, input=data, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, timeout=10)
-            with (root / 'remote.log').open('ab') as log:
-                log.write((command + ' ' + repr(arguments) + '\n').encode())
-                log.write(result.stdout + result.stderr)
-            result.check_returncode()
-            return result.stdout.decode()
-
-        deadline = time.monotonic() + 15
-        while not sock.exists():
-            if terminal.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError('Kitty did not create its control socket')
-            time.sleep(0.05)
+        terminal = kitty.launch(command)
 
         def wait(needle, timeout=15, present=True):
             nonlocal last_text
@@ -175,10 +126,6 @@ def main():
             send(f'\x1b[<{button};{x};{y}M')
             if button == 0:
                 send(f'\x1b[<0;{x};{y}m')
-
-        def capture(name):
-            remote('screenshot', str(root / (name + '.png')))
-            (root / (name + '.txt')).write_text(remote('get-text', '--extent', 'screen'))
 
         def window_return(name, reset=False):
             if not args.tmux:
@@ -709,25 +656,7 @@ def main():
         print(f'Failure context saved: {root}')
         raise
     finally:
-        os.close(read_fd)
-        if terminal is not None and terminal.poll() is None:
-            os.killpg(terminal.pid, signal.SIGTERM)
-            try:
-                terminal.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(terminal.pid, signal.SIGKILL)
-                terminal.wait()
-        if args.tmux and tmux_sock.exists():
-            subprocess.run(['tmux', '-S', str(tmux_sock), 'kill-server'],
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-        xvfb.terminate()
-        try:
-            xvfb.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            xvfb.kill()
-            xvfb.wait()
-        xvfb_log.close()
-        kitty_log.close()
+        kitty.close()
 
 
 if __name__ == '__main__':

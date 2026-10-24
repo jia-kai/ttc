@@ -7,7 +7,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func fixtureMath(tex string, display bool, width int) FixedBox {
+func fixtureMath(asset Asset, width int) FixedBox {
+	if asset.Kind != MathAsset {
+		return LiteralAsset(asset, width)
+	}
+	tex := asset.Source
 	height := 1
 	if strings.Contains(tex, "tall") {
 		height = 3
@@ -20,21 +24,16 @@ func fixtureMath(tex string, display bool, width int) FixedBox {
 	return FixedBox{Rows: rows, Width: columns, Baseline: height - 1}
 }
 
-func TestMathTableCarrierPreservesStructureAndOrdering(t *testing.T) {
+func TestMathTableGridPreservesStructureAndOrdering(t *testing.T) {
 	source := "Before table.\n\n| **Formula** $tall$ | Meaning |\n| :--- | ---: |\n| $tall$ then $x$ | **bold** and `code` |\n| $$x$$ | [notes](notes.md) 界 |\n| following | intact |\n\nAfter table."
 	for _, width := range []int{2, 8, 24, 80} {
-		text, err := TerminalMath(source, width, fixtureMath)
+		text, err := TerminalWithAssets(source, width, fixtureMath)
 		if err != nil {
 			t.Fatal(err)
 		}
 		plain := ansi.Strip(text)
 		if strings.Index(plain, "Before") > strings.Index(plain, "@") && width >= 24 {
 			t.Fatal("table escaped document buffer", plain)
-		}
-		for _, r := range plain {
-			if r >= 0xe000 && r <= 0xf8ff {
-				t.Fatalf("leaked placeholder %U: %s", r, plain)
-			}
 		}
 		for _, row := range strings.Split(text, "\n") {
 			if ansi.StringWidth(row) > width {
@@ -66,7 +65,7 @@ func TestMathBoxesInContainersAndProse(t *testing.T) {
 	} {
 		t.Run(source, func(t *testing.T) {
 			for _, width := range []int{8, 24, 80} {
-				text, err := TerminalMath(source, width, fixtureMath)
+				text, err := TerminalWithAssets(source, width, fixtureMath)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -99,7 +98,7 @@ func TestLiteralMathTableKeepsTeXAndCode(t *testing.T) {
 	}
 }
 
-func TestMathCarrierRetainsInlineAndContainerSemantics(t *testing.T) {
+func TestMathGridRetainsInlineAndContainerSemantics(t *testing.T) {
 	for _, test := range []struct {
 		source     string
 		want       string
@@ -110,7 +109,7 @@ func TestMathCarrierRetainsInlineAndContainerSemantics(t *testing.T) {
 		{"1. before $tall$ after", "before @@@@@@ after", "1."},
 		{"- [x] before $tall$ after", "before @@@@@@ after", "[✓]"},
 	} {
-		text, err := TerminalMath(test.source, 80, fixtureMath)
+		text, err := TerminalWithAssets(test.source, 80, fixtureMath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -122,7 +121,7 @@ func TestMathCarrierRetainsInlineAndContainerSemantics(t *testing.T) {
 			t.Fatalf("lost or repeated list marker %q: %s", test.decoration, plain)
 		}
 	}
-	text, err := TerminalMath("before\n$tall$\nafter", 80, fixtureMath)
+	text, err := TerminalWithAssets("before\n$tall$\nafter", 80, fixtureMath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +130,7 @@ func TestMathCarrierRetainsInlineAndContainerSemantics(t *testing.T) {
 	}
 }
 
-func TestMathTokensDoNotEscapeThroughLinks(t *testing.T) {
+func TestMathURLsRemainLiteral(t *testing.T) {
 	for _, source := range []string{
 		"[notes](https://example.test/$path$)",
 		"[value $x$](https://example.test/$path$)",
@@ -139,30 +138,25 @@ func TestMathTokensDoNotEscapeThroughLinks(t *testing.T) {
 		"<https://example.test/$path$> and [notes](https://example.test/$path$) $x$",
 		"Term $x$\n: Definition",
 	} {
-		text, err := TerminalMath(source, 80, fixtureMath)
+		text, err := TerminalWithAssets(source, 80, fixtureMath)
 		if err != nil {
 			t.Fatal(err)
 		}
 		plain := ansi.Strip(text)
-		for _, r := range plain {
-			if r >= 0xe000 && r <= 0xf8ff {
-				t.Fatalf("token in link output: %s", plain)
-			}
-		}
 		if strings.Contains(source, "example") && strings.Count(plain, "$path$") < strings.Count(source, "$path$") {
 			t.Fatalf("URL was treated as math: %s", plain)
 		}
 	}
 }
 
-func TestMathCarriersPreserveLooseListParagraphs(t *testing.T) {
+func TestMathGridPreservesLooseListParagraphs(t *testing.T) {
 	for _, source := range []string{
 		"- first $x$\n\n  second $tall$ after\n\n  last tail",
 		"- first plain\n\n  second $tall$ after\n\n  last tail",
 		"- [x] first $x$\n\n  second $tall$ after\n\n  last tail",
 		"> - first $x$\n>\n>   second $tall$ after\n>\n>   last tail",
 	} {
-		text, err := TerminalMath(source, 80, fixtureMath)
+		text, err := TerminalWithAssets(source, 80, fixtureMath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +170,7 @@ func TestMathCarriersPreserveLooseListParagraphs(t *testing.T) {
 			t.Fatal("lost tall formula", plain)
 		}
 	}
-	text, err := TerminalMath("Term\n: definition $tall$ after", 80, fixtureMath)
+	text, err := TerminalWithAssets("Term\n: definition $tall$ after", 80, fixtureMath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,14 +179,14 @@ func TestMathCarriersPreserveLooseListParagraphs(t *testing.T) {
 	}
 }
 
-func TestMathMarkersReserveDecodedEntities(t *testing.T) {
+func TestPrintableEntitiesPreservedAlongsideMath(t *testing.T) {
 	source := "&#xE000; before $x$ after\n\n&#xE001; LOST TAIL"
-	text, err := TerminalMath(source, 80, fixtureMath)
+	text, err := TerminalWithAssets(source, 80, fixtureMath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plain := ansi.Strip(text)
 	if strings.Count(plain, "@@@@@@") != 1 || !strings.Contains(plain, "LOST TAIL") || !strings.ContainsRune(plain, 0xe000) || !strings.ContainsRune(plain, 0xe001) {
-		t.Fatalf("numeric entity collided with internal token:\n%s", plain)
+		t.Fatalf("lost printable entities or content:\n%s", plain)
 	}
 }

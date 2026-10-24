@@ -2,20 +2,22 @@ package tui
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"html"
 	"image"
 	"math"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
 	"ttc/internal/render"
-	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v3"
 )
@@ -31,11 +33,15 @@ type displayRow struct {
 type placedImage struct {
 	key, path, tex string
 	columns, rows  int
+	column         int  // Exact start cell in this display row, after container prefixes.
+	local          bool // Mutable Markdown source; thumbnail cache keys must include its bytes.
+	clickable      bool // Loaded local image; only this row's exact span opens its preview.
 }
 type renderTask struct {
 	key, path, tex string
 	pixels         int
 	source         bool
+	local          bool
 	ctx            context.Context
 }
 type renderReply struct {
@@ -53,6 +59,8 @@ var errViewportImageMemory = errors.New("viewport image memory limit exceeded")
 // Decoded thumbnails and the formula LRU share a 32 MiB budget. Kitty uploads
 // remain viewport-only, and nonvisible worker results are discarded.
 type imageRenderer struct {
+	baseDir               string
+	sourceSerial          uint64
 	graphics              *graphics.Kitty
 	cellWidth, cellHeight int
 	cellFallback          bool // A warning has been shown for this fallback interval.
@@ -64,6 +72,7 @@ type imageRenderer struct {
 	visible               map[string]bool
 	imageBytes            int // Visible thumbnail bytes; formula bytes belong to mathCache.
 	mathCache             *mathRasterCache
+	markdown              markdownCache // Parsed transcript chunks, independent of raster revisions.
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	wg                    sync.WaitGroup
@@ -73,7 +82,7 @@ type imageRenderer struct {
 	pendingClick          func(string) bool
 }
 
-func newImageRenderer(ctx context.Context, g *graphics.Kitty) (*imageRenderer, error) {
+func newImageRenderer(ctx context.Context, g *graphics.Kitty, baseDir string) (*imageRenderer, error) {
 	cache, err := assets.Default()
 	if err != nil {
 		return nil, err
@@ -81,7 +90,7 @@ func newImageRenderer(ctx context.Context, g *graphics.Kitty) (*imageRenderer, e
 	ctx, cancel := context.WithCancel(ctx)
 	// Hand decoded images directly to the UI; supersampled replies must not
 	// accumulate in a buffered queue outside the viewport's memory accounting.
-	r := &imageRenderer{graphics: g, cellWidth: 8, cellHeight: 16, tasks: make(chan renderTask, 32), sources: make(chan renderTask, 1), results: make(chan renderReply), pending: map[string]context.CancelFunc{}, ready: map[string]renderReply{}, visible: map[string]bool{}, ctx: ctx, cancel: cancel}
+	r := &imageRenderer{baseDir: baseDir, graphics: g, cellWidth: 8, cellHeight: 16, tasks: make(chan renderTask, 32), sources: make(chan renderTask, 1), results: make(chan renderReply), pending: map[string]context.CancelFunc{}, ready: map[string]renderReply{}, visible: map[string]bool{}, ctx: ctx, cancel: cancel}
 	r.wg.Add(1)
 	go r.work(cache)
 	return r, nil
@@ -177,6 +186,29 @@ func (r *imageRenderer) work(cache *assets.Cache) {
 		if err = task.ctx.Err(); err == nil {
 			if task.source {
 				_, pixels, err = assets.Read(task.path)
+			} else if task.local {
+				var data []byte
+				data, err = assets.ReadEncoded(task.path)
+				if err == nil {
+					err = task.ctx.Err()
+				}
+				if err == nil {
+					checksum := sha256.Sum256(data)
+					key := assets.Key("thumbnail-v1", fmt.Sprintf("%x", checksum))
+					pixels, err = cache.Get(task.ctx, key, func(ctx context.Context) (image.Image, error) {
+						if err := ctx.Err(); err != nil {
+							return nil, err
+						}
+						original, err := assets.Decode(data)
+						if err != nil {
+							return nil, err
+						}
+						if err := ctx.Err(); err != nil {
+							return nil, err
+						}
+						return assets.Resize(ctx, original, 512, 320)
+					})
+				}
 			} else {
 				pixels, err = cache.Get(task.ctx, task.key, func(ctx context.Context) (image.Image, error) {
 					if task.path != "" {
@@ -184,7 +216,10 @@ func (r *imageRenderer) work(cache *assets.Cache) {
 						if err != nil {
 							return nil, err
 						}
-						return assets.Resize(m, 512, 320), nil
+						if err := ctx.Err(); err != nil {
+							return nil, err
+						}
+						return assets.Resize(ctx, m, 512, 320)
 					}
 					if mathRenderer == nil {
 						return nil, fmt.Errorf("MathJax backend unavailable")
@@ -204,12 +239,25 @@ func (r *imageRenderer) work(cache *assets.Cache) {
 		}
 	}
 }
-func (r *imageRenderer) loadSource(v session.ImageSnapshot) error {
+
+type imageSource struct{ id, path, file string }
+
+type imageLoad struct {
+	source imageSource
+	key    string
+	cancel context.CancelFunc
+}
+
+func (r *imageRenderer) loadSource(source imageSource) (*imageLoad, error) {
+	r.sourceSerial++
+	ctx, cancel := context.WithCancel(r.ctx)
+	load := &imageLoad{source: source, key: fmt.Sprintf("source:%d", r.sourceSerial), cancel: cancel}
 	select {
-	case r.sources <- renderTask{key: v.ID, path: v.Snapshot, source: true}:
-		return nil
+	case r.sources <- renderTask{key: load.key, path: source.file, source: true, ctx: ctx}:
+		return load, nil
 	default:
-		return fmt.Errorf("image preview is already loading")
+		cancel()
+		return nil, fmt.Errorf("image preview is already loading")
 	}
 }
 func (r *imageRenderer) close() error { r.cancel(); r.wg.Wait(); return r.graphics.Close() }
@@ -218,6 +266,23 @@ func imageBytes(m image.Image) int {
 		return 0
 	}
 	return m.Bounds().Dx() * m.Bounds().Dy() * 4
+}
+
+func imageAt(assets []placedImage, column int) *placedImage {
+	for _, asset := range assets {
+		if asset.clickable && column >= asset.column && column < asset.column+asset.columns {
+			return &asset
+		}
+	}
+	return nil
+}
+
+func (w *Window) imageAt(column, row int) *placedImage {
+	row += w.Scroll
+	if row < 0 || row >= len(w.assets) {
+		return nil
+	}
+	return imageAt(w.assets[row].assets, column)
 }
 func (r *imageRenderer) accept(reply renderReply) bool {
 	if reply.backend != "" {
@@ -275,7 +340,7 @@ func (r *imageRenderer) request(p placedImage) {
 		return
 	}
 	ctx, cancel := context.WithCancel(r.ctx)
-	task := renderTask{key: p.key, path: p.path, tex: p.tex, pixels: max(12, r.cellHeight-2), ctx: ctx}
+	task := renderTask{key: p.key, path: p.path, tex: p.tex, local: p.local, pixels: max(12, r.cellHeight-2), ctx: ctx}
 	select {
 	case r.tasks <- task:
 		r.pending[p.key] = cancel
@@ -304,9 +369,8 @@ func (r *imageRenderer) layout(v line, width int) []displayRow {
 		if reply.pixels == nil {
 			return append(out, displayRow{text: "Loading image…", assets: []placedImage{p}})
 		}
-		p.columns, p.rows = graphics.Geometry(reply.pixels, r.cellWidth, r.cellHeight, min(width, 48), 10)
-		grid, _ := r.graphics.Rows(p.key, p.columns, p.rows)
-		for _, row := range grid {
+		p, box := r.rasterBox(p, reply.pixels, min(width, 48), 1, 10)
+		for _, row := range box.Rows {
 			out = append(out, displayRow{text: row, assets: []placedImage{p}})
 		}
 		return out
@@ -314,50 +378,102 @@ func (r *imageRenderer) layout(v line, width int) []displayRow {
 	if !v.markdown || v.brief {
 		return rowsOf(layoutText(v, width))
 	}
+	return r.layoutMarkdown(r.markdown.parse(v.text), v.text, width)
+}
+
+// localImagePath resolves URI-escaped local paths without filesystem IO.
+func localImagePath(baseDir, source string) (string, bool) {
+	u, err := url.Parse(source)
+	if err != nil || u.Opaque != "" || u.Path == "" {
+		return "", false
+	}
+	if u.Scheme != "" && u.Scheme != "file" || u.Host != "" && (u.Scheme != "file" || u.Host != "localhost") {
+		return "", false
+	}
+	path := filepath.FromSlash(u.Path)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+	return filepath.Clean(path), true
+}
+
+func (r *imageRenderer) rasterBox(p placedImage, pixels image.Image, width, scale, height int) (placedImage, render.FixedBox) {
+	p.columns, p.rows = graphics.Geometry(pixels, r.cellWidth*scale, r.cellHeight*scale, max(1, min(width, 200)), height)
+	grid, _ := r.graphics.Rows(p.key, p.columns, p.rows)
+	return p, render.FixedBox{Rows: grid, Width: p.columns, Baseline: p.rows - 1}
+}
+
+// assetBox measures cached pixels or a readable placeholder. Only the worker
+// reads sources, after ensure selects assets intersecting the viewport.
+func (r *imageRenderer) assetBox(asset render.Asset, width int) (placedImage, render.FixedBox) {
+	var p placedImage
+	var reply renderReply
+	label := ""
+	if asset.Kind == render.ImageAsset {
+		path, local := localImagePath(r.baseDir, asset.Source)
+		if !local {
+			return p, render.LiteralAsset(asset, width)
+		}
+		p = placedImage{key: assets.Key("local-thumbnail-v1", path), path: path, local: true}
+		reply = r.ready[p.key]
+		if reply.pixels != nil {
+			p.clickable = true
+			return r.rasterBox(p, reply.pixels, width, 1, 10)
+		}
+		label = "[loading image: " + asset.Alt + " (" + asset.Source + ")]"
+		if reply.err != nil {
+			label = "[image unavailable: " + asset.Alt + " (" + asset.Source + "): " + reply.err.Error() + "]"
+		}
+	} else {
+		p = placedImage{key: assets.Key("mathjax-hires-v1", r.backend, asset.Source, fmt.Sprint(r.cellHeight), fmt.Sprint(assets.MathRasterScale)), tex: asset.Source}
+		reply = r.cachedMath(p.key)
+		if reply.pixels != nil {
+			return r.rasterBox(p, reply.pixels, width, assets.MathRasterScale, 12)
+		}
+		label = asset.Source
+		if reply.err != nil || r.backendError != nil {
+			label = "[math unavailable] " + label
+		}
+	}
+	box := render.LiteralBox(label, width)
+	p.columns, p.rows = box.Width, len(box.Rows)
+	return p, box
+}
+
+// layoutMarkdown reflows an already parsed document using current raster boxes.
+func (r *imageRenderer) layoutMarkdown(document *render.Document, source string, width int) []displayRow {
 	type replacement struct {
 		asset placedImage
 		row   string
 	}
 	replacements := map[rune]replacement{}
 	occupied := map[rune]bool{}
-	for _, r := range html.UnescapeString(v.text) {
+	for _, r := range html.UnescapeString(source) {
 		if r >= 0xf0000 && r <= 0x10fffd {
 			occupied[r] = true
 		}
 	}
-	// Keep graphics-row tokens separate from the Markdown adapter's BMP
-	// carriers. Supplementary private-use scalars are single terminal cells.
+	// Single-cell private-use tokens associate atomic layout rows with their
+	// graphics assets. Restore Kitty cells after Markdown positioning completes.
 	marker := rune(0xf0000)
 	var tokenError error
-	text, err := render.TerminalMath(v.text, width, func(tex string, block bool, available int) render.FixedBox {
-		p := placedImage{key: assets.Key("mathjax-hires-v1", r.backend, tex, fmt.Sprint(r.cellHeight), fmt.Sprint(assets.MathRasterScale)), tex: tex}
-		reply := r.cachedMath(p.key)
-		var grid []string
-		if reply.pixels != nil {
-			// Measure the supersampled bitmap in logical terminal pixels. The
-			// upload filters it to this cell grid's measured pixel dimensions.
-			p.columns, p.rows = graphics.Geometry(reply.pixels, r.cellWidth*assets.MathRasterScale, r.cellHeight*assets.MathRasterScale, max(1, min(available, 200)), 12)
-			grid, _ = r.graphics.Rows(p.key, p.columns, p.rows)
-		} else {
-			literal := strings.Join(strings.Fields(render.Clean(tex)), " ")
-			if reply.err != nil || r.backendError != nil {
-				literal = "[math unavailable] " + literal
-			}
-			fallback := render.LiteralBox(literal, available)
-			p.columns, p.rows = fallback.Width, len(fallback.Rows)
-			grid = fallback.Rows
+	text, err := document.Render(width, func(asset render.Asset, available int) render.FixedBox {
+		p, box := r.assetBox(asset, available)
+		if p.key == "" {
+			return box
 		}
+		grid := box.Rows
 		tokens := make([]string, len(grid))
 		for y, row := range grid {
 			for occupied[marker] || marker == 0xffffe || marker == 0xfffff {
 				marker++
 			}
 			if marker > 0x10fffd {
-				tokenError = fmt.Errorf("too many formula placeholder rows")
+				tokenError = fmt.Errorf("too many asset placeholder rows")
 				return render.FixedBox{}
 			}
 			tokens[y] = strings.Repeat(string(marker), p.columns)
-			replacements[marker] = replacement{asset: p, row: row}
+			replacements[marker] = replacement{asset: p, row: row + strings.Repeat(" ", max(0, p.columns-ansi.StringWidth(row)))}
 			marker++
 		}
 		return render.FixedBox{Rows: tokens, Width: p.columns, Baseline: p.rows - 1}
@@ -366,11 +482,12 @@ func (r *imageRenderer) layout(v line, width int) []displayRow {
 		err = tokenError
 	}
 	if err != nil {
-		return rowsOf(append([]string{"Markdown rendering failed: " + err.Error()}, wrap(render.Clean(v.text), width)...))
+		return rowsOf(append([]string{"Markdown rendering failed: " + err.Error()}, wrap(render.Clean(source), width)...))
 	}
 	out := rowsOf(styledRows(strings.Trim(text, "\n")))
 	for i := range out {
 		var restored strings.Builder
+		lastEnd, column := 0, 0
 		for offset := 0; offset < len(out[i].text); {
 			rune, size := utf8.DecodeRuneInString(out[i].text[offset:])
 			replacement, ok := replacements[rune]
@@ -385,8 +502,12 @@ func (r *imageRenderer) layout(v line, width int) []displayRow {
 				end += size
 			}
 			if (end-offset)/size != replacement.asset.columns {
-				return rowsOf(append([]string{"Markdown rendering failed: formula rectangle was split"}, wrap(render.Clean(v.text), width)...))
+				return rowsOf(append([]string{"Markdown rendering failed: asset rectangle was split"}, wrap(render.Clean(source), width)...))
 			}
+			column += ansi.StringWidth(out[i].text[lastEnd:offset])
+			replacement.asset.column = column
+			column += replacement.asset.columns
+			lastEnd = end
 			restored.WriteString(replacement.row)
 			out[i].assets = append(out[i].assets, replacement.asset)
 			offset = end
@@ -438,32 +559,33 @@ func (r *imageRenderer) ensure(rows []line) error {
 // is in source pixels; zoom is relative to aspect-preserving fit. Input is cell
 // precision, including measured letterboxing. A click selects; OK confirms.
 type imagePreview struct {
-	Window                   Window
-	snapshot                 session.ImageSnapshot
-	pixels                   image.Image
-	zoom, panX, panY         float64
-	point                    *[2]int
-	left, top, width, height int
-	cellWidth, cellHeight    int
-	scale, originX, originY  float64
-	pending                  bool
-	canvas                   image.Image
-	canvasKey                string
-	detailText               string
-	details                  *Window
+	Window                    Window
+	source                    imageSource
+	sourceWidth, sourceHeight int
+	pixels                    image.Image
+	zoom, panX, panY          float64
+	point                     *[2]int
+	left, top, width, height  int
+	cellWidth, cellHeight     int
+	scale, originX, originY   float64
+	pending                   bool
+	canvas                    image.Image
+	canvasKey                 string
+	detailText                string
+	details                   *Window
 }
 
-func newImagePreview(v session.ImageSnapshot, m image.Image, pending bool, cw, ch int) *imagePreview {
-	return &imagePreview{Window: Window{Title: "Image · " + filepath.Base(v.Path), Hint: "h/j/k/l pan · +/- zoom · 0 fit · i details · Esc cancel"}, snapshot: v, pixels: m, zoom: 1, pending: pending, cellWidth: cw, cellHeight: ch}
+func newImagePreview(source imageSource, m image.Image, pending bool, cw, ch int) *imagePreview {
+	return &imagePreview{Window: Window{Title: "Image · " + filepath.Base(source.path), Hint: "h/j/k/l pan · +/- zoom · 0 fit · i details · Esc returns"}, source: source, sourceWidth: m.Bounds().Dx(), sourceHeight: m.Bounds().Dy(), pixels: m, zoom: 1, pending: pending, cellWidth: cw, cellHeight: ch, detailText: source.path}
 }
 func (p *imagePreview) geometry(w, h int) {
 	left, top, width, height := windowBounds(w, h)
 	p.left, p.top = left+1, top+1
 	p.width, p.height = min(200, max(1, width-2)), min(100, max(1, height-4))
 	pw, ph := float64(p.width*p.cellWidth), float64(p.height*p.cellHeight)
-	p.scale = min(pw/float64(p.snapshot.Width), ph/float64(p.snapshot.Height)) * p.zoom
-	p.originX = (pw-float64(p.snapshot.Width)*p.scale)/2 - p.panX*p.scale
-	p.originY = (ph-float64(p.snapshot.Height)*p.scale)/2 - p.panY*p.scale
+	p.scale = min(pw/float64(p.sourceWidth), ph/float64(p.sourceHeight)) * p.zoom
+	p.originX = (pw-float64(p.sourceWidth)*p.scale)/2 - p.panX*p.scale
+	p.originY = (ph-float64(p.sourceHeight)*p.scale)/2 - p.panY*p.scale
 }
 func (p *imagePreview) coordinate(x, y int) *[2]int {
 	if x < p.left || x >= p.left+p.width || y < p.top || y >= p.top+p.height {
@@ -471,7 +593,7 @@ func (p *imagePreview) coordinate(x, y int) *[2]int {
 	}
 	sx := (float64((x-p.left)*p.cellWidth) + float64(p.cellWidth)/2 - p.originX) / p.scale
 	sy := (float64((y-p.top)*p.cellHeight) + float64(p.cellHeight)/2 - p.originY) / p.scale
-	if sx < 0 || sy < 0 || sx >= float64(p.snapshot.Width) || sy >= float64(p.snapshot.Height) {
+	if sx < 0 || sy < 0 || sx >= float64(p.sourceWidth) || sy >= float64(p.sourceHeight) {
 		return nil
 	}
 	point := [2]int{int(sx), int(sy)}
@@ -496,7 +618,7 @@ func (p *imagePreview) key(ev *tcell.EventKey) (close, confirm bool) {
 	case tcell.KeyRune:
 		switch ev.Str() {
 		case "i":
-			p.details = &Window{Title: "Image tool details", Text: p.detailText, Markdown: true, actor: p.Window.actor, subagentName: p.Window.subagentName}
+			p.details = &Window{Title: "Image details", Text: p.detailText, Markdown: true, actor: p.Window.actor, subagentName: p.Window.subagentName}
 		case "h":
 			p.panX -= float64(p.cellWidth) * 4 / p.scale
 		case "l":
@@ -513,8 +635,8 @@ func (p *imagePreview) key(ev *tcell.EventKey) (close, confirm bool) {
 			p.zoom, p.panX, p.panY = 1, 0, 0
 		}
 	}
-	p.panX = max(-float64(p.snapshot.Width), min(float64(p.snapshot.Width), p.panX))
-	p.panY = max(-float64(p.snapshot.Height), min(float64(p.snapshot.Height), p.panY))
+	p.panX = max(-float64(p.sourceWidth), min(float64(p.sourceWidth), p.panX))
+	p.panY = max(-float64(p.sourceHeight), min(float64(p.sourceHeight), p.panY))
 	return false, false
 }
 func (p *imagePreview) mouse(ev *tcell.EventMouse) (close, confirm bool) {
@@ -561,7 +683,7 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 	w, h := s.Size()
 	p.geometry(w, h)
 	drawWindowFrame(s, &p.Window)
-	key := fmt.Sprintf("preview:%s:%dx%d:%dx%dpx:%g:%g:%g", p.snapshot.ID, p.width, p.height, p.cellWidth, p.cellHeight, p.zoom, p.panX, p.panY)
+	key := fmt.Sprintf("preview:%s:%dx%d:%dx%dpx:%g:%g:%g", p.source.id, p.width, p.height, p.cellWidth, p.cellHeight, p.zoom, p.panX, p.panY)
 	if p.canvasKey != key {
 		// Terminal pixel measurements are external input. Check the canvas
 		// before multiplication/allocation, using the graphics upload budget.
@@ -573,17 +695,22 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 		if pw > maxPixels/ph {
 			return fmt.Errorf("image preview exceeds 16-megapixel canvas limit")
 		}
-		canvas := image.NewNRGBA(image.Rect(0, 0, pw, ph))
+		canvas := image.NewRGBA(image.Rect(0, 0, pw, ph))
 		bounds := p.pixels.Bounds()
+		fast, _ := p.pixels.(image.RGBA64Image)
 		for y := range ph {
 			sy := int(math.Floor((float64(y) - p.originY) / p.scale))
-			if sy < 0 || sy >= p.snapshot.Height {
+			if sy < 0 || sy >= p.sourceHeight {
 				continue
 			}
 			for x := range pw {
 				sx := int(math.Floor((float64(x) - p.originX) / p.scale))
-				if sx >= 0 && sx < p.snapshot.Width {
-					canvas.Set(x, y, p.pixels.At(bounds.Min.X+sx, bounds.Min.Y+sy))
+				if sx >= 0 && sx < p.sourceWidth {
+					if fast != nil {
+						canvas.SetRGBA64(x, y, fast.RGBA64At(bounds.Min.X+sx, bounds.Min.Y+sy))
+					} else {
+						canvas.Set(x, y, p.pixels.At(bounds.Min.X+sx, bounds.Min.Y+sy))
+					}
 				}
 			}
 		}
@@ -599,7 +726,7 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 	for y, row := range grid {
 		putStyled(s, p.left, p.top+y, p.width, row, style)
 	}
-	label := fmt.Sprintf("Zoom %.0f%% · source %dx%d", p.zoom*100, p.snapshot.Width, p.snapshot.Height)
+	label := fmt.Sprintf("Zoom %.0f%% · source %dx%d", p.zoom*100, p.sourceWidth, p.sourceHeight)
 	if p.point != nil {
 		label += fmt.Sprintf(" · pixel (%d, %d), cell estimate", p.point[0], p.point[1])
 	}

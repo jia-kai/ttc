@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,6 +40,16 @@ type controllerPromptHistory struct {
 
 func (h controllerPromptHistory) PromptHistory(context.Context) ([]string, error) {
 	return nil, h.err
+}
+
+func TestControllerTerminalInputError(t *testing.T) {
+	for _, editing := range []bool{false, true} {
+		c := &frontendController{editing: editing}
+		_, err := c.receiveScreenEvent(tcell.NewEventError(io.ErrUnexpectedEOF), true)
+		if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "terminal input") {
+			t.Fatalf("terminal error while editing=%v: %v", editing, err)
+		}
+	}
 }
 
 func TestControllerPartialSetupCancelsOnlyAcquiredResources(t *testing.T) {

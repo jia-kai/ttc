@@ -110,11 +110,12 @@ func (c *frontendController) inspectSaved(id int64) {
 	if c.renderer != nil {
 		snapshot, err := c.frontend.Runtime.ImageForEntry(id)
 		if err == nil && snapshot != nil {
-			if err := c.renderer.loadSource(*snapshot); err != nil {
+			load, err := c.renderer.loadSource(imageSource{id: snapshot.ID, path: snapshot.Path, file: snapshot.Snapshot})
+			if err != nil {
 				c.add("Image preview failed: "+err.Error(), 0)
 				return
 			}
-			c.modal.loading = &previewLoad{snapshot: *snapshot, generation: c.frontend.Runtime.Generation(), entryID: id}
+			c.modal.loading = &previewLoad{imageLoad: load, generation: c.frontend.Runtime.Generation(), entryID: id, actor: snapshot.Actor}
 			c.modal.window = &Window{Title: "Image", Text: "Loading full image…"}
 			c.attributeWindow(c.modal.window, snapshot.Actor)
 			return

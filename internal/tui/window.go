@@ -34,6 +34,8 @@ type Window struct {
 	TimerID               string                 // Live timer inspector; never recreated from stored history.
 	Detail                string                 // Base transient detail, without the expanded capture tail.
 	cachedText            string
+	parsedText            string
+	parsedDocument        *render.Document // Shared immutable AST across width and raster revisions.
 	cachedWidth           int
 	cachedLines           []string
 	cachedMode            uint8
@@ -91,6 +93,20 @@ func (w *Window) Lines(width, height int) []string {
 	return lines[w.Scroll:min(len(lines), w.Scroll+height)]
 }
 
+// updateLiveText follows appended output only when the old viewport was at its
+// bottom. A user reading earlier output retains their display-row offset.
+func (w *Window) updateLiveText(text string, width, height int) {
+	if text == w.Text {
+		return
+	}
+	w.Lines(width, height)
+	follow := height > 0 && w.Scroll == max(0, len(w.cachedLines)-height)
+	w.Text = text
+	if follow {
+		w.Scroll = max(0, len(w.currentLines(width))-height)
+	}
+}
+
 // currentLines refreshes the current page's render cache without loading pages.
 func (w *Window) currentLines(width int) []string {
 	mode := uint8(0)
@@ -115,6 +131,10 @@ func (w *Window) currentLines(width int) []string {
 		w.cachedWidth = width
 		w.cachedRevision = revision
 		w.assets = nil
+		if w.Markdown && (w.parsedDocument == nil || w.parsedText != w.Text) {
+			w.parsedDocument = render.ParseMarkdown(w.Text)
+			w.parsedText = w.Text
+		}
 		if w.layoutBody != nil {
 			w.body = w.layoutBody(max(1, width))
 			w.cachedLines = w.body.lines
@@ -128,13 +148,13 @@ func (w *Window) currentLines(width int) []string {
 				w.cachedLines = wrap(render.Clean(w.Text), width)
 			}
 		} else if w.Markdown && w.renderer != nil {
-			w.assets = w.renderer.layout(line{text: w.Text, markdown: true}, max(1, width))
+			w.assets = w.renderer.layoutMarkdown(w.parsedDocument, w.Text, max(1, width))
 			w.cachedLines = make([]string, len(w.assets))
 			for i, row := range w.assets {
 				w.cachedLines[i] = row.text
 			}
 		} else if w.Markdown {
-			text, err := render.Terminal(w.Text, max(1, width))
+			text, err := w.parsedDocument.Render(max(1, width), render.LiteralAsset)
 			if err != nil {
 				w.cachedLines = wrap(render.Clean(w.Text), width)
 			} else {

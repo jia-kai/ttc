@@ -67,6 +67,10 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 		}
 		return next
 	}
+	if ev.Key() == tcell.KeyEscape && c.modal.parent != nil && (c.modal.preview == nil || c.modal.preview.details == nil) {
+		c.finishPreview(false)
+		return next
+	}
 	if c.modal.preview != nil {
 		close, confirm := c.modal.preview.key(ev)
 		if close {
@@ -162,8 +166,7 @@ func (c *frontendController) handleScreenEvent(ev tcell.Event) (next frontendSub
 		c.handlePaste(ev)
 	case *tcell.EventFocus:
 		if ev.Focused && c.g != nil && !c.g.Tmux {
-			c.g.Refresh()
-			c.screen.Sync()
+			refreshTerminalGraphics(c.screen, c.g, false)
 		}
 	case *tcell.EventResize:
 		c.screen.Sync()
@@ -487,6 +490,19 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 	if c.modal.window != nil {
+		if c.renderer != nil && ev.Buttons()&tcell.Button1 != 0 {
+			w, h := c.screen.Size()
+			left, top, _, outerHeight := windowBounds(w, h)
+			bodyWidth, bodyHeight := windowContentSize(w, h, c.modal.window)
+			header := len(c.modal.window.HeaderLines(bodyWidth, max(0, outerHeight-3)))
+			bodyY := y - top - 1 - header
+			if bodyY >= 0 && bodyY < bodyHeight {
+				if asset := c.modal.window.imageAt(x-left-1, bodyY); asset != nil {
+					c.openLocalImage(*asset)
+					return
+				}
+			}
+		}
 		if c.modal.prompts != nil {
 			w, h := c.screen.Size()
 			c.modal.prompts.mouse(ev, w, h)
@@ -564,6 +580,12 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 	width = c.sidebar.bounds(width, c.sidebar.height, c.fullscreen)
 	if ev.Buttons()&tcell.Button1 != 0 && x >= 0 && x < width-1 {
 		if y >= 0 && y < len(c.view.visible) {
+			if c.renderer != nil {
+				if asset := imageAt(c.view.visible[y].assets, x); asset != nil {
+					c.openLocalImage(*asset)
+					return
+				}
+			}
 			c.openRow(c.view.visible[y])
 		}
 	}

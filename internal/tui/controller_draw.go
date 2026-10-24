@@ -117,7 +117,9 @@ func (c *frontendController) drawFrame() error {
 			c.g.Begin()
 		}
 		if c.modal.window != nil && c.modal.window.JobID != "" && !c.commandBusy {
-			c.modal.window.Text = c.frontend.Runtime.JobDetail(c.modal.window.JobID, c.modal.window.Detail)
+			window := c.modal.window
+			bodyWidth, bodyHeight := windowContentSize(width, height, window)
+			window.updateLiveText(c.frontend.Runtime.JobDetail(window.JobID, window.Detail), bodyWidth, bodyHeight)
 		}
 		if c.modal.window != nil && c.modal.window.TimerID != "" && !c.commandBusy {
 			if detail, err := c.frontend.Runtime.TimerDetail(c.modal.window.TimerID); err == nil {

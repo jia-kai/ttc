@@ -45,6 +45,7 @@ rail-integration: build
 
 kitty-test: build
 	python3 tests/kitty_visual.py
+	python3 tests/kitty_markdown.py
 
 math-test: build
 	python3 tests/pty_math.py
@@ -60,5 +61,6 @@ ci-test: math-test test check integration rail-integration
 
 full-test: ci-test kitty-test
 	python3 tests/kitty_visual.py --tmux
+	python3 tests/kitty_markdown.py --tmux
 	python3 tests/kitty_visual.py --offline
 	python3 tests/kitty_visual.py --offline --tmux

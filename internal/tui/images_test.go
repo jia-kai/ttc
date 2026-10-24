@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
 	"ttc/internal/llm"
-	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v3"
 )
@@ -47,7 +47,7 @@ func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) 
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var output bytes.Buffer
-	r, err := newImageRenderer(context.Background(), graphics.New(&output, false))
+	r, err := newImageRenderer(context.Background(), graphics.New(&output, false), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) 
 	if err := os.WriteFile(path, pngData.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.loadSource(session.ImageSnapshot{ID: "fixture", Snapshot: path}); err != nil {
+	if _, err := r.loadSource(imageSource{id: "fixture", file: path}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -109,7 +109,7 @@ func TestImageRenderingContinuesDuringMathInstallAndExitCancelsIt(t *testing.T) 
 }
 
 func TestPreviewCoordinatesPanZoomAndExplicitConfirm(t *testing.T) {
-	v := session.ImageSnapshot{ID: "image", Width: 320, Height: 200}
+	v := imageSource{id: "image"}
 	p := newImagePreview(v, image.NewNRGBA(image.Rect(0, 0, 320, 200)), true, 10, 20)
 	p.geometry(100, 30)
 	if p.coordinate(p.left, p.top+10) != nil {
@@ -491,7 +491,7 @@ func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
 	defer s.Fini()
 	s.SetSize(50, 20)
 	g := graphics.New(&bytes.Buffer{}, false)
-	p := newImagePreview(session.ImageSnapshot{ID: "image", Width: 20, Height: 10}, image.NewRGBA(image.Rect(0, 0, 20, 10)), false, 8, 16)
+	p := newImagePreview(imageSource{id: "image"}, image.NewRGBA(image.Rect(0, 0, 20, 10)), false, 8, 16)
 	g.Begin()
 	if err := p.draw(s, g); err != nil {
 		t.Fatal(err)
@@ -504,6 +504,35 @@ func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
 	}
 	if p.canvasKey == old || p.canvas.Bounds().Dx() != p.width*10 || p.canvas.Bounds().Dy() != p.height*20 {
 		t.Fatal("preview canvas retained stale pixel geometry")
+	}
+}
+
+type previewDiscardScreen struct{ tcell.Screen }
+
+func (previewDiscardScreen) Size() (int, int)                                { return 100, 40 }
+func (previewDiscardScreen) Put(int, int, string, tcell.Style) (string, int) { return "", 1 }
+func (previewDiscardScreen) Get(int, int) (string, tcell.Style, int) {
+	return " ", tcell.StyleDefault, 1
+}
+
+func TestPreviewCanvasAvoidsPerPixelColorAllocations(t *testing.T) {
+	g := graphics.New(io.Discard, false)
+	defer g.Close()
+	p := newImagePreview(imageSource{id: "allocation-fixture"}, image.NewNRGBA(image.Rect(0, 0, 800, 600)), false, 8, 16)
+	allocations := testing.AllocsPerRun(3, func() {
+		p.canvasKey = ""
+		g.Begin()
+		if err := p.draw(previewDiscardScreen{}, g); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Cell/ANSI rendering has its own allocations. Hundreds of thousands of
+	// source-pixel color interface allocations must not dominate the UI thread.
+	if allocations > 50000 {
+		t.Fatalf("preview allocated per pixel: %.0f allocations", allocations)
+	}
+	if _, ok := p.canvas.(*image.RGBA); !ok {
+		t.Fatal("preview canvas must retain premultiplied pixels")
 	}
 }
 func TestImageFrontendPreviewAndClickNotification(t *testing.T) {

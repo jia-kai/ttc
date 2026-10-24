@@ -33,8 +33,8 @@
   next render. Ordinary TeX errors leave the engine warm.
 - Conversation/Markdown windows share asset work. Failure warns and shows
   labeled literal TeX. Cached PNGs bypass engines;
-  [shared image/math asset ownership](design.md#image-and-math-assets) defines
-  cache pruning and retained-pixel budgets.
+  [shared image/math asset ownership](design.md#binary-image-and-math-assets)
+  defines cache pruning and retained-pixel budgets.
 - Inline formulas are atomic boxes beside formatted text, including in GFM table
   headers and body cells. Tall formulas occupy multiple terminal rows;
   surrounding text wraps without splitting the formula. Fit math to the actual
@@ -42,6 +42,10 @@
   occupy multiple terminal rows without introducing multiline GFM source syntax;
   even `$$x$$` can appear in a single-line source cell. When columns and
   separators cannot fit a tiny pane, cells stack in row order.
+- Markdown layout uses terminal columns and rows. Lists, quotes and tables share
+  the same layout path with or without math; container prefixes are excluded
+  from multiline formula source. `ttc md FILE` uses this renderer and the
+  existing viewport-only graphics worker in a document-only terminal view.
 - Inline placement does not imply MathJax inline typography: the backend uses
   `display: true` for both inline and block formulas. The shared
   [demo notebook](../tests/fixtures/research/markdown.md) exercises mixed-format
@@ -55,6 +59,9 @@
 | Captured worker stderr  | 4 KiB            |
 | Logical dimensions      | 4096×1024 pixels |
 | Physical canvas         | 16×1024² pixels  |
+
+Markdown formula spans are limited to 4100 source bytes, including delimiters
+and interior container prefixes; oversized or unfinished spans remain literal.
 
 - Rasterize at 3× per axis, padding included; cache full rasters. Uniformly fit
   to logical/placement limits without enlargement, averaging source area in

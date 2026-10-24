@@ -61,6 +61,9 @@ func run() error {
 // runWithModules keeps command orchestration independent of built-in providers.
 // Modules register configuration, but the command owns catalog and UI lifetimes.
 func runWithModules(modules []providers.Module) error {
+	if len(os.Args) > 1 && os.Args[1] == "md" {
+		return runMarkdown(os.Args[2:])
+	}
 	if rail.IsClientServer(os.Args[1:]) {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()

@@ -165,42 +165,13 @@ func (c *frontendController) setupTerminal() error {
 	if c.frontend.Plain {
 		return nil
 	}
-	c.screen, c.g = c.frontend.Screen, c.frontend.Graphics
-	if c.screen == nil {
-		var err error
-		c.screen, c.tty, c.g, err = newTerminal(c.ctx)
-		if err != nil {
-			return err
-		}
-	}
-	if err := c.screen.Init(); err != nil {
+	v, err := openTerminalView(c.ctx, c.frontend.Screen, c.frontend.Graphics)
+	if err != nil {
 		return err
 	}
-	c.onClose(c.screen.Fini)
-	if c.tty != nil && c.g != nil && c.screen.Colors() < 1<<24 {
-		c.g = nil
-		c.graphicsWarning = "24-bit color is disabled; Kitty math/images require RGB colors. Remove NO_COLOR or TCELL_TRUECOLOR=disable."
-	} else if c.tty != nil && c.g == nil {
-		c.graphicsWarning = "Kitty graphics unavailable; math stays as TeX."
-		if c.tty.graphicsError != nil {
-			c.graphicsWarning += " " + c.tty.graphicsError.Error()
-		}
-	}
-	c.screen.EnableMouse(tcell.MouseButtonEvents)
-	c.screen.EnablePaste()
-	c.screen.SetCursorStyle(tcell.CursorStyleBlinkingBar)
-	if c.tty != nil && c.g != nil && c.g.Tmux {
-		activation, stopActivation, err := graphics.WatchTmuxActivation(c.ctx)
-		c.graphicsActivation = activation
-		if err != nil {
-			c.graphicsWarning = "Tmux image recovery unavailable: " + err.Error()
-		} else {
-			c.onClose(stopActivation)
-		}
-	}
-	if c.g != nil && !c.g.Tmux {
-		c.screen.EnableFocus()
-	}
+	c.screen, c.tty, c.g = v.screen, v.tty, v.graphics
+	c.graphicsWarning, c.graphicsActivation = v.warning, v.activation
+	c.onClose(v.close)
 	return nil
 }
 
@@ -235,7 +206,7 @@ func (c *frontendController) setupInput() {
 func (c *frontendController) setupRenderer() error {
 	if c.g != nil {
 		var err error
-		c.renderer, err = newImageRenderer(c.ctx, c.g)
+		c.renderer, err = newImageRenderer(c.ctx, c.g, c.frontend.Runtime.Workspace.Root)
 		if err != nil {
 			return err
 		}
@@ -261,6 +232,7 @@ func (c *frontendController) setupComposer() {
 // stopInteractions cancels and joins workers before closing their dependencies.
 // A suspended screen must resume before the eventual Fini, even after an error.
 func (c *frontendController) stopInteractions() {
+	c.modal.clear()
 	c.cancelRun()
 	if c.editing {
 		<-c.editorDone

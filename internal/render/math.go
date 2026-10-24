@@ -1,38 +1,45 @@
 package render
 
 import (
+	"bytes"
+	"strings"
+
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
-	"sort"
-	"strings"
-	"unicode"
+	"github.com/yuin/goldmark/util"
 )
 
-// Math replaces inline/block formulas while preserving code, escaped delimiters,
-// and unmatched delimiters. The caller owns typesetting and fallback behavior.
+func markdownParser() goldmark.Markdown {
+	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList),
+		goldmark.WithParserOptions(
+			parser.WithInlineParsers(util.Prioritized(formulaParser{}, 50)),
+			parser.WithBlockParsers(util.Prioritized(displayFormulaParser{}, 850))))
+}
+
+// Math replaces supported formulas while preserving code, escaped/unmatched
+// delimiters and all other source bytes. Formula source is container-normalized.
 func Math(input string, replace func(string, bool) string) string {
-	return replaceMath(input, func(formula string, block bool, _, _ int) string {
-		return replace(formula, block)
-	})
+	return replaceMath(input, func(tex string, display bool, _, _ int) string { return replace(tex, display) })
 }
 
 // MathChunkCut moves a proposed source-byte cut before a formula crossing it.
-// It scans only the proposed prefix plus 4100 bytes, enough for the renderer's
-// 4096-byte formula limit and delimiters. Oversized/unmatched formulas keep the
-// original cut; source remains unchanged. The result never exceeds cut.
+// It scans only the prefix plus the supported 4096-byte formula lookahead;
+// unsupported or unfinished formulas keep the original cut.
 func MathChunkCut(input string, cut int) int {
 	cut = min(max(0, cut), len(input))
 	if cut == 0 || cut == len(input) {
 		return cut
 	}
-	prefix := input[:min(len(input), cut+4100)]
+	prefix := input[:min(len(input), cut+maxFormulaBytes+4)]
 	if !strings.ContainsAny(prefix, "$\\") {
 		return cut
 	}
 	result := cut
-	replaceMath(prefix, func(formula string, _ bool, start, end int) string {
-		if len(formula) <= 4096 && start < cut && cut < end {
+	replaceMath(prefix, func(_ string, _ bool, start, end int) string {
+		if start < cut && cut < end {
 			result = start
 		}
 		return ""
@@ -41,87 +48,42 @@ func MathChunkCut(input string, cut int) int {
 }
 
 func replaceMath(input string, replace func(string, bool, int, int) string) string {
-	var out strings.Builder
-	protected := mathCodeBlocks(input)
-	blockIndex := 0
-	for i := 0; i < len(input); {
-		for blockIndex < len(protected) && protected[blockIndex][1] <= i {
-			blockIndex++
-		}
-		if blockIndex < len(protected) && protected[blockIndex][0] <= i {
-			end := protected[blockIndex][1]
-			out.WriteString(input[i:end])
-			i = end
-			continue
-		}
-		if input[i] == '`' {
-			end := i + 1
-			for end < len(input) && input[end] == '`' {
-				end++
-			}
-			delimiter := input[i:end]
-			if close := strings.Index(input[end:], delimiter); close >= 0 {
-				end += close + len(delimiter)
-			} else {
-				end = len(input)
-			}
-			out.WriteString(input[i:end])
-			i = end
-			continue
-		}
-		if input[i] == '\\' && i+1 < len(input) && (input[i+1] == '$' || input[i+1] == '`' || input[i+1] == '\\') {
-			out.WriteString(input[i : i+2])
-			i += 2
-			continue
-		}
-		open, close, block := "", "", false
-		switch {
-		case strings.HasPrefix(input[i:], "$$"):
-			open, close, block = "$$", "$$", true
-		case strings.HasPrefix(input[i:], `\[`):
-			open, close, block = `\[`, `\]`, true
-		case strings.HasPrefix(input[i:], `\(`):
-			open, close = `\(`, `\)`
-		case input[i] == '$' && i+1 < len(input) && !unicode.IsSpace(rune(input[i+1])):
-			open, close = "$", "$"
-		}
-		if open != "" {
-			start := i + len(open)
-			end := mathClosingDelimiter(input[start:], close)
-			if end >= 0 {
-				end += start
-				formula := input[start:end]
-				if block || (!strings.Contains(formula, "\n") && formula != "" && !unicode.IsSpace(rune(formula[len(formula)-1]))) {
-					out.WriteString(replace(formula, block, i, end+len(close)))
-					i = end + len(close)
-					continue
-				}
-			}
-		}
-		out.WriteByte(input[i])
-		i++
-	}
-	return out.String()
-}
-
-func mathCodeBlocks(input string) [][2]int {
 	source := []byte(input)
-	root := goldmark.New().Parser().Parse(text.NewReader(source))
-	var ranges [][2]int
-	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
-		if entering && (n.Kind() == ast.KindFencedCodeBlock || n.Kind() == ast.KindCodeBlock) && n.Lines().Len() > 0 {
-			ranges = append(ranges, [2]int{n.Lines().At(0).Start, n.Lines().At(n.Lines().Len() - 1).Stop})
+	root := markdownParser().Parser().Parse(text.NewReader(source))
+	var output strings.Builder
+	offset := 0
+	_ = ast.Walk(root, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
 		}
-		return ast.WalkContinue, nil
+		tex, display, start, end := "", false, 0, 0
+		switch n := node.(type) {
+		case *ast.Image:
+			return ast.WalkSkipChildren, nil
+		case *formulaNode:
+			tex, display, start, end = n.tex, n.display, n.start, n.end
+		case *displayFormula:
+			tex = n.formula(source)
+			if !n.closed || len(tex) > maxFormulaBytes {
+				return ast.WalkSkipChildren, nil
+			}
+			display, start, end = true, n.start, n.end
+		default:
+			return ast.WalkContinue, nil
+		}
+		output.WriteString(input[offset:start])
+		output.WriteString(replace(tex, display, start, end))
+		offset = end
+		return ast.WalkSkipChildren, nil
 	})
-	sort.Slice(ranges, func(i, j int) bool { return ranges[i][0] < ranges[j][0] })
-	return ranges
+	output.WriteString(input[offset:])
+	return output.String()
 }
 
-func mathClosingDelimiter(input, delimiter string) int {
+func mathClosingDelimiter(input []byte, delimiter string) int {
 	start := 0
 	for start < len(input) {
-		next := strings.Index(input[start:], delimiter)
+		next := bytes.Index(input[start:], []byte(delimiter))
 		if next < 0 {
 			return -1
 		}

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"iter"
 	"strings"
 	"unicode"
 
@@ -20,13 +21,11 @@ type FixedBox struct {
 
 // flowItem contains either styled text or a box factory. The factory receives
 // the full line/cell width (at least one), not the current line's remaining room.
-// preferred is the box's natural width for table sizing; zero asks the factory.
 // block boxes occupy their own lines. Text may contain explicit newlines.
 type flowItem struct {
-	text      string
-	box       func(width int) FixedBox
-	preferred int
-	block     bool
+	text  string
+	box   func(width int) FixedBox
+	block bool
 }
 
 type flowToken struct {
@@ -39,72 +38,80 @@ type flowToken struct {
 // flowTokens splits only at grapheme boundaries and retains complete ANSI
 // sequences. SGR state is replayed for each token, isolating styles from boxes,
 // padding, and other table cells after tokens are moved onto different rows.
-func flowTokens(text string) []flowToken {
-	var tokens []flowToken
-	var buf, controls strings.Builder
-	// Keep the current attributes, not their history: replaying every previous
-	// SGR sequence at every word makes repeated partial resets quadratic.
-	var style uv.Style
-	var parser ansi.Parser
-	parser.SetParamsSize(32)
-	width, kind := 0, -1
-	flush := func() {
-		if kind < 0 {
-			return
+func flowTokens(input string) iter.Seq[flowToken] {
+	return func(yield func(flowToken) bool) {
+		text := input
+		var buf, controls strings.Builder
+		// Keep the current attributes, not their history: replaying every previous
+		// SGR sequence at every word makes repeated partial resets quadratic.
+		var style uv.Style
+		stylePrefix := ""
+		var parser ansi.Parser
+		parser.SetParamsSize(32)
+		width, kind := 0, -1
+		flush := func() bool {
+			if kind < 0 {
+				return true
+			}
+			s := buf.String()
+			if strings.Contains(s, "\x1b[") {
+				s += ansi.ResetStyle
+			}
+			token := flowToken{text: s, width: width, space: kind == 1}
+			buf.Reset()
+			width, kind = 0, -1
+			return yield(token)
 		}
-		s := buf.String()
-		if strings.Contains(s, "\x1b[") {
-			s += ansi.ResetStyle
+		var state byte
+		for len(text) > 0 {
+			seq, w, n, next := ansi.DecodeSequence(text, state, &parser)
+			text, state = text[n:], next
+			if w == 0 && seq != "\n" && seq != "\t" && seq != "\r" && (seq[0] == '\x1b' || seq[0] < 0x20 || seq[0] == 0x7f) {
+				sgr := ansi.HasCsiPrefix(seq) && parser.Command() == 'm'
+				if sgr {
+					uv.ReadStyle(parser.Params(), &style)
+					stylePrefix = ""
+					if !style.IsZero() {
+						stylePrefix = style.String()
+					}
+				}
+				if kind >= 0 {
+					buf.WriteString(seq)
+				} else if !sgr {
+					controls.WriteString(seq)
+				}
+				continue
+			}
+			if seq == "\n" {
+				if !flush() || !yield(flowToken{line: true}) {
+					return
+				}
+				continue
+			}
+			if seq == "\r" {
+				continue
+			}
+			k := 0
+			if unicode.IsSpace([]rune(seq)[0]) {
+				k = 1
+				if seq == "\t" {
+					seq, w = "    ", 4
+				}
+			}
+			if kind != k {
+				if !flush() {
+					return
+				}
+				kind = k
+				buf.WriteString(stylePrefix)
+				buf.WriteString(controls.String())
+				controls.Reset()
+			}
+			buf.WriteString(seq)
+			width += w
 		}
-		tokens = append(tokens, flowToken{text: s, width: width, space: kind == 1})
-		buf.Reset()
-		width, kind = 0, -1
+		flush()
 	}
-	var state byte
-	for len(text) > 0 {
-		seq, w, n, next := ansi.DecodeSequence(text, state, &parser)
-		text, state = text[n:], next
-		if w == 0 && seq != "\n" && seq != "\t" && seq != "\r" && (seq[0] == '\x1b' || seq[0] < 0x20 || seq[0] == 0x7f) {
-			sgr := ansi.HasCsiPrefix(seq) && parser.Command() == 'm'
-			if sgr {
-				uv.ReadStyle(parser.Params(), &style)
-			}
-			if kind >= 0 {
-				buf.WriteString(seq)
-			} else if !sgr {
-				controls.WriteString(seq)
-			}
-			continue
-		}
-		if seq == "\n" {
-			flush()
-			tokens = append(tokens, flowToken{line: true})
-			continue
-		}
-		if seq == "\r" {
-			continue
-		}
-		k := 0
-		if unicode.IsSpace([]rune(seq)[0]) {
-			k = 1
-			if seq == "\t" {
-				seq, w = "    ", 4
-			}
-		}
-		if kind != k {
-			flush()
-			kind = k
-			if !style.IsZero() {
-				buf.WriteString(style.String())
-			}
-			buf.WriteString(controls.String())
-			controls.Reset()
-		}
-		buf.WriteString(seq)
-		width += w
-	}
-	flush()
-	return tokens
 }
 
 // layoutFlow greedily packs words and atomic boxes, aligning inline baselines.
@@ -112,8 +119,14 @@ func flowTokens(text string) []flowToken {
 // Long words wrap by grapheme. A single grapheme or box may exceed width when it
 // cannot fit even on an empty line. Nonpositive widths are treated as one cell.
 func layoutFlow(items []flowItem, width int) []string {
+	return layoutFlowBox(items, width).Rows
+}
+
+// layoutFlowBox retains the first line's baseline for container decorations.
+func layoutFlowBox(items []flowItem, width int) FixedBox {
 	width = max(1, width)
 	var rows []string
+	baseline := 0
 	var line []FixedBox
 	used, above, below := 0, 0, 0
 	pending := ""
@@ -124,6 +137,9 @@ func layoutFlow(items []flowItem, width int) []string {
 				rows = append(rows, "")
 			}
 			return
+		}
+		if len(rows) == 0 {
+			baseline = above
 		}
 		for y := 0; y <= above+below; y++ {
 			var row strings.Builder
@@ -184,7 +200,7 @@ func layoutFlow(items []flowItem, width int) []string {
 			i++
 			text.WriteString(items[i].text)
 		}
-		for _, t := range flowTokens(text.String()) {
+		for t := range flowTokens(text.String()) {
 			if t.line {
 				flush(true)
 				pending, pendingWidth = "", 0
@@ -210,7 +226,7 @@ func layoutFlow(items []flowItem, width int) []string {
 					wrapped.WriteString(seq)
 					x += w
 				}
-				for _, part := range flowTokens(wrapped.String()) {
+				for part := range flowTokens(wrapped.String()) {
 					if part.line {
 						flush(false)
 					} else {
@@ -221,7 +237,7 @@ func layoutFlow(items []flowItem, width int) []string {
 		}
 	}
 	flush(false)
-	return rows
+	return FixedBox{Rows: rows, Width: width, Baseline: baseline}
 }
 
 // layoutTable lays out [row][column][flow item] cells; the first row is the
@@ -246,11 +262,7 @@ func layoutTable(cells [][][]flowItem, alignments []int, width int) []string {
 				if item.box != nil {
 					b := item.box(1)
 					minimum[c] = max(minimum[c], b.Width)
-					p := item.preferred
-					if p <= 0 {
-						p = item.box(width).Width
-					}
-					lineWidth += p
+					lineWidth += item.box(width).Width
 					continue
 				}
 				var state byte
@@ -286,19 +298,37 @@ func layoutTable(cells [][][]flowItem, alignments []int, width int) []string {
 		return rows
 	}
 	widths := append([]int(nil), minimum...)
-	// Grow the most constrained column first, bounded by the viewport width.
-	for total < width {
-		best := -1
-		for c := range widths {
-			if widths[c] < natural[c] && (best < 0 || widths[c] < widths[best]) {
-				best = c
-			}
+	// Water-fill columns using start/stop events, rather than searching every
+	// column for every extra cell. Work and storage are bounded by the actual
+	// table output width, even when the viewport is much wider than its content.
+	naturalTotal := 3 * (n - 1)
+	for _, w := range natural {
+		naturalTotal += w
+	}
+	target := min(width, naturalTotal)
+	events := make([]int, target+1)
+	for c, m := range minimum {
+		if m < natural[c] {
+			events[m]++
+			events[min(target, natural[c])]--
 		}
-		if best < 0 {
+	}
+	active, level := 0, 0
+	for ; level < target; level++ {
+		active += events[level]
+		if active > target-total {
 			break
 		}
-		widths[best]++
-		total++
+		total += active
+	}
+	for c := range widths {
+		widths[c] = max(minimum[c], min(natural[c], level))
+	}
+	for c := 0; total < target && c < n; c++ {
+		if widths[c] == level && widths[c] < natural[c] {
+			widths[c]++
+			total++
+		}
 	}
 	var rows []string
 	for r, row := range cells {
