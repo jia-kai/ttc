@@ -19,7 +19,7 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 	answer := "Final answer:\n" + strings.Repeat("界", history.MaxChildAnswerBytes/3+100)
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{
 		{Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"answer with evidence","label":"audit","persistent":false}`)}}},
-		{Text: "Intermediate commentary must not become the answer.", Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}}},
+		{Text: "Intermediate commentary must not become the answer.", Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true}`)}}},
 		{Text: answer},
 		{Text: "Parent used the delivered answer."},
 	})
@@ -192,7 +192,7 @@ func TestChildResultUsesCommittedCompletionBeforeJobSnapshot(t *testing.T) {
 func TestChildCommitFailureStopsPersistentOwnedJobs(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{
 		{Calls: []llm.ToolCall{{ID: "child", Name: "subagent", Arguments: []byte(`{"prompt":"audit","label":"audit","persistent":true}`)}}},
-		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}}},
+		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true}`)}}},
 		{Text: "Final audit answer"},
 	})
 	r.Emit = nil

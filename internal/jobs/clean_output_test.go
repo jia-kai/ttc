@@ -19,7 +19,7 @@ func TestShellCleanViewsAndRawReads(t *testing.T) {
 			m := New(context.Background(), func(s Snapshot) { notified <- s })
 			defer m.Close()
 			strip := !rawView
-			id, err := m.Start("main", "printf '\\033[31m10%%\\r100%%\\033[K\\033[0m\\n'; printf '\\033[32merror\\033[0m\\n' >&2", t.TempDir(), time.Second, true, true, true, capture.OutputOptions{StripANSI: &strip}, "")
+			id, err := m.Start("main", "printf '\\033[31m10%%\\r100%%\\033[K\\033[0m\\n'; printf '\\033[32merror\\033[0m\\n' >&2", t.TempDir(), time.Second, true, true, capture.OutputOptions{StripANSI: &strip}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +98,7 @@ func TestWatchCleanPresentationLeavesRecordRaw(t *testing.T) {
 	}
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartWatch("main", dir, false, "", capture.OutputOptions{})
+	id, err := m.StartWatch("main", dir, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestWatchCleanPresentationLeavesRecordRaw(t *testing.T) {
 		t.Fatal(inspection, err)
 	}
 	strip := false
-	rawID, err := m.StartWatch("main", dir, false, "", capture.OutputOptions{StripANSI: &strip})
+	rawID, err := m.StartWatch("main", dir, "", capture.OutputOptions{StripANSI: &strip})
 	if err != nil {
 		t.Fatal(err)
 	}

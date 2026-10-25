@@ -2,70 +2,58 @@ package main
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
+	"github.com/spf13/cobra"
+	flag "github.com/spf13/pflag"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"ttc/internal/history"
 	"ttc/internal/rail"
 )
 
-func railOptions(args []string) (rail.Options, error) {
-	data, err := history.DataRoot()
-	dataDefaultErr := err
-	opts := rail.Options{Input: os.Stdin, Output: os.Stdout}
-	flags := flag.NewFlagSet("ttc rail", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
+func registerRailFlags(flags *flag.FlagSet, opts *rail.Options, data string) {
 	flags.StringVar(&opts.Workdir, "workdir", ".", "workspace directory; attach or create its sandbox")
 	flags.StringVar(&opts.DataDir, "data-dir", data, "existing TTC data root to share when creating a sandbox")
 	flags.BoolVar(&opts.List, "list", false, "list live rail tmux sessions without attaching")
-	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage: ttc rail [--workdir DIR] [--data-dir DIR] [--list]")
-		fmt.Fprintln(flags.Output(), "Filesystem guardrails with shared host networking. Detach to keep running.")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
-		return opts, err
-	}
-	if flags.NArg() != 0 {
-		return opts, fmt.Errorf("rail does not accept positional arguments: %v", flags.Args())
-	}
+}
+
+func validateRailData(flags *flag.FlagSet, opts rail.Options, dataDefaultErr error) error {
 	// Inside tmux, attach/create becomes listing and needs no storage default.
 	if !opts.List && os.Getenv("TMUX") == "" {
 		if err := dataDefaultError(flags, dataDefaultErr); err != nil {
-			return opts, err
+			return err
 		}
 	}
-	return opts, nil
+	return nil
 }
 
 // Environment defaults do not invalidate an explicit CLI storage choice.
 func dataDefaultError(flags *flag.FlagSet, defaultErr error) error {
-	overridden := false
-	flags.Visit(func(f *flag.Flag) { overridden = overridden || f.Name == "data-dir" })
-	if overridden {
+	if flags.Changed("data-dir") {
 		return nil
 	}
 	return defaultErr
 }
 
-func runRail(args []string) error {
-	opts, err := railOptions(args)
-	if errors.Is(err, flag.ErrHelp) {
-		return nil
+func newRailCommand() *cobra.Command {
+	data, defaultErr := history.DataRoot()
+	opts := rail.Options{Input: os.Stdin, Output: os.Stdout}
+	cmd := &cobra.Command{Use: "rail", Short: "Launch or attach filesystem guardrails", Long: "Filesystem guardrails with shared host networking. Detach to keep running.", Args: cobra.NoArgs}
+	registerRailFlags(cmd.Flags(), &opts, data)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if err := validateRailData(cmd.Flags(), opts, defaultErr); err != nil {
+			return err
+		}
+		return launchRail(cmd.Context(), opts)
 	}
-	if err != nil {
-		return err
-	}
+	return cmd
+}
+
+func launchRail(ctx context.Context, opts rail.Options) error {
 	if !opts.List && os.Getenv("TMUX") != "" {
 		fmt.Fprintln(os.Stderr, "Warning: already inside tmux; not attaching or creating a rail instance. Listing live rail sessions; run from outside tmux to attach.")
 		opts.List = true
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	return rail.Run(ctx, opts)
 }
 

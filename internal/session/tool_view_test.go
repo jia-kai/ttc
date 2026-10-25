@@ -84,7 +84,7 @@ func TestQuietChildShellInspectionIncludesLiveMetadata(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	const actor = "main/child_quiet"
 	const command = "sleep 30"
-	id, err := r.Jobs.Start(actor, command, r.Workspace.Root, 0, false, true, false, capture.OutputOptions{}, "")
+	id, err := r.Jobs.Start(actor, command, r.Workspace.Root, 0, false, true, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestInspectionTailDoesNotReduceCapture(t *testing.T) {
 func TestLSPInspectorShowsStderrWithoutReadingProtocol(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
-	id, err := r.Jobs.StartLSP("main", "printf 'server diagnostic' >&2", r.Workspace.Root, 0, true, false, capture.OutputOptions{}, "")
+	id, err := r.Jobs.StartLSP("main", "printf 'server diagnostic' >&2", r.Workspace.Root, 0, true, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

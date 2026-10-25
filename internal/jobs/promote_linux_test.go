@@ -15,7 +15,7 @@ func TestPromoteReleasesForegroundAndKeepsCommandAlive(t *testing.T) {
 	m := New(context.Background(), func(v Snapshot) { notices <- v })
 	defer m.Close()
 	root := t.TempDir()
-	id, err := m.Start("main", "printf ready; while [ ! -e release ]; do sleep 0.01; done; printf done", root, 0, true, false, true, capture.OutputOptions{}, "")
+	id, err := m.Start("main", "printf ready; while [ ! -e release ]; do sleep 0.01; done; printf done", root, 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestPromoteReleasesForegroundAndKeepsCommandAlive(t *testing.T) {
 	}
 	select {
 	case v := <-notices:
-		if v.ID != id || v.Status != "completed" || !v.WakeOnExit {
+		if v.ID != id || v.Status != "completed" {
 			t.Fatal(v)
 		}
 	case <-time.After(3 * time.Second):
@@ -77,16 +77,22 @@ func TestPromoteReleasesForegroundAndKeepsCommandAlive(t *testing.T) {
 	}
 }
 
-func TestPromoteBeforeWaitPreservesNoWakePreference(t *testing.T) {
+func TestPromoteBeforeWaitNotifiesCompletion(t *testing.T) {
 	notices := make(chan Snapshot, 1)
 	m := New(context.Background(), func(v Snapshot) { notices <- v })
 	defer m.Close()
-	id, err := m.Start("main", "sleep 30", t.TempDir(), 0, true, false, false, capture.OutputOptions{}, "")
+	id, err := m.Start("main", "sleep 30", t.TempDir(), 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = m.Promote("main", id); err != nil {
 		t.Fatal(err)
+	}
+	m.mu.Lock()
+	pendingResult := m.jobs[id].foregroundResultPending
+	m.mu.Unlock()
+	if !pendingResult {
+		t.Fatal("promotion lost original result reservation before waiter registration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -98,8 +104,8 @@ func TestPromoteBeforeWaitPreservesNoWakePreference(t *testing.T) {
 	}
 	select {
 	case v := <-notices:
-		if v.WakeOnExit {
-			t.Fatal("disabled wake preference changed", v)
+		if !v.Background {
+			t.Fatal("background flag missing", v)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("completion UI notice missing")

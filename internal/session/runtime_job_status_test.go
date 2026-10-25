@@ -79,13 +79,13 @@ func TestRuntimeCommandExitStatusMatchesJobSurfaces(t *testing.T) {
 				command := fmt.Sprintf("exit %d", code)
 				var id string
 				if kind == "shell" {
-					id, err = r.Jobs.Start("main", command, r.Workspace.Root, time.Second, true, false, false, capture.OutputOptions{}, "")
+					id, err = r.Jobs.Start("main", command, r.Workspace.Root, time.Second, true, false, capture.OutputOptions{}, "")
 				} else {
 					dir := filepath.Join(r.Workspace.Root, "run")
 					if _, err := watchrun.Run(dir, []string{"/bin/sh", "-c", command}, nil, io.Discard, io.Discard); err != nil {
 						t.Fatal(err)
 					}
-					id, err = r.Jobs.StartWatch("main", dir, false, "", capture.OutputOptions{})
+					id, err = r.Jobs.StartWatch("main", dir, "", capture.OutputOptions{})
 				}
 				if err != nil {
 					t.Fatal(err)

@@ -3,13 +3,16 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ttc/internal/jobs"
+	"ttc/internal/prompts"
 )
 
 func TestUnknownJobHandlesReturnNotFound(t *testing.T) {
@@ -51,6 +54,7 @@ func TestLSPStrictOperationParameters(t *testing.T) {
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","line":1}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","query":"x"}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","unknown":true}`,
+		`{"job_id":"a","operation":"document_symbols","path":"x.py","timeout_ms":1000}`,
 	} {
 		if _, err := tool.DecodeCall(1, []byte(input)); err == nil {
 			t.Fatal("accepted", input)
@@ -59,7 +63,7 @@ func TestLSPStrictOperationParameters(t *testing.T) {
 	for _, input := range []string{
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","offset":-1}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.py","limit":501}`,
-		`{"job_id":"a","operation":"document_symbols","path":"x.py","timeout_ms":0}`,
+		`{"job_id":"a","operation":"document_symbols","path":"x.py","timeout_seconds":0}`,
 		`{"job_id":"a","operation":"hover","path":"x.py","line":1,"column":1}`,
 		`{"job_id":"a","operation":"workspace_symbols","query":""}`,
 		`{"job_id":"a","operation":"document_symbols","path":"x.custom","language_id":"python","offset":0,"limit":500}`,
@@ -67,10 +71,6 @@ func TestLSPStrictOperationParameters(t *testing.T) {
 		if _, err := tool.DecodeCall(1, []byte(input)); err != nil {
 			t.Fatal(input, err)
 		}
-	}
-	shell, _ := r.Get("shell")
-	if _, err := shell.DecodeCall(1, []byte(`{"command":"true","protocol":"lsp"}`)); err == nil {
-		t.Fatal("accepted foreground LSP")
 	}
 }
 
@@ -120,4 +120,41 @@ func TestLSPToolLifecycleAndPortableResult(t *testing.T) {
 	if !strings.Contains(string(rec.Result), `"code":"job_not_running"`) {
 		t.Fatal(string(rec.Result))
 	}
+}
+
+func TestLSPTimeoutSecondsAndRecovery(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("requires python3")
+	}
+	fixture, err := filepath.Abs("../lsp/testdata/server.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(text string) string { return "'" + strings.ReplaceAll(text, "'", "'\"'\"'") + "'" }
+	r, w, x, request := toolFixture(t)
+	if err := os.WriteFile(filepath.Join(w.Root, "sample.py"), []byte("text\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := jobs.New(context.Background(), nil)
+	defer m.Close()
+	AddShell(r, m, w, nil)
+	args, _ := json.Marshal(map[string]any{"command": "TTC_LSP_MODE=slow exec " + quote(python) + " " + quote(fixture), "background": true, "protocol": "lsp"})
+	launched := invoke(t, r, w, x, request, "shell", string(args))
+	ok(t, launched)
+	var job struct {
+		ID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(launched.Result, &job); err != nil {
+		t.Fatal(err)
+	}
+	args, _ = json.Marshal(map[string]any{"job_id": job.ID, "operation": "hover", "path": "sample.py", "line": 1, "column": 1, "timeout_seconds": 1})
+	started := time.Now()
+	record := invoke(t, r, w, x, request, "lsp_query", string(args))
+	if elapsed := time.Since(started); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
+		t.Fatalf("one-second timeout took %s", elapsed)
+	}
+	assertToolMessage(t, record, "timeout", fmt.Sprintf(prompts.ToolLSPTimeout, 1))
+	args, _ = json.Marshal(map[string]any{"job_id": job.ID, "operation": "hover", "path": "sample.py", "line": 1, "column": 1, "timeout_seconds": 30})
+	ok(t, invoke(t, r, w, x, request, "lsp_query", string(args)))
 }

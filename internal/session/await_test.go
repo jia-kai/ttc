@@ -120,6 +120,63 @@ func TestAwaitDeadlineAndCancellation(t *testing.T) {
 	}
 }
 
+func TestAwaitCountdownStartsAtSettledBoundary(t *testing.T) {
+	r, events := runtimeFixture(t, nil)
+	seedRuntime(t, r, "countdown boundary")
+	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main"}, "await", []byte(`{"deadline_seconds":1}`))
+	if !strings.Contains(string(record.Result), `"ok":true`) {
+		t.Fatal(string(record.Result))
+	}
+	// Simulate a foreground sibling taking longer than the requested countdown.
+	time.Sleep(1100 * time.Millisecond)
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() { done <- r.settleAwait(context.Background(), "main") }()
+	waitForAwait(t, events, "main")
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(started); elapsed < 900*time.Millisecond {
+			t.Fatalf("sibling time consumed countdown: %s", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("settled countdown did not expire")
+	}
+	r.orderMu.Lock()
+	defer r.orderMu.Unlock()
+	if len(r.notifications) != 1 || !strings.Contains(r.notifications[0].Content, "await_deadline") {
+		t.Fatal("missing deadline event", r.notifications)
+	}
+}
+
+func TestAwaitOmittedAndZeroDeadlineRemainDistinct(t *testing.T) {
+	for _, tc := range []struct {
+		args  string
+		timed bool
+	}{{`{}`, false}, {`{"deadline_seconds":0}`, true}} {
+		t.Run(tc.args, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			seedRuntime(t, r, "deadline presence")
+			record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main"}, "await", []byte(tc.args))
+			if !strings.Contains(string(record.Result), `"ok":true`) {
+				t.Fatal(string(record.Result))
+			}
+			request := r.awaitRequests["main"]
+			if request.timed != tc.timed || request.duration != 0 {
+				t.Fatalf("incorrect deadline presence: %+v", request)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			err := r.settleAwait(ctx, "main")
+			if tc.timed && err != nil || !tc.timed && err != context.DeadlineExceeded {
+				t.Fatalf("incorrect zero/omitted behavior: %v", err)
+			}
+		})
+	}
+}
+
 func TestChildAwaitResumesOnParentGuidanceAndCleansTimer(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	step := 0

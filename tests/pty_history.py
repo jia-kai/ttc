@@ -43,7 +43,7 @@ def main():
                       "    out.write(json.dumps(Path(sys.argv[-1]).read_text()) + '\\n')\n")
     binary = str(Path(args.binary).resolve())
     command = [binary, '--offline-script', str(script), '--workdir', str(project),
-               '--data-dir', str(data), '--auto-name=false']
+               '--data-dir', str(data)]
     process = master = None
     output, cursor, phase = bytearray(), 0, 'seed'
 

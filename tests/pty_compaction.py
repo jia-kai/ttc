@@ -101,7 +101,7 @@ def main():
         os.environ.update(TERM='xterm-256color', COLORTERM='truecolor')
         os.environ.pop('TMUX', None)
         os.execv(binary, [binary, '--offline-script', str(script), '--data-dir', str(data),
-                         '--workdir', str(cwd), '--auto-name=false'])
+                         '--workdir', str(cwd)])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 38, 124, 0, 0))
     output = bytearray()
     screen = Screen(38, 124)

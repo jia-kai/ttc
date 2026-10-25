@@ -100,7 +100,7 @@ func TestUserInterruptNoticePrecedesNextNotificationRun(t *testing.T) {
 			case "job":
 				kind, key = "job_exit", "job_id"
 				var err error
-				id, err = r.Jobs.Start("main", "printf 'completed after interruption\\n'", r.Workspace.Root, time.Second, true, true, true, capture.OutputOptions{}, "interrupt completion")
+				id, err = r.Jobs.Start("main", "printf 'completed after interruption\\n'", r.Workspace.Root, time.Second, true, true, capture.OutputOptions{}, "interrupt completion")
 				if err != nil {
 					t.Fatal(err)
 				}

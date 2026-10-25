@@ -15,7 +15,7 @@ func TestCompactLabelsAndExplicitCommandInspection(t *testing.T) {
 	defer m.Close()
 	command := "printf 'retained output'; printf 'diagnostics' >&2"
 	label := "  Check\n " + strings.Repeat("界", 100)
-	id, err := m.Start("main/child", command, t.TempDir(), 0, true, false, false, capture.OutputOptions{}, label)
+	id, err := m.Start("main/child", command, t.TempDir(), 0, true, false, capture.OutputOptions{}, label)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,8 @@ helpful to you:
 Besides conventional tools like file editing, web access, and shell execution,
 TTC also supports the following:
 
-- Background jobs, subagents, and wakeup timers.
+- Background jobs (including long-running jobs managed by independent tmux
+  sessions), subagents, and wakeup timers.
 - Built-in planning, tmux, LSP and TTC-configuration skills.
 - Image display and confirmed point coordinates delivered to the LLM as a later
   runtime message. Native binary input through `read()`: original PNG/JPEG/
@@ -249,9 +250,12 @@ prompts and unadmitted steers. Ordinary loads do not restore pending
 notifications.
 
 The first model request includes cwd, whether Git inspection found a repository,
-and its branch (`detached` when HEAD has no branch). Git is optional. Foreground
-shell commands default to a 20-second timeout and cannot disable it. Background
-commands have no default timeout; they can set an explicit deadline.
+and its branch (`detached` when HEAD has no branch). Git is optional. Ordinary
+shell commands have a one-hour execution deadline, independent of foreground or
+background mode. Foreground calls wait up to 10 seconds, then return the same
+running job in the background without restarting it or resetting its deadline.
+Background completions always notify the agent. See the [tool contracts]
+(docs/tools.md#shell) for limits and normalization warnings.
 
 Background jobs, subagents, and timers belong to the active runtime. Compaction
 preserves them; switching sessions or exiting cancels them. Agents use tmux for

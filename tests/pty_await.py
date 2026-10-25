@@ -35,7 +35,7 @@ class Instance:
         self.master, slave = pty.openpty()
         try:
             self.process = subprocess.Popen([
-                binary, '--plain', '--auto-name=false', '--workdir', str(self.project),
+                binary, '--plain', '--workdir', str(self.project),
                 '--data-dir', str(self.root / 'data'), '--offline-script', str(script),
             ], stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
         finally:

@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 from scratch import private_scratch
+from mock_naming import respond_to_naming
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -42,7 +43,7 @@ def main():
         {'prefix': 'tool: ', 'text': 'Background job launched.'},
         {'event_type': 'job_exit', 'text': 'Background completion observed.'},
         {'prefix': 'user: Long job', 'calls': [
-            {'id': 'shell_2', 'name': 'shell', 'arguments': {'command': 'sleep 30', 'background': True, 'wake_on_exit': False}}]},
+            {'id': 'shell_2', 'name': 'shell', 'arguments': {'command': 'sleep 30', 'background': True}}]},
         {'prefix': 'tool: ', 'text': 'Long job started.'},
     ]
     requests = []
@@ -73,6 +74,8 @@ def main():
                 self.send_error(404)
                 return
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if respond_to_naming(self, body):
+                return
             with request_lock:
                 if failed_request is None:
                     failed_request = body
@@ -169,7 +172,6 @@ def main():
     process = subprocess.Popen([
         str(pathlib.Path(args.binary).resolve()), '--plain', '--data-dir', str(root / 'data'),
         '--workdir', str(workspace), '--openai-base-url', endpoint, '--import-codex-auth', str(auth),
-        '--model', 'mock-model', '--variant', 'low', '--auto-name=false',
     ], stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
     output = bytearray()

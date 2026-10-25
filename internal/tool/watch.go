@@ -17,7 +17,6 @@ import (
 type watchArgs struct {
 	RecordDir string `json:"record_dir"`
 	Label     string `json:"label,omitempty"`
-	Wake      *bool  `json:"wake_on_exit,omitempty"`
 	StripANSI *bool  `json:"strip_ansi,omitempty"`
 }
 
@@ -26,7 +25,6 @@ type tmuxWatchArgs struct {
 	Label     string `json:"label,omitempty"`
 	RecordDir string `json:"record_dir"`
 	Workdir   string `json:"workdir,omitempty"`
-	Wake      *bool  `json:"wake_on_exit,omitempty"`
 	StripANSI *bool  `json:"strip_ansi,omitempty"`
 }
 
@@ -61,7 +59,7 @@ func AddTmuxWatchRun(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 }
 
 func addTmuxWatchRun(r *Registry, m *jobs.Manager, w *workspace.Manager, launcher watchrun.TmuxLauncher) {
-	Register(r, "tmux_watch_run", prompts.ToolDescription("tmux_watch_run"), map[string]any{"command": Property("string"), "label": Property("string"), "record_dir": Property("string"), "workdir": Property("string"), "wake_on_exit": Property("boolean"), "strip_ansi": Property("boolean")}, []string{"command", "record_dir"}, func(a tmuxWatchArgs) error {
+	Register(r, "tmux_watch_run", prompts.ToolDescription("tmux_watch_run"), map[string]any{"command": Property("string"), "label": Property("string"), "record_dir": Property("string"), "workdir": Property("string"), "strip_ansi": Property("boolean")}, []string{"command", "record_dir"}, func(a tmuxWatchArgs) error {
 		if err := Required("command", a.Command); err != nil {
 			return err
 		}
@@ -101,7 +99,7 @@ func addTmuxWatchRun(r *Registry, m *jobs.Manager, w *workspace.Manager, launche
 			}
 			return result, nil
 		}
-		id, err := m.StartWatch(x.Actor, launch.RecordDir, a.Wake == nil || *a.Wake, a.Label, capture.OutputOptions{StripANSI: a.StripANSI})
+		id, err := m.StartWatch(x.Actor, launch.RecordDir, a.Label, capture.OutputOptions{StripANSI: a.StripANSI})
 		if err != nil {
 			result["error"] = err.Error()
 			return result, nil
@@ -121,8 +119,8 @@ func addTmuxWatchRun(r *Registry, m *jobs.Manager, w *workspace.Manager, launche
 // AddWatch registers observation of externally owned watch-run records. The
 // resulting job supports job_read/list/stop; stopping it never kills workload.
 func AddWatch(r *Registry, m *jobs.Manager, w *workspace.Manager) {
-	Register(r, "watch", prompts.ToolDescription("watch"), map[string]any{"record_dir": Property("string"), "label": Property("string"), "wake_on_exit": Property("boolean"), "strip_ansi": Property("boolean")}, []string{"record_dir"}, func(a watchArgs) error { return Required("record_dir", a.RecordDir) }, func(ctx context.Context, x Execution, a watchArgs) (any, error) {
-		id, err := m.StartWatch(x.Actor, w.Path(a.RecordDir), a.Wake == nil || *a.Wake, a.Label, capture.OutputOptions{StripANSI: a.StripANSI})
+	Register(r, "watch", prompts.ToolDescription("watch"), map[string]any{"record_dir": Property("string"), "label": Property("string"), "strip_ansi": Property("boolean")}, []string{"record_dir"}, func(a watchArgs) error { return Required("record_dir", a.RecordDir) }, func(ctx context.Context, x Execution, a watchArgs) (any, error) {
+		id, err := m.StartWatch(x.Actor, w.Path(a.RecordDir), a.Label, capture.OutputOptions{StripANSI: a.StripANSI})
 		if err != nil {
 			return nil, jobToolError(err)
 		}

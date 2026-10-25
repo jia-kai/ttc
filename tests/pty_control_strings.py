@@ -59,7 +59,7 @@ def main():
         for text, reply in zip(expected_inputs, expected_replies)
     ], indent=2))
     argv = [binary, '--offline-script', str(script), '--data-dir', str(data),
-            '--workdir', str(project), '--auto-name=false']
+            '--workdir', str(project)]
     environment = {
         'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
         'LANG': 'C.UTF-8', 'TERM': 'xterm',

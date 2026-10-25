@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"net/http"
 	"os"
 	"os/exec"
@@ -46,10 +47,11 @@ func (loginUI) Present(ctx context.Context, step auth.Step) error {
 	return nil
 }
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "watch-run" {
-		watchMain()
-	}
 	if e := run(); e != nil {
+		var exit *workloadExit
+		if errors.As(e, &exit) {
+			os.Exit(exit.code)
+		}
 		fmt.Fprintln(os.Stderr, "ttc:", e)
 		os.Exit(1)
 	}
@@ -61,89 +63,97 @@ func run() error {
 // runWithModules keeps command orchestration independent of built-in providers.
 // Modules register configuration, but the command owns catalog and UI lifetimes.
 func runWithModules(modules []providers.Module) error {
-	if len(os.Args) > 1 && os.Args[1] == "md" {
-		return runMarkdown(os.Args[2:])
-	}
-	if rail.IsClientServer(os.Args[1:]) {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		return rail.ServeClients(ctx)
-	}
-	if rail.IsSupervisor(os.Args[1:]) {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		return rail.Serve(ctx)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "rail" {
-		return runRail(os.Args[2:])
-	}
+	root := newRootCommand(modules)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return root.ExecuteContext(ctx)
+}
+
+type launchOptions struct {
+	data, cwd, script, load, providerID string
+	setupExa, plain, login              bool
+}
+
+// newRootCommand creates independent launch and provider configuration per call.
+func newRootCommand(modules []providers.Module) *cobra.Command {
+	root := &cobra.Command{Use: "ttc", Short: "TTC - True Terminal Coding", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true}
+	root.CompletionOptions.DisableDefaultCmd = true
+	flags := root.Flags()
 	rootDefault, dataDefaultErr := history.DataRoot()
-	searchPath, e := webSearchConfigPath()
-	if e != nil {
-		return e
-	}
-	searchConfigFile := flag.String("web-search-config", searchPath, "operator web-search JSON configuration")
-	setupExaFlag := flag.Bool("setup-exa", false, "read and verify an Exa search API key from stdin, save config, then exit")
-	data := flag.String("data-dir", rootDefault, "private data root")
-	cwd := flag.String("workdir", ".", "workspace directory")
-	plain := flag.Bool("plain", false, "plain terminal output")
-	login := flag.Bool("login", false, "run device-code login then exit")
-	model := flag.String("model", "", "optional model ID override (otherwise use last choice)")
-	variant := flag.String("variant", "", "optional reasoning preset override")
-	script := flag.String("offline-script", "", "JSON response script for deterministic offline integration")
-	load := flag.String("session", "", "load stored session ID")
-	autoName := flag.Bool("auto-name", true, "one small naming request at the first tool boundary or completed response")
-	providerIDFlag := flag.String("provider", "", "compiled provider ID")
+	var opts launchOptions
+	flags.BoolVar(&opts.setupExa, "setup-exa", false, "read and verify an Exa search API key from stdin, save config, then exit")
+	flags.StringVar(&opts.data, "data-dir", rootDefault, "private data root")
+	flags.StringVar(&opts.cwd, "workdir", ".", "workspace directory")
+	flags.BoolVar(&opts.plain, "plain", false, "plain terminal output")
+	flags.BoolVar(&opts.login, "login", false, "run device-code login then exit")
+	flags.StringVar(&opts.script, "offline-script", "", "JSON response script for deterministic offline integration")
+	flags.StringVar(&opts.load, "session", "", "load stored session ID")
+	flags.StringVar(&opts.providerID, "provider", "", "compiled provider ID")
+	root.InitDefaultHelpFlag()
 	appFlags := make(map[string]bool)
-	flag.CommandLine.VisitAll(func(f *flag.Flag) { appFlags[f.Name] = true })
-	configured, e := providers.Configure(modules, flag.CommandLine)
-	if e != nil {
-		return e
+	flags.VisitAll(func(f *pflag.Flag) { appFlags[f.Name] = true })
+	configured, configErr := providers.Configure(modules, flags)
+	if configErr == nil {
+		opts.providerID = configured[0].ID
+		flags.Lookup("provider").DefValue = configured[0].ID
 	}
-	*providerIDFlag = configured[0].ID
-	flag.CommandLine.Lookup("provider").DefValue = configured[0].ID
-	if e = flag.CommandLine.Parse(os.Args[1:]); e != nil {
-		if errors.Is(e, flag.ErrHelp) {
-			return nil
+	root.AddCommand(newMarkdownCommand(), newRailCommand(), newWatchCommand())
+	for _, hook := range []struct {
+		name  string
+		serve func(context.Context) error
+	}{{"__rail_clients", rail.ServeClients}, {"__rail_serve", rail.Serve}} {
+		root.AddCommand(&cobra.Command{Use: hook.name, Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+			return hook.serve(cmd.Context())
+		}})
+	}
+	root.RunE = func(cmd *cobra.Command, args []string) error {
+		if configErr != nil {
+			return configErr
 		}
-		return e
-	}
-	if *setupExaFlag {
-		var conflict string
-		flag.CommandLine.Visit(func(f *flag.Flag) {
-			if !appFlags[f.Name] {
-				conflict = f.Name
+		searchConfigFile, err := webSearchConfigPath()
+		if err != nil {
+			return err
+		}
+		if opts.setupExa {
+			var conflict string
+			flags.Visit(func(f *pflag.Flag) {
+				if !appFlags[f.Name] {
+					conflict = f.Name
+				}
+			})
+			if opts.login || opts.script != "" || conflict != "" {
+				return errors.New("--setup-exa cannot be combined with --login, --offline-script or provider-specific options")
 			}
-		})
-		if *login || *script != "" || conflict != "" {
-			return errors.New("--setup-exa cannot be combined with --login, --offline-script or provider-specific options")
+			return setupExa(cmd.Context(), searchConfigFile, os.Stdin, os.Stderr, http.DefaultClient)
 		}
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-		return setupExa(ctx, *searchConfigFile, os.Stdin, os.Stderr, http.DefaultClient)
-	}
-	factory, e := providers.Select(configured, *providerIDFlag)
-	if e != nil {
-		return e
-	}
-	if *script != "" {
-		var conflict string
-		flag.CommandLine.Visit(func(f *flag.Flag) {
-			if f.Name == "provider" || !appFlags[f.Name] {
-				conflict = f.Name
+		factory, e := providers.Select(configured, opts.providerID)
+		if e != nil {
+			return e
+		}
+		if opts.script != "" {
+			var conflict string
+			flags.Visit(func(f *pflag.Flag) {
+				if f.Name == "provider" || !appFlags[f.Name] {
+					conflict = f.Name
+				}
+			})
+			if opts.login || conflict != "" {
+				return errors.New("--offline-script cannot be combined with --login, --provider or provider-specific options")
 			}
-		})
-		if *login || conflict != "" {
-			return errors.New("--offline-script cannot be combined with --login, --provider or provider-specific options")
 		}
+		if err := dataDefaultError(flags, dataDefaultErr); err != nil {
+			return err
+		}
+		return runAgent(cmd.Context(), opts, factory, searchConfigFile)
 	}
-	if e = applySSHAuthSockPolicy(); e != nil {
-		return e
+	return root
+}
+
+func runAgent(parent context.Context, opts launchOptions, factory providers.Factory, searchConfigFile string) error {
+	if err := applySSHAuthSockPolicy(); err != nil {
+		return err
 	}
-	if e = dataDefaultError(flag.CommandLine, dataDefaultErr); e != nil {
-		return e
-	}
-	searchConfig, e := loadWebSearchConfig(*searchConfigFile)
+	searchConfig, e := loadWebSearchConfig(searchConfigFile)
 	if e != nil {
 		return e
 	}
@@ -156,27 +166,27 @@ func runWithModules(modules []providers.Module) error {
 	if _, e := exec.LookPath("rg"); e != nil {
 		return fmt.Errorf("ripgrep (rg) is required for local search; install ripgrep and ensure rg is on PATH: %w", e)
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	if _, e = scratch.Verify(); e != nil {
 		return e
 	}
 	progress := newStartupProgress(os.Stderr)
-	store, e := history.OpenWithProgress(*data, progress.migration)
+	store, e := history.OpenWithProgress(opts.data, progress.migration)
 	progress.finish("History migration", e)
 	if e != nil {
 		return e
 	}
 	defer store.Close()
-	w, e := workspace.Open(*cwd, store)
+	w, e := workspace.Open(opts.cwd, store)
 	if e != nil {
 		return e
 	}
 	var p session.Inference
 	var components providers.Components
-	providerID := *providerIDFlag
-	if *script != "" {
-		b, e := os.ReadFile(*script)
+	providerID := opts.providerID
+	if opts.script != "" {
+		b, e := os.ReadFile(opts.script)
 		if e != nil {
 			return e
 		}
@@ -185,8 +195,6 @@ func runWithModules(modules []providers.Module) error {
 			return e
 		}
 		p = &llm.Script{Responses: responses}
-		*model = "scripted"
-		*autoName = false
 		providerID = "script"
 	} else {
 		components, e = factory(ctx, providers.Environment{DataDir: store.Root, ResolveBinary: binaryinput.Resolve})
@@ -200,7 +208,7 @@ func runWithModules(modules []providers.Module) error {
 		if components.Notice != "" {
 			fmt.Fprintln(os.Stderr, components.Notice)
 		}
-		if *login {
+		if opts.login {
 			if components.Authorize == nil {
 				return fmt.Errorf("provider %q does not support authorization", providerID)
 			}
@@ -210,7 +218,7 @@ func runWithModules(modules []providers.Module) error {
 	var models []llm.ModelSpec
 	var modelUpdates <-chan catalog.Update
 	var loginCurrent func(context.Context) ([]llm.ModelSpec, error)
-	if *script != "" {
+	if opts.script != "" {
 		models = []llm.ModelSpec{llm.ScriptModel()}
 	} else {
 		if components.Catalog == nil || components.Catalog.Bind == nil {
@@ -242,13 +250,11 @@ func runWithModules(modules []providers.Module) error {
 		}
 	}
 	var remembered *llm.Selection
-	if *model == "" {
-		remembered, e = store.LastSelection(providerID)
-		if e != nil {
-			return fmt.Errorf("read saved model choice: %w", e)
-		}
+	remembered, e = store.LastSelection(providerID)
+	if e != nil {
+		return fmt.Errorf("read saved model choice: %w", e)
 	}
-	selection, notice, e := startupSelection(providerID, models, remembered, *model, *variant)
+	selection, notice, e := startupSelection(providerID, models, remembered)
 	if e != nil {
 		return e
 	}
@@ -258,8 +264,8 @@ func runWithModules(modules []providers.Module) error {
 	// Persist the startup choice before a writable load can record its switch.
 	// Loading itself (validation, copying and activation) is owned by the runtime.
 	var source history.Session
-	if *load != "" {
-		source, e = store.Session(*load)
+	if opts.load != "" {
+		source, e = store.Session(opts.load)
 		if e != nil {
 			return e
 		}
@@ -282,7 +288,7 @@ func runWithModules(modules []providers.Module) error {
 	}
 	// Maintenance owns the database before any runtime or frontend interaction.
 	// Its synchronous callbacks write startup stderr, never runtime events.
-	notices, e := maintainHistory(ctx, store, *load, progress)
+	notices, e := maintainHistory(ctx, store, opts.load, progress)
 	if e != nil {
 		return e
 	}
@@ -309,15 +315,15 @@ func runWithModules(modules []providers.Module) error {
 		cancel()
 		runtime.Close()
 	}()
-	if *load != "" {
-		if e := runtime.Load(*load); e != nil {
+	if opts.load != "" {
+		if e := runtime.Load(opts.load); e != nil {
 			return e
 		}
 	}
-	runtime.AutoName = *autoName
+	runtime.AutoName = opts.script == ""
 	for _, notice := range notices {
 		events <- session.Event{Kind: "status", Text: notice, Generation: runtime.Generation(), SessionID: runtime.Current()}
 	}
-	ui := &tui.Frontend{Runtime: runtime, Events: events, Input: os.Stdin, Output: os.Stdout, Plain: *plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginCurrent, Models: models, ModelUpdates: modelUpdates}
+	ui := &tui.Frontend{Runtime: runtime, Events: events, Input: os.Stdin, Output: os.Stdout, Plain: opts.plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginCurrent, Models: models, ModelUpdates: modelUpdates}
 	return ui.Run(ctx)
 }

@@ -165,7 +165,7 @@ func TestCompactionRejectsGenuinelyOversizedPrefixWithoutRequest(t *testing.T) {
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Actual model history. ", 10000))
 	before := r.Current()
-	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
+	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

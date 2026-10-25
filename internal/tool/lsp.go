@@ -24,11 +24,12 @@ type lspArgs struct {
 	Query      *string `json:"query,omitempty"`
 	Offset     *int    `json:"offset,omitempty"`
 	Limit      *int    `json:"limit,omitempty"`
-	Timeout    *int    `json:"timeout_ms,omitempty"`
+	Timeout    *int    `json:"timeout_seconds,omitempty"` // Nil uses 30 seconds; normalized to [1,120].
 }
 
 func normalizeLSP(a *lspArgs) []InputWarning {
-	warnings := NormalizeEnum("operation", &a.Operation, "definition", "references", "hover", "document_symbols", "workspace_symbols")
+	warnings := NormalizeTimeoutSeconds(a.Timeout, 120)
+	warnings = append(warnings, NormalizeEnum("operation", &a.Operation, "definition", "references", "hover", "document_symbols", "workspace_symbols")...)
 	clearText := func(name string, value **string) {
 		if *value != nil && **value == "" {
 			warnings = append(warnings, AdjustedInput(name, "", nil)...)
@@ -106,9 +107,9 @@ func jobToolError(err error) error {
 
 func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 	Register(r, "lsp_query", prompts.ToolDescription("lsp_query"), map[string]any{
-		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": IntegerRange(0, math.MaxInt), "limit": IntegerRange(1, 500), "timeout_ms": IntegerRange(1, 120000),
+		"job_id": Property("string"), "operation": Property("string", "definition", "references", "hover", "document_symbols", "workspace_symbols"), "path": Property("string"), "language_id": Property("string"), "line": Property("integer"), "column": Property("integer"), "query": Property("string"), "offset": IntegerRange(0, math.MaxInt), "limit": IntegerRange(1, 500), "timeout_seconds": Property("integer"),
 	}, []string{"job_id", "operation"}, validateLSP, func(ctx context.Context, x Execution, a lspArgs) (any, error) {
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30000))*time.Millisecond)
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30))*time.Second)
 		defer cancel()
 		query := lsp.Query{Operation: a.Operation, Offset: intDefault(a.Offset, 0), Limit: intDefault(a.Limit, 100)}
 		if a.Path != nil {
@@ -128,7 +129,7 @@ func addLSP(r *Registry, m *jobs.Manager, w *workspace.Manager) {
 		}
 		result, err := m.QueryLSP(ctx, x.Actor, a.JobID, query)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
-			return nil, Fail("timeout", fmt.Sprintf(prompts.ToolLSPTimeout, intDefault(a.Timeout, 30000)))
+			return nil, Fail("timeout", fmt.Sprintf(prompts.ToolLSPTimeout, intDefault(a.Timeout, 30)))
 		}
 		return result, jobToolError(err)
 	}, normalizeLSP)

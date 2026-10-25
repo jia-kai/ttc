@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +29,6 @@ func awaitCatalogSignal(t *testing.T, ch <-chan struct{}) {
 
 func TestCatalogCLIColdAndWarmStartup(t *testing.T) {
 	if data := os.Getenv("TTC_TEST_CATALOG_CLI_DATA"); data != "" {
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--plain", "--data-dir", data, "--workdir", os.Getenv("TTC_TEST_CATALOG_CLI_WORK"), "--openai-base-url", os.Getenv("TTC_TEST_CATALOG_CLI_ENDPOINT")}
 		if err := run(); err != nil {
 			t.Fatal(err)

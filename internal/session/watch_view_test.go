@@ -22,7 +22,7 @@ func TestWatchInspectorExpandsCapturedTails(t *testing.T) {
 	if _, err := watchrun.Run(dir, []string{"/bin/sh", "-c", "printf stdout-prefix; printf '%012000d' 0; printf stdout-end; printf stderr-end >&2"}, nil, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	id, err := r.Jobs.StartWatch("main", dir, false, "", capture.OutputOptions{})
+	id, err := r.Jobs.StartWatch("main", dir, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

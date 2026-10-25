@@ -47,7 +47,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 400))
 	before, generation := r.Current(), r.Generation()
-	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
+	job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

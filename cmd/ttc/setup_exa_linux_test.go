@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -166,16 +165,16 @@ func TestSaveSetupConfigDoesNotClobberChangedTarget(t *testing.T) {
 }
 
 func TestSetupExaCLIStandalone(t *testing.T) {
-	oldArgs, oldFlags, oldInput, oldClient := os.Args, flag.CommandLine, os.Stdin, http.DefaultClient
+	oldArgs, oldInput, oldClient := os.Args, os.Stdin, http.DefaultClient
 	t.Cleanup(func() {
-		os.Args, flag.CommandLine, os.Stdin, http.DefaultClient = oldArgs, oldFlags, oldInput, oldClient
+		os.Args, os.Stdin, http.DefaultClient = oldArgs, oldInput, oldClient
 	})
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
 	t.Setenv("TTC_DATA_DIR", "invalid-relative-data-root")
 	t.Setenv("PATH", "") // Setup must not need ripgrep, provider auth, or history.
 	t.Setenv("TTC_EXA_URL", "https://override.test")
-	path := filepath.Join(root, "selected", "search.json")
+	path := filepath.Join(root, "ttc", "web-search.json")
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -186,8 +185,7 @@ func TestSetupExaCLIStandalone(t *testing.T) {
 	}
 	write.Close()
 	os.Stdin = read
-	os.Args = []string{"ttc", "--setup-exa", "--web-search-config", path}
-	flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
+	os.Args = []string{"ttc", "--setup-exa"}
 	calls := 0
 	http.DefaultClient = &http.Client{Transport: setupRoundTripper(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -205,12 +203,8 @@ func TestSetupExaCLIStandalone(t *testing.T) {
 	if config, err := loadWebSearchConfig(path); err != nil || config.APIKey != "synthetic-cli-key" || config.Endpoint != "" {
 		t.Fatal("setup config missing", err)
 	}
-	if _, err = os.Stat(filepath.Join(root, "ttc", "web-search.json")); !os.IsNotExist(err) {
-		t.Fatal("default target was used")
-	}
 	for _, conflict := range []string{"--login", "--offline-script=missing", "--import-codex-auth=missing"} {
 		os.Args = []string{"ttc", "--setup-exa", conflict}
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		if err = run(); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 			t.Fatalf("conflict %s: %v", conflict, err)
 		}

@@ -33,7 +33,7 @@ func TestChildDiagnosticsRemainExplicitlyReadableNotAutomaticallyDelivered(t *te
 					close(notified)
 				}
 				ready, release := make(chan struct{}), make(chan struct{})
-				id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Background: true, WakeOnExit: true}, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
+				id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Background: true}, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 					fmt.Fprint(stdout, "preview")
 					fmt.Fprint(stderr, strings.Repeat("PRIVATE_STDERR_SENTINEL\n", 100))
 					close(ready)

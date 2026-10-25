@@ -16,7 +16,7 @@ func TestJobValidationUsesPromptAssetsWithoutProcesses(t *testing.T) {
 	if _, err := m.View("main", "missing"); !errors.Is(err, ErrNotFound) || err.Error() != prompts.JobNotFound {
 		t.Fatalf("missing-job sentinel changed: %v", err)
 	}
-	if _, err := m.Start("main", "", "", -1, false, false, false, capture.OutputOptions{}, ""); err == nil || err.Error() != prompts.JobTimeoutNonnegative {
+	if _, err := m.Start("main", "", "", -1, false, false, capture.OutputOptions{}, ""); err == nil || err.Error() != prompts.JobTimeoutNonnegative {
 		t.Fatalf("timeout guidance = %v", err)
 	}
 	// Synthetic completed handles exercise validation without launching a shell

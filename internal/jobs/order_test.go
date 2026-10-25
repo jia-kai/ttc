@@ -23,6 +23,7 @@ func TestLiveStableStartOrderAndOtherListsKeepIDOrder(t *testing.T) {
 		done := make(chan struct{})
 		close(done)
 		m.jobs[fixture.id] = &job{
+			ctx:       m.ctx,
 			startedAt: at,
 			view:      Snapshot{ID: fixture.id, Owner: "main", Status: fixture.status, StartedAt: at.Format(time.RFC3339Nano)},
 			stdout:    m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2),
@@ -63,7 +64,7 @@ func TestLaunchTimestampRetainsPrecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell, err := m.Start("main", "sleep 10", t.TempDir(), 0, true, true, false, capture.OutputOptions{}, "")
+	shell, err := m.Start("main", "sleep 10", t.TempDir(), 0, true, true, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +90,7 @@ func TestCompletionTimestampRetainsPrecision(t *testing.T) {
 		var id string
 		var err error
 		if kind == "shell" {
-			id, err = m.Start("main", "true", t.TempDir(), 0, true, true, false, capture.OutputOptions{}, "")
+			id, err = m.Start("main", "true", t.TempDir(), 0, true, true, capture.OutputOptions{}, "")
 		} else {
 			id, err = m.StartTask("main", TaskOptions{Kind: "subagent", Label: "task", Background: true}, func(context.Context, io.Writer, io.Writer) (TaskResult, error) {
 				return TaskResult{}, nil

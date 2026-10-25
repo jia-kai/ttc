@@ -322,7 +322,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 			case 1:
 				calls = []mockCall{
 					{"read", map[string]any{"path": "fixture.png"}},
-					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true, "wake_on_exit": false}}, {"subagent", map[string]any{"persistent": true, "variant": "low", "prompt": "Write the isolated fixture result", "label": "fixture child"}},
+					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true}}, {"subagent", map[string]any{"persistent": true, "variant": "low", "prompt": "Write the isolated fixture result", "label": "fixture child"}},
 				}
 			case 2:
 				if answer := get("m1_subagent", "answer"); answer != "First child assignment complete." {

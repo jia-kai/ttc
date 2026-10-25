@@ -17,13 +17,13 @@ import (
 // is "External run". Inspect and detailed metadata retain the exact recorded argv.
 // output selects cleaned or raw model views without changing externally owned
 // record files. ReadOptions can override the view per page.
-func (m *Manager) StartWatch(owner, dir string, wake bool, label string, output capture.OutputOptions) (string, error) {
+func (m *Manager) StartWatch(owner, dir string, label string, output capture.OutputOptions) (string, error) {
 	identity, err := watchrun.ReadIdentity(dir)
 	if err != nil {
 		return "", err
 	}
 	command := watchCommand(identity.Command)
-	options := TaskOptions{Kind: "watch", Label: compactLabel(label, prompts.JobLabelWatch), command: command, Background: true, WakeOnExit: wake, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
+	options := TaskOptions{Kind: "watch", Label: compactLabel(label, prompts.JobLabelWatch), command: command, Background: true, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
 		return InspectionSpec{Fields: []InspectionField{{Name: "Record dir", Value: dir}, {Name: "Command", Value: command, Language: "sh"}}, Streams: defaultInspectionStreams(false)}
 	}}
 	options.Output = &output

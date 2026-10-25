@@ -38,7 +38,6 @@ ToolJobListState: "state must be running or all; omit it to list running jobs"
 JobGrepCursor:
   "grep requires an empty cursor; paginate the returned grep job_id without grep"
 ToolJobStopIdentifier: "supply exactly one of job_id or child_id"
-ToolLSPBackgroundRequired: "protocol=lsp requires background=true"
 ToolLSPDocumentPosition:
   "document_symbols does not take line or column; omit them"
 ToolLSPHoverPagination: "hover is not paginated; omit offset and limit"
@@ -49,8 +48,8 @@ ToolLSPQueryArgument: "query is only accepted by workspace_symbols; omit it"
 ToolLSPQueryRequired:
   "workspace_symbols requires query (an empty string is allowed)"
 ToolLSPTimeout:
-  "LSP query exceeded %d ms; increase timeout_ms (max 120000), narrow query, or
-  inspect server stderr"
+  "LSP query exceeded %d seconds; increase timeout_seconds (max 120), narrow
+  query, or inspect server stderr"
 ToolLSPWorkspaceArguments:
   "for workspace_symbols, omit path, language_id, line and column"
 ToolLineTooLong:
@@ -164,8 +163,8 @@ ToolWebSourceIdentifier: "provide exactly one of url or document_id"
 ToolWebTextResponse:
   "not a text response; use an HTML or text version of the source"
 ToolWebTimeout:
-  "page fetch timed out; increase timeout_ms (max 120000) or use a smaller page
-  URL"
+  "page fetch timed out; increase timeout_seconds (max 120) or use a smaller
+  page URL"
 
 # Shell output validation.
 ToolShellOutputMode: output_mode must be head, tail, or head_tail.

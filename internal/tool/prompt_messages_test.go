@@ -38,7 +38,7 @@ func TestEmbeddedToolMessagesReachResults(t *testing.T) {
 		{"job_stop", `{}`, "invalid_input", Fail("invalid_arguments", prompts.ToolJobStopIdentifier).Error()},
 		{"job_stop", `{"child_id":"absent"}`, "not_found", prompts.ToolNoCodingChildren},
 		{"lsp_query", `{"job_id":"absent","operation":"hover","path":"text","line":1,"column":1,"limit":1}`, "invalid_input", prompts.ToolLSPHoverPagination},
-		{"lsp_query", `{"job_id":"absent","operation":"workspace_symbols","query":"","path":"text","timeout_ms":30000}`, "invalid_input", prompts.ToolLSPWorkspaceArguments},
+		{"lsp_query", `{"job_id":"absent","operation":"workspace_symbols","query":"","path":"text","timeout_seconds":30}`, "invalid_input", prompts.ToolLSPWorkspaceArguments},
 		{"web_fetch", `{"document_id":"absent"}`, "document_unavailable", prompts.ToolWebDocumentUnavailable},
 		{"web_search", `{"query":" "}`, "invalid_input", prompts.ToolSearchQueryRange},
 	} {

@@ -3,8 +3,8 @@ package openai
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	flag "github.com/spf13/pflag"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"

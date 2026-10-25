@@ -16,6 +16,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
+from mock_naming import respond_to_naming
 
 
 def main():
@@ -69,6 +70,8 @@ def main():
             try:
                 assert self.path == '/responses'
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if respond_to_naming(self, body):
+                    return
                 # A continuation adds developer recovery instructions after
                 # runtime context; select the context rather than the last text.
                 context = next(json.loads(text) for text in texts(body, 'developer')
@@ -194,7 +197,7 @@ def main():
     output = bytearray()
     try:
         command = [str(Path(args.binary).resolve()), '--plain', '--workdir', str(project),
-                   '--data-dir', str(root / 'data'), '--auto-name=false']
+                   '--data-dir', str(root / 'data')]
         if args.offline:
             script = root / 'script.json'
             script.write_text(json.dumps([
@@ -214,7 +217,7 @@ def main():
                 'access_token': 'mock-token', 'account_id': 'mock-account'}}))
             auth.chmod(0o600)
             command += ['--openai-base-url', f'http://127.0.0.1:{server.server_port}',
-                        '--import-codex-auth', str(auth), '--model', 'mock-audit', '--variant', 'high']
+                        '--import-codex-auth', str(auth)]
         master, slave = pty.openpty()
         try:
             process = subprocess.Popen(command,
@@ -280,7 +283,7 @@ def main():
             meters = db.execute("""SELECT r.status,(SELECT json_extract(e.content_json,'$.attempts')
                 FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id
                 WHERE o.request_id=r.id ORDER BY o.completion_entry_id DESC LIMIT 1)
-                FROM model_requests r""").fetchall()
+                FROM model_requests r WHERE r.purpose='coding'""").fetchall()
             expected_requests = 3 if args.offline else len(requests)
             if args.failure:
                 expected_requests -= 1  # Last two pre-output attempts share one request record.

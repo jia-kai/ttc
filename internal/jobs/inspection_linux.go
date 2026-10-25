@@ -54,12 +54,12 @@ type Inspection struct {
 
 // TaskOptions sets task identity, lifecycle, and optional inspection behavior.
 // A nil Inspector selects the label field and 8192-byte stdout/stderr tails.
-// Background controls completion notification; WakeOnExit controls model wakeup.
+// Background controls completion notification.
 type TaskOptions struct {
-	Kind, Label            string
-	Background, WakeOnExit bool
-	Inspector              Inspector
-	Output                 *capture.OutputOptions // Optional model-facing source selection; nil retains compact task previews.
+	Kind, Label string
+	Background  bool
+	Inspector   Inspector
+	Output      *capture.OutputOptions // Optional model-facing source selection; nil retains compact task previews.
 	// StartWatch retains record_dir in Snapshot for the tool JSON contract.
 	recordDir string
 	command   string // Exact command retained by watch tasks for explicit detail lists.
@@ -162,6 +162,14 @@ func (m *Manager) Inspect(ctx context.Context, owner, id string) (Inspection, er
 }
 
 func cloneSnapshot(view Snapshot) Snapshot {
+	if view.TimeoutSeconds != nil {
+		seconds := *view.TimeoutSeconds
+		view.TimeoutSeconds = &seconds
+	}
+	if view.ForegroundWaitSeconds != nil {
+		seconds := *view.ForegroundWaitSeconds
+		view.ForegroundWaitSeconds = &seconds
+	}
 	if view.Grep != nil {
 		origin := *view.Grep
 		view.Grep = &origin

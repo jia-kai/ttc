@@ -50,14 +50,14 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	defer m.Close()
 	launches := make(chan Snapshot, 2)
 	m.OnState = func(s Snapshot) { launches <- s }
-	id, err := m.StartWatch("main/child", dir, false, "", capture.OutputOptions{})
+	id, err := m.StartWatch("main/child", dir, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	view, err := m.Wait(ctx, "main", id, nil)
-	if err != nil || view.Status != "completed" || view.Kind != "watch" || view.ExitCode == nil || *view.ExitCode != 9 || view.WakeOnExit {
+	if err != nil || view.Status != "completed" || view.Kind != "watch" || view.ExitCode == nil || *view.ExitCode != 9 {
 		t.Fatalf("view %+v %v", view, err)
 	}
 	for _, snapshot := range []Snapshot{<-launches, view} {
@@ -67,7 +67,7 @@ func TestWatchCompletionReadAndNotification(t *testing.T) {
 	}
 	select {
 	case n := <-notifications:
-		if n.WakeOnExit || n.ExitCode == nil || *n.ExitCode != 9 || n.RecordDir != dir {
+		if n.ExitCode == nil || *n.ExitCode != 9 || n.RecordDir != dir {
 			t.Fatalf("notification %+v", n)
 		}
 	case <-ctx.Done():
@@ -86,7 +86,7 @@ func TestWatchLabelAndDetailedCommand(t *testing.T) {
 	dir, identity := watchFixture(t, true)
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartWatch("main", dir, false, "Training run", capture.OutputOptions{})
+	id, err := m.StartWatch("main", dir, "Training run", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestWatchIncompleteOutputPreservesStatusButFails(t *testing.T) {
 	}
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.StartWatch("main", dir, true, "", capture.OutputOptions{})
+	id, err := m.StartWatch("main", dir, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestWatchStopAndCloseOnlyObservation(t *testing.T) {
 			dir, _ := watchFixture(t, false)
 			m := New(context.Background(), nil)
 			defer m.Close()
-			id, err := m.StartWatch("main", dir, true, "", capture.OutputOptions{})
+			id, err := m.StartWatch("main", dir, "", capture.OutputOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}

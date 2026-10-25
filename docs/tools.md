@@ -9,25 +9,27 @@ These are TTC's complete target contracts. Current code:
 
 - Input is one JSON object containing only listed fields; `?` means optional.
   Reject unknown fields and invalid operation-specific combinations before
-  execution. Known redundant values are accepted when they agree with the
-  selected operation/target; conflicting selectors remain errors. Paths are
-  absolute or relative to the session workdir unless stated otherwise. Text is
-  UTF-8; integer bounds are inclusive. Page sizes, limits and byte caps are
-  positive; offsets use each tool's documented base. Read pages are capped at
-  40,000 bytes; mutation files at 8 MiB.
+  execution, except documented safe normalizations. Known redundant values are
+  accepted when they agree with the selected operation/target; conflicting
+  selectors remain errors. Paths are absolute or relative to the session workdir
+  unless stated otherwise. Text is UTF-8; integer bounds are inclusive. Page
+  sizes, limits and byte caps are positive; offsets use each tool's documented
+  base. Read pages are capped at 40,000 bytes; mutation files at 8 MiB.
 - Out-of-range numeric budgets, page sizes, timeouts and reminder durations are
   clipped to their supported inclusive bounds before validation and execution.
   Results include `warnings` with `code:"input_clipped"`, `parameter`,
   `requested`, `effective`, `minimum`, `maximum` and an explanatory `message`.
-  Omitted values keep their defaults; background shell timeout zero and update
-  repeat zero retain their documented meanings. Scheduling repeat zero clips to
-  one second, not a one-shot reminder. Exact requested arguments stay in saved
-  records; execution uses corrected values. Recovery does not retry execution or
-  suppress semantic validation or execution errors. Malformed values, integers
-  outside Go's `int` range and source coordinates are not corrected. Pagination
-  offsets clip to their documented minimum. Finite enum values accept
-  surrounding whitespace and case normalization; commands, paths, content,
-  identifiers and search patterns do not undergo intent repair.
+  Safe adjustments use `code:"input_normalized"`, `parameter`, `requested`,
+  `effective` and optional `message`, without clipping bounds. Omitted values
+  keep their defaults; explicit timeout zero and update repeat zero retain their
+  tool-specific meanings. Scheduling repeat zero clips to one second, not a
+  one-shot reminder. Exact requested arguments stay in saved records; execution
+  uses corrected values. Recovery does not retry execution or suppress semantic
+  validation or execution errors. Malformed values, integers outside Go's `int`
+  range and source coordinates are not corrected. Pagination offsets clip to
+  their documented minimum. Finite enum values accept surrounding whitespace and
+  case normalization; commands, paths, content, identifiers and search patterns
+  do not undergo intent repair.
 - Result is one JSON object: success adds `"ok":true`; failure returns
   `{"ok":false,"error":{"code":"snake_case_code","message":"actionable detail"}}`.
   Include `error.details` only for structured recovery. Empty search results and
@@ -102,10 +104,9 @@ replaces or changes model-facing results.
   refreshes open inspection. Shell/child waits sample bounded captures every 250
   ms with synchronous callbacks, no polling queue or separate polling goroutine.
   Final results are immutable durable entries. Background completion appends a
-  separate clickable card even with `wake_on_exit=false` or completion before
-  the launch result; it never rewrites that result. History restores no polling
-  handles. Session changes join jobs; lifecycle commands pause live inspector
-  polling.
+  separate clickable card even when completion precedes the launch result; it
+  never rewrites that result. History restores no polling handles. Session
+  changes join jobs; lifecycle commands pause live inspector polling.
 
 ## Files and search
 
@@ -296,7 +297,10 @@ Input: `{path, format?, scope?}`.
   children may pause inference at a settled tool boundary without completing the
   turn or assignment. Already pending actor input resumes immediately; zero is
   an immediate deadline. Without a deadline, waiting continues until eligible
-  input or cancellation; supply a deadline when no event is guaranteed.
+  input or cancellation; supply a deadline when no event is guaranteed. The
+  countdown starts only after sibling foreground tools have settled and their
+  results are saved; the tool call itself returns immediately. This deadline
+  resumes inference, never kills a command.
 - Eligible job completions, timer firings, parent guidance, user input or the
   deadline resume inference. Awaiting children still occupy their slot and
   active assignment; `persistent:false` does not prevent awaiting. `/btw` asides
@@ -308,17 +312,20 @@ Input: `{path, format?, scope?}`.
 ### `shell`
 
 - Input:
-  `{command:string, label?:string, workdir?:string, timeout_ms?:integer, background?:boolean, wake_on_exit?:boolean, protocol?:"lsp", strict?:boolean, output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer, strip_ansi?:boolean}`.
+  `{command:string, label?:string, workdir?:string, timeout_seconds?:integer, max_fg_wait_seconds?:integer, background?:boolean, protocol?:"lsp", strict?:boolean, output_mode?:"head"|"tail"|"head_tail", output_bytes?:integer, strip_ansi?:boolean}`.
   `strict` defaults to true: `/bin/sh -eu -c` enables POSIX errexit and nounset,
   without pipefail. Set `strict:false` for commands requiring neither behavior;
   handle expected failures with conditionals or `||` when appropriate. The
   optional label names the job in compact metadata; omission uses a short
   default. Exact commands are available through `job_list(details=true)`.
-  `workdir` defaults to the session directory. Foreground `timeout_ms` defaults
-  to 20000 and cannot be disabled; explicit values are 1–86400000 ms. Background
-  has no timeout by default; `0` also means no timeout in background. A positive
-  background timeout is an optional explicit deadline. `background` defaults to
-  false and `wake_on_exit` to true. Commands are noninteractive with no PTY;
+  `workdir` defaults to the session directory. Ordinary commands use an
+  execution deadline of `timeout_seconds=3600`, in either foreground or
+  background. Explicit zero becomes 86400 with a warning; other values clip to
+  1–86400, so negative values become 1. `max_fg_wait_seconds` defaults to 10 and
+  clips to 0–86400; zero returns immediately in the background. Expiry of this
+  foreground wait promotes the same process/job without resetting its execution
+  deadline. `background` defaults to false; true ignores an explicitly supplied
+  foreground wait with a warning. Commands are noninteractive with no PTY;
   ordinary shell stdin is closed. LSP jobs reserve writable stdin for the
   protocol manager. This tool does not support interactive terminal input.
 - Result:
@@ -328,19 +335,29 @@ Input: `{path, format?, scope?}`.
   cancellation or supervision failure determines the status. `failed` indicates
   a launch or supervision failure, `cancelled` an explicit stop/timeout, and
   `interrupted` an unobserved exit after backend loss. `stdout` and `stderr`
-  identify the two streams. Each call retains at most 64 MiB (32 MiB per
-  stream), sharing a 1 GiB runtime ring-capacity pool. Pressure evicts the least
-  recently written other ring and marks its loss. `output_bytes` is a combined
-  stdout/stderr payload budget, default 8192, range 1–8192. Complete retained
-  source output is selected whenever it fits. Otherwise `output_mode` selects
-  `head`, `tail`, or `head_tail` (default). Both streams share the budget;
-  unused allowance goes to the other stream. Selection respects UTF-8 character
-  boundaries. `stdout_selection` and `stderr_selection` report
+  identify the two streams. Results also expose effective `timeout_seconds`
+  (omitted when unlimited), `max_fg_wait_seconds` when waiting was requested,
+  `background` and `promoted` when true. A cancelled job reports
+  `cancellation_reason`: `execution_deadline`, `explicit_stop`,
+  `caller_cancelled` or `runtime_cleanup`. Each call retains at most 64 MiB (32
+  MiB per stream), sharing a 1 GiB runtime ring-capacity pool. Pressure evicts
+  the least recently written other ring and marks its loss. `output_bytes` is a
+  combined stdout/stderr payload budget, default 8192, range 1–8192. Complete
+  retained source output is selected whenever it fits. Otherwise `output_mode`
+  selects `head`, `tail`, or `head_tail` (default). Both streams share the
+  budget; unused allowance goes to the other stream. Selection respects UTF-8
+  character boundaries. `stdout_selection` and `stderr_selection` report
   total/omitted/lost-prefix source bytes and head/tail segment lengths. Head and
   tail are concatenated without an inserted separator; the lengths identify the
   omitted gap. `truncated` includes selection omission or retained loss. Raw
   output and `job_read` cursors remain independent of selection. The same job
   settings govern its completion snapshot; TUI summary rows remain short.
+- Foreground completion returns its terminal result without a duplicate async
+  event. Automatic or manual promotion produces exactly one terminal background
+  event, including when completion races promotion. Background completions
+  always notify; teardown retains diagnostics but suppresses model wakeups.
+  Cancellation reasons distinguish execution deadline, explicit stop, caller
+  interruption and scope/runtime cleanup.
 - `strip_ansi` defaults to true for model-facing results. A stateful ANSI parser
   removes escape sequences and applies carriage returns, backspaces and
   erase-line controls within each selected page/segment. Normal newlines/tabs
@@ -351,11 +368,14 @@ Input: `{path, format?, scope?}`.
   writes/pages are indexed; reconstructing more than 64 KiB of preceding source
   reports a cleaning error. Request a raw page in that case. Selection metadata
   exposes `cleaning_error` when a preview cannot be cleaned.
-- `protocol="lsp"` requires `background=true`. TTC runs without a PTY, reserves
-  raw stdin/stdout for LSP framing, and keeps stderr in the job log. The command
-  must replace the shell with the server and must print nothing to stdout first.
-  The LSP manager alone reads/writes protocol stdio. `job_read` exposes only
-  stderr for this job. A stopped or exited job cannot be queried.
+- `protocol="lsp"` automatically enables background mode with a warning when
+  needed. LSP servers default to no execution deadline; explicit
+  `timeout_seconds` follows the ordinary normalization rules above. TTC runs
+  without a PTY, reserves raw stdin/stdout for LSP framing, and keeps stderr in
+  the job log. The command must replace the shell with the server and must print
+  nothing to stdout first. The LSP manager alone reads/writes protocol stdio.
+  `job_read` exposes only stderr for this job. A stopped or exited job cannot be
+  queried.
 
 ### `subagent`
 
@@ -400,6 +420,9 @@ Input: `{path, format?, scope?}`.
   close the context after managed-work cleanup. Foreground results carry that
   event for acknowledgment at request admission; background turns always notify
   the main agent, whether busy or idle. Do not emit an additional `job_exit`.
+- Child handoffs should stay under 500 words: summarize the result, evidence and
+  unresolved issues. Put lengthy reports in the shared scratch directory and
+  return their paths instead of copying them into the final response.
 - Result: a child-specific named-stream snapshot with `kind:"subagent"`,
   `child_id`, `child_turn_id`, `persistent`, and a terminal `finish_event_seq`
   when available. Unlike shell results, it uses `assignment_status` (`running`,
@@ -490,17 +513,17 @@ Input: `{path, format?, scope?}`.
 ### `tmux_watch_run`
 
 - Input:
-  `{command:string,record_dir:string,label?:string,workdir?:string,wake_on_exit?:boolean,strip_ansi?:boolean}`.
+  `{command:string,record_dir:string,label?:string,workdir?:string,strip_ansi?:boolean}`.
   `command` is a shell string run with `/bin/sh -eu`, without pipefail. Relative
   `record_dir` and `workdir` use the workspace, independently; `workdir`
   defaults to the workspace. The record parent must exist and its final
   directory must not. Cosmetic watch labels normalize controls/whitespace and
-  truncate to at most 64 UTF-8 bytes, reporting changes in input warnings;
-  `wake_on_exit` defaults to true.
+  truncate to at most 64 UTF-8 bytes, reporting changes in input warnings.
 - Requires `tmux` on PATH. Launches a new detached session and automatically
   creates a local watch job. Records capture stdout, stderr and completion
   without manual redirection. The session closes when the workload exits;
-  records remain on disk.
+  records remain on disk. There is no execution deadline; completion always
+  notifies the observing runtime except during teardown.
 - `strip_ansi` defaults to true for watcher output views. Durable stdout/stderr
   records always retain raw bytes; false selects raw model-facing previews.
 - Result includes absolute `record_dir`, `session_name`, available `session_id`
@@ -518,12 +541,11 @@ Input: `{path, format?, scope?}`.
 
 ### `watch`
 
-- Input:
-  `{record_dir:string,label?:string,wake_on_exit?:boolean,strip_ansi?:boolean}`.
-  Reattach to saved runs created by `tmux_watch_run`. Relative paths use the
-  workspace. Returns a background job snapshot with kind `watch`; `wake_on_exit`
-  defaults to true. `label` supplies a short job name; omission uses
-  `External run`.
+- Input: `{record_dir:string,label?:string,strip_ansi?:boolean}`. Reattach to
+  saved runs created by `tmux_watch_run`. Relative paths use the workspace.
+  Returns a background job snapshot with kind `watch`. There is no execution
+  deadline; completion always notifies except during teardown. `label` supplies
+  a short job name; omission uses `External run`.
 - `strip_ansi` defaults to true for previews, without changing raw record files.
   `job_read` pages captured stdout/stderr; `job_list` shows the watcher and
   `job_stop` cancels observation. Session changes and TTC exit also stop only
@@ -652,15 +674,16 @@ return actionable errors without reviving old jobs.
 - Positions are 1-based Unicode code-point columns; TTC converts them to the
   server's negotiated encoding.
 - Input:
-  `{job_id:string, operation:"definition"|"references"|"hover"| "document_symbols"|"workspace_symbols", path?:string, line?:integer, column?:integer, language_id?:string, query?:string, offset?:integer, limit?:integer, timeout_ms?:integer}`.
+  `{job_id:string, operation:"definition"|"references"|"hover"| "document_symbols"|"workspace_symbols", path?:string, line?:integer, column?:integer, language_id?:string, query?:string, offset?:integer, limit?:integer, timeout_seconds?:integer}`.
   `definition`, `references`, and `hover` require `path`, `line`, and `column`.
   `document_symbols` requires `path`. `workspace_symbols` requires `query`
   (empty string is allowed). `language_id` may accompany a path; otherwise infer
   it from the extension. `offset` (0-based, default 0) and `limit` (default 100,
   maximum 500) apply only to location and symbol results. Other
   operation-specific fields are invalid except redundant empty text values and
-  hover's explicit default `offset=0` / `limit=100`. `timeout_ms` defaults to
-  30000 and must be 1–120000.
+  hover's explicit default `offset=0` / `limit=100`. `timeout_seconds` defaults
+  to 30; explicit zero becomes 120 with a warning, and other values clip to
+  1–120 with warnings when adjusted.
 - Definition/references result:
   `{kind:"locations", locations:[Location], next_offset:integer|null, truncated:boolean}`.
   `Location` is
@@ -687,8 +710,9 @@ Discover source URLs and highlights through Exa's headless MCP endpoint.
 
 - Input: `{query:string, num_results?:integer, max_chars?:integer}`. Query is
   nonblank and at most 4096 bytes; results default to 5 (1–10), output defaults
-  to 4000 Unicode characters (1–64000). Timeout is 30 seconds; response decoding
-  is bounded to 2 MiB, accepting JSON or SSE and explicit JSON-RPC/tool errors.
+  to 4000 Unicode characters (1–64000). Timeout is fixed at 30 seconds, with no
+  timeout configuration parameter; response decoding is bounded to 2 MiB,
+  accepting JSON or SSE and explicit JSON-RPC/tool errors.
 - Result: retained-page fields below, plus `{backend:"exa", query:string}`.
   `url` is empty: the backend transport endpoint is not a source URL. Search
   text preserves backend titles/URLs/highlights; it is not executable
@@ -711,11 +735,12 @@ provider-specific replay/citation contract is outside this standalone backend.
 Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 - Input: exactly one of `url:string` or `document_id:string`; optional
-  `{format:"markdown"|"text"|"html", offset:integer, max_chars:integer, pattern:string, context_lines:integer, timeout_ms:integer}`.
+  `{format:"markdown"|"text"|"html", offset:integer, max_chars:integer, pattern:string, context_lines:integer, timeout_seconds:integer}`.
   Retained documents cannot change format. Markdown is the default; `max_chars`
-  defaults to 4000 (1–64000); timeout defaults to 30000 ms (1–120000). URLs are
-  at most 4096 bytes and cannot contain credentials; redirects obey the same URL
-  validation.
+  defaults to 4000 (1–64000). `timeout_seconds` defaults to 30; explicit zero
+  becomes 120 with a warning, and other values clip to 1–120 with warnings when
+  adjusted. URLs are at most 4096 bytes and cannot contain credentials;
+  redirects obey the same URL validation.
 - Without `pattern`, `offset` is a zero-based Unicode-character cursor. Result:
   `{document_id, url, content_type, format, untrusted:true, content, offset, cursor_unit:"unicode_characters", next_offset:integer|null, truncated:boolean}`.
   Empty or beyond-end pages have no next cursor.
@@ -900,8 +925,9 @@ Job operations are scoped to the current runtime and caller/descendant jobs;
 handles do not survive its end. Saved history and external-run records remain;
 externally owned workloads continue independently. The UI records terminal
 status. Foreground shell exits return results without `job_exit`; background
-shell and watch jobs notify only with `wake_on_exit=true`, including shells
-moved to background with Ctrl+B. Completion notices include selected
+shell and watch jobs always notify, including shells moved to background with
+Ctrl+B or after their foreground wait expires. Teardown suppresses model
+wakeups, not diagnostic recording. Completion notices include selected
 stdout/stderr, truncation/selection metadata and known exit code or signal.
 Coding children always deliver their turn event.
 

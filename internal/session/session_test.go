@@ -161,7 +161,7 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 	if len(listed) != 1 || listed[0].ID != wake.ID || listed[0].Last != "delivered" {
 		t.Fatal(listed)
 	}
-	id, e := r.Jobs.Start("main", "sleep 20", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{}, "")
+	id, e := r.Jobs.Start("main", "sleep 20", r.Workspace.Root, 0, true, true, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -278,10 +278,10 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 	}
 }
 
-func TestBackgroundWithoutWakeStillPersistsOutput(t *testing.T) {
+func TestBackgroundCompletionNotifiesAndPersistsOutput(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Start a background research command")
-	id, e := r.Jobs.Start("main", "printf retained-output", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{}, "")
+	id, e := r.Jobs.Start("main", "printf retained-output", r.Workspace.Root, 0, true, true, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -289,8 +289,8 @@ func TestBackgroundWithoutWakeStillPersistsOutput(t *testing.T) {
 		t.Fatal(e)
 	}
 	r.Jobs.Close()
-	if r.HasNotifications() {
-		t.Fatal("wake_on_exit=false woke model")
+	if !r.HasNotifications() {
+		t.Fatal("background completion did not notify model")
 	}
 	entries, e := r.Store.Branch(r.Current(), 0)
 	if e != nil {

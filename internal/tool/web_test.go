@@ -114,7 +114,7 @@ func TestWebFetchTimeoutCanBeRecovered(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("Recovered page")), Request: req}, nil
 	})}, WebSearchConfig{})
-	failed := invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test","timeout_ms":1}`)
+	failed := invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test","timeout_seconds":1}`)
 	var failure struct {
 		OK    bool
 		Error *Error
@@ -122,7 +122,54 @@ func TestWebFetchTimeoutCanBeRecovered(t *testing.T) {
 	if err := json.Unmarshal(failed.Result, &failure); err != nil || failure.OK || failure.Error == nil || failure.Error.Code != "timeout" {
 		t.Fatal(string(failed.Result), err)
 	}
-	ok(t, invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test","timeout_ms":30000}`))
+	ok(t, invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test","timeout_seconds":30}`))
+}
+
+func TestWebFetchTimeoutSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		name, argument string
+		seconds        int
+	}{
+		{"default", "", 30},
+		{"explicit", `,"timeout_seconds":2`, 2},
+		{"zero", `,"timeout_seconds":0`, 120},
+		{"negative", `,"timeout_seconds":-1`, 1},
+		{"maximum", `,"timeout_seconds":121`, 120},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, w, x, request := toolFixture(t)
+			AddWeb(r, &http.Client{Transport: fetchTransport(func(req *http.Request) (*http.Response, error) {
+				deadline, ok := req.Context().Deadline()
+				remaining := time.Until(deadline)
+				want := time.Duration(tc.seconds) * time.Second
+				if !ok || remaining > want || remaining < want-time.Second/2 {
+					t.Fatalf("deadline remaining %s, want %s", remaining, want)
+				}
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: io.NopCloser(strings.NewReader("page")), Request: req}, nil
+			})}, WebSearchConfig{})
+			ok(t, invoke(t, r, w, x, request, "web_fetch", `{"url":"https://example.test"`+tc.argument+`}`))
+		})
+	}
+}
+
+func TestWebTimeoutMillisecondsRejectedAndHistoricalRecordPreserved(t *testing.T) {
+	r := NewRegistry()
+	AddWeb(r, http.DefaultClient, WebSearchConfig{})
+	codec, _ := r.Get("web_fetch")
+	args := []byte(`{"url":"https://example.test","timeout_ms":1000}`)
+	if _, err := codec.DecodeCall(1, args); err == nil {
+		t.Fatal("accepted obsolete milliseconds input")
+	}
+	historical := Record{Name: "web_fetch", Arguments: args, Result: json.RawMessage(`{"ok":true}`)}
+	historical.Markdown.Revision = 1
+	encoded, err := json.Marshal(historical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := codec.DecodeRecord(1, encoded)
+	if err != nil || string(decoded.Arguments) != string(args) {
+		t.Fatalf("historical arguments changed: %s, %v", decoded.Arguments, err)
+	}
 }
 
 func TestWebCacheBoundsExpiryAndImmutability(t *testing.T) {

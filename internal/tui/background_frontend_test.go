@@ -12,7 +12,7 @@ import (
 
 func TestBackgroundMenuSelectsForegroundShell(t *testing.T) {
 	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
-		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; while [ ! -e release ]; do sleep 0.01; done; printf done","wake_on_exit":false}`)}}},
+		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; while [ ! -e release ]; do sleep 0.01; done; printf done"}`)}}},
 		{Text: "Foreground released"},
 	}})
 	u.typeText("start")
@@ -47,7 +47,7 @@ func TestBackgroundMenuSelectsForegroundShell(t *testing.T) {
 
 func TestCtrlBPromotesForegroundShellWithoutSubmittingDraft(t *testing.T) {
 	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
-		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; sleep 30","wake_on_exit":false}`)}}},
+		{Calls: []llm.ToolCall{{ID: "shell", Name: "shell", Arguments: []byte(`{"command":"touch started; sleep 30"}`)}}},
 		{Text: "Shortcut released"},
 	}})
 	u.typeText("start")

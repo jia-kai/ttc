@@ -81,7 +81,10 @@ func (r *Runtime) Awaiting(actor string) bool {
 	return r.awaiting[actor]
 }
 
-type awaitRequest struct{ deadline time.Time }
+type awaitRequest struct {
+	duration time.Duration
+	timed    bool // Distinguishes an explicit zero from an indefinite wait.
+}
 
 // settleAwait parks only at a balanced tool-result boundary. The await tool
 // itself has already completed and all sibling foreground calls are settled.
@@ -93,7 +96,11 @@ func (r *Runtime) settleAwait(ctx context.Context, actor string) error {
 	if !ok {
 		return nil
 	}
-	reason, err := r.awaitActor(ctx, actor, request.deadline)
+	var deadline time.Time
+	if request.timed {
+		deadline = time.Now().Add(request.duration)
+	}
+	reason, err := r.awaitActor(ctx, actor, deadline)
 	if err == nil && reason == "deadline" {
 		r.orderMu.Lock()
 		err = r.queueActorNotificationLocked(actor, `{"type":"await_deadline"}`)
@@ -168,7 +175,8 @@ func (r *Runtime) addAwaitTool() {
 		}
 		request := awaitRequest{}
 		if a.Deadline != nil {
-			request.deadline = time.Now().Add(time.Duration(*a.Deadline) * time.Second)
+			request.duration = time.Duration(*a.Deadline) * time.Second
+			request.timed = true
 		}
 		r.awaitRequests[x.Actor] = request
 		return map[string]any{"state": "awaiting"}, nil

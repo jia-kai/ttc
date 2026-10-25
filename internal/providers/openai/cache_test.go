@@ -36,7 +36,7 @@ func TestNoToolsCompactionPreservesCachePrefix(t *testing.T) {
 		},
 		Tools: []llm.ToolDefinition{
 			{Name: "read", Description: "Read a file", Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`)},
-			{Name: "shell", Description: "Run a command", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}},"required":["command"]}`)},
+			{Name: "shell", Description: "Run a command", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1}},"required":["command"]}`)},
 		},
 		MaxAttempts: 1,
 	}
@@ -63,7 +63,7 @@ func TestNoToolsCompactionPreservesCachePrefix(t *testing.T) {
 	var wantTools any
 	if err := json.Unmarshal([]byte(`[
 		{"type":"function","name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"strict":false},
-		{"type":"function","name":"shell","description":"Run a command","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}},"required":["command"]},"strict":false}
+		{"type":"function","name":"shell","description":"Run a command","parameters":{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1}},"required":["command"]},"strict":false}
 	]`), &wantTools); err != nil {
 		t.Fatal(err)
 	}

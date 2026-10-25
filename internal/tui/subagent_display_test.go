@@ -256,7 +256,7 @@ func TestCompactSubagentStreamingPreviewDoesNotOpenPayloadInspector(t *testing.T
 func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 	p := &llm.Script{Responses: []llm.ScriptResponse{
 		{Calls: []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":true,"prompt":"start background shell","label":"shell helper"}`)}}},
-		{Calls: []llm.ToolCall{{ID: "background", Name: "shell", Arguments: []byte(`{"command":"while [ ! -e release ]; do sleep 0.01; done; cat release; cat diagnostic >&2; sleep 30","background":true,"wake_on_exit":false}`)}}},
+		{Calls: []llm.ToolCall{{ID: "background", Name: "shell", Arguments: []byte(`{"command":"while [ ! -e release ]; do sleep 0.01; done; cat release; cat diagnostic >&2; sleep 30","background":true}`)}}},
 		{Calls: []llm.ToolCall{{ID: "pause", Name: "await", Arguments: []byte(`{}`)}}},
 	}}
 	u := newQuestionTestUI(t, p)

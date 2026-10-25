@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
+	flag "github.com/spf13/pflag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,7 +124,6 @@ func runModuleCLIFixture(t *testing.T, f moduleCLIFixture) {
 			}, nil
 		}
 	}
-	flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 	os.Args = append([]string{"ttc", "--plain", "--data-dir", f.Data, "--workdir", f.Work}, f.Args...)
 	var err error
 	if f.Mode == "production-script" {

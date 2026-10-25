@@ -20,12 +20,13 @@
   efforts/descriptions/defaults, not name heuristics. Reject unsupported choices
   or no selectable models. Explicit `none` sends reasoning metadata; models
   without controls show synthetic `none` and omit reasoning.
-- No startup model flag is required. Private `model-choices.json` remembers
-  explicit provider/model/variant choices, including Fast. Save before queuing;
-  save failure rejects the choice. Activity/compaction/read-only inspection do
-  not change it. Switch-record failure keeps the active model but leaves the
-  accepted startup preference. Cap the file at 64 KiB, reject invalid input and
-  serialize read-modify-write saves across instances with a short file lock.
+- Select models and variants in the UI, not root launch flags. Private
+  `model-choices.json` remembers explicit provider/model/variant choices,
+  including Fast. Save before queuing; save failure rejects the choice.
+  Activity/compaction/read-only inspection do not change it. Switch-record
+  failure keeps the active model but leaves the accepted startup preference. Cap
+  the file at 64 KiB, reject invalid input and serialize read-modify-write saves
+  across instances with a short file lock.
 - The transport implements `catalog.Source`, returning remote `ModelInfo`
   without TTC reserves. Provider-neutral `catalog.Manager` validates it and
   applies application `Policy` to produce independently owned `ModelSpec`
@@ -62,9 +63,7 @@
 - Resolve the startup choice against available metadata. With no saved choice or
   an unavailable model, use the first selectable model/default variant;
   unavailable variants use that model's default. Notify on either unavailable
-  selection. `--model ID` uses its default unless `--variant VARIANT` is
-  supplied; `--variant` alone overrides the remembered model. Invalid explicit
-  overrides fail.
+  selection.
 
 ## Switching and replay
 

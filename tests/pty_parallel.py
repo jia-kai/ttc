@@ -27,7 +27,7 @@ class Instance:
         script.write_text(json.dumps(responses))
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
-        command = [str(Path('./ttc').resolve()), '--plain', '--auto-name=false',
+        command = [str(Path('./ttc').resolve()), '--plain',
                    '--workdir', str(root / 'project'), '--data-dir', str(root / 'data'),
                    '--offline-script', str(script)]
         if load:

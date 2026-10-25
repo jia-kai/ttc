@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,14 +22,12 @@ type catalogTransport func(*http.Request) (*http.Response, error)
 func (f catalogTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestRemovedInstallMathFlagIsRejected(t *testing.T) {
-	args, flags := os.Args, flag.CommandLine
-	t.Cleanup(func() { os.Args, flag.CommandLine = args, flags })
+	args := os.Args
+	t.Cleanup(func() { os.Args = args })
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	for _, extra := range [][]string{nil, {"--setup-exa"}, {"--plain"}} {
 		os.Args = append([]string{"ttc", "--install-math"}, extra...)
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
-		flag.CommandLine.SetOutput(io.Discard)
-		if err := run(); err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -install-math") {
+		if err := run(); err == nil || !strings.Contains(err.Error(), "unknown flag: --install-math") {
 			t.Fatalf("args %v: expected unknown flag, got %v", os.Args, err)
 		}
 	}
@@ -52,13 +49,12 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 			body := `{"models":[{"slug":"first","display_name":"First","visibility":"list","priority":1,"context_window":100000,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},{"slug":"second","display_name":"Second","visibility":"list","priority":2,"context_window":100000,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}],"service_tiers":[{"id":"priority","name":"Fast"}]}]}`
 			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 		})
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--data-dir", data, "--workdir", os.Getenv("TTC_TEST_MODEL_WORK")}
 		if os.Getenv("TTC_TEST_MODEL_TUI") != "1" {
 			os.Args = append(os.Args, "--plain")
 		}
 		if load := os.Getenv("TTC_TEST_MODEL_LOAD"); load != "" {
-			os.Args = append(os.Args, "--session", load, "--model", "second/fast", "--variant", "high")
+			os.Args = append(os.Args, "--session", load)
 		}
 		_, cacheErr := os.Stat(filepath.Join(data, "openai-models.json"))
 		warm := cacheErr == nil
@@ -114,7 +110,7 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		cmd.Stdin = strings.NewReader(step.input)
 		output, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(string(output), "TTC · Linux terminal agent") {
-			t.Fatalf("CLI did not open without --model: %v\n%s", err, output)
+			t.Fatalf("CLI did not open: %v\n%s", err, output)
 		}
 		if strings.HasPrefix(step.input, "/model ") && !strings.Contains(string(output), "Model switched · second/fast · high") {
 			t.Fatalf("runtime switch missing: %s", output)
@@ -140,7 +136,6 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 
 func TestMainHelpWithInvalidDataDefault(t *testing.T) {
 	if os.Getenv("TTC_TEST_MAIN_HELP") == "1" {
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ExitOnError)
 		os.Args = []string{"ttc", "--help"}
 		if err := run(); err != nil {
 			t.Fatal(err)
@@ -188,7 +183,9 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s.SaveSelection(previous); err != nil {
+			preferred := previous
+			preferred.Model.ID, preferred.Variant = "second/fast", "high"
+			if err := s.SaveSelection(preferred); err != nil {
 				t.Fatal(err)
 			}
 			wantError := "startup switch blocked"
@@ -245,7 +242,6 @@ func TestStartupLoadModelFailureOrdering(t *testing.T) {
 
 func TestStartupRequiresRipgrepBeforeCreatingState(t *testing.T) {
 	if data := os.Getenv("TTC_TEST_NO_RG_DATA"); data != "" {
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--data-dir", data}
 		if err := run(); err == nil || !strings.Contains(err.Error(), "ripgrep (rg) is required") {
 			t.Fatalf("startup did not explain its missing search dependency: %v", err)

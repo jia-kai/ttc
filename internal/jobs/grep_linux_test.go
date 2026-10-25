@@ -196,7 +196,7 @@ func TestGrepPublishesCompletedStateOnceWithoutNotification(t *testing.T) {
 		// View acquires the manager lock and verifies publication precedes the
 		// callback, while the callback itself runs outside that lock.
 		view, err := m.View("main", s.ID)
-		if err != nil || view.Status != "completed" || s.Status != "completed" || s.WakeOnExit || s.Grep == nil || s.Grep.SourceJobID != id {
+		if err != nil || view.Status != "completed" || s.Status != "completed" || s.Grep == nil || s.Grep.SourceJobID != id {
 			t.Fatal(s, view, err)
 		}
 		states = append(states, s)

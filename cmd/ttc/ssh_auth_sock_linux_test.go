@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +47,6 @@ func TestSSHAuthSockPolicy(t *testing.T) {
 
 func TestSSHAuthSockToolEnvironment(t *testing.T) {
 	if root := os.Getenv("TTC_TEST_SSH_ENV_ROOT"); root != "" {
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--plain", "--offline-script", filepath.Join(root, "script.json"), "--workdir", root, "--data-dir", filepath.Join(root, "data")}
 		if err := run(); err != nil {
 			t.Fatal(err)

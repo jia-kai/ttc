@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
-	"flag"
+	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,17 +11,27 @@ import (
 	"testing"
 )
 
-func TestMarkdownPath(t *testing.T) {
+func TestMarkdownArguments(t *testing.T) {
 	for _, args := range [][]string{nil, {"a", "b"}, {"--unknown"}} {
-		if _, err := markdownPath(args, new(bytes.Buffer)); err == nil {
+		cmd := newMarkdownCommand()
+		cmd.SetArgs(args)
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		if err := cmd.Execute(); err == nil {
 			t.Fatalf("accepted arguments %q", args)
 		}
 	}
 	var help bytes.Buffer
-	if _, err := markdownPath([]string{"--help"}, &help); !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "Ctrl-U/D") {
+	cmd := newMarkdownCommand()
+	cmd.SetArgs([]string{"--help"})
+	cmd.SetOut(&help)
+	if err := cmd.Execute(); err != nil || !strings.Contains(help.String(), "Ctrl-U/D") {
 		t.Fatalf("help: %v, %q", err, help.String())
 	}
-	if path, err := markdownPath([]string{"--", "-notes.md"}, &help); err != nil || path != "-notes.md" {
+	cmd = newMarkdownCommand()
+	var path string
+	cmd.RunE = func(_ *cobra.Command, args []string) error { path = args[0]; return nil }
+	cmd.SetArgs([]string{"--", "-notes.md"})
+	if err := cmd.Execute(); err != nil || path != "-notes.md" {
 		t.Fatalf("literal path: %q, %v", path, err)
 	}
 }

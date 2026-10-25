@@ -63,14 +63,14 @@ func TestTmuxWatchTool(t *testing.T) {
 	defer m.Close()
 	addTmuxWatchRun(r, m, w, launcher)
 	tool, _ := r.Get("tmux_watch_run")
-	for _, args := range []string{`{}`, `{"command":"true"}`, `{"command":"true","record_dir":"r","unknown":1}`} {
+	for _, args := range []string{`{}`, `{"command":"true"}`, `{"command":"true","record_dir":"r","unknown":1}`, `{"command":"true","record_dir":"r","wake_on_exit":false}`, `{"command":"true","record_dir":"r","timeout_seconds":1}`} {
 		if _, err := tool.DecodeCall(1, []byte(args)); err == nil {
 			t.Fatalf("accepted %s", args)
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rec := r.Invoke(ctx, x, "tmux_watch_run", []byte(`{"command":"sleep 0.2; printf durable; exit 9","record_dir":"record","label":"checks","wake_on_exit":false}`))
+	rec := r.Invoke(ctx, x, "tmux_watch_run", []byte(`{"command":"sleep 0.2; printf durable; exit 9","record_dir":"record","label":"checks"}`))
 	var launch struct {
 		Status      string        `json:"status"`
 		JobID       string        `json:"job_id"`
@@ -79,7 +79,7 @@ func TestTmuxWatchTool(t *testing.T) {
 		PaneID      string        `json:"pane_id"`
 		Watcher     jobs.Snapshot `json:"watcher"`
 	}
-	if err := json.Unmarshal(rec.Result, &launch); err != nil || launch.Status != "watching" || launch.JobID == "" || launch.PaneID == "" || launch.Watcher.WakeOnExit || launch.Watcher.Label != "checks" {
+	if err := json.Unmarshal(rec.Result, &launch); err != nil || launch.Status != "watching" || launch.JobID == "" || launch.PaneID == "" || launch.Watcher.Label != "checks" {
 		t.Fatalf("launch %s %v", rec.Result, err)
 	}
 	if launch.RecordDir != filepath.Join(w.Root, "record") {
@@ -89,7 +89,7 @@ func TestTmuxWatchTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Watch stopping must not signal either external process. Reattach normally.
-	id, err := m.StartWatch(x.Actor, launch.RecordDir, false, "", capture.OutputOptions{})
+	id, err := m.StartWatch(x.Actor, launch.RecordDir, "", capture.OutputOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

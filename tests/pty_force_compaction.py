@@ -138,7 +138,7 @@ def run(root, binary):
     data = root / 'data'
     script = root / 'seed.json'
     script.write_text(json.dumps([{'prefix': 'user: Seed completed history', 'text': SEED}]))
-    base = [binary, '--data-dir', str(data), '--workdir', str(project), '--auto-name=false', '--plain']
+    base = [binary, '--data-dir', str(data), '--workdir', str(project), '--plain']
     terminal = None
     phase = 'startup'
     try:

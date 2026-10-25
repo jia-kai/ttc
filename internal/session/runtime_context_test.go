@@ -132,7 +132,7 @@ func TestRuntimeContextProjectChangesAndFinishedJobs(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(r.Workspace.Root, "AGENTS.md"), []byte("Use precise units."), 0600); err != nil {
 		t.Fatal(err)
 	}
-	id, err := r.Jobs.Start("main", "exit 7", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "")
+	id, err := r.Jobs.Start("main", "exit 7", r.Workspace.Root, 0, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

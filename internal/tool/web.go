@@ -33,7 +33,7 @@ type webArgs struct {
 	Max        *int   `json:"max_chars,omitempty"`
 	Pattern    string `json:"pattern,omitempty"` // RE2 search over retained lines.
 	Context    *int   `json:"context_lines,omitempty"`
-	Timeout    *int   `json:"timeout_ms,omitempty"`
+	Timeout    *int   `json:"timeout_seconds,omitempty"` // Nil uses 30 seconds; normalized to [1,120].
 }
 type webDocument struct {
 	id, url, contentType, format, text string
@@ -111,7 +111,7 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 		}
 		return nil
 	}
-	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": IntegerRange(0, math.MaxInt), "max_chars": IntegerRange(1, 64000), "pattern": Property("string"), "context_lines": IntegerRange(0, 10), "timeout_ms": IntegerRange(1, 120000)}, nil, func(a webArgs) error {
+	Register(r, "web_fetch", prompts.ToolDescription("web_fetch"), map[string]any{"url": Property("string"), "document_id": Property("string"), "format": Property("string", "markdown", "text", "html"), "offset": IntegerRange(0, math.MaxInt), "max_chars": IntegerRange(1, 64000), "pattern": Property("string"), "context_lines": IntegerRange(0, 10), "timeout_seconds": Property("integer")}, nil, func(a webArgs) error {
 		if (a.URL == "") == (a.DocumentID == "") {
 			return errors.New(prompts.ToolWebSourceIdentifier)
 		}
@@ -163,13 +163,14 @@ func AddWeb(r *Registry, client *http.Client, config WebSearchConfig) {
 		}
 		return webPage(ctx, doc, a)
 	}, func(a *webArgs) []InputWarning {
-		return NormalizeEnum("format", &a.Format, "markdown", "text", "html")
+		warnings := NormalizeTimeoutSeconds(a.Timeout, 120)
+		return append(warnings, NormalizeEnum("format", &a.Format, "markdown", "text", "html")...)
 	})
 	addWebSearch(r, client, cache, config)
 }
 
 func fetchWeb(ctx context.Context, client *http.Client, a webArgs) (webDocument, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30000))*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(intDefault(a.Timeout, 30))*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", a.URL, nil)
 	if err != nil {

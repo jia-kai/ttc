@@ -113,11 +113,13 @@
   alive. **Ctrl+B:** promote foreground shells without canceling; a race with
   completion returns one final result. `/background` selects live shells; none
   is a no-op.
-- **Shell completion:** persist bounded output/update UI. `wake_on_exit=true`
-  (default) notifies at a boundary or starts idle work; false is UI-only. Never
-  duplicate foreground results as completion notices.
-- **Shell deadlines:** enforce the foreground deadline and optional background
-  deadline in the [shell contract](tools.md#shell).
+- **Shell completion:** persist bounded output/update UI. Background completion
+  always notifies at a boundary or starts idle work, except teardown must not
+  schedule new model work. Never duplicate foreground results as completion
+  notices.
+- **Shell deadlines:** separate execution deadlines from foreground wait budgets
+  as defined in the [shell contract](tools.md#shell). Promotion must preserve
+  the process, job and execution deadline, with one terminal notification.
 - **Question:** main only, one pending round; composer/jobs remain usable.
   Require explicit submission, preserved drafts and dismissal/redirection rather
   than implied answers. [question](tools.md#question) defines the dialog and

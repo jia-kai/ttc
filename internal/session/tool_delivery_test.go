@@ -156,7 +156,7 @@ func TestToolDeliveryCompactsEarlierHistoryBeforeFreshBatch(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, true, false, capture.OutputOptions{}, "unrelated work")
+			job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, true, capture.OutputOptions{}, "unrelated work")
 			if err != nil {
 				t.Fatal(err)
 			}

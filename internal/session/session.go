@@ -174,9 +174,9 @@ func (r *Runtime) resetLiveWork() {
 		r.orderMu.Lock()
 		sessionID := r.Current()
 		entry, e := r.Store.Append(sessionID, "", v.Owner, "status", "", false, map[string]any{"type": "job_completion", "job": v, "markdown": md})
-		// Child assignments use the canonical answer/failure handoff rather than
-		// duplicate generic job notifications. Diagnostics remain opt-in.
-		if e == nil && v.WakeOnExit && v.Kind != "subagent" && r.ctx.Err() == nil {
+		// Child assignments and asides have their own result delivery. Cleanup
+		// retains diagnostics without scheduling another model turn.
+		if e == nil && v.CancellationReason != "runtime_cleanup" && v.Kind != "subagent" && v.Kind != "btw" && r.ctx.Err() == nil {
 			e = r.queueActorNotificationLocked(v.Owner, jobExitContent(v))
 		}
 		r.orderMu.Unlock()

@@ -351,7 +351,7 @@ def run_case(root, mode, status, binary):
     # directive/output. The oversized completed cycle must be summarized.
     script.write_text(json.dumps([{'prefix': 'user: Seed completed history',
                                   'text': 'Earlier evidence. ' * 3500 + '\nSeed complete.'}]))
-    base = [binary, '--data-dir', str(data), '--workdir', str(project), '--auto-name=false']
+    base = [binary, '--data-dir', str(data), '--workdir', str(project)]
     terminal = None
     try:
         terminal = Terminal(base + ['--offline-script', str(script), '--plain'], root / 'seed-terminal.log')

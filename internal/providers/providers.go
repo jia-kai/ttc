@@ -5,8 +5,8 @@ package providers
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	"github.com/spf13/pflag"
 	"net/http"
 
 	"ttc/internal/auth"
@@ -18,7 +18,7 @@ import (
 // flags only on the supplied flag set; each call must create independent state.
 type Module struct {
 	ID        string
-	Configure func(*flag.FlagSet) (Factory, error)
+	Configure func(*pflag.FlagSet) (Factory, error)
 }
 
 // Factory constructs components using parsed configuration. Constructors own no
@@ -72,14 +72,14 @@ type Catalog struct {
 type Configured struct {
 	ID         string
 	Open       Factory
-	flagSet    *flag.FlagSet
+	flagSet    *pflag.FlagSet
 	ownedFlags map[string]bool
 }
 
 // Configure stages all module flags before adding them to fs. Invalid modules,
 // configuration failures and flag collisions leave fs unchanged. Merged flags
 // retain the original Value pointers so parsing updates the factories' state.
-func Configure(modules []Module, fs *flag.FlagSet) ([]Configured, error) {
+func Configure(modules []Module, fs *pflag.FlagSet) ([]Configured, error) {
 	if fs == nil {
 		return nil, errors.New("provider configuration requires a flag set")
 	}
@@ -99,11 +99,12 @@ func Configure(modules []Module, fs *flag.FlagSet) ([]Configured, error) {
 			return nil, fmt.Errorf("provider %q has no configuration function", module.ID)
 		}
 	}
-	var flags []*flag.Flag
+	var flags []*pflag.Flag
 	names := make(map[string]bool)
+	shorthands := make(map[string]bool)
 	configured := make([]Configured, 0, len(modules))
 	for _, module := range modules {
-		staged := flag.NewFlagSet(module.ID, flag.ContinueOnError)
+		staged := pflag.NewFlagSet(module.ID, pflag.ContinueOnError)
 		staged.SetOutput(fs.Output())
 		factory, err := configureModule(module, staged)
 		if err != nil {
@@ -113,9 +114,15 @@ func Configure(modules []Module, fs *flag.FlagSet) ([]Configured, error) {
 			return nil, fmt.Errorf("provider %q returned no factory", module.ID)
 		}
 		ownedFlags := make(map[string]bool)
-		staged.VisitAll(func(f *flag.Flag) {
+		staged.VisitAll(func(f *pflag.Flag) {
 			if names[f.Name] || fs.Lookup(f.Name) != nil {
 				err = fmt.Errorf("provider flag %q is already registered", f.Name)
+			}
+			if f.Shorthand != "" {
+				if shorthands[f.Shorthand] || fs.ShorthandLookup(f.Shorthand) != nil {
+					err = fmt.Errorf("provider flag shorthand %q is already registered", f.Shorthand)
+				}
+				shorthands[f.Shorthand] = true
 			}
 			names[f.Name] = true
 			ownedFlags[f.Name] = true
@@ -127,15 +134,14 @@ func Configure(modules []Module, fs *flag.FlagSet) ([]Configured, error) {
 		configured = append(configured, Configured{ID: module.ID, Open: factory, flagSet: fs, ownedFlags: ownedFlags})
 	}
 	for _, f := range flags {
-		fs.Var(f.Value, f.Name, f.Usage)
-		fs.Lookup(f.Name).DefValue = f.DefValue
+		fs.AddFlag(f)
 	}
 	return configured, nil
 }
 
-// flag panics on invalid or duplicate declarations. Keep those failures inside
+// pflag panics on invalid or duplicate declarations. Keep those failures inside
 // the staging boundary rather than crashing the CLI or partially registering.
-func configureModule(module Module, fs *flag.FlagSet) (factory Factory, err error) {
+func configureModule(module Module, fs *pflag.FlagSet) (factory Factory, err error) {
 	defer func() {
 		if failure := recover(); failure != nil {
 			err = fmt.Errorf("invalid flag configuration: %v", failure)
@@ -182,7 +188,7 @@ func Select(configured []Configured, id string) (Factory, error) {
 			continue
 		}
 		var err error
-		item.flagSet.Visit(func(f *flag.Flag) {
+		item.flagSet.Visit(func(f *pflag.Flag) {
 			if err == nil && item.ownedFlags[f.Name] {
 				err = fmt.Errorf("flag --%s belongs to provider %q, not selected provider %q", f.Name, item.ID, id)
 			}

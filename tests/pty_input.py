@@ -51,8 +51,7 @@ def main():
         {'prefix': 'tool:', 'text': 'Main fixture completed.'},
         {'prefix': 'user: promote shell', 'calls': [
             {'id': 'promoted-shell', 'name': 'shell', 'arguments': {
-                'command': 'touch promotion.ready; while [ ! -e promotion.release ]; do sleep 0.02; done; printf promoted-done',
-                'wake_on_exit': False}},
+                'command': 'touch promotion.ready; while [ ! -e promotion.release ]; do sleep 0.02; done; printf promoted-done'}},
         ]},
         {'prefix': 'user: steer promoted', 'text': 'Steering and promotion verified.'},
         {'prefix': 'user: queued after promotion', 'text': 'Queued turn verified.'},

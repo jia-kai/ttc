@@ -27,7 +27,7 @@ func TestTaskResultPublishesMetadataWithTerminalCapture(t *testing.T) {
 		}
 	}
 	code := 7
-	id, err := m.StartTask("main", TaskOptions{Kind: "fixture", Label: "result", Background: true, WakeOnExit: true}, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
+	id, err := m.StartTask("main", TaskOptions{Kind: "fixture", Label: "result", Background: true}, func(ctx context.Context, stdout, stderr io.Writer) (TaskResult, error) {
 		close(started)
 		select {
 		case <-release:

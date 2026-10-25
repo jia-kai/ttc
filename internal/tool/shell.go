@@ -12,17 +12,17 @@ import (
 )
 
 type shellArgs struct {
-	Label       string `json:"label,omitempty"`
-	Command     string `json:"command"`
-	Workdir     string `json:"workdir,omitempty"`
-	Timeout     *int   `json:"timeout_ms,omitempty"`
-	Background  bool   `json:"background,omitempty"`
-	Wake        *bool  `json:"wake_on_exit,omitempty"`
-	Protocol    string `json:"protocol,omitempty"`
-	Strict      *bool  `json:"strict,omitempty"` // Nil enables set -eu; false disables it.
-	OutputMode  string `json:"output_mode,omitempty"`
-	OutputBytes *int   `json:"output_bytes,omitempty"`
-	StripANSI   *bool  `json:"strip_ansi,omitempty"`
+	Label          string `json:"label,omitempty"`
+	Command        string `json:"command"`
+	Workdir        string `json:"workdir,omitempty"`
+	Timeout        *int   `json:"timeout_seconds,omitempty"`
+	ForegroundWait *int   `json:"max_fg_wait_seconds,omitempty"`
+	Background     bool   `json:"background,omitempty"`
+	Protocol       string `json:"protocol,omitempty"`
+	Strict         *bool  `json:"strict,omitempty"` // Nil enables set -eu; false disables it.
+	OutputMode     string `json:"output_mode,omitempty"`
+	OutputBytes    *int   `json:"output_bytes,omitempty"`
+	StripANSI      *bool  `json:"strip_ansi,omitempty"`
 }
 
 // ChildView is copied live metadata for one reusable coding context.
@@ -44,15 +44,12 @@ type ChildController interface {
 // AddShell exposes managed commands and owner-scoped live handles. A nil child
 // controller leaves standalone shell registries without reusable child contexts.
 func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children ChildController) {
-	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_ms": Property("integer"), "background": Property("boolean"), "wake_on_exit": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": IntegerRange(1, capture.MaxOutputBytes), "strip_ansi": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
+	Register(r, "shell", prompts.ToolDescription("shell"), map[string]any{"command": Property("string"), "label": Property("string"), "workdir": Property("string"), "timeout_seconds": Property("integer"), "max_fg_wait_seconds": Property("integer"), "background": Property("boolean"), "protocol": Property("string", "lsp"), "strict": Property("boolean"), "output_mode": Property("string", "head", "tail", "head_tail"), "output_bytes": IntegerRange(1, capture.MaxOutputBytes), "strip_ansi": Property("boolean")}, []string{"command"}, func(a shellArgs) error {
 		if e := Required("command", a.Command); e != nil {
 			return e
 		}
 		if a.Protocol != "" && a.Protocol != "lsp" {
 			return errors.New(prompts.ToolShellProtocol)
-		}
-		if a.Protocol == "lsp" && !a.Background {
-			return errors.New(prompts.ToolLSPBackgroundRequired)
 		}
 		_, e := (capture.OutputOptions{Mode: a.OutputMode}).Normalize()
 		return e
@@ -61,22 +58,21 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		if a.Workdir != "" {
 			dir = w.Path(a.Workdir)
 		}
-		timeout := jobs.ForegroundTimeout
-		if a.Background {
+		timeout := jobs.ExecutionTimeout
+		if a.Protocol == "lsp" {
 			timeout = 0
 		}
 		if a.Timeout != nil {
-			timeout = time.Duration(*a.Timeout) * time.Millisecond
+			timeout = time.Duration(*a.Timeout) * time.Second
 		}
-		// Retain the preference for a foreground command promoted by the user.
-		wake := a.Wake == nil || *a.Wake
+		wait := time.Duration(intDefault(a.ForegroundWait, 10)) * time.Second
 		var id string
 		var e error
 		output := capture.OutputOptions{Mode: a.OutputMode, Bytes: intDefault(a.OutputBytes, capture.DefaultOutputBytes), StripANSI: a.StripANSI}
 		if a.Protocol == "lsp" {
-			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, wake, output, a.Label)
+			id, e = m.StartLSP(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, output, a.Label)
 		} else {
-			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, wake, output, a.Label)
+			id, e = m.Start(x.Actor, a.Command, dir, timeout, a.Strict == nil || *a.Strict, a.Background, output, a.Label)
 		}
 		if e != nil {
 			return nil, jobToolError(e)
@@ -85,7 +81,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 			v, err := m.View(x.Actor, id)
 			return v, jobToolError(err)
 		}
-		v, err := m.Wait(ctx, x.Actor, id, func(v jobs.Snapshot) {
+		v, err := m.WaitForeground(ctx, x.Actor, id, wait, func(v jobs.Snapshot) {
 			if x.Update != nil {
 				x.Update(v)
 			}
@@ -94,14 +90,18 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 	}, func(a *shellArgs) []InputWarning {
 		warnings := NormalizeEnum("protocol", &a.Protocol, "lsp")
 		warnings = append(warnings, NormalizeEnum("output_mode", &a.OutputMode, "head", "tail", "head_tail")...)
-		if a.Timeout == nil {
-			return warnings
+		if a.Protocol == "lsp" && !a.Background {
+			warnings = append(warnings, AdjustedInput("background", false, true)...)
+			a.Background = true
 		}
-		minimum := 1
-		if a.Background {
-			minimum = 0
+		if a.Background && a.ForegroundWait != nil {
+			warnings = append(warnings, AdjustedInput("max_fg_wait_seconds", *a.ForegroundWait, nil)...)
+			a.ForegroundWait = nil
+		} else if a.ForegroundWait != nil {
+			warnings = append(warnings, ClipInteger("max_fg_wait_seconds", a.ForegroundWait, 0, 86400)...)
 		}
-		return append(warnings, ClipInteger("timeout_ms", a.Timeout, minimum, 86400000)...)
+		warnings = append(warnings, NormalizeTimeoutSeconds(a.Timeout, 86400)...)
+		return warnings
 	})
 	type list struct {
 		State   string `json:"state,omitempty"`

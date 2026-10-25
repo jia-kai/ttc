@@ -92,7 +92,7 @@ func TestLoadPreparationFailureLeavesLiveWorkRunning(t *testing.T) {
 			if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 				t.Fatal(err)
 			}
-			job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, false, capture.OutputOptions{}, "keep running")
+			job, err := r.Jobs.Start("main", "sleep 30", r.Workspace.Root, 0, true, false, capture.OutputOptions{}, "keep running")
 			if err != nil {
 				t.Fatal(err)
 			}

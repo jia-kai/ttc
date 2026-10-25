@@ -2,15 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
-	"io"
+	"github.com/spf13/cobra"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
@@ -18,31 +14,13 @@ import (
 	"ttc/internal/tui"
 )
 
-func markdownPath(args []string, output io.Writer) (string, error) {
-	flags := flag.NewFlagSet("ttc md", flag.ContinueOnError)
-	flags.SetOutput(output)
-	flags.Usage = func() {
-		fmt.Fprintln(output, "Usage: ttc md FILE")
-		fmt.Fprintln(output, "View Markdown without an agent session. Ctrl-U/D scroll; q quits; Esc goes back or quits.")
-		fmt.Fprintln(output, "Redirected output is plain rendered text, wrapped at 80 columns.")
-	}
-	if err := flags.Parse(args); err != nil {
-		return "", err
-	}
-	if flags.NArg() != 1 {
-		return "", errors.New("usage: ttc md FILE (exactly one Markdown file is required)")
-	}
-	return flags.Arg(0), nil
+func newMarkdownCommand() *cobra.Command {
+	return &cobra.Command{Use: "md FILE", Short: "View Markdown without an agent session", Long: "View Markdown without an agent session. Ctrl-U/D scroll; q quits; Esc goes back or quits. Redirected output is plain rendered text, wrapped at 80 columns.", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return viewMarkdown(cmd.Context(), args[0])
+	}}
 }
 
-func runMarkdown(args []string) error {
-	path, err := markdownPath(args, os.Stderr)
-	if errors.Is(err, flag.ErrHelp) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
+func viewMarkdown(ctx context.Context, path string) error {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read Markdown: %w", err)
@@ -55,8 +33,6 @@ func runMarkdown(args []string) error {
 		_, err = fmt.Fprintln(os.Stdout, strings.Trim(ansi.Strip(text), "\n"))
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	document := tui.Document{Title: filepath.Base(path), Text: string(source), Directory: filepath.Dir(path)}
 	return document.Run(ctx)
 }

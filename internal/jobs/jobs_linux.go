@@ -25,46 +25,50 @@ import (
 // another actor's jobs. Callers can map it to their own error protocol.
 var ErrNotFound = errors.New(prompts.JobNotFound)
 
-// ForegroundTimeout is the default deadline for foreground shells, in duration units.
-// Foreground commands cannot run without a deadline; background shells default to none.
-const ForegroundTimeout = 20 * time.Second
+// ExecutionTimeout is the default process deadline for ordinary shells.
+const ExecutionTimeout = time.Hour
 
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
-	command         string             // Exact launch command; exposed only by explicit inspection.
-	WakeOnExit      bool               `json:"-"` // Whether the background completion should notify the model.
-	ID              string             `json:"job_id"`
-	Kind            string             `json:"kind"`
-	Owner           string             `json:"owner_actor_id"`
-	Label           string             `json:"label"`
-	RecordDir       string             `json:"record_dir,omitempty"`  // Watch-run records observed by a watch job.
-	Grep            *GrepOrigin        `json:"grep_origin,omitempty"` // Immutable filter and source snapshot bounds.
-	Status          string             `json:"status"`
-	Stdout          string             `json:"stdout"`
-	Stderr          string             `json:"stderr"`
-	StartedAt       string             `json:"started_at"` // UTC RFC3339Nano launch time.
-	FinishedAt      string             `json:"finished_at,omitempty"`
-	ExitCode        *int               `json:"exit_code,omitempty"`
-	Signal          string             `json:"signal,omitempty"`
-	Truncated       bool               `json:"truncated"`
-	StdoutTruncated bool               `json:"-"` // Per-stream preview state for boundaries that suppress stderr.
-	StdoutSelection *capture.Selection `json:"stdout_selection,omitempty"`
-	StderrSelection *capture.Selection `json:"stderr_selection,omitempty"`
+	command               string             // Exact launch command; exposed only by explicit inspection.
+	Background            bool               `json:"background,omitempty"`
+	Promoted              bool               `json:"promoted,omitempty"`
+	TimeoutSeconds        *float64           `json:"timeout_seconds,omitempty"` // Nil means no execution deadline.
+	ForegroundWaitSeconds *float64           `json:"max_fg_wait_seconds,omitempty"`
+	CancellationReason    string             `json:"cancellation_reason,omitempty"`
+	ID                    string             `json:"job_id"`
+	Kind                  string             `json:"kind"`
+	Owner                 string             `json:"owner_actor_id"`
+	Label                 string             `json:"label"`
+	RecordDir             string             `json:"record_dir,omitempty"`  // Watch-run records observed by a watch job.
+	Grep                  *GrepOrigin        `json:"grep_origin,omitempty"` // Immutable filter and source snapshot bounds.
+	Status                string             `json:"status"`
+	Stdout                string             `json:"stdout"`
+	Stderr                string             `json:"stderr"`
+	StartedAt             string             `json:"started_at"` // UTC RFC3339Nano launch time.
+	FinishedAt            string             `json:"finished_at,omitempty"`
+	ExitCode              *int               `json:"exit_code,omitempty"`
+	Signal                string             `json:"signal,omitempty"`
+	Truncated             bool               `json:"truncated"`
+	StdoutTruncated       bool               `json:"-"` // Per-stream preview state for boundaries that suppress stderr.
+	StdoutSelection       *capture.Selection `json:"stdout_selection,omitempty"`
+	StderrSelection       *capture.Selection `json:"stderr_selection,omitempty"`
 }
 type job struct {
-	view             Snapshot
-	startedAt        time.Time // Immutable launch time; ordering never depends on capture updates.
-	cmd              *exec.Cmd
-	cancel           context.CancelFunc
-	done             chan struct{}
-	published        chan struct{} // Closed after all terminal callbacks return.
-	promoted         chan struct{} // Closed once when foreground shell ownership moves to background.
-	promotionClaimed bool          // The original waiter owns promotion; later waits observe ordinary completion.
-	stdout, stderr   *capture.Buffer
-	background       bool
-	client           *lsp.Client
-	output           *capture.OutputOptions // Nil retains compact previews for non-shell tasks.
-	inspector        Inspector
+	view                    Snapshot
+	startedAt               time.Time // Immutable launch time; ordering never depends on capture updates.
+	cmd                     *exec.Cmd
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	done                    chan struct{}
+	published               chan struct{} // Closed after all terminal callbacks return.
+	promoted                chan struct{} // Closed once when foreground shell ownership moves to background.
+	foregroundResultPending bool          // Reserved at launch; the original foreground call owns the first handoff.
+	stdout, stderr          *capture.Buffer
+	cancelReason            string // Protected by Manager.mu; first cancellation wins.
+	client                  *lsp.Client
+	output                  *capture.OutputOptions // Nil retains compact previews for non-shell tasks.
+	inspector               Inspector
 }
 
 // Manager owns jobs for one runtime. Close cancels and joins all process groups.
@@ -92,33 +96,32 @@ func New(ctx context.Context, notify func(Snapshot)) *Manager {
 
 // Start launches a closed-stdin shell in a dedicated process group.
 // strict enables POSIX errexit and nounset; it does not enable pipefail.
-// Zero timeout selects ForegroundTimeout for foreground work and no deadline
-// for background work. A positive timeout is an explicit deadline in either mode.
+// Zero timeout means no execution deadline; public defaults are applied by tools.
+// A positive timeout is a process deadline independent of foreground waiting.
 // output selects the model-facing payload independently of retained job_read data.
 // label is whitespace-normalized and bounded to 80 code points;
 // empty or whitespace selects "Shell command", never the command text.
-func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background, wake bool, output capture.OutputOptions, label string) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, background, wake, false, output, compactLabel(label, prompts.JobLabelShell))
+// Foreground launches reserve their original result for WaitForeground before
+// the process becomes visible to concurrent promotion or completion.
+func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background bool, output capture.OutputOptions, label string) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, background, false, output, compactLabel(label, prompts.JobLabelShell))
 }
 
 // StartLSP launches a background stdio server. Protocol stdout is owned by the
 // LSP client; only stderr is available through Read. Stop cancels the process group.
 // output selects bounded stderr diagnostics; protocol stdout is never presented.
 // label follows Start's rules, with "Language server" as fallback.
-func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict, wake bool, output capture.OutputOptions, label string) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, true, wake, true, output, compactLabel(label, prompts.JobLabelLSP))
+func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict bool, output capture.OutputOptions, label string) (string, error) {
+	return m.start(owner, command, workdir, timeout, strict, true, true, output, compactLabel(label, prompts.JobLabelLSP))
 }
 
-func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, wake, protocol bool, options capture.OutputOptions, label string) (string, error) {
+func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, protocol bool, options capture.OutputOptions, label string) (string, error) {
 	options, err := options.Normalize()
 	if err != nil {
 		return "", err
 	}
 	if timeout < 0 {
 		return "", errors.New(prompts.JobTimeoutNonnegative)
-	}
-	if !background && timeout == 0 {
-		timeout = ForegroundTimeout
 	}
 	m.mu.Lock()
 	if m.closed {
@@ -149,10 +152,16 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	}
 	cmd.WaitDelay = time.Second
 	startedAt := time.Now().UTC()
-	j := &job{startedAt: startedAt, view: Snapshot{command: command, ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: wake}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), background: background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j := &job{startedAt: startedAt, view: Snapshot{command: command, ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: background}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	if timeout > 0 {
+		seconds := timeout.Seconds()
+		j.view.TimeoutSeconds = &seconds
+	}
 	j.inspector = commandInspector
+	j.foregroundResultPending = !background && !protocol
+	j.ctx = ctx
 	j.published = make(chan struct{})
-	if !m.scopeLocked(owner).Register(cancel, j.published) {
+	if !m.scopeLocked(owner).Register(m.cleanupCancel(j), j.published) {
 		cancel()
 		m.mu.Unlock()
 		return "", errors.New(prompts.RuntimeEnded)
@@ -199,7 +208,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
-	launch := j.view
+	launch := cloneSnapshot(j.view)
 	m.mu.Unlock()
 	if m.OnState != nil {
 		m.OnState(launch)
@@ -216,6 +225,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 		j.view.Status = "completed"
 		if ctx.Err() != nil {
 			j.view.Status = "cancelled"
+			j.view.CancellationReason = cancellationReason(ctx, j)
 		} else if e != nil {
 			var exit *exec.ExitError
 			if !errors.As(e, &exit) {
@@ -236,8 +246,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 		}
 		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		view := preview(j)
-		view.WakeOnExit = wake
-		notify := j.background
+		notify := j.view.Background
 		m.mu.Unlock()
 		if m.OnState != nil {
 			m.OnState(view)
@@ -287,8 +296,22 @@ func (m *Manager) View(owner, id string) (Snapshot, error) {
 	return preview(j), nil
 }
 
-// Wait waits for observed exit; cancellation stops foreground work only.
+// Wait observes exit; the first waiter on a live foreground shell also accepts
+// its promotion handoff. Cancellation stops foreground work only.
 func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapshot)) (Snapshot, error) {
+	return m.wait(ctx, owner, id, nil, update)
+}
+
+// WaitForeground waits up to budget before promoting the same shell process.
+// The process deadline is never changed. A zero budget promotes immediately.
+// The original call receives a nonterminal handoff after promotion, even when
+// promotion and completion both precede waiter registration. Later observers
+// receive the retained terminal state normally.
+func (m *Manager) WaitForeground(ctx context.Context, owner, id string, budget time.Duration, update func(Snapshot)) (Snapshot, error) {
+	return m.wait(ctx, owner, id, &budget, update)
+}
+
+func (m *Manager) wait(ctx context.Context, owner, id string, budget *time.Duration, update func(Snapshot)) (Snapshot, error) {
 	m.mu.Lock()
 	j, ok := m.jobs[id]
 	if !ok || !allowed(owner, j.view.Owner) {
@@ -296,12 +319,38 @@ func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapsh
 		return Snapshot{}, ErrNotFound
 	}
 	done := j.done
+	var expiry <-chan time.Time
+	if budget != nil {
+		seconds := budget.Seconds()
+		j.view.ForegroundWaitSeconds = &seconds
+		timer := time.NewTimer(*budget)
+		defer timer.Stop()
+		expiry = timer.C
+	}
 	var promoted <-chan struct{}
-	if !j.promotionClaimed {
+	if j.foregroundResultPending && (budget != nil || j.view.Status == "running") {
 		promoted = j.promoted
-		j.promotionClaimed = true
+		j.foregroundResultPending = false
 	}
 	m.mu.Unlock()
+	// A claimed promotion owns the original tool result even if the process
+	// finishes before this goroutine resumes. Terminal delivery then belongs
+	// exclusively to the background completion callback.
+	handoff := func() (Snapshot, bool) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if promoted != nil && j.view.Promoted {
+			// Promotion already transferred terminal delivery to Notify. The
+			// original call must return a handoff even when it registers after
+			// completion; derive it without retaining a second output payload.
+			view := preview(j)
+			view.Status = "running"
+			view.FinishedAt, view.Signal, view.CancellationReason = "", "", ""
+			view.ExitCode = nil
+			return view, true
+		}
+		return Snapshot{}, false
+	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -315,31 +364,46 @@ func (m *Manager) Wait(ctx context.Context, owner, id string, update func(Snapsh
 		}
 		select {
 		case <-done:
+			if view, ok := handoff(); ok {
+				return view, nil
+			}
 			return m.View(owner, id)
 		case <-promoted:
-			view, err := m.View(owner, id)
-			if err != nil || view.Status == "running" {
-				return view, err
-			}
-			// Terminal state is observable before its durable publication. A
-			// promoted waiter must join that commit before returning the result.
-			<-done
-			return m.View(owner, id)
+			view, _ := handoff()
+			return view, nil
 		case <-ctx.Done():
 			m.mu.Lock()
-			if j.background {
+			if j.view.Background {
 				view := preview(j)
 				m.mu.Unlock()
+				if promoted, ok := handoff(); ok {
+					return promoted, nil
+				}
 				if view.Status != "running" {
 					<-done
 					return m.View(owner, id)
 				}
 				return view, nil
 			}
-			j.cancel()
+			cancelJob(j, "caller_cancelled")
 			m.mu.Unlock()
 			<-done
 			return m.View(owner, id)
+		case <-expiry:
+			// Caller cancellation still owns foreground work until promotion.
+			if ctx.Err() != nil {
+				expiry = nil
+				continue
+			}
+			view, err := m.Promote(owner, id)
+			if promoted, ok := handoff(); ok {
+				return promoted, nil
+			}
+			if err == nil && view.Status != "running" {
+				<-done
+				return m.View(owner, id)
+			}
+			return view, err
 		case <-ticker.C:
 		}
 	}
@@ -372,7 +436,7 @@ func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 		m.mu.Unlock()
 		return Snapshot{}, errors.New(prompts.JobCannotStopOwnTask)
 	}
-	j.cancel()
+	cancelJob(j, "explicit_stop")
 	done := j.done
 	m.mu.Unlock()
 	<-done
@@ -496,7 +560,7 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
-	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: compactLabel(options.Label, options.Kind), RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), WakeOnExit: options.WakeOnExit}
+	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: compactLabel(options.Label, options.Kind), RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: options.Background}
 	inspector := options.Inspector
 	if inspector == nil {
 		inspector = taskInspector
@@ -511,18 +575,18 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 		}
 		output = &normalized
 	}
-	j := &job{startedAt: startedAt, view: metadata, inspector: inspector, output: output, cancel: cancel, done: make(chan struct{}), background: options.Background, stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j := &job{ctx: ctx, startedAt: startedAt, view: metadata, inspector: inspector, output: output, cancel: cancel, done: make(chan struct{}), stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
 	j.published = make(chan struct{})
 	// An assignment supervisor closes its resource scope from its deferred
 	// completion path, so it must live outside that scope.
-	if options.Kind != "subagent" && !m.scopeLocked(owner).Register(cancel, j.published) {
+	if options.Kind != "subagent" && !m.scopeLocked(owner).Register(m.cleanupCancel(j), j.published) {
 		cancel()
 		m.mu.Unlock()
 		return "", errors.New(prompts.RuntimeEnded)
 	}
 	m.jobs[j.view.ID] = j
 	m.wg.Add(1)
-	launch := j.view
+	launch := cloneSnapshot(j.view)
 	m.mu.Unlock()
 	if m.OnState != nil {
 		m.OnState(launch)
@@ -540,20 +604,20 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 		j.view.Status = "completed"
 		if ctx.Err() != nil {
 			j.view.Status = "cancelled"
+			j.view.CancellationReason = cancellationReason(ctx, j)
 		} else if err != nil {
 			j.view.Status = "failed"
 			fmt.Fprintln(j.stderr, err)
 		}
 		j.view.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		view := preview(j)
-		view.WakeOnExit = options.WakeOnExit
 		m.mu.Unlock()
 		if m.OnState != nil {
 			m.OnState(view)
 		}
 		close(j.done)
 		cancel()
-		if options.Background && m.Notify != nil {
+		if view.Background && m.Notify != nil {
 			m.Notify(view)
 		}
 	}()
@@ -571,7 +635,7 @@ func (m *Manager) Close() {
 		scopes = append(scopes, scope)
 	}
 	for _, j := range m.jobs {
-		j.cancel()
+		cancelJob(j, "runtime_cleanup")
 		done = append(done, j.done)
 	}
 	m.mu.Unlock()

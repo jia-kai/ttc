@@ -120,12 +120,6 @@ task-specific message and the requested or appropriate interval. Cancel it with
 that recurring monitoring was not established. Do not use a blocking foreground
 sleep as a progress timer.
 
-An optional PID watcher should run through `shell` with `background:true` and
-`wake_on_exit:true`. Verify the main process PID and its start identity, account
-for PID reuse and zombies, and use a short sleep between checks. Shell `wait`
-cannot wait for a process owned by another pane. Watcher completion reports
-termination, not the task's exit status.
-
 TTC jobs and timers survive compaction but end on session switch or exit; tmux
 work continues. Reestablish monitoring when requested after returning. Keep
 complete failure diagnostics before reproducing a problem, then fix and verify

@@ -258,7 +258,7 @@ func TestAdmissionUsesPublishedJobStateAtItsCutoff(t *testing.T) {
 		}
 		r.publishJob(v)
 	}
-	id, err := r.Jobs.Start("main", "true", r.Workspace.Root, time.Second, true, false, false, capture.OutputOptions{}, "")
+	id, err := r.Jobs.Start("main", "true", r.Workspace.Root, time.Second, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestClosingChildJoinsItsBackgroundCommands(t *testing.T) {
 			r.Provider = &childProvider{stream: func(ctx context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 				step++
 				if step == 1 {
-					return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "background", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true,"wake_on_exit":false}`)}})
+					return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "background", Name: "shell", Arguments: []byte(`{"command":"sleep 30","background":true}`)}})
 				}
 				if failed {
 					return errors.New("synthetic child failure")

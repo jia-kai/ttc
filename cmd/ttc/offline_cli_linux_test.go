@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +29,6 @@ func importTestCredentials(t *testing.T, owner *openai.Authenticator, account st
 
 func TestOfflineCLIRequiresNeitherCredentialsNorCatalog(t *testing.T) {
 	if data := os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_DATA"); data != "" {
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--plain", "--data-dir", data, "--workdir", os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_WORK"), "--offline-script", os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_SCRIPT")}
 		if load := os.Getenv("TTC_TEST_NEUTRAL_OFFLINE_SESSION"); load != "" {
 			os.Args = append(os.Args, "--session", load)

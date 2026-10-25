@@ -2,56 +2,45 @@ package main
 
 import (
 	"errors"
-	"flag"
-	"fmt"
-	"io"
-	"os"
+
+	"github.com/spf13/cobra"
 	"ttc/internal/watchrun"
 )
 
-func runWatch(args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	flags := flag.NewFlagSet("watch-run", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	dir := flags.String("record-dir", "", "new, unique record directory (must not exist)")
-	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: ttc watch-run --record-dir DIR -- COMMAND [ARG...]")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0, nil
-		}
-		return 1, err
-	}
-	if *dir == "" {
-		return 1, errors.New("watch-run requires --record-dir")
-	}
-	// Inspect only the wrapper prefix consumed by flag.Parse. A separator in
-	// the workload arguments is not a wrapper boundary, and record-dir's value
-	// may itself be "--". Parse above still owns flag/help/error semantics.
-	separator := false
-	for i, consumed := 0, len(args)-flags.NArg(); i < consumed; i++ {
-		if args[i] == "--" {
-			separator = true
-			break
-		}
-		if args[i] == "--record-dir" || args[i] == "-record-dir" {
-			i++ // Skip the separate value of the wrapper's string flag.
-		}
-	}
-	if !separator {
-		return 1, errors.New("watch-run requires -- before the command")
-	}
-	return watchrun.Run(*dir, flags.Args(), stdin, stdout, stderr)
-}
+// workloadExit carries the workload's exact exit status through Cobra.
+type workloadExit struct{ code int }
 
-func watchMain() {
-	code, err := runWatch(os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ttc watch-run:", err)
-		if code == 0 {
-			code = 1
-		}
+func (e *workloadExit) Error() string { return "watch-run workload failed" }
+
+func newWatchCommand() *cobra.Command {
+	var dir string
+	cmd := &cobra.Command{
+		Use:   "watch-run --record-dir DIR -- COMMAND [ARG...]",
+		Short: "Run a command with durable output and completion records",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if dir == "" {
+				return errors.New("watch-run requires --record-dir")
+			}
+			if cmd.ArgsLenAtDash() != 0 {
+				return errors.New("watch-run requires -- before the command")
+			}
+			if len(args) == 0 {
+				return errors.New("watch-run requires a command after --")
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			code, err := watchrun.Run(dir, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return &workloadExit{code: code}
+			}
+			return nil
+		},
 	}
-	os.Exit(code)
+	cmd.Flags().SetInterspersed(false)
+	cmd.Flags().StringVar(&dir, "record-dir", "", "new, unique record directory (must not exist)")
+	return cmd
 }

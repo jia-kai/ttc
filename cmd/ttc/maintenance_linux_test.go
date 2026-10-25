@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -156,7 +155,6 @@ func TestStartupMaintenanceCancellation(t *testing.T) {
 
 func TestCLIMaintenanceBeforeFrontend(t *testing.T) {
 	if root := os.Getenv("TTC_MAINTENANCE_HELPER_DATA"); root != "" {
-		flag.CommandLine = flag.NewFlagSet("ttc", flag.ContinueOnError)
 		os.Args = []string{"ttc", "--plain", "--data-dir", root, "--workdir", os.Getenv("TTC_MAINTENANCE_HELPER_WORK"), "--offline-script", os.Getenv("TTC_MAINTENANCE_HELPER_SCRIPT")}
 		if err := run(); err != nil {
 			t.Fatal(err)

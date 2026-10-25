@@ -64,7 +64,7 @@ Formula fixture done.
             os.environ['TCELL_TRUECOLOR' if args.disable_color == 'tcell' else 'NO_COLOR'] = (
                 'disable' if args.disable_color == 'tcell' else '1')
         os.execv(binary, [binary, '--offline-script', str(script), '--data-dir', str(root / 'data'),
-                         '--workdir', str(root), '--auto-name=false'])
+                         '--workdir', str(root)])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 100, 800, 512))
     output = bytearray()
     answered = submitted = False

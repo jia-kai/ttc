@@ -16,6 +16,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
+from mock_naming import respond_to_naming
 
 
 def main():
@@ -52,6 +53,8 @@ def main():
                 assert self.path == '/responses'
                 assert self.headers['Authorization'] == 'Bearer mock-token'
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if respond_to_naming(self, body):
+                    return
                 requests.append(body)
                 (root / 'requests.json').write_text(json.dumps(requests, indent=2))
                 step = len(requests)
@@ -137,7 +140,7 @@ def main():
         process = subprocess.Popen([
             str(Path(args.binary).resolve()), '--plain', '--workdir', str(project),
             '--data-dir', str(root / 'data'), '--openai-base-url', f'http://127.0.0.1:{server.server_port}',
-            '--import-codex-auth', str(auth), '--model', 'mock-model', '--variant', 'low', '--auto-name=false',
+            '--import-codex-auth', str(auth),
         ], stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
         os.close(slave)
         slave = -1

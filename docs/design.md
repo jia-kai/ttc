@@ -349,6 +349,10 @@ This defines committed ordering, not repeatable worker completion order.
 
 ## Provider and model abstraction
 
+The CLI uses Cobra root and `md`, `rail` and `watch-run` commands, with
+generated command-specific help and parser errors. Root model/variant selection
+is an interactive UI concern backed by remembered choices, not launch flags.
+
 `llm` holds shared, effect-free values and deterministic offline scripting, not
 production provider registration or services. Sessions consume only
 `session.Inference`:
@@ -368,7 +372,7 @@ replay compatibility remains separate.
 `internal/providers` defines neutral module contracts and configuration helpers.
 Concrete subpackages own each provider's implementation and wiring; shared LLM
 values remain independent of them. A `Module` has an `ID` and
-`Configure(*flag.FlagSet) (Factory, error)`; configuration registers
+`Configure(*pflag.FlagSet) (Factory, error)`; configuration registers
 module-owned flags with independent state. `Configure` stages all module flags
 and rejects invalid modules or collisions without partially changing the
 application's flag set. After parsing, `Select` returns the requested configured

@@ -89,7 +89,7 @@ func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionT
 
 func queueTestNotification(t *testing.T, u *questionTestUI, label string) string {
 	t.Helper()
-	id, err := u.runtime.Jobs.StartTask("main", jobs.TaskOptions{Kind: "shell", Label: label, Background: true, WakeOnExit: true}, func(context.Context, io.Writer, io.Writer) (jobs.TaskResult, error) { return jobs.TaskResult{}, nil })
+	id, err := u.runtime.Jobs.StartTask("main", jobs.TaskOptions{Kind: "shell", Label: label, Background: true}, func(context.Context, io.Writer, io.Writer) (jobs.TaskResult, error) { return jobs.TaskResult{}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

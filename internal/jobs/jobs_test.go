@@ -15,7 +15,7 @@ import (
 func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.Start("main", "i=1; while [ $i -le 20 ]; do printf 'out-%s\\n' $i; printf 'err-%s\\n' $i >&2; i=$((i+1)); done", t.TempDir(), time.Second, true, false, false, capture.OutputOptions{}, "")
+	id, err := m.Start("main", "i=1; while [ $i -le 20 ]; do printf 'out-%s\\n' $i; printf 'err-%s\\n' $i >&2; i=$((i+1)); done", t.TempDir(), time.Second, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestSeparateStreamsTailEOFGrepAndTaskCancellation(t *testing.T) {
 func TestShellSupervisionFailureExplainsRecovery(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
-	id, err := m.Start("main", "printf 'leader finished\\n'; sleep 5 &", t.TempDir(), 3*time.Second, true, false, false, capture.OutputOptions{}, "")
+	id, err := m.Start("main", "printf 'leader finished\\n'; sleep 5 &", t.TempDir(), 3*time.Second, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestForegroundExitStatusBackgroundNotificationAndStaleHandles(t *testing.T)
 	notify := make(chan Snapshot, 2)
 	m := New(context.Background(), func(v Snapshot) { notify <- v })
 	root := t.TempDir()
-	id, e := m.Start("main", "printf hello; exit 7", root, time.Second, true, false, false, capture.OutputOptions{}, "")
+	id, e := m.Start("main", "printf hello; exit 7", root, time.Second, true, false, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -107,7 +107,7 @@ func TestForegroundExitStatusBackgroundNotificationAndStaleHandles(t *testing.T)
 		t.Fatal("duplicate foreground notification")
 	default:
 	}
-	id, e = m.Start("main", "printf background", root, time.Second, true, true, true, capture.OutputOptions{}, "")
+	id, e = m.Start("main", "printf background", root, time.Second, true, true, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -136,7 +136,7 @@ func TestCancellationStopsProcessGroupAndBoundedLogs(t *testing.T) {
 	defer m.Close()
 	root := t.TempDir()
 	marker := filepath.Join(root, "leak")
-	id, e := m.Start("main", "(sleep 1; touch '"+marker+"') & wait", root, 0, true, false, false, capture.OutputOptions{}, "")
+	id, e := m.Start("main", "(sleep 1; touch '"+marker+"') & wait", root, 0, true, false, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -148,7 +148,7 @@ func TestCancellationStopsProcessGroupAndBoundedLogs(t *testing.T) {
 	if _, e = os.Stat(marker); !os.IsNotExist(e) {
 		t.Fatal("descendant escaped")
 	}
-	id, e = m.Start("main", "head -c 400000 /dev/zero | tr '\\0' x", root, time.Second, true, false, false, capture.OutputOptions{}, "")
+	id, e = m.Start("main", "head -c 400000 /dev/zero | tr '\\0' x", root, time.Second, true, false, capture.OutputOptions{}, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -162,7 +162,7 @@ func TestWaitPublishesBoundedStreamingSnapshots(t *testing.T) {
 	m := New(context.Background(), nil)
 	defer m.Close()
 	root := t.TempDir()
-	id, err := m.Start("main", "printf 'first\\n'; while [ ! -e release ]; do sleep 0.01; done; printf 'last\\n'", root, 5*time.Second, true, false, false, capture.OutputOptions{}, "")
+	id, err := m.Start("main", "printf 'first\\n'; while [ ! -e release ]; do sleep 0.01; done; printf 'last\\n'", root, 5*time.Second, true, false, capture.OutputOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

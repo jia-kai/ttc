@@ -25,25 +25,24 @@ broad read-write mounts or global Docker/SSH-agent authorization.
   affect future rail instances across projects.
 - **Rail, project:** `<workdir>/ttc-rail.json`, with no ancestor search. Prefer
   this for project-specific mounts and denies.
-- **Web search:** `${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json`, or
-  the file selected by `--web-search-config PATH`. Documented fields are
-  `api_key` and optional HTTP(S) `endpoint`; the public Exa endpoint works
-  without a key. Users can run `ttc --setup-exa` privately from the host: it
-  reads stdin (terminal entry is hidden), confirms replacing an existing
-  config's key, verifies one test search, and atomically saves mode 0600 while
-  preserving the endpoint. `TTC_EXA_URL`, if set, overrides verification without
-  changing the saved endpoint, as at normal startup. Setup requires HTTPS except
-  for HTTP localhost/loopback tests. `--web-search-config PATH` also selects the
-  setup target. Never run setup with a real key through agent tools or include
-  the key in a command. Restart TTC after changes; recreate rail if an imported
-  config was replaced on the host (see the restart rules below).
-- **Launch options:** `--model`, `--variant`, `--workdir`, `--data-dir`,
-  `--plain` and other flags shown by `ttc --help`. Provide a launch command or
-  edit a user-requested launcher; do not pretend these are JSON settings. Use
-  available model IDs/reasoning presets, not guesses; `/model` is the
-  interactive selector. Never edit saved model selection directly.
-  `TTC_DATA_DIR` selects an absolute default data root; `--data-dir` overrides
-  it. Rail sets it to the instance's shared state directory.
+- **Web search:** `${XDG_CONFIG_HOME:-$HOME/.config}/ttc/web-search.json`.
+  Documented fields are `api_key` and optional HTTP(S) `endpoint`; the public
+  Exa endpoint works without a key. Users can run `ttc --setup-exa` privately
+  from the host: it reads stdin (terminal entry is hidden), confirms replacing
+  an existing config's key, verifies one test search, and atomically saves mode
+  0600 while preserving the endpoint. `TTC_EXA_URL`, if set, overrides
+  verification without changing the saved endpoint, as at normal startup. Setup
+  requires HTTPS except for HTTP localhost/loopback tests. Never run setup with
+  a real key through agent tools or include the key in a command. Restart TTC
+  after changes; recreate rail if an imported config was replaced on the host
+  (see the restart rules below).
+- **Launch options:** `--workdir`, `--data-dir`, `--plain` and other flags shown
+  by `ttc --help`. Provide a launch command or edit a user-requested launcher;
+  do not pretend these are JSON settings. Use `/model` to choose a model and
+  reasoning variant interactively; TTC remembers the choice. Never edit saved
+  model selection directly. `TTC_DATA_DIR` selects an absolute default data
+  root; `--data-dir` overrides it. Rail sets it to the instance's shared state
+  directory.
 - **Authentication:** use the supported `ttc --login` or
   `ttc --import-codex-auth PATH` workflow, letting the user handle private
   authorization. Never read, print or directly edit TTC/Codex credentials,
@@ -52,11 +51,11 @@ broad read-write mounts or global Docker/SSH-agent authorization.
 
 ## Inspect and change safely
 
-1. Resolve the actual workdir, XDG config directory and any explicit config
-   override. Read applicable AGENTS.md files and existing **non-secret** configs
-   before editing. Inspect both rail layers to understand the effective result.
-   Do not silently replace a missing or invalid explicitly selected path with a
-   default; report the error.
+1. Resolve the actual workdir and XDG config directory. Read applicable
+   AGENTS.md files and existing **non-secret** configs before editing. Inspect
+   both rail layers to understand the effective result. Do not silently replace
+   a missing or invalid explicitly selected path with a default; report the
+   error.
 2. Use `read`, `edit`, `patch` or `write` for config/launcher changes. Preserve
    unrelated settings and make the smallest change. Workspace changes
    participate in shared undo. Global files outside the workspace are editable

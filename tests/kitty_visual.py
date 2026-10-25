@@ -85,7 +85,7 @@ def main():
             # ToolCall.arguments is JSON bytes in the Go fixture, rather than a
             # string; RawMessage accepts an ordinary encoded object here.
             command = [binary, '--offline-script', str(script), '--workdir', str(project),
-                       '--data-dir', str(root / 'data'), '--auto-name=false']
+                       '--data-dir', str(root / 'data')]
         else:
             command = ['python3', str(Path(__file__).with_name('demo.py').resolve()), '--interactive',
                        '--visual-hold', '--binary', binary, '--artifacts-file', str(root / 'demo.json')]

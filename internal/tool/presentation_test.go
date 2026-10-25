@@ -106,7 +106,7 @@ func TestShellStrictDefaultAndOptOut(t *testing.T) {
 			}
 		})
 	}
-	record := invoke(t, r, w, x, req, "shell", `{"command":"false; printf should-not-run","background":true,"wake_on_exit":false}`)
+	record := invoke(t, r, w, x, req, "shell", `{"command":"false; printf should-not-run","background":true}`)
 	ok(t, record)
 	var launched jobs.Snapshot
 	json.Unmarshal(record.Result, &launched)

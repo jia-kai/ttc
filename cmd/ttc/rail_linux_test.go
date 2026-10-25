@@ -2,9 +2,32 @@ package main
 
 import (
 	"errors"
-	"flag"
+	flag "github.com/spf13/pflag"
 	"testing"
+	"ttc/internal/history"
+	"ttc/internal/rail"
 )
+
+// Parse the real command without launching tmux or a sandbox.
+func railOptions(args []string) (rail.Options, error) {
+	cmd := newRailCommand()
+	cmd.InitDefaultHelpFlag()
+	var opts rail.Options
+	if err := cmd.ParseFlags(args); err != nil {
+		return opts, err
+	}
+	if help, _ := cmd.Flags().GetBool("help"); help {
+		return opts, flag.ErrHelp
+	}
+	if err := cmd.ValidateArgs(cmd.Flags().Args()); err != nil {
+		return opts, err
+	}
+	opts.Workdir, _ = cmd.Flags().GetString("workdir")
+	opts.DataDir, _ = cmd.Flags().GetString("data-dir")
+	opts.List, _ = cmd.Flags().GetBool("list")
+	_, defaultErr := history.DataRoot()
+	return opts, validateRailData(cmd.Flags(), opts, defaultErr)
+}
 
 func TestRailOptions(t *testing.T) {
 	t.Setenv("TMUX", "")

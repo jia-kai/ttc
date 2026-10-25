@@ -29,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 from scratch import private_scratch
+from mock_naming import respond_to_naming
 from pty_screen import Screen
 from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, child_response_row, child_response_target, compact_rows, demo_completed, verify_child_answers
 
@@ -108,6 +109,8 @@ def main():
                 assert self.headers['Authorization'] == 'Bearer mock-token'
                 assert self.headers['ChatGPT-Account-ID'] == 'mock-account'
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if respond_to_naming(self, body):
+                    return
                 requests.append(body)
                 (root / 'requests.json').write_text(json.dumps(requests, indent=2))
                 expected_model, effort = ('demo-b', 'high') if args.tui else ('demo-a', 'low')
@@ -128,7 +131,25 @@ def main():
                         assert isinstance(payload['set'], dict)
                 last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 child = context['actor'] != 'main'
+                # Terminal job notifications now always arrive. Acknowledge
+                # event-only turns without advancing the scripted tool cycle.
                 conversation = child_requests if child else main_requests
+                previous_input = conversation[-1]['input'] if conversation else []
+                new_results = any(item['type'] == 'function_call_output'
+                                  for item in body['input'][len(previous_input):])
+                runtime_notice = False
+                if last.get('role') == 'user':
+                    text = last['content'][0].get('text', '')
+                    notice = json.loads(text) if text.startswith('{') else {}
+                    runtime_notice = notice.get('message_type') == 'runtime_notification'
+                    if runtime_notice and not new_results:
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/event-stream')
+                        self.end_headers()
+                        event = {'type': 'response.completed', 'response': {'id': 'notice-ack',
+                                 'usage': {'input_tokens': 10, 'output_tokens': 0}}}
+                        self.wfile.write(('data: ' + json.dumps(event) + '\n\n').encode())
+                        return
                 if conversation:
                     assert body['instructions'] == conversation[0]['instructions']
                     previous_input = conversation[-1]['input']
@@ -138,7 +159,7 @@ def main():
                 if stage == 0 and not child:
                     assert last['role'] == 'user' and last['content'][0]['text'].startswith('Run demo')
                 elif stage > 0 and stage < 6 and (not child or stage == 1):
-                    assert last['type'] == 'function_call_output'
+                    assert last['type'] == 'function_call_output' or (runtime_notice and new_results)
                 results = {}
                 for item in body['input']:
                     if item['type'] == 'function_call_output':
@@ -171,9 +192,9 @@ def main():
                 elif stage == 2:
                     calls = [call('wakeup_list', {}),
                              call('subagent', {'persistent': True, 'child_id': results['subagent']['child_id'], 'prompt': 'Verify the final fixture report.'}),
-                             call('shell', {'command': 'python3 .lsp/server.fixture', 'background': True, 'protocol': 'lsp', 'wake_on_exit': False}),
+                             call('shell', {'command': 'python3 .lsp/server.fixture', 'background': True, 'protocol': 'lsp'}),
                              call('shell', {'command': "printf 'background evidence\\n'; touch background.ready; sleep 30",
-                                           'background': True, 'wake_on_exit': False})]
+                                           'background': True})]
                 elif stage == 3:
                     if args.visual_hold:
                         deadline = time.monotonic() + 45
@@ -265,8 +286,7 @@ def main():
     os.environ.pop('EXA_API_KEY', None)
     binary = str(Path(args.binary).resolve())
     command = [binary, '--data-dir', str(root / 'data'), '--workdir', str(workspace),
-               '--openai-base-url', endpoint, '--import-codex-auth', str(auth), '--model', 'demo-a',
-               '--variant', 'low', '--auto-name=false']
+               '--openai-base-url', endpoint, '--import-codex-auth', str(auth)]
     print(f'Demo project and artifacts: {root}', flush=True)
     if args.interactive:
         print('Type "Run demo". The question dialog has three tabs and a final Submit tab.\n'

@@ -22,29 +22,23 @@ func TestStartupSelection(t *testing.T) {
 	foreign := saved("second", "high")
 	foreign.Provider = "other"
 	for _, tt := range []struct {
-		name           string
-		models         []llm.ModelSpec
-		saved          *llm.Selection
-		model, variant string
-		want           llm.ModelSpec
-		wantVariant    string
-		notice, fails  bool
+		name          string
+		models        []llm.ModelSpec
+		saved         *llm.Selection
+		want          llm.ModelSpec
+		wantVariant   string
+		notice, fails bool
 	}{
 		{name: "first launch", models: models, want: first, wantVariant: "low"},
 		{name: "remembered", models: models, saved: saved("second", "low"), want: second, wantVariant: "low"},
 		{name: "fast", models: models, saved: saved("second/fast", "high"), want: fast, wantVariant: "high"},
 		{name: "missing model", models: models, saved: saved("removed/fast", "high"), want: first, wantVariant: "low", notice: true},
 		{name: "missing variant", models: models, saved: saved("second", "removed"), want: second, wantVariant: "high", notice: true},
-		{name: "explicit model default", models: models, saved: saved("second", "high"), model: "first", want: first, wantVariant: "low"},
-		{name: "explicit model and variant", models: models, model: "first", variant: "high", want: first, wantVariant: "high"},
-		{name: "variant override", models: models, saved: saved("second", "low"), variant: "high", want: second, wantVariant: "high"},
 		{name: "other provider", models: models, saved: foreign, want: first, wantVariant: "low"},
-		{name: "invalid explicit model", models: models, model: "missing", fails: true},
-		{name: "invalid explicit variant", models: models, saved: saved("second", "low"), variant: "missing", fails: true},
 		{name: "empty catalog", fails: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, notice, err := startupSelection("openai", tt.models, tt.saved, tt.model, tt.variant)
+			got, notice, err := startupSelection("openai", tt.models, tt.saved)
 			if (err != nil) != tt.fails {
 				t.Fatalf("selection=%+v error=%v", got, err)
 			}

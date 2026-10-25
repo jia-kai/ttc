@@ -18,9 +18,7 @@ the project root:
 ```json
 {
   "command": "exec gopls",
-  "background": true,
-  "protocol": "lsp",
-  "wake_on_exit": false
+  "protocol": "lsp"
 }
 ```
 
@@ -57,7 +55,7 @@ pagination. For example, substitute the returned job ID:
 The client owns protocol stdin/stdout. Use `job_read` with `stream:"stderr"` for
 diagnostics, and `job_stop` when available to stop an owned server. Never send
 raw RPC through shell or read protocol stdout. Queries default to a 30-second
-timeout; increase `timeout_ms` up to 120000 for a cold index. On a stopped or
+timeout; increase `timeout_seconds` up to 120 for a cold index. On a stopped or
 failed initialization, inspect diagnostics, then reuse another accessible server
 or restart with available lifecycle tools; otherwise report the missing server.
 Compaction preserves these live handles; session switching or exit closes them.

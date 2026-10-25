@@ -153,7 +153,7 @@ func TestChildToolResultUsesExplicitExecutionFields(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	child := &codingChild{id: "main/child_test", state: "running"}
 	assignment := &childAssignment{turn: "turn", persistent: true}
-	view := jobs.Snapshot{ID: "job", Kind: "subagent", Owner: child.id, Label: "audit", Status: "running", RecordDir: "must-not-leak", WakeOnExit: true, Stdout: "preview", Stderr: "diagnostic"}
+	view := jobs.Snapshot{ID: "job", Kind: "subagent", Owner: child.id, Label: "audit", Status: "running", RecordDir: "must-not-leak", Stdout: "preview", Stderr: "diagnostic"}
 	preview := childAPIObject(t, r.childResult(child, assignment, view))
 	if string(preview["stdout"]) != `"preview"` || preview["record_dir"] != nil || preview["status"] != nil || preview["wake_on_exit"] != nil {
 		t.Fatal("generic snapshot changed the child API", preview)

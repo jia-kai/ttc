@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +10,25 @@ import (
 	"strings"
 	"testing"
 )
+
+// runWatch executes the real Cobra command and exposes its workload status.
+func runWatch(args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	cmd := newWatchCommand()
+	cmd.SilenceErrors, cmd.SilenceUsage = true, true
+	cmd.SetArgs(args)
+	cmd.SetIn(stdin)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	err := cmd.Execute()
+	var exit *workloadExit
+	if errors.As(err, &exit) {
+		return exit.code, nil
+	}
+	if err != nil {
+		return 1, err
+	}
+	return 0, nil
+}
 
 func TestWatchRunCLI(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "record")
