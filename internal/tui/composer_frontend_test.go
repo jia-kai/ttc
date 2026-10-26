@@ -189,7 +189,9 @@ func TestQuestionPasteRemainderDoesNotEnterComposerAfterClosure(t *testing.T) {
 	u.wait(t, "Choose a method?")
 	u.screen.EventQ() <- tcell.NewEventPaste(true)
 	u.typeText("A")
-	u.wait(t, "Other")
+	// Wait for the pasted text so closure cannot race ahead of the UI capturing
+	// the question destination.
+	u.wait(t, "Text: A")
 	form := u.runtime.PendingQuestion()
 	if form == nil {
 		t.Fatal("question not pending")
