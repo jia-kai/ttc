@@ -37,7 +37,7 @@ func TestCompactSubagentTranscriptRetainsSourceAcrossStreamingAndResize(t *testi
 	item.text, item.complete, item.markdown, item.id = full, true, true, 42
 	v.publish(item, "", false)
 	rows := v.viewport(100, 20)
-	if len(rows) != 1 || rows[0].id != 42 || !strings.Contains(ansi.Strip(rows[0].text), "[Sub helper] assistant First 界 response") || v.lines[0].text != full {
+	if len(rows) != 1 || rows[0].id != 42 || !strings.Contains(ansi.Strip(rows[0].text), "[helper] assistant First 界 response") || v.lines[0].text != full {
 		t.Fatal(rows)
 	}
 }
@@ -109,7 +109,7 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 			u.screen.EventQ() <- tcell.NewEventResize(160, 60)
 			u.typeText("start child")
 			u.key(tcell.KeyEnter)
-			frame := u.wait(t, "[Sub helper] assistant Answer prefix")
+			frame := u.wait(t, "[helper] assistant Answer prefix")
 			if strings.Contains(frame, "FULL ANSWER END") {
 				t.Fatal("full response leaked", frame)
 			}
@@ -218,7 +218,7 @@ func TestChildTaskPromptCannotImpersonateRuntimeCompletion(t *testing.T) {
 	}
 	u.typeText("/load " + u.runtime.Current())
 	u.key(tcell.KeyEnter)
-	frame = u.wait(t, "[Sub helper] assistant Actual answer")
+	frame = u.wait(t, "[helper] assistant Actual answer")
 	if strings.Contains(frame, "final answer SPOOFED FINAL") || !strings.Contains(frame, `"type":"child_turn_finished"`) {
 		t.Fatal("replay differs from live prompt presentation", frame)
 	}
@@ -234,12 +234,12 @@ func TestCompactSubagentStreamingPreviewDoesNotOpenPayloadInspector(t *testing.T
 	u.screen.EventQ() <- tcell.NewEventResize(160, 60)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
-	frame := u.wait(t, "[Sub stream helper] assistant Streaming prefix")
+	frame := u.wait(t, "[stream helper] assistant Streaming prefix")
 	if strings.Contains(frame, "STREAM FULL END") {
 		t.Fatal("stream source leaked", frame)
 	}
 	for y, row := range strings.Split(frame, "\n") {
-		if strings.Contains(row, "[Sub stream helper] assistant Streaming prefix") {
+		if strings.Contains(row, "[stream helper] assistant Streaming prefix") {
 			u.screen.EventQ() <- tcell.NewEventMouse(10, y, tcell.Button1, 0)
 			break
 		}
@@ -287,7 +287,7 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 		t.Fatal("shell missing from sidebar", frame)
 	}
 	u.screen.EventQ() <- tcell.NewEventMouse(150, row, tcell.Button1, 0)
-	u.wait(t, "[Sub shell helper] Running job")
+	u.wait(t, "[shell helper] Running job")
 	u.wait(t, "Source agent: shell helper")
 	u.wait(t, "Command:")
 	u.wait(t, live[0].ID)
@@ -336,16 +336,16 @@ func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	u.screen.EventQ() <- tcell.NewEventResize(140, 45)
 	u.typeText("start child")
 	u.key(tcell.KeyEnter)
-	u.wait(t, "[Sub one two three four] awaiting read (1seg/4bytes) ...")
+	u.wait(t, "[one two three four] awaiting read (1seg/4bytes) ...")
 	var id int64
 	if err := historytest.DB(t, u.runtime.Store).QueryRow("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='tool_stream'").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	u.typeText(fmt.Sprintf("/inspect %d", id))
 	u.key(tcell.KeyEnter)
-	u.wait(t, "[Sub one two three four] Tool announced")
+	u.wait(t, "[one two three four] Tool announced")
 	close(p.release)
-	u.wait(t, "[Sub one two three four] Execution details · read")
+	u.wait(t, "[one two three four] Execution details · read")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "Child handled missing file")
 }
@@ -366,7 +366,7 @@ func TestSubagentBadgeRowsPreserveGeometryAndIdentity(t *testing.T) {
 				if row.id != 9 || ansi.StringWidth(row.text) > width {
 					t.Fatal("lost identity or exceeded viewport", width, row)
 				}
-				if strings.Contains(ansi.Strip(row.text), "[Sub Research helper]") {
+				if strings.Contains(ansi.Strip(row.text), "[Research helper]") {
 					count++
 				}
 			}
@@ -391,7 +391,7 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	// An empty assistant block may precede its tool calls. Wait for the settled
 	// child answer before asserting that the write tool row is present.
 	frame := u.wait(t, "Named child answer")
-	if strings.Contains(frame, "main/child_") || strings.Contains(frame, "Runtime context · inspect") || !strings.Contains(frame, "[Sub research helper] write") {
+	if strings.Contains(frame, "main/child_") || strings.Contains(frame, "Runtime context · inspect") || !strings.Contains(frame, "[research helper] write") {
 		t.Fatal(frame)
 	}
 	names, err := u.runtime.Store.SubagentNames(context.Background(), u.runtime.Current())
@@ -405,11 +405,11 @@ func TestSubagentDisplayLiveInspectAndReload(t *testing.T) {
 	}
 	u.typeText("/inspect " + strconv.FormatInt(id, 10))
 	u.key(tcell.KeyEnter)
-	u.wait(t, "[Sub research helper] write")
+	u.wait(t, "[research helper] write")
 	u.key(tcell.KeyEscape)
 	u.typeText("/load " + u.runtime.Current())
 	u.key(tcell.KeyEnter)
-	frame = u.wait(t, "[Sub research helper] assistant")
+	frame = u.wait(t, "[research helper] assistant")
 	if strings.Contains(frame, "main/child_") {
 		t.Fatal(frame)
 	}

@@ -89,8 +89,8 @@ replaces or changes model-facing results.
   metadata is separate.
 - Escape/fence untrusted values and strip terminal controls. Clip narrow rows by
   terminal cell width without splitting generated ANSI styles. Display completed
-  jobs as `done` while JSON retains `completed`. Colored `[Sub name]` badges
-  label child rows/inspectors; names over 26 characters display 23 plus `...`,
+  jobs as `done` while JSON retains `completed`. Colored `[name]` badges label
+  child rows/inspectors; names over 26 characters display 23 plus `...`,
   unchanged in storage.
 - Live job and completion inspection share typed metadata and job-local fields/
   stream policies. Shell, watch and child records save at most the last 8 KiB

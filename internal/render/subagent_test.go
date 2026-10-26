@@ -15,7 +15,7 @@ func TestSubagentBadgeNameAndCellBounds(t *testing.T) {
 		if strings.ContainsAny(full, "\x1b\n") || !utf8.ValidString(full) {
 			t.Fatal(full)
 		}
-		if utf8.RuneCountInString(name) == 27 && full != "[Sub "+strings.Repeat("界", 23)+"...]" {
+		if utf8.RuneCountInString(name) == 27 && full != "["+strings.Repeat("界", 23)+"...]" {
 			t.Fatal("name truncation", full)
 		}
 		for _, width := range []int{1, 2, 8, 26, 80} {

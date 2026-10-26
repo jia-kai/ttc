@@ -17,15 +17,15 @@ class ChildFixtureTests(unittest.TestCase):
         self.assertNotIn(CHILD_BODY, CHILD_ANSWER[:256])
 
     def test_compact_rows(self):
-        rows = ('header\n[Sub Fixture check] assistant ' + CHILD_PREFIX + ' ...\n'
-                'subagent · done · [Sub Fixture check] final answer ' + CHILD_PREFIX + '…')
+        rows = ('header\n[Fixture check] assistant ' + CHILD_PREFIX + ' ...\n'
+                'subagent · done · [Fixture check] final answer ' + CHILD_PREFIX + '…')
         self.assertEqual(compact_rows(rows), (2, 3))
 
-        boundary = '[Sub Fixture check] Request #7 · coding · attempt 1 · Inspect ' + CHILD_PREFIX
+        boundary = '[Fixture check] Request #7 · coding · attempt 1 · Inspect ' + CHILD_PREFIX
         self.assertEqual(compact_rows(rows + '\n' + boundary), (2, 3))
 
     def test_reject_expanded_or_missing_rows(self):
-        valid = ('[Sub Fixture check] assistant ' + CHILD_PREFIX + ' ...\n'
+        valid = ('[Fixture check] assistant ' + CHILD_PREFIX + ' ...\n'
                  'subagent · done · Sub Fixture check final answer ' + CHILD_PREFIX + ' ...')
         for invalid in (valid + '\n' + CHILD_BODY, valid + '\n' + CHILD_TAIL,
                         valid + '\n{"answer": "long"}', valid.splitlines()[0],
@@ -34,7 +34,7 @@ class ChildFixtureTests(unittest.TestCase):
                 compact_rows(invalid)
 
     def test_narrow_requires_both_clipped_rows(self):
-        response = '[Sub Fixture check] assistant CHILD…'
+        response = '[Fixture check] assistant CHILD…'
         completion = 'subagent · done · Sub Fixture check final…'
         self.assertEqual(compact_rows(response + '\n' + completion, narrow=True), (1, 2))
         for text in (response, completion, response + '\n' + completion + '\n' + CHILD_BODY):
@@ -57,7 +57,7 @@ class ChildFixtureTests(unittest.TestCase):
                     'item': {'title': title},
                 })))
             self.assertEqual(child_response_target(db), (4, title))
-        clipped = '[Sub Fixture check] Request #7 · coding · attempt 1 · com…'
+        clipped = '[Fixture check] Request #7 · coding · attempt 1 · com…'
         self.assertEqual(child_response_row('header\n' + clipped, title), 2)
         for text in (clipped.replace('coding', 'naming'), clipped + '\n' + clipped):
             with self.subTest(text=text), self.assertRaises(AssertionError):

@@ -43,7 +43,7 @@ def compact_rows(text, narrow=False):
     assert '"answer"' not in text and '"answer_truncated"' not in text, text
     responses, completions = [], []
     for number, row in enumerate(text.splitlines(), 1):
-        response = '[Sub Fixture check] assistant ' in row and 'CHILD' in row
+        response = '[Fixture check] assistant ' in row and 'CHILD' in row
         completion = 'subagent' in row and 'done' in row and 'Fixture check' in row
         if narrow and not (response or completion):
             continue
@@ -78,7 +78,7 @@ def child_response_row(text, title):
     """Find the target boundary even when the terminal clips its semantic suffix."""
     marker = title.split(' · attempt ', 1)[0]
     matches = [number for number, row in enumerate(text.splitlines(), 1)
-               if '[Sub Fixture check]' in row and marker in row]
+               if '[Fixture check]' in row and marker in row]
     assert len(matches) == 1, (marker, text)
     return matches[0]
 

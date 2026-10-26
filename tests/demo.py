@@ -394,7 +394,7 @@ path.write_text('Looks good.')
         # the viewport, then test their actual mouse hit targets.
         for _ in range(35):
             text = settled_screen()
-            if CHILD_PREFIX in text and '[Sub Fixture check] assistant ' in text:
+            if CHILD_PREFIX in text and '[Fixture check] assistant ' in text:
                 try:
                     rows = compact_rows(text)
                     break

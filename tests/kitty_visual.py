@@ -368,7 +368,7 @@ def main():
         # using actual rendered row coordinates, not database-only inspection.
         for _ in range(20):
             last_text = remote('get-text', '--extent', 'screen')
-            if CHILD_PREFIX in last_text and '[Sub Fixture check] assistant ' in last_text:
+            if CHILD_PREFIX in last_text and '[Fixture check] assistant ' in last_text:
                 try:
                     child_rows = compact_rows(last_text)
                     break

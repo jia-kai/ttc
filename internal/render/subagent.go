@@ -54,7 +54,7 @@ func SubagentBadge(actor, name string, width int, colors bool) string {
 	if len(runes) > 26 {
 		name = string(runes[:23]) + "..."
 	}
-	text := ansi.Truncate("[Sub "+name+"]", max(1, width), "…")
+	text := ansi.Truncate("["+name+"]", max(1, width), "…")
 	if !colors {
 		return text
 	}
