@@ -6,6 +6,15 @@ import (
 	"unicode"
 )
 
+// StopLabel returns a bounded launch identity, preferring an explicit label,
+// then a normalized command preview, then the exact job ID.
+func (s Snapshot) StopLabel() string {
+	if s.stopLabel != "" {
+		return s.stopLabel
+	}
+	return s.ID
+}
+
 // Metadata is the output-free projection used by routine job lists and runtime
 // snapshots. Command is included only by an explicitly detailed job list.
 type Metadata struct {

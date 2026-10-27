@@ -42,12 +42,16 @@ func TestComposerCursorTracksWidthAndHidesForWindow(t *testing.T) {
 	}
 	defer s.Fini()
 	s.SetSize(20, 10)
-	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", nil, llm.Selection{})
+	draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: newComposer("λ界"),
+	})
 	x, y, visible := s.cursorX, s.cursorY, s.cursorVisible
 	if !visible || x != 5 || y != 8 {
 		t.Fatal(x, y, visible)
 	}
-	draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, newComposer("λ界"), 0, nil, nil, "", &Window{Title: "Inspector"}, llm.Selection{})
+	draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: newComposer("λ界"), window: &Window{Title: "Inspector"},
+	})
 	visible = s.cursorVisible
 	if visible {
 		t.Fatal("composer cursor visible inside viewer")

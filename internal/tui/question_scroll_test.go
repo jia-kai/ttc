@@ -24,7 +24,7 @@ func TestQuestionMouseWheelPreservesManualScroll(t *testing.T) {
 		t.Fatal("fixture does not require scrolling")
 	}
 	for range 30 {
-		u.screen.EventQ() <- tcell.NewEventMouse(50, 15, tcell.WheelUp, 0)
+		u.screen.EventQ() <- tcell.NewEventMouse(50, 24, tcell.WheelUp, 0)
 	}
 	u.wait(t, "FIRST_PROMPT_LINE")
 	// Keyboard navigation must leave manual-scroll mode and reveal the option
@@ -32,11 +32,11 @@ func TestQuestionMouseWheelPreservesManualScroll(t *testing.T) {
 	u.key(tcell.KeyDown)
 	u.wait(t, "Second option")
 	for range 30 {
-		u.screen.EventQ() <- tcell.NewEventMouse(50, 15, tcell.WheelUp, 0)
+		u.screen.EventQ() <- tcell.NewEventMouse(50, 24, tcell.WheelUp, 0)
 	}
 	u.wait(t, "FIRST_PROMPT_LINE")
 	for range 30 {
-		u.screen.EventQ() <- tcell.NewEventMouse(50, 15, tcell.WheelDown, 0)
+		u.screen.EventQ() <- tcell.NewEventMouse(50, 24, tcell.WheelDown, 0)
 	}
 	u.wait(t, "LAST_OPTION")
 }

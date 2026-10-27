@@ -167,7 +167,7 @@ func AddShell(r *Registry, m *jobs.Manager, w *workspace.Manager, children Child
 		if e != nil {
 			return nil, Fail("not_found", e.Error())
 		}
-		return map[string]any{"job_id": v.ID, "status": v.Status}, nil
+		return map[string]any{"job_id": v.ID, "kind": v.Kind, "label": v.StopLabel(), "status": v.Status}, nil
 	})
 	addLSP(r, m, w)
 }

@@ -19,7 +19,7 @@ type questionAnswer struct {
 }
 
 // questionDialog owns a round's editable answers. Only the final tab submits;
-// its shared Window supplies a fixed tab header and scrollable question body.
+// its shared Window supplies a fixed tab header and scrollable inline body.
 type questionDialog struct {
 	Window       Window
 	form         session.QuestionForm
@@ -90,7 +90,7 @@ func (d *questionDialog) key(ev *tcell.EventKey, height int) (answers []session.
 			d.tab++
 		}
 		d.Window.Scroll = 0
-	case isCtrl(ev, "u") || isCtrl(ev, "d") || ev.Key() == tcell.KeyPgUp || ev.Key() == tcell.KeyPgDn:
+	case ev.Key() == tcell.KeyPgUp || ev.Key() == tcell.KeyPgDn:
 		d.Window.Key(ev, height)
 		d.manualScroll = true
 		return nil, false
@@ -203,7 +203,6 @@ func (d *questionDialog) update() {
 	d.Window.cachedLines = nil
 	d.inputRow = -1
 	d.Window.Title = "Questions"
-	d.Window.HideHint = true
 	var tabs []string
 	for i := range d.form.Questions {
 		label := fmt.Sprintf("%d", i+1)

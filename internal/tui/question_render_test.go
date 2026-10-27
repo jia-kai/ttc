@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v3"
-	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -16,6 +15,18 @@ func questionRenderDraft(text string, cursor int) *questionDialog {
 	d.answers[0].custom.cursor = cursor
 	d.update()
 	return d
+}
+
+func paintInlineQuestion(t *testing.T, s *testScreen, d *questionDialog) questionInputGeometry {
+	t.Helper()
+	w, h := s.Size()
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: newComposer("hidden draft"), attached: 2,
+		window: &d.Window, question: d,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return layoutQuestionInput(w, h, false, 0)
 }
 
 func TestQuestionRenderComposerGeometry(t *testing.T) {
@@ -70,13 +81,10 @@ func TestQuestionRenderNativeCursorAndMovement(t *testing.T) {
 	d := questionRenderDraft("abcd", 2)
 	paint := func(wantX int) {
 		t.Helper()
-		width, height := windowContentSize(50, 24, &d.Window)
-		d.reveal(width, height)
-		drawWindow(s, &d.Window)
-		left, top, _, outerHeight := windowBounds(50, 24)
-		y := top + 1 + len(d.Window.HeaderLines(width, outerHeight-3)) + d.inputRow
-		if !s.cursorVisible || s.cursorX != left+1+wantX || s.cursorY != y {
-			t.Fatalf("native cursor = (%d,%d,%v), want (%d,%d,true)", s.cursorX, s.cursorY, s.cursorVisible, left+1+wantX, y)
+		geometry := paintInlineQuestion(t, s, d)
+		y := geometry.bodyY + d.inputRow - d.Window.Scroll
+		if !s.cursorVisible || s.cursorX != wantX || s.cursorY != y {
+			t.Fatalf("native cursor = (%d,%d,%v), want (%d,%d,true)", s.cursorX, s.cursorY, s.cursorVisible, wantX, y)
 		}
 		if frame := screenText(s); !strings.Contains(frame, "Text: abcd") || strings.Contains(frame, "▏") {
 			t.Fatalf("text is not contiguous beneath the cursor:\n%s", frame)
@@ -105,15 +113,13 @@ func TestQuestionRenderResizeAndNarrowWindow(t *testing.T) {
 	d := questionRenderDraft("abcdefghij", 10)
 	for _, size := range []struct{ width, height int }{{32, 22}, {16, 22}, {8, 22}, {5, 22}, {32, 22}} {
 		s.SetSize(size.width, size.height)
-		width, height := windowContentSize(size.width, size.height, &d.Window)
-		d.reveal(width, height)
-		drawWindow(s, &d.Window)
+		geometry := paintInlineQuestion(t, s, d)
+		width, height := geometry.bodyWidth, geometry.bodyHeight
 		body := d.Window.body
 		if body.cursor == nil || body.cursor.x < 0 || body.cursor.x >= width || body.cursor.y < d.Window.Scroll || body.cursor.y >= d.Window.Scroll+height {
 			t.Fatalf("size %v: cursor %v outside body viewport width=%d height=%d scroll=%d", size, body.cursor, width, height, d.Window.Scroll)
 		}
-		left, top, _, outerHeight := windowBounds(size.width, size.height)
-		want := cellPosition{left + 1 + body.cursor.x, top + 1 + len(d.Window.HeaderLines(width, outerHeight-3)) + body.cursor.y - d.Window.Scroll}
+		want := cellPosition{body.cursor.x, geometry.bodyY + body.cursor.y - d.Window.Scroll}
 		if !s.cursorVisible || (cellPosition{s.cursorX, s.cursorY}) != want {
 			t.Fatalf("size %v: screen cursor=(%d,%d,%v), want %v", size, s.cursorX, s.cursorY, s.cursorVisible, want)
 		}
@@ -133,27 +139,28 @@ func TestQuestionRenderManualScrollAndInactiveCursor(t *testing.T) {
 	d := questionRenderDraft(strings.Repeat("line\n", 24)+"end", 0)
 	d.form.Questions[0].Prompt = strings.Repeat("prompt\n", 20)
 	d.update()
-	width, height := windowContentSize(40, 12, &d.Window)
+	geometry := layoutQuestionInput(40, 12, false, 0)
+	width, height := geometry.bodyWidth, geometry.bodyHeight
 	for _, scroll := range []int{0, 1 << 20} {
 		d.Window.Scroll, d.manualScroll = scroll, true
 		d.Window.Lines(width, height)
 		clamped := d.Window.Scroll
 		d.reveal(width, height)
-		drawWindow(s, &d.Window)
+		paintInlineQuestion(t, s, d)
 		if d.Window.Scroll != clamped || s.cursorVisible {
 			t.Fatalf("manual scroll moved or exposed offscreen cursor: scroll=%d want=%d visible=%v", d.Window.Scroll, clamped, s.cursorVisible)
 		}
 	}
 	d.key(tcell.NewEventKey(tcell.KeyRight, "", 0), height)
 	d.reveal(width, height)
-	drawWindow(s, &d.Window)
+	paintInlineQuestion(t, s, d)
 	if d.manualScroll || !s.cursorVisible {
 		t.Fatal("editing did not restore cursor-following")
 	}
 	for _, key := range []tcell.Key{tcell.KeyEscape, tcell.KeyTab} {
 		d.key(tcell.NewEventKey(key, "", 0), height)
 		d.reveal(width, height)
-		drawWindow(s, &d.Window)
+		paintInlineQuestion(t, s, d)
 		if d.Window.body.cursor != nil || s.cursorVisible {
 			t.Fatalf("cursor visible outside text entry after %v", key)
 		}
@@ -193,7 +200,7 @@ func TestQuestionRenderEditsMatchComposer(t *testing.T) {
 	}
 }
 
-func TestQuestionRenderDrawUsesModalCursorInsteadOfMainInput(t *testing.T) {
+func TestQuestionRenderDrawUsesQuestionCursorInsteadOfMainInput(t *testing.T) {
 	s := newTestScreen(t)
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
@@ -203,7 +210,13 @@ func TestQuestionRenderDrawUsesModalCursorInsteadOfMainInput(t *testing.T) {
 	d := questionRenderDraft("answer", 2)
 	main := newComposer("main draft")
 	for _, window := range []*Window{nil, &d.Window} {
-		if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, -1, main, 0, nil, nil, "", window, llm.Selection{}); err != nil {
+		var question *questionDialog
+		if window != nil {
+			question = d
+		}
+		if err := draw(s, drawState{
+			view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: main, window: window, question: question,
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if !s.cursorVisible {
@@ -215,9 +228,12 @@ func TestQuestionRenderDrawUsesModalCursorInsteadOfMainInput(t *testing.T) {
 				t.Fatalf("main cursor=(%d,%d)", s.cursorX, s.cursorY)
 			}
 		} else {
-			left, top, _, _ := windowBounds(60, 24)
-			if s.cursorX != left+1+8 || s.cursorY != top+2+d.inputRow {
-				t.Fatalf("modal cursor=(%d,%d)", s.cursorX, s.cursorY)
+			geometry := layoutQuestionInput(60, 24, false, 0)
+			if s.cursorX != 8 || s.cursorY != geometry.bodyY+d.inputRow-d.Window.Scroll {
+				t.Fatalf("question cursor=(%d,%d)", s.cursorX, s.cursorY)
+			}
+			if strings.Contains(screenText(s), "main draft") {
+				t.Fatal("question exposed the main draft")
 			}
 		}
 	}

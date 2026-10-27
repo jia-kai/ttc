@@ -31,6 +31,7 @@ const ExecutionTimeout = time.Hour
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
 	command               string             // Exact launch command; exposed only by explicit inspection.
+	stopLabel             string             // Launch-time display identity, independent of capture output.
 	Background            bool               `json:"background,omitempty"`
 	Promoted              bool               `json:"promoted,omitempty"`
 	TimeoutSeconds        *float64           `json:"timeout_seconds,omitempty"` // Nil means no execution deadline.
@@ -104,7 +105,7 @@ func New(ctx context.Context, notify func(Snapshot)) *Manager {
 // Foreground launches reserve their original result for WaitForeground before
 // the process becomes visible to concurrent promotion or completion.
 func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, strict, background bool, output capture.OutputOptions, label string) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, background, false, output, compactLabel(label, prompts.JobLabelShell))
+	return m.start(owner, command, workdir, timeout, strict, background, false, output, label)
 }
 
 // StartLSP launches a background stdio server. Protocol stdout is owned by the
@@ -112,7 +113,7 @@ func (m *Manager) Start(owner, command, workdir string, timeout time.Duration, s
 // output selects bounded stderr diagnostics; protocol stdout is never presented.
 // label follows Start's rules, with "Language server" as fallback.
 func (m *Manager) StartLSP(owner, command, workdir string, timeout time.Duration, strict bool, output capture.OutputOptions, label string) (string, error) {
-	return m.start(owner, command, workdir, timeout, strict, true, true, output, compactLabel(label, prompts.JobLabelLSP))
+	return m.start(owner, command, workdir, timeout, strict, true, true, output, label)
 }
 
 func (m *Manager) start(owner, command, workdir string, timeout time.Duration, strict, background, protocol bool, options capture.OutputOptions, label string) (string, error) {
@@ -122,6 +123,17 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	}
 	if timeout < 0 {
 		return "", errors.New(prompts.JobTimeoutNonnegative)
+	}
+	label = compactLabel(label, "")
+	stopLabel := label
+	if stopLabel == "" {
+		stopLabel = compactLabel(command, "")
+	}
+	if label == "" {
+		label = prompts.JobLabelShell
+		if protocol {
+			label = prompts.JobLabelLSP
+		}
 	}
 	m.mu.Lock()
 	if m.closed {
@@ -153,6 +165,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	cmd.WaitDelay = time.Second
 	startedAt := time.Now().UTC()
 	j := &job{startedAt: startedAt, view: Snapshot{command: command, ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: background}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
+	j.view.stopLabel = stopLabel
 	if timeout > 0 {
 		seconds := timeout.Seconds()
 		j.view.TimeoutSeconds = &seconds
@@ -424,7 +437,8 @@ func (m *Manager) List(owner string, all bool) []Snapshot {
 	return out
 }
 
-// Stop cancels a whole process group and waits for its result.
+// Stop cancels a whole process group and waits for its result. The returned
+// snapshot contains metadata only; stopping never acquires captured output.
 func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 	m.mu.Lock()
 	j, ok := m.jobs[id]
@@ -440,7 +454,9 @@ func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 	done := j.done
 	m.mu.Unlock()
 	<-done
-	return m.View(owner, id)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return cloneSnapshot(j.view), nil
 }
 
 // ReadOptions selects a bounded stream page or creates a grep snapshot job.
@@ -553,6 +569,14 @@ type TaskResult struct {
 // Returned exit metadata is copied and published atomically with terminal status
 // and captured output. Worker errors report supervision failure, not exit status.
 func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.Context, io.Writer, io.Writer) (TaskResult, error)) (string, error) {
+	label := compactLabel(options.Label, "")
+	stopLabel := label
+	if stopLabel == "" {
+		stopLabel = compactLabel(options.command, "")
+	}
+	if label == "" {
+		label = compactLabel(options.defaultLabel, options.Kind)
+	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -560,7 +584,8 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
-	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: compactLabel(options.Label, options.Kind), RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: options.Background}
+	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: label, RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: options.Background}
+	metadata.stopLabel = stopLabel
 	inspector := options.Inspector
 	if inspector == nil {
 		inspector = taskInspector

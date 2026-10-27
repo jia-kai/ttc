@@ -100,7 +100,9 @@ func TestPendingInputDrawPreservesOriginalsAndGraphemes(t *testing.T) {
 	steers := []string{"👩‍💻e\u0301suffix"}
 	view, sidebar := newTranscript(), newSidebar()
 	for range 3 {
-		if err := draw(s, view, sidebar, false, nil, nil, -1, newComposer(""), 0, queue, steers, "", nil, llm.Selection{}); err != nil {
+		if err := draw(s, drawState{
+			view: view, sidebar: sidebar, focused: -1, draft: newComposer(""), queue: queue, steers: steers,
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}

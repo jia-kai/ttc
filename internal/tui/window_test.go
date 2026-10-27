@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 	contextbuild "ttc/internal/context"
-	"ttc/internal/llm"
 	"ttc/internal/render"
 
 	"github.com/gdamore/tcell/v3"
@@ -68,7 +67,10 @@ func TestNarrowScreenDraw(t *testing.T) {
 	}
 	defer s.Fini()
 	s.SetSize(20, 8)
-	draw(s, transcriptOf([]line{{text: "System prompt · inspect", id: 1}}), newSidebar(), false, nil, nil, 0, newComposer("draft"), 0, nil, nil, "", &Window{Title: "Inspector", Text: "hello\x1bworld"}, llm.Selection{})
+	draw(s, drawState{
+		view: transcriptOf([]line{{text: "System prompt · inspect", id: 1}}), sidebar: newSidebar(), focused: 0, draft: newComposer("draft"),
+		window: &Window{Title: "Inspector", Text: "hello\x1bworld"},
+	})
 	width, height := s.Size()
 	if width*height != 160 {
 		t.Fatal(width, height)
@@ -84,7 +86,9 @@ func TestBorderedWindowProgressTopMiddleBottomAndResize(t *testing.T) {
 	s.SetSize(60, 16)
 	w := &Window{Title: "System prompt", Text: strings.TrimSuffix(strings.Repeat("row\n", 100), "\n"), System: true}
 	frame := func() string {
-		draw(s, newTranscript(), newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", w, llm.Selection{})
+		draw(s, drawState{
+			view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: newComposer(""), window: w,
+		})
 		return screenText(s)
 	}
 	if text := frame(); !strings.Contains(text, "┌System prompt") || !strings.Contains(text, "0%") || !strings.Contains(text, "lines 1–") {
@@ -129,7 +133,9 @@ func TestHumanBackgroundSystemColorAndQueueRows(t *testing.T) {
 	lines := []line{{text: "user instructions", id: 1, human: true}, {text: "System prompt · inspect", id: 2, system: true}}
 	queue := []contextbuild.Input{{Text: "first queued\nsecond part"}, {Text: strings.Repeat("long queued ", 20)}}
 	view := transcriptOf(lines)
-	draw(s, view, newSidebar(), false, nil, nil, -1, newComposer("draft"), 0, queue, nil, "Working · 0s", nil, llm.Selection{})
+	draw(s, drawState{
+		view: view, sidebar: newSidebar(), focused: -1, draft: newComposer("draft"), queue: queue, indicator: "Working · 0s",
+	})
 	_, style, _ := s.Get(1, 0)
 	bg := style.GetBackground()
 	if bg != color.GetColor(render.HumanColor) {

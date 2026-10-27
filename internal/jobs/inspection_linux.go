@@ -61,8 +61,9 @@ type TaskOptions struct {
 	Inspector   Inspector
 	Output      *capture.OutputOptions // Optional model-facing source selection; nil retains compact task previews.
 	// StartWatch retains record_dir in Snapshot for the tool JSON contract.
-	recordDir string
-	command   string // Exact command retained by watch tasks for explicit detail lists.
+	recordDir    string
+	command      string // Exact command retained by watch tasks for explicit detail lists.
+	defaultLabel string // Automatic display label for watches; not an explicit stop identity.
 }
 
 const inspectionMaxBytes = 65536

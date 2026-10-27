@@ -12,19 +12,20 @@ For visual inspection, run this inside your terminal or a tmux pane:
 make demo
 ```
 
-Type `Run demo` and press Enter. The question dialog has three question tabs and
-a final Submit tab. Prompts and options form one block, with controls below; the
-review numbers questions to match their tabs. Select recommended **Yes** with
-Enter to advance, choose **Other**, and enter `Looks good.`. Press Enter to
-advance to the checks. Select **Data** with Enter to advance to **Submit**, and
-press Enter again to send the complete round. Each question is single-choice;
-Space selects without advancing. Tab/Shift+Tab preserves answers while switching
-tabs; Left/Right moves the cursor while editing text and switches tabs
-otherwise. Free-form answers support the main input's Bash-like editing keys and
-Ctrl+X E editor. Only Enter on Submit sends answers. Esc leaves text entry, then
-dismisses; `/questions` reopens the pending dialog. A normal message instead
-settles dismissed calls with `dismissed:true` and redirects the agent; local
-commands leave them pending.
+Type `Run demo` and press Enter. Questions replace the normal input area with
+three question tabs and a final Submit tab. Ctrl+U/D scroll the visible
+conversation; PgUp/PgDn scroll the question body. Prompts and options form one
+block, with controls below; the review numbers questions to match their tabs.
+Select recommended **Yes** with Enter to advance, choose **Other**, and enter
+`Looks good.`. Press Enter to advance to the checks. Select **Data** with Enter
+to advance to **Submit**, and press Enter again to send the complete round. Each
+question is single-choice; Space selects without advancing. Tab/Shift+Tab
+preserves answers while switching tabs; Left/Right moves the cursor while
+editing text and switches tabs otherwise. Free-form answers support the main
+input's Bash-like editing keys and Ctrl+X E editor. Only Enter on Submit sends
+answers. Esc leaves text entry, then dismisses; `/questions` reopens the pending
+form. A normal message instead settles dismissed calls with `dismissed:true` and
+redirects the agent; local commands leave them pending.
 
 The fixture exercises 20 selected tool types: file read/search, three edit
 types, shell, a reusable child with an idle follow-up and explicit close, a
@@ -51,7 +52,7 @@ graphics-capable interactive demo, OK sends the requested point to the mock
 server; Esc sends cancellation. Ctrl+X F toggles fullscreen copy mode, hiding
 conversation scroll decorations and disabling mouse capture; select/copy with
 the terminal and scroll by Ctrl+U/D. The display freezes while runtime work
-continues; periodic redraws and automatic question dialogs pause until exit. Esc
+continues; periodic redraws and automatic question forms pause until exit. Esc
 or Ctrl+X F restores normal mouse behavior. Ctrl+X S opens the sidebar overlay;
 click headers to expand lists and wheel-scroll each independently.
 

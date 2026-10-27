@@ -87,11 +87,6 @@ func (c *frontendController) drawFrame() error {
 			width, height := windowContentSize(w, h, c.modal.window)
 			c.modal.background.reveal(width, height)
 		}
-		if c.modal.question != nil {
-			w, h := c.screen.Size()
-			width, height := windowContentSize(w, h, c.modal.window)
-			c.modal.question.reveal(width, height)
-		}
 		width, height := c.screen.Size()
 		c.sidebar.bounds(width, height, c.fullscreen)
 		if !c.commandBusy && c.sidebar.width > 0 {
@@ -136,8 +131,12 @@ func (c *frontendController) drawFrame() error {
 			drawFocus = c.copyFocused
 		}
 		paneWidth := c.sidebar.bounds(width, height, c.fullscreen)
-		geometry := layoutInput(&c.draft, paneWidth, height, c.fullscreen, height)
-		previewLimit := geometry.queuedRows
+		var previewLimit int
+		if c.modal.question != nil {
+			previewLimit = layoutQuestionInput(paneWidth, height, c.fullscreen, height).queuedRows
+		} else {
+			previewLimit = layoutInput(&c.draft, paneWidth, height, c.fullscreen, height).queuedRows
+		}
 		steerCount, steers := c.frontend.Runtime.SteeringPreview(previewLimit)
 		indicator := ""
 		if c.busy {
@@ -145,7 +144,22 @@ func (c *frontendController) drawFrame() error {
 		} else if c.notificationPaused {
 			indicator = "Auto-wake paused · prompt, /compact, /force-compact, /load or session/model change resumes"
 		}
-		if err := draw(c.screen, c.displayView(), c.sidebar, c.fullscreen, c.modal.preview, c.renderer, drawFocus, c.draft, len(c.attachments), c.queue, steers, indicator, c.modal.window, c.frontend.Runtime.CurrentSelection()); err != nil {
+		if err := draw(c.screen, drawState{
+			view:       c.displayView(),
+			sidebar:    c.sidebar,
+			fullscreen: c.fullscreen,
+			preview:    c.modal.preview,
+			renderer:   c.renderer,
+			focused:    drawFocus,
+			draft:      c.draft,
+			attached:   len(c.attachments),
+			queue:      c.queue,
+			steers:     steers,
+			indicator:  indicator,
+			window:     c.modal.window,
+			question:   c.modal.question,
+			selection:  c.frontend.Runtime.CurrentSelection(),
+		}); err != nil {
 			return err
 		}
 		if c.renderer != nil {

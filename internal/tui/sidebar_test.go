@@ -488,11 +488,17 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 		v.append(line{text: fmt.Sprintf("message %d", i), id: int64(i + 1)})
 	}
 	b := newSidebar()
-	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{})
+	draw(s, drawState{
+		view: v, sidebar: b, focused: -1, draft: newComposer(""),
+	})
 	v.scroll(-50, 27)
-	draw(s, v, b, false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{})
+	draw(s, drawState{
+		view: v, sidebar: b, focused: -1, draft: newComposer(""),
+	})
 	anchor := v.entryAt(0)
-	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{})
+	draw(s, drawState{
+		view: v, sidebar: b, fullscreen: true, focused: -1, draft: newComposer(""),
+	})
 	if v.entryAt(0) != anchor {
 		t.Fatal("fullscreen changed anchor")
 	}
@@ -500,12 +506,16 @@ func TestFullscreenHidesComposerAndKeepsAnchor(t *testing.T) {
 	if visible || b.width != 0 {
 		t.Fatal("fullscreen left composer/sidebar")
 	}
-	draw(s, v, b, true, nil, nil, -1, newComposer("draft"), 0, nil, nil, "", nil, llm.Selection{})
+	draw(s, drawState{
+		view: v, sidebar: b, fullscreen: true, focused: -1, draft: newComposer("draft"),
+	})
 	visible = s.cursorVisible
 	if !visible {
 		t.Fatal("typing did not show composer")
 	}
-	draw(s, v, b, true, nil, nil, -1, newComposer(""), 0, nil, nil, "Working · 0s", nil, llm.Selection{})
+	draw(s, drawState{
+		view: v, sidebar: b, fullscreen: true, focused: -1, draft: newComposer(""), indicator: "Working · 0s",
+	})
 	var status string
 	for x := range 40 {
 		r, _, _ := s.Get(x, 29)

@@ -4,7 +4,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
-	"ttc/internal/llm"
 )
 
 func TestSharedPresentationInterleavingAndFinalImmutability(t *testing.T) {
@@ -75,7 +74,9 @@ func TestStreamingSpeakerDrawUsesStyledCells(t *testing.T) {
 	s.SetSize(60, 12)
 	v := newTranscript()
 	v.assistant(1, "assistant", "plain *streamed* body", 0, false)
-	if err := draw(s, v, newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: v, sidebar: newSidebar(), focused: -1, draft: newComposer(""),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for i, r := range "assistant" {

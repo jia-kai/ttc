@@ -32,6 +32,16 @@ def check_question_cursor(remote, wait, send, key, capture, root):
         raise AssertionError('incorrect native question cursor: ' + name + '\n' + repr(state))
 
     wait('Any notes for the report?')
+    wait('Ctrl+U/D context')
+    initial = remote('get-text', '--extent', 'screen')
+    (root / 'question-inline-context.txt').write_text(initial)
+    rows = initial.splitlines()
+    question_rows = [row for row, text in enumerate(rows) if 'Any notes for the report?' in text]
+    assert question_rows and question_rows[-1] >= len(rows) // 2, initial
+    # The conversation remains rendered above the form, rather than hidden
+    # under the former modal. Both offline and mock fixtures start this way.
+    assert any('Run demo' in text or 'Waiting for answer' in text
+               for text in rows[:len(rows) // 2]), initial
     key('down')
     key('down')
     key('enter')  # Other enters the shared free-text composer.

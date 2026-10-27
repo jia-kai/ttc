@@ -176,3 +176,46 @@ func (c *frontendController) scrollInput(delta int) {
 	c.draft.scrollTop = min(max(0, geometry.input.top+delta), max(0, geometry.input.total-len(geometry.input.rows)))
 	c.draft.manualScroll = true
 }
+
+// questionInputGeometry keeps the question header fixed above its scrollable
+// body. The footer occupies the last terminal row; queued previews and status
+// sit between the transcript and the question, never reducing the transcript
+// below half the pane (apart from unavoidable tiny-terminal constraints).
+type questionInputGeometry struct {
+	bodyWidth, bodyHeight        int
+	headerY, bodyY               int
+	transcriptHeight, queuedRows int
+}
+
+func layoutQuestionInput(width, height int, fullscreen bool, pending int) questionInputGeometry {
+	height = max(0, height)
+	statusRows := 0
+	if !fullscreen && height >= 6 {
+		statusRows = 1
+	}
+	questionRows := min(12, max(0, height-1-statusRows-height/2))
+	// In tiny panes, prefer a body row over a header or status line.
+	headerRows := 0
+	if questionRows >= 2 {
+		headerRows = 1
+	}
+	available := max(0, height-1-statusRows-questionRows)
+	queued := 0
+	if !fullscreen {
+		queued = min(max(0, pending), max(0, available-(height+1)/2))
+	}
+	headerY := max(0, height-1-questionRows)
+	return questionInputGeometry{
+		bodyWidth: max(0, width-1), bodyHeight: questionRows - headerRows,
+		headerY: headerY, bodyY: headerY + headerRows,
+		transcriptHeight: max(0, available-queued), queuedRows: queued,
+	}
+}
+
+// layoutQuestionInput uses the same pane bounds as drawing and keyboard routing.
+func (c *frontendController) layoutQuestionInput() questionInputGeometry {
+	w, h := c.screen.Size()
+	w = c.sidebar.bounds(w, h, c.fullscreen)
+	steers, _ := c.frontend.Runtime.SteeringPreview(0)
+	return layoutQuestionInput(w, h, c.fullscreen, len(c.queue)+steers)
+}

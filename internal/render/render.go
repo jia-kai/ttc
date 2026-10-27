@@ -122,7 +122,13 @@ func tool(name string, args, result json.RawMessage, inspected bool) Markdown {
 	if name == "subagent" {
 		status, _ = v["assignment_status"].(string)
 	}
+	if name == "job_stop" && a["child_id"] != nil {
+		status, _ = v["child_state"].(string)
+	}
 	summary := "**" + Inline(name) + "**"
+	if name == "job_stop" {
+		summary = stopSummary(a, v)
+	}
 	detail := toolDetail(name, args, result, inspected)
 	if name == "subagent" {
 		if answer, ok := v["answer"].(string); ok {
@@ -167,7 +173,7 @@ func tool(name string, args, result json.RawMessage, inspected bool) Markdown {
 		if command != "" {
 			summary += "\n\n" + Fence(clip(strings.Join(strings.Fields(Clean(command)), " "), 192), "sh")
 		}
-	} else {
+	} else if name != "job_stop" {
 		// Prefer the pattern over an optional search root; never preview file
 		// contents, question arrays, or full results in the conversation row.
 		for _, key := range []string{"query", "pattern", "path", "label", "name", "job_id", "url", "document_id"} {

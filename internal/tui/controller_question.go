@@ -54,6 +54,9 @@ func (c *frontendController) showQuestion(form *session.QuestionForm) {
 		c.add("Pending question · "+form.ID+"\n"+string(data), form.EntryID)
 		return
 	}
+	// Answering uses the live conversation, not the frozen copy-mode snapshot.
+	c.setFullscreen(false)
+	c.sidebar.overlay = false
 	if c.retainedQuestion == nil || c.retainedQuestion.form.ID != form.ID {
 		c.retainedQuestion = newQuestionDialog(*form)
 	}

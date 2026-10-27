@@ -35,39 +35,66 @@ func drawInputCursor(s tcell.Screen, left, top, width, height int, cursor *cellP
 	s.ShowCursor(left+cursor.x, top+cursor.y)
 }
 
-func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, preview *imagePreview, renderer *imageRenderer, focused int, draft composer, attached int, queue []contextbuild.Input, steers []string, indicator string, window *Window, selection llm.Selection) error {
+// drawState contains the inputs for one frame; referenced UI state remains shared.
+type drawState struct {
+	view       *transcript
+	sidebar    *sidebar
+	fullscreen bool
+	preview    *imagePreview
+	renderer   *imageRenderer
+	focused    int      // Transcript line index; -1 means no focus (zero is valid).
+	draft      composer // Value copy: layout and scrolling updates stay local to the frame.
+	attached   int
+	queue      []contextbuild.Input
+	steers     []string
+	indicator  string
+	window     *Window
+	question   *questionDialog
+	selection  llm.Selection
+}
+
+func draw(s tcell.Screen, frame drawState) error {
 	s.Clear()
 	w, h := s.Size()
-	paneWidth := sidebar.bounds(w, h, fullscreen)
+	paneWidth := frame.sidebar.bounds(w, h, frame.fullscreen)
 	w = paneWidth
 	style := tcell.StyleDefault.Foreground(tcell.GetColor(render.TextColor))
-	geometry := layoutInput(&draft, w, h, fullscreen, len(queue)+len(steers))
-	queuedLines, height := geometry.queuedRows, geometry.transcriptHeight
+	var geometry inputGeometry
+	var questionGeometry questionInputGeometry
+	var queuedLines, height int
+	if frame.question != nil {
+		questionGeometry = layoutQuestionInput(w, h, frame.fullscreen, len(frame.queue)+len(frame.steers))
+		queuedLines, height = questionGeometry.queuedRows, questionGeometry.transcriptHeight
+		frame.question.reveal(questionGeometry.bodyWidth, questionGeometry.bodyHeight)
+	} else {
+		geometry = layoutInput(&frame.draft, w, h, frame.fullscreen, len(frame.queue)+len(frame.steers))
+		queuedLines, height = geometry.queuedRows, geometry.transcriptHeight
+	}
 	columns := max(1, w-1)
-	if fullscreen {
+	if frame.fullscreen {
 		columns = max(1, w)
 	}
-	all := view.viewport(columns, height)
-	start := view.firstLine
-	if renderer != nil {
+	all := frame.view.viewport(columns, height)
+	start := frame.view.firstLine
+	if frame.renderer != nil {
 		assets := all
-		if window != nil && preview == nil && window.Markdown {
-			if window.renderer != renderer {
-				window.renderer = renderer
-				window.cachedLines = nil
+		if frame.window != nil && frame.question == nil && frame.preview == nil && frame.window.Markdown {
+			if frame.window.renderer != frame.renderer {
+				frame.window.renderer = frame.renderer
+				frame.window.cachedLines = nil
 			}
 			// Prepare the popup viewport before requesting assets. The shared
 			// worker and memory bound cover both visible conversation and popup.
 			fullWidth, fullHeight := s.Size()
-			innerWidth, bodyHeight := windowContentSize(fullWidth, fullHeight, window)
-			rows := window.Lines(innerWidth, bodyHeight)
+			innerWidth, bodyHeight := windowContentSize(fullWidth, fullHeight, frame.window)
+			rows := frame.window.Lines(innerWidth, bodyHeight)
 			assets = append(append([]line(nil), all...), make([]line, len(rows))...)
 			for i := range rows {
-				row := window.assets[window.Scroll+i]
+				row := frame.window.assets[frame.window.Scroll+i]
 				assets[len(all)+i] = line{text: row.text, assets: row.assets}
 			}
 		}
-		if err := renderer.ensure(assets); err != nil {
+		if err := frame.renderer.ensure(assets); err != nil {
 			return err
 		}
 	}
@@ -83,7 +110,7 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 		if all[i].system {
 			st = st.Foreground(tcell.GetColor(render.LavenderColor))
 		}
-		if focused >= 0 && focused < len(view.lines) && all[i].id != 0 && all[i].id == view.lines[focused].id {
+		if frame.focused >= 0 && frame.focused < len(frame.view.lines) && all[i].id != 0 && all[i].id == frame.view.lines[frame.focused].id {
 			st = st.Reverse(true)
 		}
 		if strings.ContainsRune(all[i].text, '\U0010eeee') {
@@ -95,67 +122,102 @@ func draw(s tcell.Screen, view *transcript, sidebar *sidebar, fullscreen bool, p
 			put(s, 0, y, columns, all[i].text, st)
 		}
 	}
-	if !fullscreen {
-		drawScrollBar(s, w-1, 0, height, view.total, start, style.Foreground(tcell.GetColor(render.MutedColor)))
+	if !frame.fullscreen {
+		drawScrollBar(s, w-1, 0, height, frame.view.total, start, style.Foreground(tcell.GetColor(render.MutedColor)))
 	}
-	status := selection.Model.ID + " · " + selection.Variant + " · /help · Ctrl+X F full · Ctrl+X M model"
-	if indicator != "" {
-		status = indicator
+	status := frame.selection.Model.ID + " · " + frame.selection.Variant + " · /help · Ctrl+X F full · Ctrl+X M model"
+	if frame.indicator != "" {
+		status = frame.indicator
 	}
-	if !fullscreen {
-		if h >= 3 {
+	if !frame.fullscreen {
+		if (frame.question == nil && h >= 3) || (frame.question != nil && h >= 6) {
 			put(s, 0, height, w, status, style.Foreground(tcell.GetColor(render.CyanColor)))
 		}
 		for i := range queuedLines {
 			label := "Queued · "
 			var source string
-			if i < len(steers) {
+			if i < len(frame.steers) {
 				label = "Steer · "
-				source = steers[i]
+				source = frame.steers[i]
 			} else {
-				source = queue[i-len(steers)].Text
+				source = frame.queue[i-len(frame.steers)].Text
 			}
 			text := pendingInputPreview(label, source, w)
 			put(s, 0, height+1+i, w, strings.Repeat(" ", max(0, w)), style.Background(tcell.GetColor(render.HumanColor)))
 			putStyled(s, 0, height+1+i, w, text, style.Background(tcell.GetColor(render.HumanColor)))
 		}
 	}
-	for i, row := range geometry.input.rows {
-		if i == 0 {
-			put(s, 0, geometry.inputY+i, w, "> ", style)
+	if frame.question == nil {
+		for i, row := range geometry.input.rows {
+			if i == 0 {
+				put(s, 0, geometry.inputY+i, w, "> ", style)
+			}
+			put(s, 2, geometry.inputY+i, max(0, w-2), row.text, style)
 		}
-		put(s, 2, geometry.inputY+i, max(0, w-2), row.text, style)
 	}
-	progress := scrollIndicator(view.total, height, start, w)
-	if len(view.blocks) > len(view.recent) {
+	progress := scrollIndicator(frame.view.total, height, start, w)
+	if len(frame.view.blocks) > len(frame.view.recent) {
 		progress = "~" + progress
 	}
-	if fullscreen {
+	if frame.fullscreen {
 		progress = ""
 		put(s, 0, h-1, w, "Copy mode · updates paused · Esc returns", style.Foreground(tcell.GetColor(render.CyanColor)))
 	}
-	if attached > 0 {
-		put(s, 0, h-1, max(0, w-runewidth.StringWidth(progress)-1), fmt.Sprintf("%d attachments", attached), style)
+	if frame.attached > 0 && frame.question == nil {
+		put(s, 0, h-1, max(0, w-runewidth.StringWidth(progress)-1), fmt.Sprintf("%d attachments", frame.attached), style)
+	}
+	if frame.question != nil && h > 0 {
+		put(s, 0, h-1, max(0, w-runewidth.StringWidth(progress)-1), "Ctrl+U/D context · PgUp/PgDn question · Tab tabs", style.Foreground(tcell.GetColor(render.CyanColor)))
 	}
 	put(s, max(0, w-runewidth.StringWidth(progress)), h-1, w, progress, style.Foreground(tcell.GetColor(render.MutedColor)))
-	sidebar.draw(s)
-	if window == nil && preview == nil && draft.completion != nil {
-		draft.completion.draw(s, geometry.inputY, w)
+	if frame.question != nil {
+		drawQuestionInput(s, frame.question, questionGeometry, style)
+		// The narrow-pane sidebar is an overlay; do not expose a cursor on
+		// top of it when it covers the custom answer's insertion point.
+		if frame.sidebar.overlay && frame.sidebar.width > 0 && frame.question.Window.body.cursor != nil && frame.question.Window.body.cursor.x >= frame.sidebar.left {
+			s.HideCursor()
+		}
 	}
-	if preview != nil && renderer != nil {
+	frame.sidebar.draw(s)
+	if frame.question == nil && frame.window == nil && frame.preview == nil && frame.draft.completion != nil {
+		frame.draft.completion.draw(s, geometry.inputY, w)
+	}
+	if frame.preview != nil && frame.renderer != nil {
 		s.HideCursor()
-		if err := preview.draw(s, renderer.graphics); err != nil {
+		if err := frame.preview.draw(s, frame.renderer.graphics); err != nil {
 			drawWindow(s, &Window{Title: "Image preview", Text: "Image preview failed: " + err.Error()})
 		}
-	} else if window != nil {
+	} else if frame.question == nil && frame.window != nil {
 		s.HideCursor()
-		drawWindow(s, window)
-	} else {
+		drawWindow(s, frame.window)
+	} else if frame.question == nil {
 		drawInputCursor(s, 2, geometry.inputY, max(0, w-2), len(geometry.input.rows),
 			&cellPosition{geometry.input.cursorX, geometry.input.cursorY})
 	}
 	s.Show()
 	return nil
+}
+
+// drawQuestionInput uses Window only as the form's body cache and viewport;
+// unlike drawWindow, it never covers the transcript or sidebar with a popup.
+func drawQuestionInput(s tcell.Screen, question *questionDialog, geometry questionInputGeometry, style tcell.Style) {
+	window := &question.Window
+	if geometry.bodyY > geometry.headerY {
+		header := window.HeaderLines(geometry.bodyWidth, 1)
+		if len(header) > 0 {
+			put(s, 0, geometry.headerY, geometry.bodyWidth, header[0], style.Foreground(tcell.GetColor(render.CyanColor)).Bold(true))
+		}
+	}
+	rows := window.Lines(geometry.bodyWidth, geometry.bodyHeight)
+	for i, row := range rows {
+		put(s, 0, geometry.bodyY+i, geometry.bodyWidth, row, style)
+	}
+	drawScrollBar(s, geometry.bodyWidth, geometry.bodyY, geometry.bodyHeight, len(window.cachedLines), window.Scroll, style.Foreground(tcell.GetColor(render.MutedColor)))
+	var cursor *cellPosition
+	if window.body.cursor != nil {
+		cursor = &cellPosition{window.body.cursor.x, window.body.cursor.y - window.Scroll}
+	}
+	drawInputCursor(s, 0, geometry.bodyY, geometry.bodyWidth, geometry.bodyHeight, cursor)
 }
 
 func drawScrollBar(s tcell.Screen, x, top, height, total, offset int, style tcell.Style) {
@@ -203,13 +265,11 @@ func drawWindowFrame(s tcell.Screen, window *Window) {
 	s.Put(left, top+height-1, "└", style)
 	s.Put(left+width-1, top+height-1, "┘", style)
 	title := render.Clean(window.Title)
-	if !window.HideHint {
-		hint := window.Hint
-		if hint == "" {
-			hint = "Esc closes"
-		}
-		title += render.Clean(" · " + hint)
+	hint := window.Hint
+	if hint == "" {
+		hint = "Esc closes"
 	}
+	title += render.Clean(" · " + hint)
 	if window.subagentName != "" {
 		title = render.SubagentBadge(window.actor, window.subagentName, max(1, (width-2)/2), true) + " " + title
 	}

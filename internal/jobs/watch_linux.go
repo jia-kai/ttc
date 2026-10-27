@@ -23,7 +23,7 @@ func (m *Manager) StartWatch(owner, dir string, label string, output capture.Out
 		return "", err
 	}
 	command := watchCommand(identity.Command)
-	options := TaskOptions{Kind: "watch", Label: compactLabel(label, prompts.JobLabelWatch), command: command, Background: true, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
+	options := TaskOptions{Kind: "watch", Label: label, defaultLabel: prompts.JobLabelWatch, command: command, Background: true, recordDir: dir, Inspector: func(Snapshot) InspectionSpec {
 		return InspectionSpec{Fields: []InspectionField{{Name: "Record dir", Value: dir}, {Name: "Command", Value: command, Language: "sh"}}, Streams: defaultInspectionStreams(false)}
 	}}
 	options.Output = &output

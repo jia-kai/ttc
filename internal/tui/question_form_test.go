@@ -269,9 +269,6 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 		}
 	}
 	assertOrder("Which method?", "( ) First", "( ) Second (Recommended)", "Useful explanation", "Other · free-text input", "Up/Down choose", "←/→ tabs · Esc dismisses")
-	if !d.Window.HideHint {
-		t.Fatal("question controls should not precede content in the title bar")
-	}
 
 	d.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 8)
 	d.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 8)
@@ -287,25 +284,5 @@ func TestQuestionContentPrecedesControlHints(t *testing.T) {
 	assertOrder("1. Which method?\n   custom\n   answer", "2. Any notes?\n   Unanswered", "3. Which check?\n   Unanswered", "> [ Submit answers ]", "Enter submits", "←/→ tabs · Esc dismisses")
 	if d.rows[d.focusRow] != "> [ Submit answers ]" {
 		t.Fatal("review focus moved from Submit to the footer", d.focusRow, d.rows)
-	}
-}
-
-func TestQuestionTitleHasNoControlHints(t *testing.T) {
-	s := newTestScreen(t)
-	if err := s.Init(); err != nil {
-		t.Fatal(err)
-	}
-	defer s.Fini()
-	s.SetSize(100, 30)
-	d := newQuestionDialog(questionFixture())
-	drawWindow(s, &d.Window)
-	left, top, width, _ := windowBounds(100, 30)
-	var title strings.Builder
-	for x := left; x < left+width; x++ {
-		r, _, _ := s.Get(x, top)
-		title.WriteString(r)
-	}
-	if !strings.Contains(title.String(), "Questions") || strings.Contains(title.String(), "Esc") || strings.Contains(title.String(), "tabs") {
-		t.Fatal(title.String())
 	}
 }

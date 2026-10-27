@@ -399,13 +399,23 @@ func normalizeFrontendKey(ev *tcell.EventKey) *tcell.EventKey {
 func (c *frontendController) handleQuestionKey(ev *tcell.EventKey) {
 	c.esc = false
 	c.viewChord = false
+	// Questions replace the composer, not the conversation viewport. Keep the
+	// normal context-scrolling keys available even during custom text entry.
+	if isCtrl(ev, "u") {
+		c.view.scroll(-max(1, len(c.view.visible)/2), len(c.view.visible))
+		return
+	}
+	if isCtrl(ev, "d") {
+		c.view.pageDown(len(c.view.visible))
+		return
+	}
 	if c.modal.question.textEntry() && isCtrl(ev, "x") {
 		c.viewChord = true
 		return
 	}
-	w, h := c.screen.Size()
-	_, height := windowContentSize(w, h, c.modal.window)
-	answers, dismissed := c.modal.question.key(ev, height)
+	geometry := c.layoutQuestionInput()
+	c.modal.question.Window.currentLines(geometry.bodyWidth)
+	answers, dismissed := c.modal.question.key(ev, geometry.bodyHeight)
 	if dismissed {
 		if err := c.frontend.Runtime.DismissQuestion(c.modal.question.form.ID); err != nil {
 			c.modal.question.errorText = err.Error()
@@ -489,6 +499,32 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 		}
 		return
 	}
+	if c.modal.question != nil {
+		geometry := c.layoutQuestionInput()
+		width, _ := c.screen.Size()
+		width = c.sidebar.bounds(width, c.sidebar.height, false)
+		if x < 0 || x >= width {
+			return
+		}
+		delta := 0
+		if ev.Buttons()&tcell.WheelUp != 0 {
+			delta = -3
+		} else if ev.Buttons()&tcell.WheelDown != 0 {
+			delta = 3
+		}
+		if delta != 0 {
+			if y >= geometry.headerY {
+				d := c.modal.question
+				d.Window.currentLines(geometry.bodyWidth)
+				d.Window.ScrollBy(delta, geometry.bodyHeight)
+				d.Window.Scroll = max(0, d.Window.Scroll)
+				d.manualScroll = true
+			} else if y >= 0 && y < geometry.transcriptHeight {
+				c.view.scroll(delta, len(c.view.visible))
+			}
+		}
+		return
+	}
 	if c.modal.window != nil {
 		if c.renderer != nil && ev.Buttons()&tcell.Button1 != 0 {
 			w, h := c.screen.Size()
@@ -535,9 +571,6 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 			c.modal.window.ScrollBy(delta, height)
 			// Preserve the nonpaged wheel's immediate top clamp.
 			c.modal.window.Scroll = max(0, c.modal.window.Scroll)
-			if c.modal.question != nil {
-				c.modal.question.manualScroll = true
-			}
 		}
 		return
 	}

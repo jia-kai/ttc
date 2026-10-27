@@ -151,7 +151,9 @@ func TestTurnBoundaryScreen(t *testing.T) {
 	view := newTranscript()
 	view.append(line{text: "user · prompt", human: true, turnTime: "09:07", id: 1})
 	view.append(line{text: "user · steer", human: true, id: 2})
-	if err := draw(s, view, newSidebar(), false, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: view, sidebar: newSidebar(), focused: -1, draft: newComposer(""),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, y := range []int{0, 1, 3} {

@@ -646,10 +646,12 @@ Input: `{path, format?, scope?}`.
 
 - Input: `{job_id?:string,child_id?:string}`; exactly one is required.
 - Job result:
-  `{job_id:string,status:"cancelled"|"completed"|"failed"| "interrupted"}`. This
-  is scheduler job status even for subagent jobs, not semantic assignment
-  status. Already-finished jobs return their existing state. Stopping a `watch`
-  job cancels observation only, not the external wrapper/workload.
+  `{job_id:string,kind:string,label:string,status:"cancelled"|"completed"|"failed"|"interrupted"}`.
+  `label` is a bounded display identity: explicit label, then normalized command
+  preview, then job ID. Resolving it does not read captured output. This is
+  scheduler job status even for subagent jobs, not semantic assignment status.
+  Already-finished jobs return their existing state. Stopping a `watch` job
+  cancels observation only, not the external wrapper/workload.
 - Child result:
   `{label:string,child_id:string,child_turn_id:string,job_id:string,child_state:"closed",assignment_status:"completed"|"failed"|"cancelled"}`
   (the full child view). `assignment_status` describes the latest assignment,
@@ -809,21 +811,22 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
   unsupported. A recommendation identifies an existing option ID, with optional
   explanation in that option's description. Invalid recommendation IDs fail
   validation; omitted recommendations are valid.
-- The terminal dialog shows question tabs and a final Submit tab. Tab/Shift+Tab
-  switches tabs; Left/Right also switches tabs outside text editing. Up/Down
-  focuses options. Enter selects an option or finishes text editing and advances
-  to the next tab (Submit after the last question). Choosing Other opens custom
-  entry instead. Space selects without advancing. Selecting an option replaces
-  the previous choice and does not toggle it off. Recommendations start focused
-  but unselected. Custom text and selected options are mutually exclusive
-  answers; drafts survive switching tabs and answer type. Free-form answers use
-  the main input's cursor, word/line and kill/yank keys, plus Ctrl+X E for the
-  external editor. Left/Right moves the text caret; Shift+Enter inserts a
-  newline when the terminal reports it distinctly. Each answer has its own draft
-  and kill buffer. Edited text must remain valid UTF-8 and within 16 KiB;
-  rejected edits preserve text, cursor and kill buffer. Only Enter on Submit
-  sends the round. Missing answers return focus to the first unanswered
-  question.
+- The terminal form replaces the input area, keeping conversation context
+  visible. Ctrl+U/D scroll the conversation; PgUp/PgDn scroll the question body.
+  The form shows question tabs and a final Submit tab. Tab/Shift+Tab switches
+  tabs; Left/Right also switches tabs outside text editing. Up/Down focuses
+  options. Enter selects an option or finishes text editing and advances to the
+  next tab (Submit after the last question). Choosing Other opens custom entry
+  instead. Space selects without advancing. Selecting an option replaces the
+  previous choice and does not toggle it off. Recommendations start focused but
+  unselected. Custom text and selected options are mutually exclusive answers;
+  drafts survive switching tabs and answer type. Free-form answers use the main
+  input's cursor, word/line and kill/yank keys, plus Ctrl+X E for the external
+  editor. Left/Right moves the text caret; Shift+Enter inserts a newline when
+  the terminal reports it distinctly. Each answer has its own draft and kill
+  buffer. Edited text must remain valid UTF-8 and within 16 KiB; rejected edits
+  preserve text, cursor and kill buffer. Only Enter on Submit sends the round.
+  Missing answers return focus to the first unanswered question.
 - Esc leaves custom editing first, then dismisses without answering.
   `/questions` reopens the pending round with its drafts; an optional `FORM_ID`
   must match it. The next normal user message settles a dismissed call and

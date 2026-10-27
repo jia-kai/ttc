@@ -260,7 +260,9 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	s.SetSize(20, 10)
 	c := newComposer("é界x")
 	c.cursor = 2
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: c,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	x, y, visible := s.cursorX, s.cursorY, s.cursorVisible
@@ -270,7 +272,9 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	}
 	s.SetSize(6, 10)
 	c.set("abcdef")
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: c,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	x, y, visible = s.cursorX, s.cursorY, s.cursorVisible
@@ -283,14 +287,18 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 		t.Fatal("wrapped input rows", rows[7:9])
 	}
 	c.cursor = 2
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: c,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.cursorVisible || s.cursorX != 4 || s.cursorY != 7 {
 		t.Fatal("cursor before wrap", s.cursorX, s.cursorY, s.cursorVisible)
 	}
 	s.SetSize(10, 10)
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: c,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.cursorVisible || s.cursorX != 4 || s.cursorY != 8 {
@@ -302,14 +310,18 @@ func TestComposerDrawFollowsCursorAndCombiningCharacters(t *testing.T) {
 	c.set("0\n1\n2\n3\n4\n5\n6\n7")
 	c.manualScroll, c.scrollTop = true, 0
 	before := c.cursor
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: c,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if s.cursorVisible || c.cursor != before {
 		t.Fatal("manual scrolling did not hide the stationary cursor", s.cursorVisible, c.cursor)
 	}
 	c.key(tcell.NewEventKey(tcell.KeyLeft, "", 0))
-	if err := draw(s, newTranscript(), newSidebar(), false, nil, nil, 0, c, 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), focused: 0, draft: c,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.cursorVisible || s.cursorX != 2 || s.cursorY != 8 {

@@ -71,7 +71,9 @@ func TestFullscreenConversationUsesLastColumnWithoutScrollbar(t *testing.T) {
 		view.append(line{text: strings.Repeat("x", 20), id: int64(i + 1)})
 	}
 	sidebar := newSidebar()
-	if err := draw(screen, view, sidebar, true, nil, nil, -1, newComposer(""), 0, nil, nil, "", nil, llm.Selection{}); err != nil {
+	if err := draw(screen, drawState{
+		view: view, sidebar: sidebar, fullscreen: true, focused: -1, draft: newComposer(""),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for y := range 11 {
