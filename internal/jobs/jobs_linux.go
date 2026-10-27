@@ -31,7 +31,7 @@ const ExecutionTimeout = time.Hour
 // Snapshot is an immutable job view. ExitCode is nil until an exit is observed.
 type Snapshot struct {
 	command               string             // Exact launch command; exposed only by explicit inspection.
-	stopLabel             string             // Launch-time display identity, independent of capture output.
+	referenceLabel        string             // Launch-time display identity, independent of capture output.
 	Background            bool               `json:"background,omitempty"`
 	Promoted              bool               `json:"promoted,omitempty"`
 	TimeoutSeconds        *float64           `json:"timeout_seconds,omitempty"` // Nil means no execution deadline.
@@ -125,9 +125,9 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 		return "", errors.New(prompts.JobTimeoutNonnegative)
 	}
 	label = compactLabel(label, "")
-	stopLabel := label
-	if stopLabel == "" {
-		stopLabel = compactLabel(command, "")
+	referenceLabel := label
+	if referenceLabel == "" {
+		referenceLabel = compactLabel(command, "")
 	}
 	if label == "" {
 		label = prompts.JobLabelShell
@@ -165,7 +165,7 @@ func (m *Manager) start(owner, command, workdir string, timeout time.Duration, s
 	cmd.WaitDelay = time.Second
 	startedAt := time.Now().UTC()
 	j := &job{startedAt: startedAt, view: Snapshot{command: command, ID: history.NewID("job"), Kind: "shell", Owner: owner, Label: label, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: background}, cmd: cmd, cancel: cancel, done: make(chan struct{}), promoted: make(chan struct{}), stdout: m.pool.NewBuffer(capture.CallLimit / 2), stderr: m.pool.NewBuffer(capture.CallLimit / 2)}
-	j.view.stopLabel = stopLabel
+	j.view.referenceLabel = referenceLabel
 	if timeout > 0 {
 		seconds := timeout.Seconds()
 		j.view.TimeoutSeconds = &seconds
@@ -570,9 +570,9 @@ type TaskResult struct {
 // and captured output. Worker errors report supervision failure, not exit status.
 func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.Context, io.Writer, io.Writer) (TaskResult, error)) (string, error) {
 	label := compactLabel(options.Label, "")
-	stopLabel := label
-	if stopLabel == "" {
-		stopLabel = compactLabel(options.command, "")
+	referenceLabel := label
+	if referenceLabel == "" {
+		referenceLabel = compactLabel(options.command, "")
 	}
 	if label == "" {
 		label = compactLabel(options.defaultLabel, options.Kind)
@@ -585,7 +585,7 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
 	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: label, RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: options.Background}
-	metadata.stopLabel = stopLabel
+	metadata.referenceLabel = referenceLabel
 	inspector := options.Inspector
 	if inspector == nil {
 		inspector = taskInspector

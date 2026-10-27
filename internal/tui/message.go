@@ -54,6 +54,8 @@ func notificationLine(item line, content string) line {
 		Type    string `json:"type"`
 		ChildID string `json:"child_id"`
 		JobID   string `json:"job_id"`
+		Kind    string `json:"kind"`
+		Label   string `json:"label"`
 		Status  string `json:"status"`
 		Name    string `json:"name"`
 		Message string `json:"message"`
@@ -73,7 +75,11 @@ func notificationLine(item line, content string) line {
 	if notice.Type != "" {
 		parts = append(parts, strings.ReplaceAll(notice.Type, "_", " "))
 	}
-	for _, field := range []string{notice.JobID, notice.Name, notice.Status, notice.Message} {
+	job := ""
+	if notice.JobID != "" {
+		job = render.JobReference(notice.Kind, notice.Label, notice.JobID)
+	}
+	for _, field := range []string{job, notice.Name, notice.Status, notice.Message} {
 		if field != "" {
 			parts = append(parts, field)
 		}

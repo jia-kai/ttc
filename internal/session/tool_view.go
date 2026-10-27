@@ -52,7 +52,9 @@ func jobInspectionDetail(inspection jobs.Inspection, detail string, now time.Tim
 	out.WriteString(detail)
 	out.WriteString("\n")
 	for _, field := range inspection.Spec.Fields {
-		out.WriteString("- **" + render.EscapeInline(field.Name) + ":** ")
+		// A bullet here would join the preceding metadata list across the
+		// blank separator, making every metadata entry a loose-list paragraph.
+		out.WriteString("\n**" + render.EscapeInline(field.Name) + ":** ")
 		if field.Language != "" || strings.ContainsAny(field.Value, "\n\t") {
 			out.WriteString("\n\n" + render.Fence(field.Value, field.Language) + "\n")
 		} else {

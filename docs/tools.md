@@ -92,6 +92,8 @@ replaces or changes model-facing results.
   jobs as `done` while JSON retains `completed`. Colored `[name]` badges label
   child rows/inspectors; names over 26 characters display 23 plus `...`,
   unchanged in storage.
+- Job-stop summaries and runtime notices share a bounded `kind=label` reference,
+  preferring an explicit label, then a command preview, then the exact ID.
 - Live job and completion inspection share typed metadata and job-local fields/
   stream policies. Shell, watch and child records save at most the last 8 KiB
   per stream; LSP exposes stderr only, and `/btw` keeps at most 64 KiB per
@@ -930,9 +932,11 @@ externally owned workloads continue independently. The UI records terminal
 status. Foreground shell exits return results without `job_exit`; background
 shell and watch jobs always notify, including shells moved to background with
 Ctrl+B or after their foreground wait expires. Teardown suppresses model
-wakeups, not diagnostic recording. Completion notices include selected
-stdout/stderr, truncation/selection metadata and known exit code or signal.
-Coding children always deliver their turn event.
+wakeups, not diagnostic recording. Completion notices include the exact
+`job_id`, job `kind`, optional display `label`, selected stdout/stderr,
+truncation/selection metadata and known exit code or signal. Labels are
+cosmetic; use `job_id` for follow-up tools. Coding children always deliver their
+turn event.
 
 Child runtime-event backlogs retain compact durable source references and drain
 in bounded admission batches (32 events / 2048 estimated tokens). Large events

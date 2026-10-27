@@ -48,8 +48,8 @@ func TestStopLaunchIdentityWithoutOutput(t *testing.T) {
 			if want == "" {
 				want = id
 			}
-			if v.StopLabel() != want || !utf8.ValidString(v.StopLabel()) || v.Stdout != "" || v.Stderr != "" || v.StdoutSelection != nil || v.StderrSelection != nil {
-				t.Fatalf("stop=%+v identity=%q want=%q", v, v.StopLabel(), want)
+			if v.ReferenceLabel() != want || !utf8.ValidString(v.ReferenceLabel()) || v.Stdout != "" || v.Stderr != "" || v.StdoutSelection != nil || v.StderrSelection != nil {
+				t.Fatalf("stop=%+v identity=%q want=%q", v, v.ReferenceLabel(), want)
 			}
 		})
 	}
@@ -73,8 +73,8 @@ func TestStopWatchIdentity(t *testing.T) {
 			if want == "" {
 				want = watchCommand(identity.Command)
 			}
-			if v.StopLabel() != want || v.Kind != "watch" {
-				t.Fatalf("stop=%+v label=%q want=%q", v, v.StopLabel(), want)
+			if v.ReferenceLabel() != want || v.Kind != "watch" {
+				t.Fatalf("stop=%+v label=%q want=%q", v, v.ReferenceLabel(), want)
 			}
 		})
 	}
@@ -105,8 +105,8 @@ func TestStopTaskIdentityIgnoresAutomaticLabels(t *testing.T) {
 			if want == "" {
 				want = id
 			}
-			if v.StopLabel() != want {
-				t.Fatalf("label=%q want=%q (display=%q)", v.StopLabel(), want, v.Label)
+			if v.ReferenceLabel() != want {
+				t.Fatalf("label=%q want=%q (display=%q)", v.ReferenceLabel(), want, v.Label)
 			}
 		})
 	}
@@ -125,7 +125,7 @@ func TestStopGrepIdentityUsesID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.StopLabel() != grepID || v.Kind != "grep" {
-		t.Fatalf("stop=%+v label=%q", v, v.StopLabel())
+	if v.ReferenceLabel() != grepID || v.Kind != "grep" {
+		t.Fatalf("stop=%+v label=%q", v, v.ReferenceLabel())
 	}
 }

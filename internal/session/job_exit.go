@@ -8,7 +8,8 @@ import (
 )
 
 // jobExitContent carries the immutable completion selection rather than forcing
-// a second read for modest results. Labels and timestamps stay in job metadata.
+// a second read for modest results. Labels support human-readable notification
+// references; the exact job ID remains available for follow-up tools.
 func jobExitContent(v jobs.Snapshot) string {
 	var stderr *string
 	if v.Kind == "subagent" {
@@ -26,6 +27,7 @@ func jobExitContent(v jobs.Snapshot) string {
 		Type            string             `json:"type"`
 		ID              string             `json:"job_id"`
 		Kind            string             `json:"kind"`
+		Label           string             `json:"label,omitempty"`
 		Status          string             `json:"status"`
 		Stdout          string             `json:"stdout"`
 		Stderr          *string            `json:"stderr,omitempty"`
@@ -34,7 +36,7 @@ func jobExitContent(v jobs.Snapshot) string {
 		Truncated       bool               `json:"truncated"`
 		StdoutSelection *capture.Selection `json:"stdout_selection,omitempty"`
 		StderrSelection *capture.Selection `json:"stderr_selection,omitempty"`
-	}{"job_exit", v.ID, v.Kind, v.Status, v.Stdout, stderr, v.ExitCode, v.Signal, v.Truncated, v.StdoutSelection, v.StderrSelection}
+	}{"job_exit", v.ID, v.Kind, v.ReferenceLabel(), v.Status, v.Stdout, stderr, v.ExitCode, v.Signal, v.Truncated, v.StdoutSelection, v.StderrSelection}
 	encoded, _ := json.Marshal(body) // Contains only strings, integers and fixed structs.
 	return string(encoded)
 }

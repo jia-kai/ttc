@@ -103,11 +103,17 @@ func TestRuntimeCommandExitStatusMatchesJobSurfaces(t *testing.T) {
 					t.Fatal("job_read disagrees with completion", page, err)
 				}
 				var notification struct {
+					ID       string `json:"job_id"`
+					Kind     string `json:"kind"`
+					Label    string `json:"label"`
 					Status   string `json:"status"`
 					ExitCode *int   `json:"exit_code"`
 				}
 				if err := json.Unmarshal([]byte(jobExitContent(job)), &notification); err != nil || notification.Status != job.Status || !reflect.DeepEqual(notification.ExitCode, job.ExitCode) {
 					t.Fatal("job_exit disagrees with completion", notification, err)
+				}
+				if notification.ID != job.ID || notification.Kind != job.Kind || notification.Label != job.ReferenceLabel() {
+					t.Fatal("job_exit lost job reference metadata", notification, job)
 				}
 				m, _, err := r.runtimeContext(ctx, "main", r.selection, cursor)
 				if err != nil || m != nil {
@@ -116,5 +122,39 @@ func TestRuntimeCommandExitStatusMatchesJobSurfaces(t *testing.T) {
 
 			})
 		}
+	}
+}
+
+func TestJobExitIncludesHumanReferenceAndExactID(t *testing.T) {
+	for _, label := range []string{"", "Run tests"} {
+		t.Run(label, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			manager := jobs.New(ctx, nil)
+			defer manager.Close()
+			id, err := manager.Start("main", "printf 'reference fixture'", t.TempDir(), time.Second, true, true, capture.OutputOptions{}, label)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := manager.Wait(ctx, "main", id, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var notice map[string]any
+			if err := json.Unmarshal([]byte(jobExitContent(job)), &notice); err != nil {
+				t.Fatal(err)
+			}
+			want := label
+			if want == "" {
+				want = "printf 'reference fixture'"
+			}
+			stopped, err := manager.Stop("main", id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if notice["job_id"] != id || notice["kind"] != job.Kind || notice["label"] != want || notice["label"] != stopped.ReferenceLabel() {
+				t.Fatal("completion and stop disagree on job identity", notice, stopped.ReferenceLabel())
+			}
+		})
 	}
 }

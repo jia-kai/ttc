@@ -7,11 +7,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gdamore/tcell/v3"
 	"ttc/internal/assets"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/graphics"
 	"ttc/internal/workspace"
 )
+
+func TestQuestionInlineReviewRevealsSubmitButton(t *testing.T) {
+	s := newTestScreen(t)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(110, 42) // The demo's terminal geometry.
+	d := newQuestionDialog(questionFixture())
+	for range d.form.Questions {
+		if answers, dismissed := d.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 11); answers != nil || dismissed {
+			t.Fatal("selecting an answer submitted or dismissed the form")
+		}
+	}
+	paintInlineQuestion(t, s, d)
+	text := screenText(s)
+	for _, want := range []string{"[Submit]", "> [ Submit answers ]"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("review target %q is not visible: %s", want, text)
+		}
+	}
+	// Help below the focused button need not be visible; submission depends on
+	// the visible control rather than the viewport including that help text.
+	answers, dismissed := d.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 11)
+	if dismissed || len(answers) != len(d.form.Questions) {
+		t.Fatalf("explicit Submit did not return all answers: %+v, dismissed=%v", answers, dismissed)
+	}
+}
 
 func TestQuestionInlineGeometryBounds(t *testing.T) {
 	for height := 0; height <= 80; height++ {

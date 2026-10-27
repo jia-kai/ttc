@@ -6,11 +6,12 @@ import (
 	"unicode"
 )
 
-// StopLabel returns a bounded launch identity, preferring an explicit label,
-// then a normalized command preview, then the exact job ID.
-func (s Snapshot) StopLabel() string {
-	if s.stopLabel != "" {
-		return s.stopLabel
+// ReferenceLabel returns a bounded launch identity, preferring an explicit label,
+// then a normalized command preview, then the exact job ID. Unlike Label, it
+// excludes generic display defaults so unlabeled jobs remain distinguishable.
+func (s Snapshot) ReferenceLabel() string {
+	if s.referenceLabel != "" {
+		return s.referenceLabel
 	}
 	return s.ID
 }

@@ -458,28 +458,29 @@ path.write_text('Looks good.')
 
     try:
         if args.tui:
-            expect('Ctrl+X M')
+            screen_expect('Ctrl+X M')
             os.write(master, b'\x18m')
-            expect('Model family')
+            screen_expect('Model family')
             os.write(master, b'\x1b[B\r')
-            expect('Reasoning variant')
+            screen_expect('Reasoning variant')
             os.write(master, b'\x1b[B\r')
-            expect('demo-b')
+            screen_expect('demo-b')
         send('Run demo')
         if args.tui:
-            expect('Recommended')
+            screen_expect('Recommended')
             os.write(master, b'\r')  # Select Yes and advance to Notes.
-            expect('Any notes')
+            screen_expect('Any notes')
             # Shared Ctrl+W editing and Ctrl+X E must operate on this answer.
             os.write(master, b'\x1b[B\x1b[B\rLooks obsolete\x17bad.\x18e')
-            expect('Text: Looks good.')
+            screen_expect('Text: Looks good.')
             assert (root / 'editor-original.txt').read_text() == 'Looks bad.'
             os.write(master, b'\r')
-            expect('Which evidence')
+            screen_expect('Which evidence')
             os.write(master, b'\r')  # Select Data and advance to Submit.
-            # The renderer may cursor-address unchanged spaces between words;
-            # this single-word instruction is unique to the Submit tab.
-            expect('submits')
+            # The bounded inline viewport reveals the focused submit button,
+            # not necessarily the help text below it. Reconstruct cursor-addressed
+            # updates instead of requiring a contiguous phrase in terminal bytes.
+            screen_expect('> [ Submit answers ]')
             os.write(master, b'\r')
         else:
             expect('Waiting for answer')
@@ -504,7 +505,7 @@ path.write_text('Looks good.')
             verify_child_inspectors()
             os.write(master, b'\x04')  # Empty-composer Ctrl+D must not exit.
             send('/model')
-            expect('Model family')
+            screen_expect('Model family')
             os.write(master, b'\x03')  # Ctrl+C exits even while the menu is open.
         else:
             expect('20 tool types')

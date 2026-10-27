@@ -27,7 +27,7 @@ func TestMessageProjectionCategories(t *testing.T) {
 	}{
 		{llm.TypeRuntimeContext, "Runtime context", true},
 		{llm.TypeCompactionContext, "Compaction context · inspect", true},
-		{llm.TypeRuntimeNotification, "Runtime notification · job exit · job_1 · completed", true},
+		{llm.TypeRuntimeNotification, "Runtime notification · job exit · job=job_1 · completed", true},
 		{llm.TypeChildGuidance, "Main-agent guidance", true},
 		{llm.TypeDeveloperInstruction, "Instructions", true},
 		{llm.TypeRuntimeInstruction, "Runtime instructions", true},
@@ -45,6 +45,21 @@ func TestNotificationPreviewIsBounded(t *testing.T) {
 	item := messageLine(line{}, llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"wakeup","message":"` + strings.Repeat("long reminder ", 10000) + `"}`})
 	if len([]rune(item.text)) > 256 || !item.brief || !item.system {
 		t.Fatalf("unbounded notification preview: bytes=%d brief=%v", len(item.text), item.brief)
+	}
+}
+
+func TestNotificationJobReferences(t *testing.T) {
+	for _, tc := range []struct{ content, want string }{
+		{`{"type":"job_exit","job_id":"job_exact","kind":"shell","label":"Run tests","status":"completed"}`, "Runtime notification · job exit · shell=Run tests · completed"},
+		{`{"type":"job_exit","job_id":"job_exact","kind":"watch","status":"cancelled"}`, "Runtime notification · job exit · watch=job_exact · cancelled"},
+		{`{"type":"job_exit","job_id":"job_exact","kind":"lsp","label":"  gopls\n\tchecks\u001b\u202e","status":"failed"}`, "Runtime notification · job exit · lsp=gopls checks · failed"},
+		{`{"type":"job_exit","job_id":"job_exact","kind":"shell","label":"*[tests]` + "`" + `","status":"completed"}`, "Runtime notification · job exit · shell=*[tests]` · completed"},
+		{`{"type":"wakeup","name":"reminder","message":"check tests"}`, "Runtime notification · wakeup · reminder · check tests"},
+	} {
+		item := messageLine(line{}, llm.Message{Type: llm.TypeRuntimeNotification, Content: tc.content})
+		if item.text != tc.want || !item.system || !item.brief || item.markdown {
+			t.Fatalf("notification projection %+v; want %q", item, tc.want)
+		}
 	}
 }
 
