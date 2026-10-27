@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -36,16 +37,19 @@ func failedTool(call llm.ToolCall, code, message string) tool.Record {
 // caller drains completions and persists them as they arrive. Returned records
 // retain model call order, independent of completion order. Routing locks cover
 // child file mutations/commits so compaction can advance their continuation.
+// A successful await registration is acknowledged to its worker immediately,
+// but its result is persisted only after all siblings settle and the wait ends.
 func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry *tool.Registry, calls []llm.ToolCall, ids []string, streamErr error) ([]tool.Record, error) {
+	started := time.Now()
 	if len(calls) != len(ids) {
 		return nil, errors.New(prompts.SessionToolIntentMismatch)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type completion struct {
-		index  int
-		record tool.Record
-		stored chan struct{}
+		index    int
+		record   tool.Record
+		accepted chan struct{}
 	}
 	done := make(chan completion)
 	entryIDs := make([]int64, len(ids))
@@ -104,9 +108,9 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 			base := render.InspectedTool(call.Name, call.Arguments, record.Result).Detail
 			record.Markdown.Detail = r.JobDetail(jobID, base)
 		}
-		stored := make(chan struct{})
-		done <- completion{i, record, stored}
-		<-stored // Finish persistence before admitting the next ordered call.
+		accepted := make(chan struct{})
+		done <- completion{i, record, accepted}
+		<-accepted // Admit the next ordered call after persistence or await deferral.
 	}
 	var reads sync.WaitGroup
 	var workers sync.WaitGroup
@@ -132,8 +136,7 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 	}()
 	records := make([]tool.Record, len(calls))
 	var batchErr error
-	for range calls {
-		result := <-done
+	persist := func(result completion) {
 		r.routeMu.RLock()
 		delivered, deliveryErr := budget.deliver(r, r.Current(), result.record)
 		// Preserve exact execution separately from the model-visible delivery.
@@ -146,13 +149,35 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 		if err != nil {
 			batchErr = errors.Join(batchErr, err)
 			cancel()
-			close(result.stored)
-			continue
+			return
 		}
 		text := delivered.Markdown.Summary
 		r.emit(Event{Kind: "tool", Actor: actor, Text: text, EntryID: entry, CallID: ids[result.index]})
-		close(result.stored)
+	}
+	var deferred *completion
+	for range calls {
+		result := <-done
+		var status struct {
+			OK bool `json:"ok"`
+		}
+		if result.record.Name == "await" && json.Unmarshal(result.record.Result, &status) == nil && status.OK {
+			// Release the ordered worker so calls following await can still run.
+			deferred = &result
+		} else {
+			persist(result)
+		}
+		close(result.accepted)
 	}
 	workers.Wait()
+	if deferred != nil {
+		err := r.settleAwait(ctx, actor)
+		record, resultErr := completeAwait(deferred.record, time.Since(started), err)
+		if resultErr != nil {
+			return records, errors.Join(batchErr, err, resultErr)
+		}
+		deferred.record = record
+		persist(*deferred)
+		batchErr = errors.Join(batchErr, err)
+	}
 	return records, batchErr
 }

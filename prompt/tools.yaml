@@ -5,9 +5,11 @@ await:
     optional deadline_seconds timeout. Already pending input returns
     immediately. No polling is needed. Available to main and coding children,
     not asides. This wait begins after sibling foreground tools settle and their
-    results are saved; the tool call itself completes immediately. Ensure an
-    event source exists, use a deadline, or expect to wait for user/parent
-    input. This wait is transient and is not resumed after session reload.
+    results are saved. The result is saved after waking and includes
+    wait_time_seconds, elapsed seconds since tool-batch admission formatted as
+    %.2f (including all sibling settlement). Ensure an event source exists, use
+    a deadline, or expect to wait for user/parent input. This wait is transient
+    and is not resumed after session reload.
 conversation_export:
   description: >-
     Generate the calling actor's selected conversation from durable history,

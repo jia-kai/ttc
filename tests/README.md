@@ -105,10 +105,11 @@ saved.
 
 `pty_await.py --binary /path/to/ttc` uses socket-free scripted inference in a
 plain PTY. It verifies main timer/input wakeups, coding-child timer/shell
-wakeups, no completed turn while awaiting, and cancellation of a persistent
-child's owned timers before it becomes idle. FIFO and frontend-event markers
-coordinate the fixture; scripts, terminal logs, SQLite history, table snapshots,
-and failure tracebacks remain in its printed private scratch directory.
+wakeups, deferred await results with elapsed seconds, no completed turn while
+awaiting, and cancellation of a persistent child's owned timers before it
+becomes idle. FIFO and frontend-event markers coordinate the fixture; scripts,
+terminal logs, SQLite history, table snapshots, and failure tracebacks remain in
+its printed private scratch directory.
 
 For reproducible headless validation:
 

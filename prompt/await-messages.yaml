@@ -1,4 +1,5 @@
 AwaitActorInactive: This actor has no active coding assignment.
+AwaitRequestMissing: No registered await request exists for this actor.
 AwaitInvalidDeadline: deadline_seconds must be between 0 and 31536000.
 AwaitAlreadyRequested:
   Only one await request may be active at a tool-result boundary.

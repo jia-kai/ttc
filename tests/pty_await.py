@@ -89,7 +89,7 @@ class Instance:
         assert b'Turn complete' not in self.output, self.root
         assert self.rows("SELECT count(*) FROM turns WHERE actor_id='main' AND status='completed'") == [(0,)]
         assert self.rows("SELECT count(*) FROM model_requests WHERE actor_id=? AND purpose='coding'", (actor,)) == [(requests,)]
-        assert self.rows('SELECT count(*) FROM tool_calls WHERE result_json IS NULL') == [(0,)]
+        assert self.rows('SELECT name FROM tool_calls WHERE result_json IS NULL') == [('await',)]
         # No final assistant message is allowed to settle an awaiting assignment.
         assert not self.rows("SELECT id FROM entries WHERE actor_id=? AND role='assistant' AND json_extract(content_json,'$.content')!=''", (actor,))
 
@@ -103,6 +103,10 @@ class Instance:
             WHERE o.request_id=r.id ORDER BY o.completion_entry_id DESC LIMIT 1)
             FROM model_requests r WHERE r.status!='completed'""")
         assert not failed, failed
+        for (result,) in self.rows("SELECT result_json FROM tool_calls WHERE name='await'"):
+            value = json.loads(result)
+            assert set(value) == {'ok', 'wait_time_seconds'} and value['ok'] is True, value
+            assert isinstance(value['wait_time_seconds'], (int, float)) and value['wait_time_seconds'] >= 0, value
         assert b'Error:' not in self.output, self.root
 
     def dump(self):
@@ -186,7 +190,7 @@ def main():
         instance.send('Run the timer child')
         instance.expect('Awaiting events')
         assert b'Turn complete' not in instance.output
-        assert instance.rows("SELECT count(*) FROM tool_calls WHERE actor_id!='main' AND result_json IS NULL") == [(0,)]
+        assert instance.rows("SELECT name FROM tool_calls WHERE actor_id!='main' AND result_json IS NULL") == [('await',)]
         assert not instance.rows("SELECT id FROM entries WHERE actor_id!='main' AND role='assistant' AND json_extract(content_json,'$.content')!=''")
         instance.finish('PARENT-TIMER-FINISHED')
         actor = instance.rows("SELECT DISTINCT actor_id FROM model_requests WHERE actor_id!='main'")[0][0]
@@ -216,7 +220,7 @@ def main():
         actor = child[0][0]
         assert b'Turn complete' not in instance.output
         assert instance.rows("SELECT count(*) FROM model_requests WHERE actor_id=?", (actor,)) == [(1,)]
-        assert instance.rows("SELECT count(*) FROM tool_calls WHERE actor_id=? AND result_json IS NULL", (actor,)) == [(0,)]
+        assert instance.rows("SELECT name FROM tool_calls WHERE actor_id=? AND result_json IS NULL", (actor,)) == [('await',)]
         assert not instance.rows("SELECT id FROM entries WHERE actor_id=? AND role='assistant' AND json_extract(content_json,'$.content')!=''", (actor,))
         instance.until(lambda: (instance.project / 'started').exists(), 'background shell started')
 

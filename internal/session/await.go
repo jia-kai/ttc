@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
+	"ttc/internal/render"
 	"ttc/internal/tool"
 )
 
@@ -86,15 +88,15 @@ type awaitRequest struct {
 	timed    bool // Distinguishes an explicit zero from an indefinite wait.
 }
 
-// settleAwait parks only at a balanced tool-result boundary. The await tool
-// itself has already completed and all sibling foreground calls are settled.
+// settleAwait waits after sibling foreground calls settle. The caller persists
+// the await result after this returns, including cancellation and failure.
 func (r *Runtime) settleAwait(ctx context.Context, actor string) error {
 	r.orderMu.Lock()
 	request, ok := r.awaitRequests[actor]
 	delete(r.awaitRequests, actor)
 	r.orderMu.Unlock()
 	if !ok {
-		return nil
+		return tool.Fail("await_missing", prompts.AwaitRequestMissing)
 	}
 	var deadline time.Time
 	if request.timed {
@@ -109,7 +111,37 @@ func (r *Runtime) settleAwait(ctx context.Context, actor string) error {
 	return err
 }
 
+// completeAwait preserves registry warnings while replacing the provisional
+// acknowledgment with the outcome and elapsed batch-admission-to-wakeup time.
+func completeAwait(record tool.Record, elapsed time.Duration, waitErr error) (tool.Record, error) {
+	var value map[string]any
+	if err := json.Unmarshal(record.Result, &value); err != nil {
+		return record, err
+	}
+	value["wait_time_seconds"] = json.Number(fmt.Sprintf("%.2f", elapsed.Seconds()))
+	if waitErr != nil {
+		code := "execution_failed"
+		if errors.Is(waitErr, context.Canceled) {
+			code = "cancelled"
+		} else if errors.Is(waitErr, context.DeadlineExceeded) {
+			code = "timeout"
+		}
+		value["ok"] = false
+		value["error"] = tool.Fail(code, waitErr.Error())
+	}
+	result, err := json.Marshal(value)
+	if err != nil {
+		return record, err
+	}
+	record.Result = result
+	record.Markdown = render.Tool(record.Name, record.Arguments, result)
+	return record, nil
+}
+
 func (r *Runtime) awaitActor(ctx context.Context, actor string, deadline time.Time) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	r.orderMu.Lock()
 	if actor != "main" && r.actorAssignments[actor] == nil {
 		r.orderMu.Unlock()
@@ -179,6 +211,6 @@ func (r *Runtime) addAwaitTool() {
 			request.timed = true
 		}
 		r.awaitRequests[x.Actor] = request
-		return map[string]any{"state": "awaiting"}, nil
+		return nil, nil
 	})
 }

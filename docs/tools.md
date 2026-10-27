@@ -296,13 +296,18 @@ Input: `{path, format?, scope?}`.
 ### `await`
 
 - Input: `{deadline_seconds?:integer}`, range 0–31536000. Main and coding
-  children may pause inference at a settled tool boundary without completing the
+  children may pause inference after sibling tools settle without completing the
   turn or assignment. Already pending actor input resumes immediately; zero is
   an immediate deadline. Without a deadline, waiting continues until eligible
   input or cancellation; supply a deadline when no event is guaranteed. The
   countdown starts only after sibling foreground tools have settled and their
-  results are saved; the tool call itself returns immediately. This deadline
-  resumes inference, never kills a command.
+  results are saved. This deadline resumes inference, never kills a command.
+- Successful output: `{"ok":true,"wait_time_seconds":123.45}`. The result is
+  saved after waking. Elapsed seconds run from tool-batch admission through
+  wakeup, including all sibling settlement, and use `%.2f` formatting.
+  Cancellation saves an error result with elapsed seconds before ending the
+  turn. A crash leaves the call pending; loading uses the last complete main
+  tool exchange and does not restore the wait.
 - Eligible job completions, timer firings, parent guidance, user input or the
   deadline resume inference. Awaiting children still occupy their slot and
   active assignment; `persistent:false` does not prevent awaiting. `/btw` asides

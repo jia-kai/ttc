@@ -89,7 +89,7 @@ type Runtime struct {
 	actorAssignments  map[string]*childAssignment // orderMu; assignment-specific event delivery.
 	actorSignals      map[string]chan struct{}    // orderMu; event-driven inference resumption.
 	awaiting          map[string]bool             // orderMu; transient UI state, never restored.
-	awaitRequests     map[string]awaitRequest     // orderMu; consumed only after tool settlement.
+	awaitRequests     map[string]awaitRequest     // orderMu; consumed after sibling tool settlement.
 	activityStop      func()
 	children          map[string]*codingChild // Owned by childStartMu; live handles never restored.
 	childStartMu      sync.Mutex              // Serializes child capacity checks and admission, never child execution.
@@ -602,9 +602,6 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: id, RequestID: request})
 		}
 		if _, e = r.runToolBatch(ctx, turn, "main", r.Tools, reply.Calls, callIDs, streamErr); e != nil {
-			return e
-		}
-		if e = r.settleAwait(ctx, "main"); e != nil {
 			return e
 		}
 		r.emit(Event{Kind: "usage"})

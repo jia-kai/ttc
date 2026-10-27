@@ -389,9 +389,6 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			}
 			messages = append(messages, llm.Message{Type: llm.TypeToolResult, CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
 		}
-		if err := r.settleAwait(ctx, actor); err != nil {
-			return err
-		}
 		if streamErr != nil {
 			var partial *llm.PartialError
 			if callbackFailed || !errors.As(streamErr, &partial) {
