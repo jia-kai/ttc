@@ -466,7 +466,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		t.Fatal("child completion acknowledgments", acknowledged, err)
 	}
 	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM model_requests WHERE json_extract(input_json,'$.version')=1 AND json_extract(input_json,'$.message_count')>0 AND event_cutoff>0").Scan(&requestsStored); err != nil || requestsStored != 9 {
-		t.Fatal(requestsStored, err)
+		t.Fatalf("stored model requests: got %d, want 9: %v", requestsStored, err)
 	}
 	usage := r.UsageSnapshot().Totals
 	if usage.Requests != 9 || usage.ReportedRequests != 9 || usage.Tokens.InputTokens != 900 || usage.Tokens.OutputTokens != 90 || usage.Tokens.CachedInputTokens == nil || *usage.Tokens.CachedInputTokens != 288 {

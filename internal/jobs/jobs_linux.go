@@ -81,6 +81,8 @@ type Manager struct {
 	jobs   map[string]*job
 	scopes map[string]*managed.Scope
 	closed bool
+	// Notify delivers background completions outside the manager lock. Set before
+	// launching jobs; it must not synchronously stop or join the job being notified.
 	Notify func(Snapshot)
 	// OnState publishes launch and terminal states outside the manager lock.
 	// Set before launching jobs; callbacks must not wait for this job to finish.
@@ -437,8 +439,9 @@ func (m *Manager) List(owner string, all bool) []Snapshot {
 	return out
 }
 
-// Stop cancels a whole process group and waits for its result. The returned
-// snapshot contains metadata only; stopping never acquires captured output.
+// Stop cancels a whole process group and joins its terminal callbacks, so its
+// completion notification is published before returning. The returned snapshot
+// contains metadata only; stopping never acquires captured output.
 func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 	m.mu.Lock()
 	j, ok := m.jobs[id]
@@ -451,9 +454,9 @@ func (m *Manager) Stop(owner, id string) (Snapshot, error) {
 		return Snapshot{}, errors.New(prompts.JobCannotStopOwnTask)
 	}
 	cancelJob(j, "explicit_stop")
-	done := j.done
+	published := j.published
 	m.mu.Unlock()
-	<-done
+	<-published
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return cloneSnapshot(j.view), nil
