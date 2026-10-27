@@ -19,7 +19,6 @@ import (
 	"ttc/internal/workspace"
 
 	"github.com/gdamore/tcell/v3"
-	"github.com/gdamore/tcell/v3/vt"
 )
 
 func TestDirectRowsDoNotOpenPayloadWindows(t *testing.T) {
@@ -209,14 +208,14 @@ func (w eventWriter) Write(p []byte) (int, error) {
 // testScreen uses an in-memory terminal and records cursor requests for draw assertions.
 type testScreen struct {
 	tcell.Screen
-	term             vt.MockTerm
+	term             *headlessTTY
 	cursorX, cursorY int
 	cursorVisible    bool
 }
 
 func newTestScreen(t *testing.T) *testScreen {
 	t.Helper()
-	term := vt.NewMockTerm(vt.MockOptSize{X: 80, Y: 25})
+	term := newHeadlessTTY(80, 25)
 	// Unit fixtures inject events directly; protocol negotiation is covered by PTYs.
 	screen, err := tcell.NewTerminfoScreenFromTty(term, tcell.OptTerm("xterm"), tcell.OptColors(1<<24), tcell.OptNegotiation(false))
 	if err != nil {
@@ -226,7 +225,7 @@ func newTestScreen(t *testing.T) *testScreen {
 }
 
 func (s *testScreen) SetSize(width, height int) {
-	s.term.SetSize(vt.Coord{X: vt.Col(width), Y: vt.Row(height)})
+	s.term.setSize(width, height)
 	s.Screen.SetSize(width, height)
 }
 
