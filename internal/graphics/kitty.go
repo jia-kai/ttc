@@ -49,7 +49,7 @@ func (k *Kitty) format(s string) string {
 // Place sends PNG bytes once for an asset/geometry (or after Refresh), then returns self-contained
 // placeholder rows. Each cell carries explicit row, column and all image ID bits.
 // Grid axes are terminal columns/rows, limited to the diacritic table (297).
-// Images fit uniformly within the placement, with transparent padding and area
+// Images fit uniformly within the placement, with transparent padding and antialiased
 // filtering. rasterScale is the source supersampling factor (1 for ordinary
 // images); sources remain unchanged. Cell-size changes require a fresh upload.
 func (k *Kitty) Place(key string, m image.Image, columns, rows, rasterScale int) ([]string, error) {

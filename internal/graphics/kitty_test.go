@@ -193,8 +193,9 @@ func TestKittyFiltersUploadOncePerPixelGeometry(t *testing.T) {
 	}
 	for y := range 16 {
 		for x := range 8 {
-			if got := color.NRGBAModel.Convert(decoded.At(x, y)); got != (color.NRGBA{255, 255, 255, 85}) {
-				t.Fatal("wire PNG lost area coverage", got)
+			got := color.NRGBAModel.Convert(decoded.At(x, y)).(color.NRGBA)
+			if got.R != 255 || got.G != 255 || got.B != 255 || got.A < 80 || got.A > 100 {
+				t.Fatal("wire PNG lost filtered transparency", got)
 			}
 		}
 	}

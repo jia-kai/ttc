@@ -18,6 +18,7 @@ import (
 
 	"ttc/internal/binaryinput"
 	"ttc/internal/blobcache"
+	"ttc/internal/imageresample"
 	"ttc/internal/prompts"
 )
 
@@ -189,7 +190,7 @@ func (w contextWriter) Write(p []byte) (int, error) {
 }
 
 // Resize fits an image inside pixel bounds, preserving aspect ratio and transparency.
-// Nearest-neighbor sampling checks cancellation between output rows. An image
+// Antialiased filtering preserves fine detail and observes cancellation. An image
 // already inside the bounds is returned unchanged; callers must not mutate it.
 func Resize(ctx context.Context, m image.Image, maxWidth, maxHeight int) (image.Image, error) {
 	if err := ctx.Err(); err != nil {
@@ -205,24 +206,8 @@ func Resize(ctx context.Context, m image.Image, maxWidth, maxHeight int) (image.
 	scale := min(float64(maxWidth)/float64(b.Dx()), float64(maxHeight)/float64(b.Dy()), 1)
 	w, h := max(1, int(float64(b.Dx())*scale)), max(1, int(float64(b.Dy())*scale))
 	out := image.NewRGBA(image.Rect(0, 0, w, h))
-	fast, _ := m.(image.RGBA64Image)
-	for y := range h {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		sy := b.Min.Y + y*b.Dy()/h
-		for x := range w {
-			sx := b.Min.X + x*b.Dx()/w
-			var r, g, blue, a uint32
-			if fast != nil {
-				c := fast.RGBA64At(sx, sy)
-				r, g, blue, a = uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
-			} else {
-				r, g, blue, a = m.At(sx, sy).RGBA()
-			}
-			p := out.Pix[out.PixOffset(x, y):]
-			p[0], p[1], p[2], p[3] = byte(r>>8), byte(g>>8), byte(blue>>8), byte(a>>8)
-		}
+	if err := imageresample.Draw(ctx, out, m, float64(w)/float64(b.Dx()), float64(h)/float64(b.Dy()), 0, 0); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

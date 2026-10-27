@@ -217,7 +217,7 @@ func TestMathAndThumbnailsShareDecodedMemoryBudget(t *testing.T) {
 	// A cached raster remains separate from thumbnail identities even if the
 	// caller accidentally asks for the same spelling of a formula's source path.
 	key := assets.Key("mathjax-hires-v1", "fixture", "x", "16", fmt.Sprint(assets.MathRasterScale))
-	if key == assets.Key("thumbnail-v1", "x") {
+	if key == assets.Key("thumbnail-v2", "x") {
 		t.Fatal("formula and image identities overlap")
 	}
 }

@@ -27,7 +27,9 @@ TTC also supports the following:
 - Image display and confirmed point coordinates delivered to the LLM as a later
   runtime message. Native binary input through `read()`: original PNG/JPEG/
   non-animated GIF images and provider-announced documents such as PDF, Word,
-  PowerPoint and spreadsheets.
+  PowerPoint and spreadsheets. Thumbnails, full-resolution image previews and
+  terminal placements share antialiased downsampling; preview enlargement uses
+  bilinear interpolation.
 - Inline and block math using MathJax.
 - Transparency of all internal processes. Click a message or tool row to inspect
   raw messages and saved tool details.
@@ -272,12 +274,22 @@ disposable filesystem cache at `${XDG_CACHE_HOME:-~/.cache}/ttc/assets`: **4 GiB
 total**, with least-recently-used eviction and **30-day idle retention**. Active
 images are not pinned.
 
-TTC also supports viewing a Markdown document with math and images using its
-Markdown renderer:
+View a file directly without starting an agent session:
 
 ```sh
-ttc md /path/to/notes.md
+ttc /path/to/notes.md           # Markdown with math and images
+ttc /path/to/plot.png           # interactive image preview
+ttc -- -notes.md               # filename beginning with a dash
 ```
+
+Markdown uses case-insensitive `.md` or `.markdown` extensions and must be UTF-8
+text without NUL bytes. Images are detected by signature: PNG, JPEG and
+single-frame GIF, regardless of extension (except Markdown extensions).
+Unsupported or malformed files fail with an error; inputs must be regular files
+at most 32 MiB, with image canvases limited to 16,777,216 pixels. Image viewing
+requires Kitty graphics and supports the shared pan/zoom controls. Redirected
+Markdown output is plain text wrapped at 80 columns; redirected images fail.
+File viewing cannot be combined with agent launch flags.
 
 ## Testing
 

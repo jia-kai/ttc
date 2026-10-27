@@ -444,6 +444,33 @@ func TestResizeReuseCancellationAndAllocationBounds(t *testing.T) {
 		t.Fatal("accepted missing image")
 	}
 }
+
+func TestResizePreservesThinLines(t *testing.T) {
+	m := image.NewRGBA(image.Rect(4, 6, 16, 12))
+	for y := 6; y < 12; y++ {
+		for x := 4; x < 16; x++ {
+			c := color.RGBA{A: 255}
+			if (x-4)%3 == 1 {
+				c = color.RGBA{255, 255, 255, 255}
+			}
+			m.SetRGBA(x, y, c)
+		}
+	}
+	out, err := Resize(context.Background(), m, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for y := range 2 {
+		for x := range 4 {
+			got := color.RGBAModel.Convert(out.At(x, y)).(color.RGBA)
+			// The widened tent filter retains roughly one-third brightness.
+			// Normalized source-edge weights can make edge pixels brighter.
+			if got.R < 80 || got.R > 100 || got.G != got.R || got.B != got.R || got.A != 255 {
+				t.Fatal("thin lines lost instead of antialiased", got)
+			}
+		}
+	}
+}
 func TestMathInitializationCancellationWithoutHostDependencies(t *testing.T) {
 	// Core tests do not require optional host renderers. A canceled context must
 	// stop before an unavailable backend can become a persistent render worker.

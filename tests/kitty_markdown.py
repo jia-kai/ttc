@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise `ttc md FILE` in real headless Kitty, optionally through private tmux.
+"""Exercise `ttc FILE` in real headless Kitty, optionally through private tmux.
 
 Requires Xvfb, kitty/kitten (including remote-control screenshot), Pillow, and
 Node/npm plus rsvg-convert for MathJax. The normal MathJax cache is reused; no credentials,
@@ -263,7 +263,7 @@ def main():
     try:
         kitty.start(screen='1600x1400x24')
         for exit_key in ('q', 'esc', 'ctrl+c'):
-            terminal = kitty.launch([binary, 'md', str(fixture)], height=60,
+            terminal = kitty.launch([binary, str(fixture)], height=60,
                                     log_name='kitty-' + exit_key.replace('+', '-') + '.log')
             if exit_key == 'q':
                 initial = wait(layout_ready, 'complete rendered Markdown layout', timeout=150)
@@ -297,9 +297,26 @@ def main():
             remote('send-key', exit_key)
             terminal.wait(timeout=10)
             assert terminal.returncode == 0, f'{exit_key} exit code: {terminal.returncode}'
+        for exit_key in ('q', 'esc', 'ctrl+c'):
+            terminal = kitty.launch([binary, str(document_dir / 'plot sample.png')], height=60,
+                                    log_name='kitty-image-' + exit_key.replace('+', '-') + '.log')
+            text = wait(lambda text: 'h/j/k/l pan' in text and 'source 192x96' in text
+                        and PLACEHOLDER in text, 'direct image startup')
+            clean_ui(text)
+            if exit_key == 'q':
+                capture('direct-image-fit')
+                remote('send-text', '--stdin', data=b'+')
+                wait(lambda text: 'Zoom 125%' in text, 'direct image zoom')
+                capture('direct-image-zoom')
+                remote('send-text', '--stdin', data=b'l')
+                time.sleep(0.2)
+                capture('direct-image-pan')
+            remote('send-key', exit_key)
+            terminal.wait(timeout=10)
+            assert terminal.returncode == 0, f'direct image {exit_key} exit code: {terminal.returncode}'
         # Config/data isolation makes accidental auth or history setup observable.
         assert not list((root / 'data').rglob('*.sqlite*')), 'viewer created session history'
-        print(f'PASS: real Kitty Markdown layout/math/images/preview/scroll/resize/exits; tmux={args.tmux}: {root}')
+        print(f'PASS: real Kitty Markdown layout/math/images/preview/scroll/resize/exits and direct image viewing; tmux={args.tmux}: {root}')
     except BaseException:
         (root / 'failure.log').write_text(traceback.format_exc())
         # Save evidence before destroying the PTY, even when an assertion fails.

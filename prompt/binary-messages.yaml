@@ -20,6 +20,7 @@ BinaryZIPEntrySizeMismatch: ZIP directory entry count or size mismatch
 BinaryZIPEntryCountMismatch: ZIP directory entry count mismatch
 BinaryZIPEndRecord: missing ZIP end-of-directory record
 BinaryInvalidImage: "invalid image: %w"
+BinaryImageFormatUnsupported: "unsupported image format: %s"
 BinaryGIFBlockMarker: invalid GIF block marker %#x
 BinaryReferenceSize: binary file size must be between 0 and %d bytes
 BinaryReferenceMIME:

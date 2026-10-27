@@ -196,7 +196,7 @@ python3 tests/pty_math.py --tmux    # mock tmux metadata, no reply; real MathJax
 python3 tests/pty_math.py --disable-color # explicit RGB-disable fallback
 ```
 
-`kitty_markdown.py` checks `ttc md FILE` without an agent session, including
+`kitty_markdown.py` checks `ttc FILE` without an agent session, including
 loose/nested lists, quoted math, local images and their enlarged previews,
 tables, full-width presentation and all exit keys. Both Kitty suites share
 isolated terminal startup and artifact capture.

@@ -813,12 +813,15 @@ The concrete boundaries above are TTC decisions, informed by:
   scans history or revives job IDs. A cancelable joined worker refreshes
   optional Git root/branch every five seconds with two-second deadlines and
   bounded output. Workspace header uses `Workspace.Root`.
-- `ttc md FILE` opens a standalone Markdown document using the shared terminal,
-  inspection-window layout cache and graphics worker, without a runtime,
-  history, sidebar or composer. It starts at the top and shares window scrolling
-  controls. The complete document is parsed together, preserving references and
-  containers across source chunk boundaries. Redirected output is plain text at
-  80 columns.
+- `ttc FILE` opens standalone Markdown or an image preview with the shared
+  terminal, without a runtime, history, sidebar or composer. Markdown uses the
+  inspection-window layout cache and graphics worker, starts at the top and
+  shares window scrolling controls. The complete document is parsed together,
+  preserving references and containers across source chunk boundaries.
+  Redirected Markdown is plain text at 80 columns. Images reuse the pan/zoom
+  preview without a Markdown worker or MathJax setup and require Kitty graphics;
+  redirected images fail. Format validation and limits are documented in the
+  [usage guide](../README.md#usage).
 - Markdown layout walks Goldmark's AST and resolves the shared Glamour style
   configuration into styled text and atomic math/image boxes. Greedy paragraph
   flow aligns integer-cell baselines; lists and quotes reserve prefix columns

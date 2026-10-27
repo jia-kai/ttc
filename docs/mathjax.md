@@ -44,8 +44,8 @@
   separators cannot fit a tiny pane, cells stack in row order.
 - Markdown layout uses terminal columns and rows. Lists, quotes and tables share
   the same layout path with or without math; container prefixes are excluded
-  from multiline formula source. `ttc md FILE` uses this renderer and the
-  existing viewport-only graphics worker in a document-only terminal view.
+  from multiline formula source. `ttc FILE` uses this renderer and the existing
+  viewport-only graphics worker in a document-only terminal view.
 - Inline placement does not imply MathJax inline typography: the backend uses
   `display: true` for both inline and block formulas. The shared
   [demo notebook](../tests/fixtures/research/markdown.md) exercises mixed-format

@@ -76,7 +76,7 @@ type launchOptions struct {
 
 // newRootCommand creates independent launch and provider configuration per call.
 func newRootCommand(modules []providers.Module) *cobra.Command {
-	root := &cobra.Command{Use: "ttc", Short: "TTC - True Terminal Coding", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true}
+	root := &cobra.Command{Use: "ttc [FILE]", Short: "TTC - True Terminal Coding", Long: "TTC - True Terminal Coding\n\nStart TTC, or view a Markdown (.md, .markdown) or PNG/JPEG/single-frame GIF file without an agent session. Ctrl-U/D scroll Markdown; q quits; Esc goes back or quits. Redirected Markdown is plain text wrapped at 80 columns; images require a Kitty graphics terminal.", Args: cobra.MaximumNArgs(1), SilenceUsage: true, SilenceErrors: true}
 	root.CompletionOptions.DisableDefaultCmd = true
 	flags := root.Flags()
 	rootDefault, dataDefaultErr := history.DataRoot()
@@ -97,7 +97,7 @@ func newRootCommand(modules []providers.Module) *cobra.Command {
 		opts.providerID = configured[0].ID
 		flags.Lookup("provider").DefValue = configured[0].ID
 	}
-	root.AddCommand(newMarkdownCommand(), newRailCommand(), newWatchCommand())
+	root.AddCommand(newRailCommand(), newWatchCommand())
 	for _, hook := range []struct {
 		name  string
 		serve func(context.Context) error
@@ -107,6 +107,14 @@ func newRootCommand(modules []providers.Module) *cobra.Command {
 		}})
 	}
 	root.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 {
+			var conflict string
+			flags.Visit(func(f *pflag.Flag) { conflict = f.Name })
+			if conflict != "" {
+				return fmt.Errorf("file viewing cannot be combined with --%s", conflict)
+			}
+			return viewFile(cmd.Context(), args[0])
+		}
 		if configErr != nil {
 			return configErr
 		}

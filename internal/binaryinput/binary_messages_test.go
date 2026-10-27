@@ -45,6 +45,7 @@ func TestBinaryDiagnosticPromptBytes(t *testing.T) {
 		prompts.BinaryZIPEntrySizeMismatch:   "ZIP directory entry count or size mismatch",
 		prompts.BinaryZIPEntryCountMismatch:  "ZIP directory entry count mismatch",
 		prompts.BinaryZIPEndRecord:           "missing ZIP end-of-directory record",
+		prompts.BinaryImageFormatUnsupported: "unsupported image format: %s",
 		prompts.BinaryInvalidImage:           "invalid image: %w",
 		prompts.BinaryGIFBlockMarker:         "invalid GIF block marker %#x",
 		prompts.BinaryReferenceSize:          "binary file size must be between 0 and %d bytes",

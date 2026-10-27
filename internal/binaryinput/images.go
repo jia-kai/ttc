@@ -34,33 +34,53 @@ func ImageConfig(data []byte) (image.Config, string, error) {
 	return config, format, nil
 }
 
-// validateReadImage bounds the canvas before pixel allocation. GIFs need full
-// container validation: image.Decode otherwise stops after the first frame and
-// can accept an animation or a missing trailer. Count frames before DecodeAll so
-// hostile animations cannot allocate an unbounded collection of decoded frames.
+// DecodeImage decodes PNG, JPEG or a complete single-frame GIF. It bounds
+// encoded size and canvas dimensions before allocating pixels and observes
+// cancellation during reads and GIF container validation.
+func DecodeImage(ctx context.Context, data []byte) (image.Image, error) {
+	_, pixels, err := decodeImage(ctx, data)
+	return pixels, err
+}
+
 func validateReadImage(ctx context.Context, data []byte) (image.Config, error) {
+	config, _, err := decodeImage(ctx, data)
+	return config, err
+}
+
+// GIFs need full container validation: image.Decode otherwise stops after the
+// first frame and can accept an animation or a missing trailer. Count frames
+// before DecodeAll so hostile animations cannot allocate unbounded frames.
+func decodeImage(ctx context.Context, data []byte) (image.Config, image.Image, error) {
 	if err := ctx.Err(); err != nil {
-		return image.Config{}, err
+		return image.Config{}, nil, err
 	}
 	config, format, err := ImageConfig(data)
 	if err != nil {
-		return image.Config{}, err
+		return image.Config{}, nil, err
 	}
-	if format == "gif" {
+	var pixels image.Image
+	switch format {
+	case "gif":
 		if err := singleFrameGIF(ctx, data); err != nil {
-			return image.Config{}, err
+			return image.Config{}, nil, err
 		}
-		_, err = gif.DecodeAll(&contextReader{ctx: ctx, reader: bytes.NewReader(data)})
-	} else {
-		_, _, err = image.Decode(&contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+		var frames *gif.GIF
+		frames, err = gif.DecodeAll(&contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+		if err == nil {
+			pixels = frames.Image[0]
+		}
+	case "png", "jpeg":
+		pixels, _, err = image.Decode(&contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	default:
+		return image.Config{}, nil, fmt.Errorf(prompts.BinaryImageFormatUnsupported, format)
 	}
 	if ctx.Err() != nil {
-		return image.Config{}, ctx.Err()
+		return image.Config{}, nil, ctx.Err()
 	}
 	if err != nil {
-		return image.Config{}, fmt.Errorf(prompts.BinaryInvalidImage, err)
+		return image.Config{}, nil, fmt.Errorf(prompts.BinaryInvalidImage, err)
 	}
-	return config, nil
+	return config, pixels, nil
 }
 
 func singleFrameGIF(ctx context.Context, data []byte) error {

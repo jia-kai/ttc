@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"path/filepath"
 	"strings"
 
 	"github.com/gdamore/tcell/v3"
@@ -27,7 +29,30 @@ type Document struct {
 // from an image preview or cancels its pending load. User exits return nil;
 // context cancellation returns ctx.Err(). Terminal and graphics errors are
 // returned after canceling and joining workers and restoring the terminal.
-func (d *Document) Run(ctx context.Context) (err error) {
+func (d *Document) Run(ctx context.Context) error {
+	return d.run(ctx, nil)
+}
+
+// Image displays already validated, decoded image pixels in the shared pan/zoom
+// preview without an agent session. Pixels must not be mutated during Run.
+type Image struct {
+	Path     string          // Source filename shown in the preview status.
+	Pixels   image.Image     // Required decoded image, with positive dimensions.
+	Screen   tcell.Screen    // Optional uninitialized screen, primarily for tests.
+	Graphics *graphics.Kitty // Optional graphics sink used with an injected Screen.
+}
+
+// Run owns the terminal and graphics workers until q, Esc or Ctrl-C is pressed.
+// It fails when pixels are missing or the terminal does not support graphics.
+func (i *Image) Run(ctx context.Context) error {
+	if i.Pixels == nil || i.Pixels.Bounds().Empty() {
+		return fmt.Errorf("image pixels with positive dimensions are required")
+	}
+	d := Document{Title: filepath.Base(i.Path), Screen: i.Screen, Graphics: i.Graphics}
+	return d.run(ctx, i)
+}
+
+func (d *Document) run(ctx context.Context, initial *Image) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -38,9 +63,17 @@ func (d *Document) Run(ctx context.Context) (err error) {
 		return err
 	}
 	defer terminal.close()
+	if initial != nil && terminal.graphics == nil {
+		return fmt.Errorf("image viewing requires Kitty terminal graphics: %s", terminal.warning)
+	}
 	window := &Window{Text: d.Text, Markdown: true}
 	var results <-chan renderReply
-	if terminal.graphics != nil {
+	if initial != nil {
+		// A decoded standalone image only needs placement and cell sizing. Do
+		// not start the Markdown worker or its MathJax installer.
+		window.renderer = &imageRenderer{graphics: terminal.graphics, cellWidth: 8, cellHeight: 16}
+		defer func() { err = errors.Join(err, terminal.graphics.Close()) }()
+	} else if terminal.graphics != nil {
 		renderer, e := newImageRenderer(ctx, terminal.graphics, d.Directory)
 		if e != nil {
 			return errors.Join(e, terminal.graphics.Close())
@@ -51,6 +84,10 @@ func (d *Document) Run(ctx context.Context) (err error) {
 	}
 	warning := terminal.warning
 	var preview *imagePreview
+	if initial != nil {
+		preview = newImagePreview(imageSource{id: initial.Path, path: initial.Path, file: initial.Path}, initial.Pixels, false, window.renderer.cellWidth, window.renderer.cellHeight)
+		preview.Window.Hint = "h/j/k/l pan · +/- zoom · 0 fit · i details · q/Esc quit"
+	}
 	var loading *imageLoad
 	defer func() {
 		if loading != nil {
@@ -105,14 +142,20 @@ func (d *Document) Run(ctx context.Context) (err error) {
 			case *tcell.EventError:
 				return fmt.Errorf("terminal input: %w", event)
 			case *tcell.EventKey:
-				if isCtrl(event, "c") || event.Key() == tcell.KeyRune && event.Str() == "q" {
+				if isCtrl(event, "c") {
 					return nil
 				}
 				if preview != nil {
 					if close, _ := preview.key(event); close {
+						if initial != nil {
+							return nil
+						}
 						preview = nil
 					}
 					continue
+				}
+				if event.Key() == tcell.KeyRune && event.Str() == "q" {
+					return nil
 				}
 				if event.Key() == tcell.KeyEscape {
 					if loading != nil {
@@ -133,6 +176,9 @@ func (d *Document) Run(ctx context.Context) (err error) {
 			case *tcell.EventMouse:
 				if preview != nil {
 					if close, _ := preview.mouse(event); close {
+						if initial != nil {
+							return nil
+						}
 						preview = nil
 					}
 					continue

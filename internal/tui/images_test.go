@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"io"
 	"os"
@@ -507,6 +508,61 @@ func TestPreviewRebuildsAtNewCellPixelSize(t *testing.T) {
 	}
 }
 
+func TestPreviewButtonsMatchClickRequest(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%v", pending), func(t *testing.T) {
+			s := newTestScreen(t)
+			if err := s.Init(); err != nil {
+				t.Fatal(err)
+			}
+			defer s.Fini()
+			s.SetSize(80, 30)
+			g := graphics.New(io.Discard, false)
+			defer g.Close()
+			p := newImagePreview(imageSource{id: "buttons"}, image.NewRGBA(image.Rect(0, 0, 20, 10)), pending, 8, 16)
+			g.Begin()
+			if err := p.draw(s, g); err != nil {
+				t.Fatal(err)
+			}
+			text := screenText(s)
+			if strings.Contains(text, "[ Cancel ]") != pending || strings.Contains(text, "[ OK: pick ]") != pending || strings.Contains(text, "[ Close (q) ]") == pending {
+				t.Fatalf("wrong buttons for pending=%v:\n%s", pending, text)
+			}
+			close, confirm := p.mouse(tcell.NewEventMouse(p.left+15, p.top+p.height+1, tcell.Button1, 0))
+			if close != pending || confirm {
+				t.Fatalf("Cancel hit area: close=%v confirm=%v", close, confirm)
+			}
+			close, confirm = p.key(tcell.NewEventKey(tcell.KeyRune, "q", 0))
+			if close == pending || confirm {
+				t.Fatalf("q close shortcut: close=%v confirm=%v", close, confirm)
+			}
+			if pending {
+				close, confirm = p.mouse(tcell.NewEventMouse(p.left, p.top+p.height+1, tcell.Button1, 0))
+				if close || confirm {
+					t.Fatal("confirmed without a selected point")
+				}
+				p.point = &[2]int{3, 4}
+				if err := p.draw(s, g); err != nil {
+					t.Fatal(err)
+				}
+				text = screenText(s)
+				if !strings.Contains(text, "[ OK ]") || !strings.Contains(text, "[ Cancel ]") || strings.Contains(text, "[ Close (q) ]") {
+					t.Fatal("wrong buttons after point selection:\n" + text)
+				}
+				close, confirm = p.mouse(tcell.NewEventMouse(p.left, p.top+p.height+1, tcell.Button1, 0))
+				if !close || !confirm {
+					t.Fatal("selected point was not confirmed")
+				}
+			} else {
+				close, confirm = p.mouse(tcell.NewEventMouse(p.left+12, p.top+p.height+1, tcell.Button1, 0))
+				if !close || confirm {
+					t.Fatal("Close button edge did not close preview")
+				}
+			}
+		})
+	}
+}
+
 type previewDiscardScreen struct{ tcell.Screen }
 
 func (previewDiscardScreen) Size() (int, int)                                { return 100, 40 }
@@ -533,6 +589,35 @@ func TestPreviewCanvasAvoidsPerPixelColorAllocations(t *testing.T) {
 	}
 	if _, ok := p.canvas.(*image.RGBA); !ok {
 		t.Fatal("preview canvas must retain premultiplied pixels")
+	}
+}
+
+func TestPreviewDownsamplesOriginalAtFractionalPan(t *testing.T) {
+	m := image.NewRGBA(image.Rect(4, 6, 2404, 1806))
+	for y := 6; y < 1806; y++ {
+		for x := 4; x < 2404; x++ {
+			c := color.RGBA{A: 255}
+			if (x+y)%2 == 0 {
+				c = color.RGBA{255, 255, 255, 255}
+			}
+			m.SetRGBA(x, y, c)
+		}
+	}
+	g := graphics.New(io.Discard, false)
+	defer g.Close()
+	p := newImagePreview(imageSource{id: "checkerboard"}, m, false, 8, 16)
+	p.geometry(100, 40)
+	// At this zoom every output pixel covers exactly 4x4 source pixels;
+	// fractional panning must not turn the checkerboard into moire patterns.
+	p.zoom = .25 / p.scale
+	p.panX, p.panY = .375, -.125
+	g.Begin()
+	if err := p.draw(previewDiscardScreen{}, g); err != nil {
+		t.Fatal(err)
+	}
+	x, y := p.canvas.Bounds().Dx()/2, p.canvas.Bounds().Dy()/2
+	if got := color.RGBAModel.Convert(p.canvas.At(x, y)); got != (color.RGBA{128, 128, 128, 255}) {
+		t.Fatal("preview aliases original pixels", got)
 	}
 }
 func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
@@ -592,7 +677,7 @@ func TestImageFrontendPreviewAndClickNotification(t *testing.T) {
 	// History inspection opens the saved pixels without reviving an interaction.
 	u.typeText(fmt.Sprintf("/inspect %d", id))
 	u.key(tcell.KeyEnter)
-	u.wait(t, "[ Close ]")
+	u.wait(t, "[ Close (q) ]")
 	u.key(tcell.KeyEscape)
 	time.Sleep(20 * time.Millisecond)
 	if u.runtime.HasNotifications() {

@@ -13,7 +13,7 @@ import (
 func TestCommandTreeHelp(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("TTC_DATA_DIR", "relative")
-	for _, args := range [][]string{{"--help"}, {"help"}, {"help", "md"}, {"md", "--help"}, {"rail", "--help"}, {"watch-run", "--help"}} {
+	for _, args := range [][]string{{"--help"}, {"help"}, {"notes.md", "--help"}, {"rail", "--help"}, {"watch-run", "--help"}} {
 		root := newRootCommand(builtin.Modules())
 		var out bytes.Buffer
 		root.SetOut(&out)

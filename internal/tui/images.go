@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"image"
-	"math"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"ttc/internal/assets"
 	"ttc/internal/graphics"
+	"ttc/internal/imageresample"
 	"ttc/internal/render"
 
 	"github.com/gdamore/tcell/v3"
@@ -194,7 +194,7 @@ func (r *imageRenderer) work(cache *assets.Cache) {
 				}
 				if err == nil {
 					checksum := sha256.Sum256(data)
-					key := assets.Key("thumbnail-v1", fmt.Sprintf("%x", checksum))
+					key := assets.Key("thumbnail-v2", fmt.Sprintf("%x", checksum))
 					pixels, err = cache.Get(task.ctx, key, func(ctx context.Context) (image.Image, error) {
 						if err := ctx.Err(); err != nil {
 							return nil, err
@@ -357,7 +357,7 @@ func rowsOf(text []string) []displayRow {
 }
 func (r *imageRenderer) layout(v line, width int) []displayRow {
 	if v.image != nil {
-		p := placedImage{key: assets.Key("thumbnail-v1", v.image.Snapshot), path: v.image.Snapshot}
+		p := placedImage{key: assets.Key("thumbnail-v2", v.image.Snapshot), path: v.image.Snapshot}
 		if r.pendingClick != nil && r.pendingClick(v.image.ID) {
 			v.text = "**click pending** · " + v.text
 		}
@@ -617,6 +617,10 @@ func (p *imagePreview) key(ev *tcell.EventKey) (close, confirm bool) {
 		}
 	case tcell.KeyRune:
 		switch ev.Str() {
+		case "q":
+			if !p.pending {
+				return true, false
+			}
 		case "i":
 			p.details = &Window{Title: "Image details", Text: p.detailText, Markdown: true, actor: p.Window.actor, subagentName: p.Window.subagentName}
 		case "h":
@@ -657,7 +661,11 @@ func (p *imagePreview) mouse(ev *tcell.EventMouse) (close, confirm bool) {
 		p.zoom = max(.25, p.zoom/1.25)
 	case ev.Buttons()&tcell.Button1 != 0:
 		if y == p.top+p.height+1 {
-			if x >= p.left && x < p.left+10 {
+			buttonWidth := len("[ Close (q) ]")
+			if p.pending {
+				buttonWidth = 12
+			}
+			if x >= p.left && x < p.left+buttonWidth {
 				if p.pending && p.point != nil {
 					return true, true
 				}
@@ -665,7 +673,7 @@ func (p *imagePreview) mouse(ev *tcell.EventMouse) (close, confirm bool) {
 					return true, false
 				}
 			}
-			if x >= p.left+12 && x < p.left+24 {
+			if p.pending && x >= p.left+12 && x < p.left+22 {
 				return true, false
 			}
 		}
@@ -696,23 +704,8 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 			return fmt.Errorf("image preview exceeds 16-megapixel canvas limit")
 		}
 		canvas := image.NewRGBA(image.Rect(0, 0, pw, ph))
-		bounds := p.pixels.Bounds()
-		fast, _ := p.pixels.(image.RGBA64Image)
-		for y := range ph {
-			sy := int(math.Floor((float64(y) - p.originY) / p.scale))
-			if sy < 0 || sy >= p.sourceHeight {
-				continue
-			}
-			for x := range pw {
-				sx := int(math.Floor((float64(x) - p.originX) / p.scale))
-				if sx >= 0 && sx < p.sourceWidth {
-					if fast != nil {
-						canvas.SetRGBA64(x, y, fast.RGBA64At(bounds.Min.X+sx, bounds.Min.Y+sy))
-					} else {
-						canvas.Set(x, y, p.pixels.At(bounds.Min.X+sx, bounds.Min.Y+sy))
-					}
-				}
-			}
+		if err := imageresample.Draw(context.Background(), canvas, p.pixels, p.scale, p.scale, p.originX, p.originY); err != nil {
+			return err
 		}
 
 		p.canvas = canvas
@@ -731,13 +724,14 @@ func (p *imagePreview) draw(s tcell.Screen, g *graphics.Kitty) error {
 		label += fmt.Sprintf(" · pixel (%d, %d), cell estimate", p.point[0], p.point[1])
 	}
 	put(s, p.left, p.top+p.height, p.width, label, style.Foreground(tcell.GetColor(render.CyanColor)))
-	button := "[ Close ]"
+	button := "[ Close (q) ]"
 	if p.pending {
 		button = "[ OK ]"
 		if p.point == nil {
 			button = "[ OK: pick ]"
 		}
+		button = fmt.Sprintf("%-12s[ Cancel ]", button)
 	}
-	put(s, p.left, p.top+p.height+1, p.width, fmt.Sprintf("%-12s[ Cancel ]", button), style.Bold(true))
+	put(s, p.left, p.top+p.height+1, p.width, button, style.Bold(true))
 	return nil
 }
