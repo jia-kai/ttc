@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
 from mock_naming import respond_to_naming
+from retry_policy import default_max_attempts
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -223,7 +224,8 @@ def main():
         retry_id, retry_json, visible = db.execute("SELECT id,content_json,model_visible FROM entries WHERE json_extract(content_json,'$.type')='model_retry'").fetchone()
         retry = json.loads(retry_json)
         assert not visible
-        assert retry['retry']['attempt'] == 2 and retry['retry']['max_attempts'] == 3
+        assert retry['retry']['attempt'] == 2
+        assert retry['retry']['max_attempts'] == default_max_attempts()
         assert retry['retry']['delay_ms'] == 0 and 'HTTP 503' in retry['retry']['reason']
         assert db.execute('SELECT purpose FROM model_requests WHERE id=?', (retry['request_id'],)).fetchone()[0] == 'coding'
         assert failed_request == requests[0], 'retry changed the request'

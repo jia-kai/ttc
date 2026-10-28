@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
 from mock_naming import respond_to_naming
+from retry_policy import default_max_attempts
 
 
 def main():
@@ -27,6 +28,7 @@ def main():
     parser.add_argument('--failure', action='store_true',
                         help='Exhaust upstream retries after partial child text; verify warning and transcripts')
     args = parser.parse_args()
+    max_attempts = default_max_attempts()
     if args.failure and args.offline:
         parser.error('--failure requires the mock HTTP provider')
     root = Path(tempfile.mkdtemp(prefix='pty-subagent-', dir=private_scratch()))
@@ -95,7 +97,7 @@ def main():
                            for item in body['input'] if item['type'] == 'function_call_output'}
                 calls, text = [], ''
                 if child:
-                    assert step < (4 if args.failure else 2), 'unexpected child request'
+                    assert step < (max_attempts + 1 if args.failure else 2), 'unexpected child request'
                     assert all('PARENT-ONLY-MARKER' not in text for text in texts(body))
                     assert 'subagent' not in [tool['name'] for tool in body['tools']]
                     if step == 0:
@@ -252,7 +254,7 @@ def main():
             assert len(notice_requests) == 1, notice_requests
             assert len(counts) == 2 and counts['main'] in (2, 3), counts
             child_actor = next(actor for actor in counts if actor != 'main')
-            assert counts[child_actor] == (4 if args.failure else 2)
+            assert counts[child_actor] == (max_attempts + 1 if args.failure else 2)
             main_key = next(r['body']['prompt_cache_key'] for r in requests if r['actor'] == 'main')
             child_keys = {r['body']['prompt_cache_key'] for r in requests if r['actor'] == child_actor}
             assert len(child_keys) == 1 and main_key not in child_keys
@@ -286,7 +288,16 @@ def main():
                 FROM model_requests r WHERE r.purpose='coding'""").fetchall()
             expected_requests = 3 if args.offline else len(requests)
             if args.failure:
-                expected_requests -= 1  # Last two pre-output attempts share one request record.
+                retries = [json.loads(row[0])['retry'] for row in db.execute(
+                    "SELECT content_json FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='model_retry' ORDER BY id",
+                    (finish['child_id'],)).fetchall()]
+                assert retries, 'missing child retry notices'
+                assert all(retry['max_attempts'] == max_attempts for retry in retries)
+                assert [retry['attempt'] for retry in retries] == list(range(2, max_attempts + 1))
+                assert counts[finish['child_id']] == max_attempts + 1  # Initial successful read, then exhaustion.
+                # The first failed attempt emits partial output. All remaining
+                # pre-output attempts share one continuation request record.
+                expected_requests -= max_attempts - 2
             assert len(meters) == expected_requests
             completed = [json.loads(attempts)[-1] for status, attempts in meters if status == 'completed']
             completed_requests = expected_requests - (2 if args.failure else 0)
@@ -299,10 +310,6 @@ def main():
                 usage = [attempt['usage'] for attempt in completed]
                 assert sum(u['input_tokens'] for u in usage) == 100 * completed_requests
                 assert sum(u['cached_input_tokens'] for u in usage) == 32 * completed_requests
-            if args.failure:
-                retries = db.execute("SELECT content_json FROM entries WHERE actor_id=? AND json_extract(content_json,'$.type')='model_retry'", (finish['child_id'],)).fetchall()
-                assert len(retries) == 2
-                assert [json.loads(row[0])['retry']['attempt'] for row in retries] == [2, 3]
         coverage = ('offline foreground disposal, UTF-8 bounded answer, exact durable reply, three completed requests without usage'
                     if args.offline else 'HTTP low-variant child, isolated read, background answer delivered once, metering')
         if args.failure:
