@@ -17,7 +17,7 @@ import (
 	"ttc/internal/prompts"
 )
 
-const maxRetryDelay = 30 * time.Second
+const maxRetryDelay = 150 * time.Second
 
 func wait(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -60,14 +60,14 @@ func transportFailure(err error) error {
 	return fmt.Errorf(prompts.OpenAITransportFailed, detail)
 }
 
-// retryDelay uses server delays exactly, capped at 30 seconds. Ordinary backoff
+// retryDelay uses server delays exactly, capped at 150 seconds. Ordinary backoff
 // starts at one second, doubles to the cap, and uses 25% jitter. attempt is zero
 // for the first failed request. Clamp before shifting/multiplying to avoid overflow.
 func retryDelay(attempt int, header string, now time.Time) time.Duration {
 	header = strings.TrimSpace(header)
 	if header != "" {
 		if seconds, err := strconv.ParseUint(header, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
-			if seconds >= 30 {
+			if seconds >= uint64(maxRetryDelay/time.Second) {
 				return maxRetryDelay
 			}
 			return time.Duration(seconds) * time.Second
@@ -78,7 +78,7 @@ func retryDelay(attempt int, header string, now time.Time) time.Duration {
 		}
 	}
 	base := maxRetryDelay
-	if attempt < 5 {
+	if attempt < 8 {
 		base = time.Second * time.Duration(1<<attempt)
 	}
 	return min(time.Duration(float64(base)*(0.75+rand.Float64()*0.5)), maxRetryDelay)

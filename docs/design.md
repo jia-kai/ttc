@@ -500,7 +500,7 @@ workers.
   only. Native steering and resuming the same partial stream are outside v1.
   Providers retry upstream HTTP, transport, stream and protocol failures
   regardless of code. Parser-private native items, including reasoning, do not
-  block retry and are discarded on failure. Zero `MaxAttempts` selects three
+  block retry and are discarded on failure. Zero `MaxAttempts` selects nine
   total attempts; positive values bound the whole retry/recovery chain;
   `PriorAttempts` carries failed attempts across continuation requests and
   resets after a successful response. Naming and compaction use the same
@@ -520,7 +520,7 @@ workers.
   policy; unfinished calls never execute.
 - Before each cancellable retry wait, emit a typed event and hidden inspectable
   request-linked notice for main, child or compaction. Callback failure stops
-  retry. Backoff starts at one second, doubles with 25% jitter, and caps at 30
+  retry. Backoff starts at one second, doubles with 25% jitter, and caps at 150
   seconds. Numeric/date Retry-After overrides it with that cap; zero/past
   permits immediate retry. Keep constant-size retry bookkeeping; history retains
   partial output and recovery instructions. Restart never retries unfinished

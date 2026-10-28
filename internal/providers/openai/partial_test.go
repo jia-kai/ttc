@@ -106,7 +106,7 @@ func TestInvalidFinalToolArgumentsUsePartialRecovery(t *testing.T) {
 			for _, tc := range []struct {
 				prior, limit int
 				handoff      bool
-			}{{0, 2, true}, {1, 2, false}, {2, 0, false}} {
+			}{{0, 2, true}, {1, 2, false}, {llm.DefaultMaxAttempts - 1, 0, false}} {
 				var starts, calls int
 				err := a.Stream(context.Background(), partialRequest(tc.prior, tc.limit), func(ev llm.StreamEvent) error {
 					if ev.Kind == "call_start" {
@@ -145,8 +145,9 @@ func TestPartialHandoffRespectsPriorAttemptsAndLimits(t *testing.T) {
 		{1, 3, true, 1500, 2500},
 		{3, 5, true, 6000, 10000},
 		{1, 0, true, 1500, 2500},
-		{2, 0, false, 0, 0},
-		{100000, 100002, true, 22500, 30000},
+		{2, 0, true, 3000, 5000},
+		{llm.DefaultMaxAttempts - 1, 0, false, 0, 0},
+		{100000, 100002, true, 112500, 150000},
 	} {
 		t.Run(fmt.Sprintf("%d/%d", tc.prior, tc.limit), func(t *testing.T) {
 			var requests atomic.Int32
@@ -182,7 +183,7 @@ func TestPartialHandoffRespectsPriorAttemptsAndLimits(t *testing.T) {
 }
 
 func TestPriorAttemptsValidationMakesNoRequests(t *testing.T) {
-	for _, bounds := range [][2]int{{-1, 0}, {0, -1}, {2, 2}, {3, 2}, {3, 0}, {100000, 0}} {
+	for _, bounds := range [][2]int{{-1, 0}, {0, -1}, {2, 2}, {3, 2}, {llm.DefaultMaxAttempts, 0}, {100000, 0}} {
 		var requests atomic.Int32
 		a := adapterFixture(t, func(http.ResponseWriter, *http.Request) { requests.Add(1) })
 		err := a.Stream(context.Background(), partialRequest(bounds[0], bounds[1]), func(ev llm.StreamEvent) error {
@@ -226,7 +227,7 @@ func TestPreOutputRetriesContinueAttemptNumberingIntoPartialHandoff(t *testing.T
 					t.Fatal("pre-output numbering restarted", retry)
 				}
 			}
-			if partial != nil && (partial.Retry.Attempt != 7 || partial.Retry.MaxAttempts != limit || partial.Retry.DelayMilliseconds < 22500 || partial.Retry.DelayMilliseconds > 30000) {
+			if partial != nil && (partial.Retry.Attempt != 7 || partial.Retry.MaxAttempts != limit || partial.Retry.DelayMilliseconds < 24000 || partial.Retry.DelayMilliseconds > 40000) {
 				t.Fatal("partial backoff restarted", partial.Retry)
 			}
 		})

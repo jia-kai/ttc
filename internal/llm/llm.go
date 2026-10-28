@@ -241,9 +241,9 @@ func ContextFor(selection Selection, messages []Message) []Message {
 	return out
 }
 
-// DefaultMaxAttempts bounds a response/recovery sequence to three total upstream
+// DefaultMaxAttempts bounds a response/recovery sequence to nine total upstream
 // attempts, including the initial request and any partial-output continuations.
-const DefaultMaxAttempts = 3
+const DefaultMaxAttempts = 9
 
 // Request contains immutable instructions, selection and canonical context,
 // including developer messages. Providers own transport/state codecs and map

@@ -74,7 +74,7 @@ func TestUncommittedUpstreamFailureMatrixRecoversOrExhausts(t *testing.T) {
 				} else {
 					var transient *llm.TransientError
 					var partial *llm.PartialError
-					if !errors.As(err, &transient) || errors.As(err, &partial) || !strings.HasPrefix(err.Error(), "upstream attempt 3/3 failed: ") {
+					if !errors.As(err, &transient) || errors.As(err, &partial) || !strings.HasPrefix(err.Error(), fmt.Sprintf("upstream attempt %d/%d failed: ", llm.DefaultMaxAttempts, llm.DefaultMaxAttempts)) {
 						t.Fatal("incorrect exhaustion", err)
 					}
 				}
@@ -82,8 +82,8 @@ func TestUncommittedUpstreamFailureMatrixRecoversOrExhausts(t *testing.T) {
 					t.Fatal("incorrect attempt budget", requests, retries, completions)
 				}
 				for i, retry := range retries {
-					prefix := fmt.Sprintf("upstream attempt %d/3 failed: ", i+1)
-					if retry.Attempt != i+2 || retry.MaxAttempts != 3 || retry.DelayMilliseconds != 0 || !strings.HasPrefix(retry.Reason, prefix) {
+					prefix := fmt.Sprintf("upstream attempt %d/%d failed: ", i+1, llm.DefaultMaxAttempts)
+					if retry.Attempt != i+2 || retry.MaxAttempts != llm.DefaultMaxAttempts || retry.DelayMilliseconds != 0 || !strings.HasPrefix(retry.Reason, prefix) {
 						t.Fatal("incorrect retry metadata", retry)
 					}
 					for _, want := range append(tc.want, "request_id=request_fixture") {
@@ -94,7 +94,7 @@ func TestUncommittedUpstreamFailureMatrixRecoversOrExhausts(t *testing.T) {
 					if strings.Contains(retry.Reason, "private scalar") {
 						t.Error("retry exposed arbitrary upstream value", retry.Reason)
 					}
-					if !recover && strings.TrimPrefix(retry.Reason, prefix) != strings.TrimPrefix(err.Error(), "upstream attempt 3/3 failed: ") {
+					if !recover && strings.TrimPrefix(retry.Reason, prefix) != strings.TrimPrefix(err.Error(), fmt.Sprintf("upstream attempt %d/%d failed: ", llm.DefaultMaxAttempts, llm.DefaultMaxAttempts)) {
 						t.Fatal("retry reason did not preserve full final diagnostic", retry.Reason, err)
 					}
 				}

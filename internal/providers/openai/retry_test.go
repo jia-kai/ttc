@@ -23,8 +23,11 @@ func TestRetryAfterAndSaturatedBackoff(t *testing.T) {
 		want   time.Duration
 	}{
 		{"0", 0}, {"3", 3 * time.Second}, {"18446744073709551615", maxRetryDelay},
+		{"30", 30 * time.Second}, {"149", 149 * time.Second},
+		{"150", 150 * time.Second}, {"151", 150 * time.Second},
 		{"18446744073709551615000000", maxRetryDelay},
 		{now.Add(7 * time.Second).Format(http.TimeFormat), 7 * time.Second},
+		{now.Add(149 * time.Second).Format(http.TimeFormat), 149 * time.Second},
 		{now.Add(-time.Hour).Format(http.TimeFormat), 0},
 		{now.Add(time.Hour).Format(http.TimeFormat), maxRetryDelay},
 	} {
@@ -32,11 +35,11 @@ func TestRetryAfterAndSaturatedBackoff(t *testing.T) {
 			t.Errorf("%q: got %s, want %s", tc.header, got, tc.want)
 		}
 	}
-	for _, attempt := range []int{0, 1, 4, 5, 100000} {
+	for _, attempt := range []int{0, 1, 4, 5, 6, 7, 8, 100000} {
 		for range 20 {
 			got := retryDelay(attempt, "invalid", now)
 			base := maxRetryDelay
-			if attempt < 5 {
+			if attempt < 8 {
 				base = time.Second * time.Duration(1<<attempt)
 			}
 			if got < time.Duration(float64(base)*0.75) || got > min(time.Duration(float64(base)*1.25), maxRetryDelay) {
