@@ -378,7 +378,7 @@ func TestForceCompactHTTPContextRejectionPreservesContextLiveWorkAndQueues(t *te
 		t.Fatal("upstream rejection canceled unrelated timer", live)
 	}
 	var status, attemptStatus, diagnostic string
-	if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].status'),json_extract(e.content_json,'$.attempts[0].error') FROM model_requests r JOIN request_observations o ON o.request_id=r.id JOIN entries e ON e.id=o.completion_entry_id WHERE r.session_id=? AND r.purpose='compaction' ORDER BY o.completion_entry_id DESC LIMIT 1`, source).Scan(&status, &attemptStatus, &diagnostic); err != nil || status != "failed" || attemptStatus != "failed" || diagnostic != upstream.Error() || !strings.Contains(diagnostic, "context_length_exceeded") || !strings.Contains(diagnostic, "force-context-3") {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].status'),json_extract(e.content_json,'$.attempts[0].error') FROM model_requests r JOIN request_observations o ON o.request_id=r.id JOIN entries e ON e.id=o.completion_entry_id WHERE r.session_id=? AND r.purpose='compaction' ORDER BY o.completion_entry_id DESC LIMIT 1`, source).Scan(&status, &attemptStatus, &diagnostic); err != nil || status != "failed" || attemptStatus != "failed" || diagnostic != upstream.Error() || !strings.Contains(diagnostic, "context_length_exceeded") || !strings.Contains(diagnostic, fmt.Sprintf("force-context-%d", llm.DefaultMaxAttempts)) {
 		t.Fatal("forced rejection lost durable request-failed diagnostics", status, attemptStatus, diagnostic, err)
 	}
 	var forced int

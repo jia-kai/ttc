@@ -69,10 +69,10 @@ func TestHTTPMockUnknownErrorsPersistAcrossBoundedRetries(t *testing.T) {
 						if status != "failed" || recordedError != err.Error() {
 							t.Fatal("final diagnostic absent from request attempts", status, recordedError, err)
 						}
-						if !strings.Contains(recordedError, "mock-upstream-3") {
+						if !strings.Contains(recordedError, fmt.Sprintf("mock-upstream-%d", llm.DefaultMaxAttempts)) {
 							t.Fatal("final upstream request identity lost", recordedError)
 						}
-						if shape == "nested" && (!strings.Contains(recordedError, "unknown_backend_fault") || !strings.Contains(recordedError, "Backend failure 3")) {
+						if shape == "nested" && (!strings.Contains(recordedError, "unknown_backend_fault") || !strings.Contains(recordedError, fmt.Sprintf("Backend failure %d", llm.DefaultMaxAttempts))) {
 							t.Fatal("nested final diagnostic lost", recordedError)
 						}
 						if shape == "bare" && (!strings.Contains(recordedError, "error details missing") || !strings.Contains(recordedError, "shape=")) {
@@ -228,11 +228,11 @@ func TestHTTPMockPrivatePartialFailuresPersistAfterExhaustion(t *testing.T) {
 			}
 			request := assertHTTPRetryHistory(t, r, "main", purpose, "nested")
 			var status, diagnostic string
-			if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].error') FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id WHERE o.request_id=? ORDER BY o.completion_entry_id DESC LIMIT 1`, request).Scan(&status, &diagnostic); err != nil || status != "failed" || !strings.Contains(diagnostic, "upstream attempt 3/3") || !strings.Contains(diagnostic, "Backend failure 3") {
+			if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].error') FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id WHERE o.request_id=? ORDER BY o.completion_entry_id DESC LIMIT 1`, request).Scan(&status, &diagnostic); err != nil || status != "failed" || !strings.Contains(diagnostic, fmt.Sprintf("upstream attempt %d/%d", llm.DefaultMaxAttempts, llm.DefaultMaxAttempts)) || !strings.Contains(diagnostic, fmt.Sprintf("Backend failure %d", llm.DefaultMaxAttempts)) {
 				t.Fatal("private request final failure was not recorded", status, diagnostic, err)
 			}
 			exact, err := r.Store.TranscriptJSONL(r.Current(), 0)
-			if err != nil || !strings.Contains(string(exact), "Backend failure 3") || strings.Contains(string(exact), "Discarded private reply") {
+			if err != nil || !strings.Contains(string(exact), fmt.Sprintf("Backend failure %d", llm.DefaultMaxAttempts)) || strings.Contains(string(exact), "Discarded private reply") {
 				t.Fatal("export lost final diagnostic or leaked failed private text", string(exact), err)
 			}
 		})
