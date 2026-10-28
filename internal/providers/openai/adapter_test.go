@@ -155,7 +155,7 @@ func TestCatalogAndStreamToolReasoningContinuity(t *testing.T) {
 			t.Error("missing auth headers")
 		}
 		if r.URL.Path == "/models" {
-			if r.URL.Query().Get("client_version") != "0.159.0" {
+			if r.URL.Query().Get("client_version") != "0.165.0" {
 				t.Error("catalog uses an obsolete client contract")
 			}
 			fmt.Fprint(w, `{"models":[{"slug":"test","visibility":"list","display_name":"Test","context_window":100000,"effective_context_window_percent":95,"default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"}],"input_modalities":["text","image"]}]}`)

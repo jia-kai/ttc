@@ -74,7 +74,7 @@ def main():
 
         def do_GET(self):
             if self.path.startswith('/models?'):
-                assert 'client_version=0.159.0' in self.path
+                assert 'client_version=0.165.0' in self.path
                 models = []
                 for model, name in (('demo-a', 'Demo Sol'), ('demo-b', 'Demo Luna')):
                     models.append({'slug': model, 'display_name': name, 'visibility': 'list',

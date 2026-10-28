@@ -9,7 +9,7 @@
   `catalog.Manager` policy, deadlines and lifecycle. Module configuration uses
   flags, not a provider JSON file; [composition](design.md#adding-a-provider)
   defines extension points.
-- Fetch authenticated `/models` with `client_version=0.159.0`, independent of
+- Fetch authenticated `/models` with `client_version=0.165.0`, independent of
   TTC/installed Codex versions. Discovery/selection make no inference requests.
 - Deadline: 30 seconds or the caller's shorter limit. Retry transport failures,
   429 and 5xx up to three total attempts with exponential jitter; Retry-After

@@ -16,7 +16,7 @@ import (
 
 // CatalogVersion negotiates the verified Codex catalog contract, not TTC's release.
 // The backend excludes ordinary models for older versions even with valid credentials.
-const CatalogVersion = "0.159.0"
+const CatalogVersion = "0.165.0"
 const catalogMaxAttempts = 3
 const maxCatalogBytes = 4 << 20
 
