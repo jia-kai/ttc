@@ -123,10 +123,10 @@ func TestModelStatusShowsEasyChoice(t *testing.T) {
 		t.Fatal("status contains shortcut hints", text)
 	}
 	h.command("/model easy family-b high")
-	h.wait(t, "family-a [family-b · high] · low")
+	h.wait(t, "family-a · low [family-b · high]")
 	h.command("/model easy off")
 	text = h.wait(t, "Easy model disabled")
-	if !strings.Contains(text, "family-a · low") || strings.Contains(text, "family-a [family-b") {
+	if !strings.Contains(text, "family-a · low") || strings.Contains(text, "[family-b · high]") {
 		t.Fatal("status retained cleared easy choice", text)
 	}
 }

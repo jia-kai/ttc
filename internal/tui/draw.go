@@ -126,11 +126,10 @@ func draw(s tcell.Screen, frame drawState) error {
 	if !frame.fullscreen {
 		drawScrollBar(s, w-1, 0, height, frame.view.total, start, style.Foreground(tcell.GetColor(render.MutedColor)))
 	}
-	status := frame.selection.Model.ID
+	status := frame.selection.Model.ID + " · " + frame.selection.Variant
 	if frame.easy != nil {
 		status += " [" + frame.easy.Model.ID + " · " + frame.easy.Variant + "]"
 	}
-	status += " · " + frame.selection.Variant
 	if frame.indicator != "" {
 		status = frame.indicator
 	}
