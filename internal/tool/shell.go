@@ -29,6 +29,7 @@ type shellArgs struct {
 type ChildView struct {
 	ID               string `json:"child_id"`
 	Label            string `json:"label"`
+	Easy             bool   `json:"easy,omitempty"`    // Creation-time routing request, including fallback.
 	ChildState       string `json:"child_state"`       // Context lifecycle: running, idle or closed at observation.
 	AssignmentStatus string `json:"assignment_status"` // Current or latest assignment: running, completed, failed or cancelled.
 	TurnID           string `json:"child_turn_id"`

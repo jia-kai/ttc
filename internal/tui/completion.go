@@ -55,7 +55,7 @@ var slashCommands = []completionItem{
 	{value: "/compact", description: "Summarize earlier context with optional focus"},
 	{value: "/force-compact", description: "Attempt summary despite input estimate; provider may reject"},
 	{value: "/jobs", description: "Inspect jobs"}, {value: "/timers", description: "Inspect timers"},
-	{value: "/inspect", description: "Inspect an entry"}, {value: "/attach", description: "Snapshot an attachment"}, {value: "/model", description: "Choose model"}, {value: "/models", description: "Choose model"},
+	{value: "/inspect", description: "Inspect an entry"}, {value: "/attach", description: "Snapshot an attachment"}, {value: "/model", description: "Choose main or easy model"}, {value: "/models", description: "Choose main or easy model"},
 	{value: "/questions", description: "Open pending questions"}, {value: "/answer", description: "Answer in plain mode"}, {value: "/login", description: "Device login"}, {value: "/quit", description: "Exit"},
 }
 

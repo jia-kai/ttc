@@ -19,7 +19,6 @@ func TestSessionToolMessageAssets(t *testing.T) {
 		name, tool, actor, args, code, message string
 	}{
 		{"persistence", "subagent", "main", `{"prompt":"audit","label":"audit"}`, "invalid_input", "invalid_arguments: " + prompts.ChildExplicitPersistence},
-		{"variant", "subagent", "main", `{"prompt":"audit","label":"audit","persistent":false,"variant":""}`, "invalid_input", "invalid_arguments: " + prompts.ChildNonemptyVariant},
 		{"label", "subagent", "main", `{"prompt":"audit","label":"one two three four five","persistent":false}`, "invalid_input", "invalid_arguments: " + prompts.ChildValidLabel},
 		{"child assignment", "subagent", "main/child_fixture", `{"prompt":"audit","label":"audit","persistent":false}`, "ownership", prompts.ChildCannotAssign},
 		{"question count", "question", "main", `{"questions":[]}`, "invalid_input", prompts.QuestionCount},

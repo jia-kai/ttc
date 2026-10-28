@@ -68,7 +68,9 @@ type Runtime struct {
 	Workspace         *workspace.Manager
 	Provider          Inference
 	selection         llm.Selection
+	providerID        string // Provider backing this runtime, including while inspecting archived sessions.
 	pendingModel      *llm.Selection
+	easyModel         *llm.Selection
 	Skills            *skills.Catalog
 	Tools             *tool.Registry
 	defaultTools      []llm.ToolDefinition // Owned immutable default schemas for this runtime config; never aliases Tools.
@@ -78,6 +80,7 @@ type Runtime struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	mu                sync.Mutex
+	easyModelMu       sync.Mutex // Serializes preference writes and installation, without holding mu during I/O.
 	runMu             sync.Mutex // Serializes main foreground turns and idle lifecycle commands.
 	orderMu           sync.Mutex // Serializes event publication and immutable request admission.
 	boundaryMu        sync.Mutex // Orders boundary batches; never acquired by frontend/runtime state reads.
@@ -125,7 +128,7 @@ type Runtime struct {
 // Loaded compaction-boundary notifications are queued before any work starts.
 func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Inference, selection llm.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: history.NewID("session"), AutoName: true}
+	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, providerID: selection.Provider, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: history.NewID("session"), AutoName: true}
 	r.replaceAccounting(preparedAccounting{})
 	r.resetLiveWork()
 	if session != "" {

@@ -4,15 +4,112 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"ttc/internal/historytest"
 
+	"ttc/internal/filelock"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
+
+func TestEasyModelSaveDoesNotHoldRuntimeLock(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	lock, err := filelock.Acquire(context.Background(), filepath.Join(r.Store.Root, "model-choices.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			lock.Close()
+		}
+	}()
+	choice := r.CurrentSelection()
+	done := make(chan error, 1)
+	go func() { done <- r.RequestEasyModel(&choice) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for r.easyModelMu.TryLock() {
+		r.easyModelMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("easy request did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	read := make(chan llm.Selection, 1)
+	go func() { read <- r.CurrentSelection() }()
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		t.Fatal("runtime read blocked by preference file lock")
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("easy preference save stuck")
+	}
+	if got := r.EasyModelChoice(); got == nil || got.Model.ID != choice.Model.ID {
+		t.Fatal(got)
+	}
+}
+
+func TestEasyModelSaveFailurePreservesChoice(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	old := r.CurrentSelection()
+	if err := r.RequestEasyModel(&old); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(r.Store.Root, "model-choices.json")
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	next := old
+	next.Model.ID = "different"
+	if err := r.RequestEasyModel(&next); err == nil {
+		t.Fatal("save succeeded with unsafe preferences")
+	}
+	if got := r.EasyModelChoice(); got == nil || got.Model.ID != old.Model.ID {
+		t.Fatal(got)
+	}
+}
+
+func TestClearEasyModelForLoginUsesBackingProvider(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	choice := r.CurrentSelection()
+	if err := r.RequestEasyModel(&choice); err != nil {
+		t.Fatal(err)
+	}
+	other := llm.Selection{Provider: "archived", Model: llm.ModelSpec{ID: "old"}, Variant: "none"}
+	if err := r.Store.SaveEasySelection(other.Provider, &other); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.selection = other
+	r.mu.Unlock()
+	if err := r.ClearEasyModelForLogin(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Store.LastEasySelection(choice.Provider); err != nil || got != nil {
+		t.Fatal(got, err)
+	}
+	if got, err := r.Store.LastEasySelection(other.Provider); err != nil || got == nil {
+		t.Fatal(got, err)
+	}
+	if got := r.EasyModelChoice(); got != nil {
+		t.Fatal(got)
+	}
+}
 
 func TestModelSwitchAtToolBoundaryPreservesPerRequestState(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)

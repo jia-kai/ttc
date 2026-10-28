@@ -73,6 +73,17 @@ func TestLoginDiscardsStartupRefreshAndDiscoversCurrentAccount(t *testing.T) {
 			}
 			r.AutoName = false
 			defer r.Close()
+			easy := llm.Selection{Provider: "script", Model: menuModels()[1], Variant: "high"}
+			// An unavailable saved choice is not installed in the runtime at startup.
+			var saveErr error
+			if failed {
+				saveErr = store.SaveEasySelection("script", &easy)
+			} else {
+				saveErr = r.RequestEasyModel(&easy)
+			}
+			if saveErr != nil {
+				t.Fatal(saveErr)
+			}
 			input, writer := io.Pipe()
 			defer input.Close()
 			defer writer.Close()
@@ -127,6 +138,12 @@ func TestLoginDiscardsStartupRefreshAndDiscoversCurrentAccount(t *testing.T) {
 			case <-p.started:
 			case <-time.After(3 * time.Second):
 				t.Fatal("login not started")
+			}
+			if r.EasyModelChoice() != nil {
+				t.Fatal("login retained old-account easy model")
+			}
+			if saved, err := store.LastEasySelection("script"); err != nil || saved != nil {
+				t.Fatal("login retained saved easy preference", saved, err)
 			}
 			stale := menuModels()[:1]
 			stale[0].Name = "Superseded account model"

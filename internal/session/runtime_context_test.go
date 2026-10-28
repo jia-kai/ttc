@@ -63,6 +63,59 @@ func TestRuntimeContextUpdateExplicitClearingAndIndependentProjectLists(t *testi
 	}
 }
 
+func TestRuntimeContextEasyModelUpdatesAndClears(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	ctx := context.Background()
+	initial, cursor, err := r.runtimeContext(ctx, "main", r.CurrentSelection(), contextCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(runtimeFields(t, initial, "runtime_context")["easy_model"]); got != "null" {
+		t.Fatalf("unconfigured = %s", got)
+	}
+	easy := r.CurrentSelection()
+	easy.Model.ID = "easy-fixture"
+	easy.Model.Images = true
+	if err := r.RestoreEasyModel(easy); err != nil {
+		t.Fatal(err)
+	}
+	update, cursor, err := r.runtimeContext(ctx, "main", r.CurrentSelection(), cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got easyModelContext
+	fields := runtimeFields(t, update, "runtime_context_update")
+	if err := json.Unmarshal(fields["easy_model"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != easy.Provider+"/easy-fixture/"+easy.Variant || !got.ImageInput || got.ContextLimit != easy.Model.Budget.ContextLimit || got.BinaryFiles == nil {
+		t.Fatalf("easy model: %+v", got)
+	}
+	easy.Model.ID = "replacement-easy"
+	easy.Model.Images = false
+	if err := r.RestoreEasyModel(easy); err != nil {
+		t.Fatal(err)
+	}
+	update, cursor, err = r.runtimeContext(ctx, "main", r.CurrentSelection(), cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields = runtimeFields(t, update, "runtime_context_update")
+	if err := json.Unmarshal(fields["easy_model"], &got); err != nil || got.Model != easy.Provider+"/replacement-easy/"+easy.Variant || got.ImageInput {
+		t.Fatalf("changed easy model: %+v, %v", got, err)
+	}
+	if err := r.RequestEasyModel(nil); err != nil {
+		t.Fatal(err)
+	}
+	update, _, err = r.runtimeContext(ctx, "main", r.CurrentSelection(), cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(runtimeFields(t, update, "runtime_context_update")["easy_model"]); got != "null" {
+		t.Fatalf("cleared = %s", got)
+	}
+}
+
 func TestRuntimeInstructionsRejectSpecialFilesAndCancellation(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	path := filepath.Join(r.Workspace.Root, "AGENTS.md")

@@ -10,8 +10,43 @@ import (
 	"ttc/internal/capture"
 	"ttc/internal/graphics"
 	"ttc/internal/jobs"
+	"ttc/internal/render"
 	"ttc/internal/session"
 )
+
+func TestToolInspectionDrawKeepsFieldsCompact(t *testing.T) {
+	detail := render.Tool("read", []byte(`{"path":"note.txt"}`), []byte(`{"content":"first\nsecond\n","offset":1,"truncated":false}`)).Detail
+	for _, kitty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("kitty=%v", kitty), func(t *testing.T) {
+			screen := newTestScreen(t)
+			if err := screen.Init(); err != nil {
+				t.Fatal(err)
+			}
+			defer screen.Fini()
+			screen.SetSize(100, 40)
+			var renderer *imageRenderer
+			if kitty {
+				var wire bytes.Buffer
+				renderer = &imageRenderer{graphics: graphics.New(&wire, false), cellWidth: 8, cellHeight: 16}
+			}
+			window := &Window{Title: "Read", Text: detail, Markdown: true, renderer: renderer}
+			if err := draw(screen, drawState{view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: newComposer(""), renderer: renderer, window: window}); err != nil {
+				t.Fatal(err)
+			}
+			frame := screenText(screen)
+			rows := strings.Split(frame, "\n")
+			for i, row := range rows {
+				if strings.Contains(row, "Offset:") {
+					if i+1 >= len(rows) || !strings.Contains(rows[i+1], "Truncated:") {
+						t.Fatalf("read result fields are not adjacent:\n%s", frame)
+					}
+					return
+				}
+			}
+			t.Fatalf("read result fields missing:\n%s", frame)
+		})
+	}
+}
 
 func TestShellInspectionDrawKeepsMetadataRowsAdjacent(t *testing.T) {
 	manager := jobs.New(context.Background(), nil)

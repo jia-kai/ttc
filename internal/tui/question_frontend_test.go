@@ -114,7 +114,7 @@ func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(c
 		}
 		r.Close()
 	})
-	ui.wait(t, "/help")
+	ui.wait(t, "lines ")
 	s.SetSize(100, 30)
 	s.EventQ() <- tcell.NewEventResize(100, 30)
 	return ui

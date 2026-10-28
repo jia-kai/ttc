@@ -10,6 +10,7 @@ import (
 	"ttc/internal/tool"
 
 	"ttc/internal/history"
+	"ttc/internal/historytest"
 	"ttc/internal/llm"
 	"ttc/internal/scratch"
 	"ttc/internal/session"
@@ -29,6 +30,27 @@ func menuModels() []llm.ModelSpec {
 	return []llm.ModelSpec{a, b}
 }
 
+func TestModelMenuMarkers(t *testing.T) {
+	models := menuModels()
+	current := llm.Selection{Model: models[0], Variant: "low"}
+	m := newModelMenu(models, current)
+	easy := llm.Selection{Model: models[1], Variant: "high"}
+	m.easy = &easy
+	m.update()
+	if m.rows[0] != ">*  Family A · family-a" || m.rows[1] != " E  Family B · family-b" {
+		t.Fatalf("family markers: %q", m.rows)
+	}
+	m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 20)
+	if m.rows[0] != ">*  low (default)" || m.rows[1] != "    high" {
+		t.Fatalf("variant markers: %q", m.rows)
+	}
+	m.easy = &current
+	m.update()
+	if m.rows[0] != ">E* low (default)" {
+		t.Fatalf("combined markers: %q", m.rows[0])
+	}
+}
+
 func TestModelMenuChoicesAndCancellation(t *testing.T) {
 	models := menuModels()
 	current := llm.Selection{Provider: "script", Model: models[0], Variant: "high"}
@@ -36,11 +58,14 @@ func TestModelMenuChoicesAndCancellation(t *testing.T) {
 	key := func(k tcell.Key) (string, string, bool) {
 		return m.key(tcell.NewEventKey(k, "", 0), 20)
 	}
-	if !strings.Contains(m.Window.Text, "> Family A") {
+	if !strings.Contains(m.Window.Text, ">*  Family A") {
 		t.Fatal("current family is not focused")
 	}
-	key(tcell.KeyEnter)
-	if !strings.Contains(m.Window.Text, "> high (selected)") {
+	m.key(tcell.NewEventKey(tcell.KeyRune, "E", 0), 20)
+	if !m.variants || !strings.Contains(m.Window.Hint, "E toggles easy") {
+		t.Fatal("E on family must open variants with an easy-toggle hint")
+	}
+	if !strings.Contains(m.Window.Text, ">*  high") {
 		t.Fatal("current variant is not focused", m.Window.Text)
 	}
 	if _, _, closed := key(tcell.KeyEscape); closed || m.variants {
@@ -48,7 +73,7 @@ func TestModelMenuChoicesAndCancellation(t *testing.T) {
 	}
 	key(tcell.KeyDown)
 	key(tcell.KeyEnter)
-	if !strings.Contains(m.Window.Text, "> high · Deeper reasoning (default)") {
+	if !strings.Contains(m.Window.Text, ">   high · Deeper reasoning (default)") {
 		t.Fatal("new family must focus its provider default", m.Window.Text)
 	}
 	key(tcell.KeyDown)
@@ -66,19 +91,134 @@ func TestModelMenuNarrowViewportKeepsSelectionVisible(t *testing.T) {
 	m := newModelMenu(models, llm.Selection{Model: models[0], Variant: "low"})
 	m.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 20)
 	m.reveal(16, 2)
-	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> Family B") {
+	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), ">   Family B") {
 		t.Fatal("wrapped family cursor is outside viewport", lines)
 	}
 	m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 20)
 	m.key(tcell.NewEventKey(tcell.KeyEnd, "", 0), 20)
 	m.reveal(16, 2)
-	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> max") {
+	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), ">   max") {
 		t.Fatal("variant cursor is outside viewport", lines)
 	}
 	m.key(tcell.NewEventKey(tcell.KeyHome, "", 0), 20)
 	m.reveal(16, 2)
-	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), "> low") {
+	if lines := m.Window.Lines(16, 2); !strings.Contains(strings.Join(lines, "\n"), ">   low") {
 		t.Fatal("scroll did not return to first variant", lines)
+	}
+}
+
+func TestLegacyEasyModelCommandRejected(t *testing.T) {
+	h := newCatalogUpdateFixture(t)
+	h.command("/easy-model family-b high")
+	h.wait(t, "unknown command /easy-model")
+	if easy := h.runtime.EasyModelChoice(); easy != nil {
+		t.Fatalf("legacy command changed easy selection: %+v", easy)
+	}
+}
+
+func TestModelStatusShowsEasyChoice(t *testing.T) {
+	h := newCatalogUpdateFixture(t)
+	text := h.wait(t, "family-a · low")
+	if strings.Contains(text, "Ctrl+X F full") || strings.Contains(text, "Ctrl+X M model") || strings.Contains(text, "low · /help") {
+		t.Fatal("status contains shortcut hints", text)
+	}
+	h.command("/model easy family-b high")
+	h.wait(t, "family-a [family-b · high] · low")
+	h.command("/model easy off")
+	text = h.wait(t, "Easy model disabled")
+	if !strings.Contains(text, "family-a · low") || strings.Contains(text, "family-a [family-b") {
+		t.Fatal("status retained cleared easy choice", text)
+	}
+}
+
+func TestEasyChoiceWhileViewingOtherProviderArchive(t *testing.T) {
+	h := newCatalogUpdateFixture(t)
+	r := h.runtime
+	archive := llm.Selection{Provider: "archived", Model: menuModels()[0], Variant: "low"}
+	if err := r.Store.SaveEasySelection(archive.Provider, &archive); err != nil {
+		t.Fatal(err)
+	}
+	id := history.NewID("session")
+	turn, _, err := r.Store.StartSession(id, r.Workspace.Root, archive, llm.Message{Type: llm.TypeUserInput, Content: "archive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Store.FinishTurn(turn, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET read_only=1 WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Load(id); err != nil || r.CurrentSelection().Provider != "archived" {
+		t.Fatal("archive load", err, r.CurrentSelection())
+	}
+	h.command("/model easy family-b high")
+	h.wait(t, "Easy model selected · family-b · high")
+	got, err := r.Store.LastEasySelection(r.ProviderID())
+	if err != nil || got == nil || got.Provider != r.ProviderID() || got.Model.ID != "family-b" {
+		t.Fatal("backing preference", got, err)
+	}
+	got, err = r.Store.LastEasySelection("archived")
+	if err != nil || got == nil || got.Model.ID != archive.Model.ID {
+		t.Fatal("archive preference changed", got, err)
+	}
+	h.command("/model easy off")
+	h.wait(t, "Easy model disabled")
+	got, err = r.Store.LastEasySelection(r.ProviderID())
+	if err != nil || got != nil {
+		t.Fatal("backing preference not cleared", got, err)
+	}
+	got, err = r.Store.LastEasySelection("archived")
+	if err != nil || got == nil {
+		t.Fatal("archive preference cleared", got, err)
+	}
+}
+
+func TestModelCommandsAddressReservedIDs(t *testing.T) {
+	models := menuModels()
+	models[0].ID = "easy"
+	models[1].ID = "off"
+	h := newCatalogUpdateFixtureModels(t, models)
+	h.command("/model main easy high")
+	h.wait(t, "Model switched · easy · high")
+	if got := h.runtime.ModelChoice(); got.Model.ID != "easy" || got.Variant != "high" {
+		t.Fatal(got)
+	}
+	h.command("/model easy -- off low")
+	h.wait(t, "Easy model selected · off · low")
+	if got := h.runtime.EasyModelChoice(); got == nil || got.Model.ID != "off" || got.Variant != "low" {
+		t.Fatal(got)
+	}
+	h.command("/model easy off")
+	h.wait(t, "Easy model disabled")
+	if h.runtime.EasyModelChoice() != nil {
+		t.Fatal("clear did not clear")
+	}
+}
+
+func TestModelMenuNarrowRendersEasyHintAndMarker(t *testing.T) {
+	models := menuModels()
+	models[0].Name = strings.Repeat("long-name", 8)
+	models[0].Description = strings.Repeat("long description ", 8)
+	models[0].VariantDescriptions = map[string]string{"low": strings.Repeat("long description ", 8)}
+	choice := llm.Selection{Provider: "script", Model: models[0], Variant: "low"}
+	m := newModelMenu(models, choice)
+	m.easy = &choice
+	m.update()
+	s := newTestScreen(t)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(40, 20)
+	drawWindow(s, &m.Window)
+	if text := screenText(s); !strings.Contains(text, "E/Enter variants") || !strings.Contains(text, ">E* ") {
+		t.Fatal("narrow family view hides easy action or marker", text)
+	}
+	m.key(tcell.NewEventKey(tcell.KeyEnter, "", 0), 10)
+	drawWindow(s, &m.Window)
+	if text := screenText(s); !strings.Contains(text, "E toggles easy") || !strings.Contains(text, ">E* low") {
+		t.Fatal("narrow variant view hides easy action or marker", text)
 	}
 }
 
@@ -189,7 +329,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 			return llm.Request{}
 		}
 	}
-	waitFrame("/help")
+	waitFrame("family-a · low")
 	screen.SetSize(100, 30)
 	screen.EventQ() <- tcell.NewEventResize(100, 30)
 	typeText("/model")
@@ -197,6 +337,27 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	waitFrame("Model family")
 	key(tcell.KeyEnter)
 	waitFrame("Reasoning variant")
+	typeText("e") // The main model can also be the explicit easy model.
+	waitFrame(">E* low (default)")
+	if easy := r.EasyModelChoice(); easy == nil || easy.Model.ID != "family-a" || easy.Variant != "low" {
+		t.Fatal("same main/easy choice not saved", easy)
+	}
+	key(tcell.KeyEscape)
+	waitFrame("Model family")
+	waitFrame(">E* Family A · family-a")
+	key(tcell.KeyDown)
+	key(tcell.KeyEnter)
+	waitFrame("Reasoning variant")
+	typeText("E")
+	waitFrame(">E  high · Deeper reasoning (default)")
+	if easy := r.EasyModelChoice(); easy == nil || easy.Model.ID != "family-b" || easy.Variant != "high" {
+		t.Fatal("easy choice not switched", easy)
+	}
+	typeText("e")
+	waitFrame("high · Deeper reasoning (default)   ")
+	if easy := r.EasyModelChoice(); easy != nil {
+		t.Fatal("easy choice not cleared", easy)
+	}
 	key(tcell.KeyEscape)
 	waitFrame("Model family")
 	key(tcell.KeyEscape)
@@ -212,7 +373,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	waitFrame("Model family")
 	key(tcell.KeyDown)
 	key(tcell.KeyEnter)
-	waitFrame("Reasoning variant · Family B")
+	waitFrame("Reasoning variant")
 	key(tcell.KeyEnd)
 	key(tcell.KeyEnter)
 	waitFrame("Model selected for next tool boundary · family-b · max")

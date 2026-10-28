@@ -101,8 +101,9 @@ These commands require an idle turn.
 
 ## Model and login
 
-- **Ctrl+X M** or **/model** — Pick a model and reasoning variant.
-- **/model ID [VARIANT]** — Select a model directly.
+- **Ctrl+X M** or **/model** — Pick a model and reasoning variant. Enter selects the main model; E on a variant toggles it as the easy model. E marks the easy choice and * the main choice.
+- **/model [main] ID [VARIANT]** — Select the main model directly; use **/model main easy** or **/model main main** for those reserved IDs.
+- **/model easy ID [VARIANT]** or **/model easy off** — Select or clear the optional easy model (also available in plain mode). Use **/model easy -- off** for a model named off.
 - **Model changes during work** — Apply at the next LLM request after the current response and foreground tool batch finish.
 - **/login in plain mode** — Start device authorization while idle.
 - **ttc --login** — Log in before starting the TUI.

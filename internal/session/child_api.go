@@ -45,6 +45,7 @@ type childToolResult struct {
 	Kind            string             `json:"kind"`
 	Owner           string             `json:"owner_actor_id"`
 	Label           string             `json:"label"`
+	Easy            bool               `json:"easy,omitempty"` // Creation-time routing request, including fallback.
 	StartedAt       string             `json:"started_at"`
 	FinishedAt      string             `json:"finished_at,omitempty"`
 	ExitCode        *int               `json:"exit_code,omitempty"`
@@ -82,7 +83,7 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 			ChildID: child.id, TurnID: assignment.turn, JobID: view.ID,
 			AssignmentStatus: view.Status, ChildState: child.state, Persistent: assignment.persistent,
 		},
-		Kind: view.Kind, Owner: view.Owner, Label: view.Label,
+		Kind: view.Kind, Owner: view.Owner, Label: view.Label, Easy: child.easy,
 		StartedAt: view.StartedAt, FinishedAt: view.FinishedAt, Signal: view.Signal,
 	}
 	if view.ExitCode != nil {

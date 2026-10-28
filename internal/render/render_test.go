@@ -17,9 +17,25 @@ func TestTerminalControlsAndSafeFences(t *testing.T) {
 	if !strings.HasPrefix(block, "`````text\n") {
 		t.Fatal(block)
 	}
+	if block := Fence("``\x00`\nafter", "text"); !strings.HasPrefix(block, "````text\n") {
+		t.Fatal("fence must account for backticks joined by cleaning:", block)
+	}
 	inline := Inline(strings.Repeat("界", 100) + "[x]")
 	if !utf8.ValidString(inline) || len(inline) > 160 {
 		t.Fatal(inline)
+	}
+}
+
+func TestFencePreservesTrailingLines(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"", "```text\n\n```\n"},
+		{"line", "```text\nline\n```\n"},
+		{"line\n", "```text\nline\n```\n"},
+		{"line\n\n", "```text\nline\n\n```\n"},
+	} {
+		if got := Fence(tc.input, "text"); got != tc.want {
+			t.Errorf("Fence(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 

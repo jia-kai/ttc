@@ -41,6 +41,10 @@ type catalogUpdateFixture struct {
 }
 
 func newCatalogUpdateFixture(t *testing.T) *catalogUpdateFixture {
+	return newCatalogUpdateFixtureModels(t, menuModels())
+}
+
+func newCatalogUpdateFixtureModels(t *testing.T, models []llm.ModelSpec) *catalogUpdateFixture {
 	t.Helper()
 	store, err := history.Open(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -54,7 +58,6 @@ func newCatalogUpdateFixture(t *testing.T) *catalogUpdateFixture {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &gatedModelProvider{requests: make(chan llm.Request, 4), release: make(chan struct{})}
 	events := make(chan session.Event, 64)
-	models := menuModels()
 	r, err := session.New(ctx, store, w, p, llm.Selection{Provider: "script", Model: models[0], Variant: "low"}, "", &skills.Catalog{}, tool.WebSearchConfig{}, func(e session.Event) {
 		select {
 		case events <- e:
@@ -79,7 +82,7 @@ func newCatalogUpdateFixture(t *testing.T) *catalogUpdateFixture {
 		}
 		r.Close()
 	})
-	h.wait(t, "/help")
+	h.wait(t, models[0].ID+" · low")
 	screen.SetSize(120, 36)
 	screen.EventQ() <- tcell.NewEventResize(120, 36)
 	return h
@@ -137,9 +140,9 @@ func TestCatalogRefreshPreservesOpenMenuAndActiveTurn(t *testing.T) {
 	close(h.updates)
 	// The old menu remains navigable even though its model has disappeared.
 	h.key(tcell.KeyDown)
-	h.wait(t, "> Family B")
+	h.wait(t, ">   Family B")
 	h.key(tcell.KeyEnter)
-	h.wait(t, "Reasoning variant · Family B")
+	h.wait(t, "Reasoning variant")
 	h.key(tcell.KeyEnter)
 	h.wait(t, `unknown model "family-b"`)
 	if !reflect.DeepEqual(h.runtime.ModelChoice(), initial) || !reflect.DeepEqual(first.Selection, initial) {

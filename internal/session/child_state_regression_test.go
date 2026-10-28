@@ -62,7 +62,7 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	if _, err := historytest.DB(t, r.Store).Exec(trigger); err != nil {
 		t.Fatal(err)
 	}
-	args, err := json.Marshal(map[string]any{"persistent": true, "prompt": "rejected followup", "child_id": id, "variant": "alternate"})
+	args, err := json.Marshal(map[string]any{"persistent": true, "prompt": "rejected followup", "child_id": id})
 	if err != nil {
 		t.Fatal(err)
 	}

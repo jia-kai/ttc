@@ -387,18 +387,19 @@ Input: `{path, format?, scope?}`.
 ### `subagent`
 
 - Input:
-  `{prompt:string, persistent:boolean, child_id?:string, label?:string, background?:boolean, variant?:string}`.
+  `{prompt:string, persistent:boolean, child_id?:string, label?:string, background?:boolean, easy?:boolean}`.
   Explicitly choose `persistent` on every assignment, including follow-ups;
   omission is invalid. Omit `child_id` to create a child; a nonblank single-line
   `label` of 1–4 words and at most 64 Unicode characters without controls is
   then required. Supply `child_id` for an idle follow-up; omit `label` or supply
   the same whitespace-normalized label to retain its title. A different label is
-  rejected. `background` defaults to false. `variant` selects a supported
-  reasoning variant of the child's frozen model. Omission inherits the parent at
-  creation and retains the child's choice on idle follow-up; it never changes
-  the model ID. New assignments get distinct child-turn/job IDs. Running
-  children return `child_busy` with wait guidance; closed/unknown handles
-  require a new child.
+  rejected. `background` and `easy` default to false. For a new child,
+  `easy=true` selects the user-configured easy model and reasoning variant, or
+  the main model if no easy model is configured. On follow-up, `easy` is ignored
+  and a warning reports the child's original easy request, even when the values
+  match; the child's selection remains fixed. New assignments get distinct
+  child-turn/job IDs. Running children return `child_busy` with wait guidance;
+  closed/unknown handles require a new child.
 - Coding-child contexts (including idle children) and running `/btw` asides
   share a limit of 16 slots. Close an unused child with `job_stop(child_id=...)`
   to free its slot. Children cannot spawn children, assign follow-ups or use
@@ -406,15 +407,14 @@ Input: `{path, format?, scope?}`.
   report gaps to main and stop; they do not start user dialogs. Their inspectors
   accept no steering.
 - Persistent children retain their conversation, model and tool policy across
-  successful assignments; an idle follow-up may change the reasoning variant.
-  Every assignment cancels and joins its managed commands, watchers and timers
-  before completion, including successful persistent assignments. Retaining a
-  context does not retain executable work. Durable tmux workloads remain
-  external. New children receive the task, project instructions and tools, not
-  the parent transcript. File mutations share the workspace queue and
-  main-session undo history. Child messages/prompts/tool records remain
-  inspectable and outside parent model context, apart from explicit
-  completion/compaction events. No cycle limit applies.
+  successful assignments. Every assignment cancels and joins its managed
+  commands, watchers and timers before completion, including successful
+  persistent assignments. Retaining a context does not retain executable work.
+  Durable tmux workloads remain external. New children receive the task, project
+  instructions and tools, not the parent transcript. File mutations share the
+  workspace queue and main-session undo history. Child messages/prompts/tool
+  records remain inspectable and outside parent model context, apart from
+  explicit completion/compaction events. No cycle limit applies.
 - Child input uses [compaction](compaction.md), including its retention, handoff
   and failure policy. A child cut never switches main history or its undo floor;
   successful handoff emits the

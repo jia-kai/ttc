@@ -58,8 +58,10 @@
   replacement and publication. Plain-mode `/login` clears picker choices and
   calls `Invalidate` before authorization, canceling/joining discovery and
   discarding old delivery. Success then calls `Refresh`; authorization or
-  discovery failure/cancellation leaves the picker unavailable. The active
-  selection remains frozen.
+  discovery failure/cancellation leaves the picker unavailable. The active main
+  selection remains frozen. Both `/login` and `--login` clear the selected
+  provider's saved easy choice before authorization, even if authorization or
+  discovery fails; a failure to clear it aborts authorization.
 - Resolve the startup choice against available metadata. With no saved choice or
   an unavailable model, use the first selectable model/default variant;
   unavailable variants use that model's default. Notify on either unavailable
@@ -72,11 +74,19 @@
   next request, or immediately while idle (including after final
   response/interruption). Latest choice wins; identical full selections add no
   record.
+- In the model picker, E opens variants from a family and toggles the easy
+  choice on a variant without closing the picker; `[E]` marks its family and
+  variant. Enter selects the main model. Plain mode uses
+  `/model easy MODEL_ID [VARIANT]` or `/model easy off` to clear the choice and
+  use the main model. Use `/model main easy` or `/model main main` for a main
+  model with either reserved ID, and `/model easy -- off` for an easy model
+  named `off`; each form accepts an optional variant. The choice is saved
+  independently per provider. If the saved model or variant is unavailable at
+  startup, TTC uses the main model and reports the unavailable choice.
 - Atomically apply selection and inspectable `model_switch` metadata; failure
   keeps the old active model. Save turn-start and per-request selections,
-  linking each request to its assistant message. Main switches do not affect
-  children; idle follow-ups may explicitly select another supported reasoning
-  variant of the child's frozen model.
+  linking each request to its assistant message. Main and easy model switches do
+  not affect existing children; follow-ups retain the child's frozen selection.
 - Native replay provenance includes provider/base model/codec version. Standard
   and Fast of one base are compatible; other bases strip foreign native items
   from the request copy, preserving stored originals.

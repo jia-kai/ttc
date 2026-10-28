@@ -278,7 +278,7 @@ func TestSidebarInspectsQuietSubagentShellAndRefreshesOutput(t *testing.T) {
 	}
 	row := -1
 	for y, text := range strings.Split(frame, "\n") {
-		if strings.Contains(text, "● shell") {
+		if strings.Contains(text, "shell (") {
 			row = y
 			break
 		}

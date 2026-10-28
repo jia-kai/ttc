@@ -177,16 +177,20 @@ subagent:
     before finishing. Supply child_id to follow up on an idle retained child;
     omit label or repeat its existing normalized label. Calls wait for the
     answer by default; background=true returns a job_id immediately and delivers
-    the answer on completion. variant selects a supported reasoning variant;
-    omit it to inherit the parent setting at creation or retain the child's
-    setting. Child-specific results and completion notifications expose
-    assignment_status and child_state; check assignment_status, not ok, for the
-    outcome. Background launch results may observe fast completion, but the
-    answer arrives only in the completion notification. Failed or cancelled
-    assignments return the last assistant text with a partial-work/side-effect
-    warning and durable full-transcript paths, or an explicit export error. Use
-    job_read for bounded raw output. Generic job surfaces retain scheduler
-    status even for subagents.
+    the answer on completion. easy defaults to false; set easy=true only for a
+    new child when the assignment is bounded, low-risk, and has clear, readily
+    verifiable success criteria. The easy model is shown in the runtime context;
+    consider its suitability, not just the task's length. Use the main model for
+    uncertain, subtle, cross-cutting or high-impact work, including critical
+    independent reviews. Verify results; completion does not imply correctness.
+    Follow-ups retain the child's model. Child-specific results and completion
+    notifications expose assignment_status and child_state; check
+    assignment_status, not ok, for the outcome. Background launch results may
+    observe fast completion, but the answer arrives only in the completion
+    notification. Failed or cancelled assignments return the last assistant text
+    with a partial-work/side-effect warning and durable full-transcript paths,
+    or an explicit export error. Use job_read for bounded raw output. Generic
+    job surfaces retain scheduler status even for subagents.
 tmux_watch_run:
   description: >-
     Launch command (a shell string) in a new detached tmux session and

@@ -194,6 +194,23 @@ func (c *frontendController) handlePickerKey(ev *tcell.EventKey) (next frontendS
 	}
 	if c.modal.menu != nil {
 		c.esc = false
+		m := c.modal.menu
+		if m.variants && ev.Key() == tcell.KeyRune && ev.Modifiers() == 0 && (ev.Str() == "e" || ev.Str() == "E") {
+			model := m.models[m.modelIndex]
+			variant := model.Variants[m.variantIndex]
+			if m.easy != nil && m.easy.Model.ID == model.ID && m.easy.Variant == variant {
+				if err := c.frontend.Runtime.RequestEasyModel(nil); err != nil {
+					c.add("Easy model selection failed: "+err.Error(), 0)
+				} else {
+					c.add("Easy model cleared · using main model", 0)
+				}
+			} else {
+				c.selectEasyModel(model.ID, variant)
+			}
+			m.easy = c.frontend.Runtime.EasyModelChoice()
+			m.update()
+			return next, true
+		}
 		w, h := c.screen.Size()
 		_, height := windowContentSize(w, h, c.modal.window)
 		id, variant, closed := c.modal.menu.key(ev, height)

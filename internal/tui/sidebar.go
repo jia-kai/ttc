@@ -99,15 +99,18 @@ func (b *sidebar) sectionCount(index int) int {
 }
 
 func sidebarJobPrefix(v jobs.Snapshot, now time.Time) string {
-	elapsed := ""
+	elapsed := "?"
 	if at, err := time.Parse(time.RFC3339Nano, v.StartedAt); err == nil {
-		elapsed = " · " + shortDuration(now.Sub(at))
+		elapsed = shortDuration(now.Sub(at))
 	}
 	kind := v.Kind
 	if kind == "subagent" {
 		kind = "agent"
+		if v.Easy {
+			kind += "*"
+		}
 	}
-	return "● " + kind + elapsed + " · "
+	return kind + " (" + elapsed + ") · "
 }
 
 func sidebarTimerSuffix(v session.TimerView, now time.Time) string {

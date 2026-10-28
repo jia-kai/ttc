@@ -20,6 +20,7 @@ type modelMenu struct {
 	variants     bool
 	rows         []string
 	manualScroll bool
+	easy         *llm.Selection
 }
 
 func newModelMenu(models []llm.ModelSpec, current llm.Selection) *modelMenu {
@@ -42,6 +43,11 @@ func (m *modelMenu) key(ev *tcell.EventKey, height int) (id, variant string, clo
 		return "", "", false
 	}
 	m.manualScroll = false
+	// E on a family opens its variants; E on a variant is handled by the
+	// controller because saving the preference can fail.
+	if !m.variants && ev.Key() == tcell.KeyRune && ev.Modifiers() == 0 && (ev.Str() == "e" || ev.Str() == "E") {
+		ev = tcell.NewEventKey(tcell.KeyEnter, "", 0)
+	}
 	index, count := &m.modelIndex, len(m.models)
 	model := m.models[m.modelIndex]
 	if m.variants {
@@ -91,8 +97,8 @@ func (m *modelMenu) update() {
 	m.rows = nil
 	if m.variants {
 		model := m.models[m.modelIndex]
-		m.Window.Title = "Reasoning variant · " + model.Name
-		m.Window.Hint = "Enter selects · Esc back"
+		m.Window.Title = "Reasoning variant"
+		m.Window.Hint = "E toggles easy · Enter main · Esc back · " + model.Name
 		for i, v := range model.Variants {
 			label := v
 			if description := model.VariantDescriptions[v]; description != "" {
@@ -101,26 +107,40 @@ func (m *modelMenu) update() {
 			if v == model.DefaultVariant {
 				label += " (default)"
 			}
-			if model.ID == m.current.Model.ID && v == m.current.Variant {
-				label += " (selected)"
-			}
-			m.rows = append(m.rows, menuRow(label, i == m.variantIndex))
+			easy := m.easy != nil && model.ID == m.easy.Model.ID && v == m.easy.Variant
+			selected := model.ID == m.current.Model.ID && v == m.current.Variant
+			m.rows = append(m.rows, modelMenuRow(label, i == m.variantIndex, easy, selected))
 		}
 	} else {
 		m.Window.Title = "Model family"
-		m.Window.Hint = "Enter chooses variants · Esc closes"
+		m.Window.Hint = "E/Enter variants · E toggles easy there"
 		for i, model := range m.models {
 			label := fmt.Sprintf("%s · %s", model.Name, model.ID)
 			if model.Description != "" {
 				label += " · " + model.Description
 			}
-			if model.ID == m.current.Model.ID {
-				label += " (selected)"
-			}
-			m.rows = append(m.rows, menuRow(label, i == m.modelIndex))
+			easy := m.easy != nil && model.ID == m.easy.Model.ID
+			selected := model.ID == m.current.Model.ID
+			m.rows = append(m.rows, modelMenuRow(label, i == m.modelIndex, easy, selected))
 		}
 	}
 	m.Window.Text = strings.Join(m.rows, "\n")
+}
+
+func modelMenuRow(label string, focused, easy, selected bool) string {
+	marker := "  "
+	if easy && selected {
+		marker = "E*"
+	} else if easy {
+		marker = "E "
+	} else if selected {
+		marker = "* "
+	}
+	cursor := " "
+	if focused {
+		cursor = ">"
+	}
+	return cursor + marker + " " + label
 }
 
 func menuRow(label string, selected bool) string {

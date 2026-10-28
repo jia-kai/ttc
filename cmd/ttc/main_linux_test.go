@@ -95,11 +95,15 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 	}
 	for _, step := range []struct {
 		input, model, variant string
+		easy, easyVariant     string
 		retryCatalog          bool
 	}{
-		{"/quit\n", "first", "low", false},
-		{"/model second/fast high\n/quit\n", "second/fast", "high", false},
-		{"/quit\n", "second/fast", "high", true},
+		{"/quit\n", "first", "low", "", "", false},
+		{"/model second/fast high\n/model easy first high\n/quit\n", "second/fast", "high", "first", "high", false},
+		{"/quit\n", "second/fast", "high", "first", "high", true},
+		{"/model easy first\n/quit\n", "second/fast", "high", "first", "low", false},
+		{"/model easy\n/model easy off high\n/quit\n", "second/fast", "high", "first", "low", false},
+		{"/model easy off\n/quit\n", "second/fast", "high", "", "", false},
 	} {
 		cmd := exec.Command(executable, "-test.run=^TestStartupWithoutModelAndSwitchAcrossRestarts$")
 		// An explicit --data-dir must override even an invalid environment default.
@@ -112,14 +116,21 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		if err != nil || !strings.Contains(string(output), "TTC · Linux terminal agent") {
 			t.Fatalf("CLI did not open: %v\n%s", err, output)
 		}
-		if strings.HasPrefix(step.input, "/model ") && !strings.Contains(string(output), "Model switched · second/fast · high") {
+		if strings.HasPrefix(step.input, "/model second/") && !strings.Contains(string(output), "Model switched · second/fast · high") {
 			t.Fatalf("runtime switch missing: %s", output)
+		}
+		if strings.HasPrefix(step.input, "/model easy\n") && strings.Count(string(output), "Error: /model [main] ID [VARIANT] or /model easy [--] ID [VARIANT] or /model easy off") != 2 {
+			t.Fatalf("invalid easy commands not rejected: %s", output)
 		}
 		s, err := history.Open(data)
 		if err != nil {
 			t.Fatal(err)
 		}
 		got, readErr := s.LastSelection("openai")
+		easy, easyErr := s.LastEasySelection("openai")
+		if easyErr != nil || (step.easy == "" && easy != nil) || (step.easy != "" && (easy == nil || easy.Model.ID != step.easy || easy.Variant != step.easyVariant)) {
+			t.Fatalf("easy=%+v err=%v", easy, easyErr)
+		}
 		for _, table := range []string{"workspaces", "sessions", "turns", "entries"} {
 			var count int
 			if err := historytest.DB(t, s).QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
@@ -130,6 +141,28 @@ func TestStartupWithoutModelAndSwitchAcrossRestarts(t *testing.T) {
 		closeErr := s.Close()
 		if readErr != nil || closeErr != nil || got == nil || got.Model.ID != step.model || got.Variant != step.variant {
 			t.Fatalf("remembered=%+v read=%v close=%v", got, readErr, closeErr)
+		}
+	}
+	for _, saved := range []llm.Selection{
+		{Provider: "openai", Model: llm.ModelSpec{ID: "missing"}, Variant: "low"},
+		{Provider: "openai", Model: llm.ModelSpec{ID: "first"}, Variant: "missing"},
+	} {
+		s, err := history.Open(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SaveEasySelection("openai", &saved); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(executable, "-test.run=^TestStartupWithoutModelAndSwitchAcrossRestarts$")
+		cmd.Env = append(os.Environ(), "TTC_TEST_MODEL_DATA="+data, "TTC_TEST_MODEL_WORK="+work, "TTC_DATA_DIR=relative")
+		cmd.Stdin = strings.NewReader("/quit\n")
+		output, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(output), "Saved easy model or variant unavailable; using the main model") {
+			t.Fatalf("saved easy selection %+v: %v\n%s", saved, err, output)
 		}
 	}
 }

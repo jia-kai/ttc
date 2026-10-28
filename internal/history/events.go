@@ -47,6 +47,8 @@ type RequestAdmission struct {
 	TurnID    string
 	Actor     string
 	Selection llm.Selection
+	// EasySelection is the optional resolved easy model frozen for this request.
+	EasySelection *llm.Selection
 	// Checkpoint is optional main-only input accounting, committed atomically
 	// with the request after validation.
 	Checkpoint *ctxmgr.Checkpoint
@@ -84,6 +86,10 @@ func (s *Store) AdmitRequest(input RequestAdmission) (v Admission, err error) {
 		return v, errors.New(prompts.HistoryRuntimeContext)
 	}
 	data, err := json.Marshal(model)
+	if err != nil {
+		return v, err
+	}
+	requestModel, err := json.Marshal(requestModelSnapshot{Selection: model, EasySelection: input.EasySelection})
 	if err != nil {
 		return v, err
 	}
@@ -161,7 +167,7 @@ func (s *Store) AdmitRequest(input RequestAdmission) (v Admission, err error) {
 		if err != nil {
 			return err
 		}
-		r, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,event_cutoff,delivered_events_json,created_ms) VALUES(?,?,?,'coding',?,'running',?,?,?)`, session, textOrNil(turn), actor, string(data), v.Cutoff, string(ack), time.Now().UnixMilli())
+		r, err := tx.Exec(`INSERT INTO model_requests(session_id,turn_id,actor_id,purpose,model_json,status,event_cutoff,delivered_events_json,created_ms) VALUES(?,?,?,'coding',?,'running',?,?,?)`, session, textOrNil(turn), actor, string(requestModel), v.Cutoff, string(ack), time.Now().UnixMilli())
 		if err != nil {
 			return err
 		}

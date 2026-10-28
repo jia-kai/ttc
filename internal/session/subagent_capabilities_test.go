@@ -73,7 +73,6 @@ func TestSubagentCapabilitiesAcrossAssignmentsAndParentModelChange(t *testing.T)
 			// The retained child's model and capabilities stay frozen while the
 			// parent changes model; a later new child receives the new model.
 			r.selection.Model.ID = "changed-parent-model"
-			args["variant"] = "high"
 		}
 		encoded, err := json.Marshal(args)
 		if err != nil {
@@ -93,9 +92,6 @@ func TestSubagentCapabilitiesAcrossAssignmentsAndParentModelChange(t *testing.T)
 		}
 		if request.Selection.Model.ID != wantModel {
 			t.Fatalf("assignment %d model = %q, want %q", assignment, request.Selection.Model.ID, wantModel)
-		}
-		if assignment == 1 && request.Selection.Variant != "high" {
-			t.Fatal("follow-up did not change reasoning variant")
 		}
 		if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 			t.Fatal(err)

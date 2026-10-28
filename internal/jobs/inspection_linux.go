@@ -58,6 +58,7 @@ type Inspection struct {
 type TaskOptions struct {
 	Kind, Label string
 	Background  bool
+	Easy        bool // Subagent creation requested easy routing, including fallback.
 	Inspector   Inspector
 	Output      *capture.OutputOptions // Optional model-facing source selection; nil retains compact task previews.
 	// StartWatch retains record_dir in Snapshot for the tool JSON contract.

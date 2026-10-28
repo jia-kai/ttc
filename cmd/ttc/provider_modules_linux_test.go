@@ -79,6 +79,17 @@ func runModuleCLIFixture(t *testing.T, f moduleCLIFixture) {
 				}}
 				components.Authorize = func(ctx context.Context, ui auth.UI) error {
 					calls[3]++
+					store, err := history.Open(f.Data)
+					if err != nil {
+						t.Fatal(err)
+					}
+					easy, err := store.LastEasySelection(id)
+					if err != nil || easy != nil {
+						t.Fatalf("authorization retained easy choice: %+v, %v", easy, err)
+					}
+					if err := store.Close(); err != nil {
+						t.Fatal(err)
+					}
 					if f.Mode != "login" {
 						assertModuleCLISelection(t, f.Data, id, "old")
 					}
@@ -170,6 +181,7 @@ func TestProviderModulesCLI(t *testing.T) {
 		{Mode: "default-second", WantProvider: "second", WantModel: "old", WantCalls: [4]int{1, 1, 1, 0}},
 		{Mode: "flags", Args: []string{"--provider", "second", "--second-value", "configured", "--second-count", "19", "--second-enabled"}, WantProvider: "second", WantModel: "old", WantCalls: [4]int{1, 1, 1, 0}},
 		{Mode: "login", Args: []string{"--provider", "second", "--login"}, WantProvider: "second", WantCalls: [4]int{1, 0, 0, 1}},
+		{Mode: "login-bad-preference", Args: []string{"--provider", "second", "--login"}, WantProvider: "second", WantError: "clear easy model before login", WantCalls: [4]int{1, 0, 0, 0}},
 		{Mode: "interactive-login", Input: "/login\n/model\n/quit\n", WantProvider: "first", WantModel: "old", WantCalls: [4]int{1, 2, 2, 1}},
 		{Mode: "interactive-reselect", Input: "/login\n/model fresh none\n/quit\n", WantProvider: "first", WantModel: "fresh", WantCalls: [4]int{1, 2, 2, 1}},
 		{Mode: "nil-inference", WantProvider: "first", WantError: `provider "first" has no inference component`, WantCalls: [4]int{1, 0, 0, 0}},
@@ -217,6 +229,33 @@ func TestProviderModulesCLI(t *testing.T) {
 					t.Fatal(err)
 				}
 				fixture.Args = append(fixture.Args, "--offline-script", script)
+			}
+			if fixture.Mode == "login" || strings.HasPrefix(fixture.Mode, "interactive") {
+				store, err := history.Open(fixture.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, id := range []string{"first", "second"} {
+					choice := llm.Selection{Provider: id, Model: llm.ModelSpec{ID: "unavailable"}, Variant: "none"}
+					if err := store.SaveEasySelection(id, &choice); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fixture.Mode == "login-bad-preference" {
+				store, err := history.Open(fixture.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(fixture.Data, "model-choices.json"), []byte("invalid"), 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			raw, err := json.Marshal(fixture)
 			if err != nil {
@@ -287,6 +326,19 @@ func TestProviderModulesCLI(t *testing.T) {
 			}
 			if fixture.Mode == "login" && (!strings.Contains(string(output), "Fixture authorization complete") || strings.Contains(string(output), "TTC · Linux terminal agent")) {
 				t.Fatalf("login did not exit before frontend: %s", output)
+			}
+			if fixture.Mode == "login" {
+				store, err := history.Open(fixture.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				other, err := store.LastEasySelection("first")
+				if err != nil || other == nil || other.Model.ID != "unavailable" {
+					t.Fatalf("other provider preference changed: %+v, %v", other, err)
+				}
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
 		})
 	}

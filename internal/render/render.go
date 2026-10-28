@@ -50,8 +50,12 @@ func Fence(s, lang string) string {
 	if lang == "json" {
 		s = prettyJSON(json.RawMessage(s))
 	}
-	f := backticks(s, 3)
-	return f + lang + "\n" + Clean(s) + "\n" + f + "\n"
+	body := Clean(s)
+	f := backticks(body, 3)
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	return f + lang + "\n" + body + f + "\n"
 }
 
 func backticks(s string, minimum int) string {

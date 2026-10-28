@@ -220,6 +220,9 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 			if components.Authorize == nil {
 				return fmt.Errorf("provider %q does not support authorization", providerID)
 			}
+			if err := store.SaveEasySelection(providerID, nil); err != nil {
+				return fmt.Errorf("clear easy model before login: %w", err)
+			}
 			return components.Authorize(ctx, loginUI{})
 		}
 	}
@@ -323,6 +326,18 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 		cancel()
 		runtime.Close()
 	}()
+	rememberedEasy, e := store.LastEasySelection(providerID)
+	if e != nil {
+		return fmt.Errorf("read saved easy model choice: %w", e)
+	}
+	if rememberedEasy != nil {
+		easy, err := llm.Resolve(providerID, models, rememberedEasy.Model.ID, rememberedEasy.Variant)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ttc: Saved easy model or variant unavailable; using the main model. Use /model to choose.")
+		} else if err := runtime.RestoreEasyModel(easy); err != nil {
+			return fmt.Errorf("restore easy model choice: %w", err)
+		}
+	}
 	if opts.load != "" {
 		if e := runtime.Load(opts.load); e != nil {
 			return e

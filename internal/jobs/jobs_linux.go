@@ -33,6 +33,7 @@ type Snapshot struct {
 	command               string             // Exact launch command; exposed only by explicit inspection.
 	referenceLabel        string             // Launch-time display identity, independent of capture output.
 	Background            bool               `json:"background,omitempty"`
+	Easy                  bool               `json:"easy,omitempty"` // Subagent creation requested easy routing, including fallback.
 	Promoted              bool               `json:"promoted,omitempty"`
 	TimeoutSeconds        *float64           `json:"timeout_seconds,omitempty"` // Nil means no execution deadline.
 	ForegroundWaitSeconds *float64           `json:"max_fg_wait_seconds,omitempty"`
@@ -587,7 +588,7 @@ func (m *Manager) StartTask(owner string, options TaskOptions, run func(context.
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	startedAt := time.Now().UTC()
-	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: label, RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: options.Background}
+	metadata := Snapshot{command: options.command, ID: history.NewID("job"), Kind: options.Kind, Label: label, RecordDir: options.recordDir, Owner: owner, Status: "running", StartedAt: startedAt.Format(time.RFC3339Nano), Background: options.Background, Easy: options.Easy}
 	metadata.referenceLabel = referenceLabel
 	inspector := options.Inspector
 	if inspector == nil {

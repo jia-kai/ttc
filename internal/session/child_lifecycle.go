@@ -23,6 +23,7 @@ import (
 type codingChild struct {
 	id, label, state, turn, job string
 	selection                   llm.Selection
+	easy                        bool // Creation-time routing request, including fallback.
 	tools                       *tool.Registry
 	estimator                   *contextbuild.Estimator // Owned by the running worker; retained across idle assignments.
 	messages                    []llm.Message
@@ -77,7 +78,7 @@ func (child *codingChild) view() tool.ChildView {
 	if child.assignment != nil && child.assignment.completion.Outcome != "" {
 		status = child.assignment.completion.Outcome
 	}
-	return tool.ChildView{ID: child.id, Label: child.label, ChildState: child.state, AssignmentStatus: status, TurnID: child.turn, JobID: child.job}
+	return tool.ChildView{ID: child.id, Label: child.label, Easy: child.easy, ChildState: child.state, AssignmentStatus: status, TurnID: child.turn, JobID: child.job}
 }
 
 // ChildViews returns current coding contexts, including idle contexts. Children

@@ -26,6 +26,7 @@ import (
 type contextCursor struct {
 	snapshot *runtimeContext   // Immutable state represented by the last admitted baseline/update.
 	git      workspace.GitInfo // Git metadata sampled on this actor's first request.
+	easy     *llm.Selection    // Full easy selection sampled with the runtime announcement.
 }
 type projectInstruction struct {
 	Path    string `json:"path"`
@@ -139,6 +140,7 @@ type runtimeContext struct {
 	Scratch     string             `json:"scratch_directory"`
 	Date        string             `json:"date_utc"`
 	Model       string             `json:"model"`
+	EasyModel   *easyModelContext  `json:"easy_model"` // Nil means easy children inherit the issuing model.
 	ImageInput  bool               `json:"image_input"`
 	BinaryFiles *[]nativeReadGroup `json:"binary_files"`
 	ImageClick  bool               `json:"image_click"`
@@ -146,6 +148,14 @@ type runtimeContext struct {
 	Jobs        []jobs.Metadata    `json:"live_jobs"`
 	Timers      []TimerView        `json:"live_timers"`
 	Project     *projectContext    `json:"project"`
+}
+
+// easyModelContext describes the configured model used for new easy children.
+type easyModelContext struct {
+	Model        string            `json:"model"`
+	ImageInput   bool              `json:"image_input"`
+	BinaryFiles  []nativeReadGroup `json:"binary_files"`
+	ContextLimit int               `json:"context_limit"` // Tokens.
 }
 
 // runtimeContextUpdate replaces only supplied fields. Project is a namespace:
@@ -168,6 +178,7 @@ func contextUpdate(previous, current *runtimeContext) runtimeContextUpdate {
 	set("scratch_directory", previous.Scratch, current.Scratch)
 	set("date_utc", previous.Date, current.Date)
 	set("model", previous.Model, current.Model)
+	set("easy_model", previous.EasyModel, current.EasyModel)
 	set("image_input", previous.ImageInput, current.ImageInput)
 	set("image_click", previous.ImageClick, current.ImageClick)
 	set("binary_files", previous.BinaryFiles, current.BinaryFiles)
@@ -259,6 +270,12 @@ func (r *Runtime) runtimeContextLocked(ctx context.Context, actor string, select
 	clicks := r.images.enabled
 	r.images.mu.Unlock()
 	v := runtimeContext{Type: "runtime_context", Actor: actor, Cwd: r.Workspace.Root, Scratch: path, Date: time.Now().UTC().Format("2006-01-02"), Model: selection.Provider + "/" + selection.Model.ID + "/" + selection.Variant, ImageInput: selection.Model.Images, ImageClick: clicks, Project: &project, Children: []tool.ChildView{}, Jobs: []jobs.Metadata{}, Timers: []TimerView{}}
+	if actor == "main" {
+		next.easy = r.EasyModelChoice()
+		if easy := next.easy; easy != nil {
+			v.EasyModel = &easyModelContext{Model: easy.Provider + "/" + easy.Model.ID + "/" + easy.Variant, ImageInput: easy.Model.Images, BinaryFiles: nativeReadGroups(easy.Model.BinaryFileTypes()), ContextLimit: easy.Model.Budget.ContextLimit}
+		}
+	}
 	v.IsRepo, v.Branch = next.git.Repo != "", next.git.Branch
 	formats := nativeReadGroups(selection.Model.BinaryFileTypes())
 	v.BinaryFiles = &formats

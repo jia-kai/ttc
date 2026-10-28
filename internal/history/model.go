@@ -28,6 +28,7 @@ type modelChoice struct {
 type modelChoices struct {
 	Version int                    `json:"version"`
 	Choices map[string]modelChoice `json:"choices"`
+	Easy    map[string]modelChoice `json:"easy,omitempty"`
 }
 
 // SwitchModel atomically records an applied selection and updates session metadata.
@@ -88,8 +89,45 @@ func (s *Store) LastSelection(providerID string) (*llm.Selection, error) {
 // Call before accepting a queued choice. Catalog metadata is never persisted.
 // Invalid existing files fail rather than falling back to session history.
 func (s *Store) SaveSelection(selection llm.Selection) error {
-	if err := validateModelChoice(selection.Provider, modelChoice{selection.Model.ID, selection.Variant}); err != nil {
+	return s.saveModelChoice(selection.Provider, &selection, false)
+}
+
+// LastEasySelection returns the optional easy-model preference for a provider.
+func (s *Store) LastEasySelection(providerID string) (*llm.Selection, error) {
+	if err := llm.ValidateChoiceText("provider", providerID, llm.MaxProviderIDBytes); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	choices, err := s.readModelChoices()
+	if err != nil {
+		return nil, err
+	}
+	choice, ok := choices.Easy[providerID]
+	if !ok {
+		return nil, nil
+	}
+	return &llm.Selection{Provider: providerID, Model: llm.ModelSpec{ID: choice.ID}, Variant: choice.Variant}, nil
+}
+
+// SaveEasySelection saves or clears the optional easy-model preference.
+func (s *Store) SaveEasySelection(providerID string, selection *llm.Selection) error {
+	return s.saveModelChoice(providerID, selection, true)
+}
+
+func (s *Store) saveModelChoice(providerID string, selection *llm.Selection, easy bool) error {
+	if err := llm.ValidateChoiceText("provider", providerID, llm.MaxProviderIDBytes); err != nil {
 		return err
+	}
+	if selection != nil {
+		if selection.Provider != providerID {
+			return errors.New("model preference provider mismatch")
+		}
+		if err := validateModelChoice(selection.Provider, modelChoice{selection.Model.ID, selection.Variant}); err != nil {
+			return err
+		}
+	} else if !easy {
+		return errors.New("main model preference is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,7 +140,18 @@ func (s *Store) SaveSelection(selection llm.Selection) error {
 	if err != nil {
 		return err
 	}
-	choices.Choices[selection.Provider] = modelChoice{selection.Model.ID, selection.Variant}
+	if easy {
+		if choices.Easy == nil {
+			choices.Easy = make(map[string]modelChoice)
+		}
+		if selection == nil {
+			delete(choices.Easy, providerID)
+		} else {
+			choices.Easy[providerID] = modelChoice{selection.Model.ID, selection.Variant}
+		}
+	} else {
+		choices.Choices[providerID] = modelChoice{selection.Model.ID, selection.Variant}
+	}
 	data, err := json.Marshal(choices)
 	if err != nil {
 		return err
@@ -160,6 +209,11 @@ func (s *Store) readModelChoices() (modelChoices, error) {
 		return modelChoices{}, errors.New("invalid model preferences version or choices")
 	}
 	for providerID, choice := range choices.Choices {
+		if err := validateModelChoice(providerID, choice); err != nil {
+			return modelChoices{}, err
+		}
+	}
+	for providerID, choice := range choices.Easy {
 		if err := validateModelChoice(providerID, choice); err != nil {
 			return modelChoices{}, err
 		}

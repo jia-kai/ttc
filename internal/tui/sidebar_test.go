@@ -76,7 +76,7 @@ func TestSidebarJobMarqueeRefreshPrefixAndClickIdentity(t *testing.T) {
 	b := newSidebar()
 	js := []jobs.Snapshot{
 		{ID: "shell-id", Kind: "shell", Label: "abcdefghijklmnopqrstuvwxyz-tail"},
-		{ID: "agent-id", Kind: "subagent", Label: "ABCDEFGHIJKLMNOPQRSTUVWXYZ-tail"},
+		{ID: "agent-id", Kind: "subagent", Easy: true, Label: "ABCDEFGHIJKLMNOPQRSTUVWXYZ-tail"},
 		{ID: "short-id", Kind: "shell", Label: "short"},
 	}
 	b.update(session.ContextUsage{}, js, nil)
@@ -84,7 +84,7 @@ func TestSidebarJobMarqueeRefreshPrefixAndClickIdentity(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	b.drawAt(s, at)
 	section := &b.sections[1]
-	for i, prefix := range []string{"● shell · ", "● agent · "} {
+	for i, prefix := range []string{"shell (?) · ", "agent* (?) · "} {
 		got := sidebarScreenText(s, b.left+1, section.top+1+i, b.width-2)
 		want := prefix + js[i].Label[:b.width-2-len([]rune(prefix))]
 		if got != want {
@@ -98,7 +98,7 @@ func TestSidebarJobMarqueeRefreshPrefixAndClickIdentity(t *testing.T) {
 	if b.texts["job:shell-id"] != cached {
 		t.Fatal("metadata refresh reset animation")
 	}
-	for i, prefix := range []string{"● shell · ", "● agent · "} {
+	for i, prefix := range []string{"shell (?) · ", "agent* (?) · "} {
 		got := sidebarScreenText(s, b.left+1, section.top+1+i, b.width-2)
 		want := prefix + js[i].Label[1:1+b.width-2-len([]rune(prefix))]
 		if got != want {
@@ -108,7 +108,7 @@ func TestSidebarJobMarqueeRefreshPrefixAndClickIdentity(t *testing.T) {
 			t.Fatal("animation changed click target", action)
 		}
 	}
-	if got := sidebarScreenText(s, b.left+1, section.top+3, b.width-2); !strings.HasPrefix(got, "● shell · short ") {
+	if got := sidebarScreenText(s, b.left+1, section.top+3, b.width-2); !strings.HasPrefix(got, "shell (?) · short ") {
 		t.Fatal("fitting label moved", got)
 	}
 	width := b.width - 2 - len([]rune(sidebarJobPrefix(b.jobs[0], at)))
@@ -218,12 +218,12 @@ func TestSidebarMarqueeKeepsElapsedPrefixAndNarrowClickTarget(t *testing.T) {
 	defer s.Fini()
 	s.SetSize(120, 15)
 	b := newSidebar()
-	b.update(session.ContextUsage{}, []jobs.Snapshot{{ID: "job", Kind: "shell", StartedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano), Label: strings.Repeat("abc", 20)}}, nil)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.update(session.ContextUsage{}, []jobs.Snapshot{{ID: "job", Kind: "shell", StartedAt: at.Add(-time.Minute).Format(time.RFC3339Nano), Label: strings.Repeat("abc", 20)}}, nil)
 	b.bounds(120, 15, false)
-	at := time.Now()
 	b.drawAt(s, at)
 	prefix := sidebarJobPrefix(b.jobs[0], at)
-	if !strings.Contains(prefix, " · 1m") {
+	if prefix != "shell (1m00s) · " {
 		t.Fatal("elapsed time missing from fixed prefix", prefix)
 	}
 	b.drawAt(s, at.Add(2*time.Second))
@@ -378,7 +378,7 @@ func TestSidebarCountdownAndElapsedUseDrawTime(t *testing.T) {
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	job := jobs.Snapshot{Kind: "subagent", StartedAt: at.Add(-time.Minute).Format(time.RFC3339Nano)}
 	timer := session.TimerView{NextAt: at.Add(30 * time.Second).Format(time.RFC3339Nano)}
-	if got := sidebarJobPrefix(job, at); got != "● agent · 1m00s · " {
+	if got := sidebarJobPrefix(job, at); got != "agent (1m00s) · " {
 		t.Fatal("elapsed prefix does not use draw time", got)
 	}
 	if got := sidebarTimerSuffix(timer, at); got != " · in 30s" {
@@ -386,6 +386,27 @@ func TestSidebarCountdownAndElapsedUseDrawTime(t *testing.T) {
 	}
 	if got := sidebarTimerSuffix(timer, at.Add(time.Minute)); got != " · in 0s" {
 		t.Fatal("expired countdown was not clamped", got)
+	}
+}
+
+func TestSidebarJobPrefixes(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, kind, started, want string
+		easy                      bool
+	}{
+		{"agent", "subagent", at.Add(-time.Minute).Format(time.RFC3339Nano), "agent (1m00s) · ", false},
+		{"easy agent", "subagent", at.Add(-time.Minute).Format(time.RFC3339Nano), "agent* (1m00s) · ", true},
+		{"shell", "shell", at.Add(-time.Second).Format(time.RFC3339Nano), "shell (1s) · ", false},
+		{"other", "watch", at.Add(-time.Second).Format(time.RFC3339Nano), "watch (1s) · ", true},
+		{"unknown time", "subagent", "invalid", "agent* (?) · ", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := jobs.Snapshot{Kind: tc.kind, StartedAt: tc.started, Easy: tc.easy}
+			if got := sidebarJobPrefix(job, at); got != tc.want {
+				t.Fatalf("prefix = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

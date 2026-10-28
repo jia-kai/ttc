@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"time"
 	"ttc/internal/prompts"
@@ -27,22 +26,19 @@ const maxChildSlots = 16
 func (r *Runtime) addSubagentTool() {
 	r.addChildMessageTool()
 	type args struct {
-		Prompt     string  `json:"prompt"`
-		ChildID    string  `json:"child_id,omitempty"`
-		Label      string  `json:"label,omitempty"`
-		Background bool    `json:"background,omitempty"`
-		Persistent *bool   `json:"persistent"`
-		Variant    *string `json:"variant,omitempty"`
+		Prompt     string `json:"prompt"`
+		ChildID    string `json:"child_id,omitempty"`
+		Label      string `json:"label,omitempty"`
+		Background bool   `json:"background,omitempty"`
+		Persistent *bool  `json:"persistent"`
+		Easy       *bool  `json:"easy,omitempty"`
 	}
-	tool.Register(r.Tools, "subagent", fmt.Sprintf(prompts.ToolDescription("subagent"), maxChildSlots), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "variant": tool.Property("string")}, []string{"prompt", "persistent"}, func(a args) error {
+	tool.Register(r.Tools, "subagent", fmt.Sprintf(prompts.ToolDescription("subagent"), maxChildSlots), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "easy": tool.Property("boolean")}, []string{"prompt", "persistent"}, func(a args) error {
 		if err := tool.Required("prompt", a.Prompt); err != nil {
 			return err
 		}
 		if a.Persistent == nil {
 			return tool.Fail("invalid_arguments", prompts.ChildExplicitPersistence)
-		}
-		if a.Variant != nil && strings.TrimSpace(*a.Variant) == "" {
-			return tool.Fail("invalid_arguments", prompts.ChildNonemptyVariant)
 		}
 		if a.ChildID != "" {
 			return nil
@@ -58,7 +54,7 @@ func (r *Runtime) addSubagentTool() {
 		if err := r.checkContext(false); err != nil {
 			return nil, err
 		}
-		selection, err := r.Store.ToolSelection(ctx, x.CallID)
+		selection, easySelection, err := r.Store.ToolModelSelections(ctx, x.CallID)
 		if err != nil {
 			return nil, err
 		}
@@ -79,12 +75,11 @@ func (r *Runtime) addSubagentTool() {
 			}
 			selection = child.selection
 		}
-		if a.Variant != nil {
-			if !slices.Contains(selection.Model.Variants, *a.Variant) {
-				r.childStartMu.Unlock()
-				return nil, tool.Fail("invalid_arguments", fmt.Sprintf(prompts.ChildUnsupportedVariant, *a.Variant, selection.Model.ID, strings.Join(selection.Model.Variants, ", ")))
+		easy := a.Easy != nil && *a.Easy
+		if child == nil && easy {
+			if easySelection != nil {
+				selection = *easySelection
 			}
-			selection.Variant = *a.Variant
 		}
 		if child == nil {
 			asideCount := 0
@@ -97,7 +92,7 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
-			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), estimator: &contextbuild.Estimator{}, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), easy: easy, estimator: &contextbuild.Estimator{}, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
 			r.children[child.id] = child
 		}
 		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, selection)
@@ -131,7 +126,7 @@ func (r *Runtime) addSubagentTool() {
 		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
-		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
+		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background, Easy: child.easy}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
 			<-ready
 			defer func() {
 				task.cancelled = childCtx.Err() != nil
@@ -176,12 +171,20 @@ func (r *Runtime) addSubagentTool() {
 		if a.ChildID == "" {
 			return nil
 		}
-		normalized := strings.Join(strings.Fields(a.Label), " ")
-		if normalized == a.Label {
-			return nil
+		var warnings []tool.InputWarning
+		if a.Easy != nil {
+			r.childStartMu.Lock()
+			child := r.children[a.ChildID]
+			if child != nil {
+				warnings = append(warnings, tool.InputWarning{Code: "input_ignored", Parameter: "easy", Requested: *a.Easy, Effective: child.easy, Message: prompts.ChildFollowupEasy})
+			}
+			r.childStartMu.Unlock()
 		}
-		warnings := tool.AdjustedInput("label", a.Label, normalized)
-		a.Label = normalized
+		normalized := strings.Join(strings.Fields(a.Label), " ")
+		if normalized != a.Label {
+			warnings = append(warnings, tool.AdjustedInput("label", a.Label, normalized)...)
+			a.Label = normalized
+		}
 		return warnings
 	})
 }

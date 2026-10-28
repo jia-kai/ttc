@@ -67,6 +67,7 @@ advances only after successful admission. Retries reuse frozen admitted input.
 | `is_repo`, `branch`          | Optional Git metadata; branch may be `detached`  |
 | `date_utc`                   | Current UTC date                                 |
 | `model`                      | Frozen provider/model/variant for this request   |
+| `easy_model`                 | Optional easy-model identity and capabilities    |
 | `image_input`, `image_click` | Model/frontend image capabilities                |
 | `binary_files`               | Native-read extension groups and byte limits     |
 | `project`                    | Scoped AGENTS contents and skill catalog         |

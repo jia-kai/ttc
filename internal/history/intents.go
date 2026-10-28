@@ -10,6 +10,14 @@ import (
 	"ttc/internal/llm"
 )
 
+// requestModelSnapshot extends the existing flat selection representation so
+// older request records decode with no easy selection and existing readers can
+// continue decoding the main selection unchanged.
+type requestModelSnapshot struct {
+	llm.Selection
+	EasySelection *llm.Selection `json:"easy_selection,omitempty"`
+}
+
 // ErrNotFound means a required durable record does not exist.
 var ErrNotFound = errors.New("history record not found")
 
@@ -88,16 +96,23 @@ func (s *Store) ToolExecution(ctx context.Context, call string) (ToolExecution, 
 // without scanning conversation entries. An unknown call/request returns
 // ErrNotFound; malformed saved model data returns a decoding error.
 func (s *Store) ToolSelection(ctx context.Context, call string) (llm.Selection, error) {
+	selection, _, err := s.ToolModelSelections(ctx, call)
+	return selection, err
+}
+
+// ToolModelSelections returns both selections frozen at the owning request.
+// A nil easy selection means the request had no configured easy model.
+func (s *Store) ToolModelSelections(ctx context.Context, call string) (llm.Selection, *llm.Selection, error) {
 	var model string
 	err := s.db.QueryRowContext(ctx, "SELECT q.model_json FROM tool_calls c JOIN model_requests q ON q.id=c.request_id WHERE c.id=?", call).Scan(&model)
-	var selection llm.Selection
+	var snapshot requestModelSnapshot
 	if err == nil {
-		err = json.Unmarshal([]byte(model), &selection)
+		err = json.Unmarshal([]byte(model), &snapshot)
 	}
 	if err != nil {
-		return llm.Selection{}, intentError("read tool selection", err)
+		return llm.Selection{}, nil, intentError("read tool model selections", err)
 	}
-	return selection, nil
+	return snapshot.Selection, snapshot.EasySelection, nil
 }
 
 // ToolIntentEntry returns the latest physical intent entry for a call, including

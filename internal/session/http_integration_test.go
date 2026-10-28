@@ -322,7 +322,7 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 			case 1:
 				calls = []mockCall{
 					{"read", map[string]any{"path": "fixture.png"}},
-					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true}}, {"subagent", map[string]any{"persistent": true, "variant": "low", "prompt": "Write the isolated fixture result", "label": "fixture child"}},
+					{"write", map[string]any{"path": "result.txt", "content": "alpha\n"}}, {"shell", map[string]any{"command": "exec " + quote(python) + " server.py", "protocol": "lsp", "background": true}}, {"subagent", map[string]any{"persistent": true, "easy": true, "prompt": "Write the isolated fixture result", "label": "fixture child"}},
 				}
 			case 2:
 				if answer := get("m1_subagent", "answer"); answer != "First child assignment complete." {
@@ -372,7 +372,13 @@ func TestHTTPMockOpenAIIntegrationTwentyToolTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Provider = adapter
+	r.providerID = "openai"
 	r.selection = selection
+	easySelection := selection
+	easySelection.Variant = "low"
+	if err := r.RestoreEasyModel(easySelection); err != nil {
+		t.Fatal(err)
+	}
 	r.Tools = r.Tools.Filter(func(name string) bool { return name != "web_fetch" && name != "web_search" })
 	tool.AddWeb(r.Tools, client, tool.WebSearchConfig{Endpoint: "http://mock.invalid/mcp"})
 	events := make(chan Event, 1024)

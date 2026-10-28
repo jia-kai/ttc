@@ -77,7 +77,7 @@ func TestDirectRowsDoNotOpenPayloadWindows(t *testing.T) {
 		}
 		t.Fatalf("screen missing %q: %s", needle, latest)
 	}
-	wait("/help")
+	wait(selection.Model.ID + " · " + selection.Variant)
 	screen.SetSize(100, 30)
 	screen.EventQ() <- tcell.NewEventResize(100, 30)
 	wait("Ready for input")

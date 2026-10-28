@@ -121,7 +121,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 			return errors.New("admitted request has no token checkpoint")
 		}
 		admitted, e = r.Store.AdmitRequest(history.RequestAdmission{
-			SessionID: r.Current(), TurnID: turn, Actor: "main", Selection: selection,
+			SessionID: r.Current(), TurnID: turn, Actor: "main", Selection: selection, EasySelection: next.easy,
 			Checkpoint: checkpoint, Context: cm, Notices: r.notifications, Steers: steers,
 		})
 		if e != nil {

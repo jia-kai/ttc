@@ -159,6 +159,7 @@ func (c *frontendController) drawFrame() error {
 			window:     c.modal.window,
 			question:   c.modal.question,
 			selection:  c.frontend.Runtime.CurrentSelection(),
+			easy:       c.frontend.Runtime.EasyModelChoice(),
 		}); err != nil {
 			return err
 		}

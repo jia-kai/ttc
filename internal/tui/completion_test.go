@@ -82,6 +82,16 @@ func TestCompletionTokensAndCursorReplacement(t *testing.T) {
 	}
 }
 
+func TestModelCompletionReplacesLegacyEasyCommand(t *testing.T) {
+	model := commandCompletions(completionQuery{prefix: "model"})
+	if len(model.items) == 0 || model.items[0].value != "/model" || !strings.Contains(model.items[0].description, "easy") {
+		t.Fatalf("model completion = %+v", model.items)
+	}
+	if legacy := commandCompletions(completionQuery{prefix: "easy-model"}); len(legacy.items) != 0 {
+		t.Fatalf("legacy easy command completion = %+v", legacy.items)
+	}
+}
+
 func TestForceCompactCompletionAndCommandMenuShareDescription(t *testing.T) {
 	draft := newComposer("/force-c")
 	q, ok := completionAt(draft, "", 1)

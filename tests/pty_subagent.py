@@ -91,7 +91,7 @@ def main():
                 assert body['store'] is False and body['stream'] is True
                 assert body['parallel_tool_calls'] is True
                 assert body['model'] == 'mock-audit'
-                assert body['reasoning']['effort'] == ('low' if child else 'high')
+                assert body['reasoning']['effort'] == 'high'
                 assert body['prompt_cache_key'] == self.headers['session-id']
                 results = {item['call_id']: json.loads(item['output'])
                            for item in body['input'] if item['type'] == 'function_call_output'}
@@ -113,7 +113,7 @@ def main():
                     assert 'persistent' in definition['parameters']['required']
                     calls = [('audit-child', 'subagent', {
                         'prompt': 'Audit evidence.txt and report the measurement.',
-                        'label': 'audit', 'persistent': False, 'background': True, 'variant': 'low'})]
+                        'label': 'audit', 'persistent': False, 'background': True, 'easy': True})]
                 else:
                     assert step < 3, 'unexpected parent request'
                     launch = results['audit-child']
@@ -205,7 +205,7 @@ def main():
             script.write_text(json.dumps([
                 {'prefix': 'user: ' + prompt, 'calls': [{'id': 'audit-child', 'name': 'subagent',
                     'arguments': {'prompt': 'Audit evidence.txt and report the measurement.',
-                                  'label': 'audit', 'persistent': False, 'variant': 'none'}}]},
+                                  'label': 'audit', 'persistent': False, 'easy': True}}]},
                 {'prefix': 'user: Audit evidence.txt', 'text': answer},
                 {'prefix': 'tool: ', 'text': 'Parent received the Unicode audit answer directly.'},
             ]))
@@ -311,7 +311,7 @@ def main():
                 assert sum(u['input_tokens'] for u in usage) == 100 * completed_requests
                 assert sum(u['cached_input_tokens'] for u in usage) == 32 * completed_requests
         coverage = ('offline foreground disposal, UTF-8 bounded answer, exact durable reply, three completed requests without usage'
-                    if args.offline else 'HTTP low-variant child, isolated read, background answer delivered once, metering')
+                    if args.offline else 'HTTP easy fallback child, isolated read, background answer delivered once, metering')
         if args.failure:
             coverage = 'bounded child retry exhaustion, partial answer, caller warning, durable full transcripts'
         print(f'PASS: {coverage}, closed context; artifacts: {root}')

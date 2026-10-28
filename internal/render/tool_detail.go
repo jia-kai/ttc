@@ -108,11 +108,12 @@ func writeToolValue(out *strings.Builder, key string, value any, indent, path st
 			if lang == "" {
 				lang = "text"
 			}
-			out.WriteString("\n\n")
+			// A fence can follow the item label directly. Blank lines between
+			// list blocks make every sibling loose in Markdown renderers.
+			out.WriteString("\n")
 			for _, row := range strings.Split(strings.TrimSuffix(Fence(value, lang), "\n"), "\n") {
 				out.WriteString(indent + "  " + row + "\n")
 			}
-			out.WriteString("\n")
 		} else {
 			f := backticks(value, 1)
 			out.WriteString(" " + f + " " + Clean(value) + " " + f + "\n")

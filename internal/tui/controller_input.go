@@ -137,12 +137,17 @@ func (c *frontendController) openModelMenu() {
 		for _, model := range c.frontend.Models {
 			fmt.Fprintf(&b, "%s · %s · variants=%v · default=%s\n", model.ID, model.Name, model.Variants, model.DefaultVariant)
 		}
-		c.add(b.String()+"Select with /model ID [VARIANT]", 0)
+		c.add(b.String()+"Select main: /model main ID [VARIANT] · easy: /model easy ID [VARIANT] · clear easy: /model easy off", 0)
 		return
 	}
-	selected := c.frontend.Runtime.ModelChoice()
 	c.modal.clear()
-	c.modal.menu = newModelMenu(c.frontend.Models, selected)
+	current := c.frontend.Runtime.ModelChoice()
+	if current.Provider != c.frontend.Runtime.ProviderID() {
+		current = llm.Selection{}
+	}
+	c.modal.menu = newModelMenu(c.frontend.Models, current)
+	c.modal.menu.easy = c.frontend.Runtime.EasyModelChoice()
+	c.modal.menu.update()
 	c.modal.question = nil
 	c.modal.window = &c.modal.menu.Window
 }
@@ -193,7 +198,7 @@ func (c *frontendController) openBackgroundMenu() {
 }
 
 func (c *frontendController) selectModel(id, variant string) {
-	selection, err := llm.Resolve(c.frontend.Runtime.CurrentSelection().Provider, c.frontend.Models, id, variant)
+	selection, err := llm.Resolve(c.frontend.Runtime.ProviderID(), c.frontend.Models, id, variant)
 	if err != nil {
 		c.add("Error: "+err.Error(), 0)
 		return
@@ -204,6 +209,18 @@ func (c *frontendController) selectModel(id, variant string) {
 	}
 	c.notificationPaused = false
 	c.add("Model selected for next tool boundary · "+id+" · "+selection.Variant, 0)
+}
+
+func (c *frontendController) selectEasyModel(id, variant string) {
+	selection, err := llm.Resolve(c.frontend.Runtime.ProviderID(), c.frontend.Models, id, variant)
+	if err == nil {
+		err = c.frontend.Runtime.RequestEasyModel(&selection)
+	}
+	if err != nil {
+		c.add("Easy model selection failed: "+err.Error(), 0)
+		return
+	}
+	c.add("Easy model selected · "+id+" · "+selection.Variant, 0)
 }
 
 func (c *frontendController) submit(next frontendSubmission) bool {
@@ -442,15 +459,37 @@ func (c *frontendController) answerQuestion(text string) {
 
 func (c *frontendController) requestModel(text string) {
 	fields := strings.Fields(text)
-	if len(fields) < 2 || len(fields) > 3 {
-		c.add("Error: /model ID [VARIANT]", 0)
+	args := fields[1:]
+	easy := len(args) > 0 && args[0] == "easy"
+	if easy || (len(args) > 0 && args[0] == "main") {
+		args = args[1:]
+	}
+	if easy && len(args) == 1 && args[0] == "off" {
+		if err := c.frontend.Runtime.RequestEasyModel(nil); err != nil {
+			c.add("Easy model selection failed: "+err.Error(), 0)
+		} else {
+			c.add("Easy model disabled · using main model", 0)
+		}
+		return
+	}
+	if easy && len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	} else if easy && len(args) > 0 && args[0] == "off" {
+		args = nil
+	}
+	if len(args) < 1 || len(args) > 2 {
+		c.add("Error: /model [main] ID [VARIANT] or /model easy [--] ID [VARIANT] or /model easy off", 0)
 		return
 	}
 	variant := ""
-	if len(fields) == 3 {
-		variant = fields[2]
+	if len(args) == 2 {
+		variant = args[1]
 	}
-	c.selectModel(fields[1], variant)
+	if easy {
+		c.selectEasyModel(args[0], variant)
+	} else {
+		c.selectModel(args[0], variant)
+	}
 }
 
 func (c *frontendController) login() {
@@ -464,6 +503,12 @@ func (c *frontendController) login() {
 	}
 	if c.frontend.Login == nil {
 		c.add("Login requires plain mode: ttc --login", 0)
+		return
+	}
+	// An easy choice belongs to the old catalog. Clear it before authorization,
+	// including when authorization or subsequent discovery fails.
+	if err := c.frontend.Runtime.ClearEasyModelForLogin(); err != nil {
+		c.add("Login failed to clear easy model: "+err.Error(), 0)
 		return
 	}
 	// Authorization and discovery belong to the injected lifecycle owner.

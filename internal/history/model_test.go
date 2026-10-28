@@ -13,6 +13,46 @@ import (
 	"ttc/internal/llm"
 )
 
+func TestEasyModelPreferenceIndependentAndPersistent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := llm.Selection{Provider: "openai", Model: llm.ModelSpec{ID: "main"}, Variant: "high"}
+	easy := llm.Selection{Provider: "openai", Model: llm.ModelSpec{ID: "easy"}, Variant: "low"}
+	if err := s.SaveSelection(main); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveEasySelection("openai", &easy); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.LastEasySelection("openai")
+	if err != nil || got == nil || got.Model.ID != "easy" || got.Variant != "low" {
+		t.Fatal(got, err)
+	}
+	if got, err := s.LastSelection("openai"); err != nil || got == nil || got.Model.ID != "main" {
+		t.Fatal(got, err)
+	}
+	if err := s.SaveEasySelection("openai", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LastEasySelection("openai"); err != nil || got != nil {
+		t.Fatal(got, err)
+	}
+	if got, err := s.LastSelection("openai"); err != nil || got == nil || got.Model.ID != "main" {
+		t.Fatal(got, err)
+	}
+}
+
 func TestModelPreferencesRestartIsolationAndNoSessions(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "data")
 	s, err := Open(root)
