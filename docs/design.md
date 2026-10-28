@@ -163,7 +163,10 @@ One Go module uses direct construction and small interfaces at their consumers:
   SQL. Typed history reads assemble replay and inspection data; pure projections
   format loaded data without database or filesystem access. Large supported TUI
   inspectors retain bounded SQL slices and streamed instruction snapshots rather
-  than loading complete records. Plain inspection uses complete records.
+  than loading complete records. Replay and request-inspection ancestry
+  projections keep selected IDs outermost and look up entries by primary key,
+  avoiding full-table scans of unrelated saved history. Plain inspection uses
+  complete records.
 - The frontend controller owns mutable UI state on one event loop. Lifecycle,
   input, runtime events, replay, inspection and drawing have separate handlers;
   workers return results to the loop rather than mutate that state.

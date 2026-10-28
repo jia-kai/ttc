@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/lexers"
 )
 
 // StructuredState carries bounded source syntax hints across Unicode-character
@@ -154,32 +151,52 @@ func structuredJSON(source string) string {
 	if strings.HasPrefix(strings.TrimSpace(source), "[opaque payload:") {
 		return inspectionColor(source, MutedColor)
 	}
-	lexer := lexers.Get("json")
-	if lexer == nil {
-		return source
-	}
-	iterator, err := lexer.Tokenise(nil, source)
-	if err != nil {
-		return source
-	}
+	// Pages may stop inside any token. A general-purpose lexer recovers from
+	// an unfinished string one character at a time, allocating lexer state for
+	// each character. Scan JSON tokens directly so partial strings take one
+	// pass and one styled span, just like complete strings.
 	var b strings.Builder
-	for token := iterator(); token != chroma.EOF; token = iterator() {
+	b.Grow(len(source))
+	for start := 0; start < len(source); {
+		end := start + 1
 		color := ""
-		switch {
-		case token.Type.InSubCategory(chroma.LiteralString):
+		switch source[start] {
+		case '"':
+			for end < len(source) {
+				c := source[end]
+				end++
+				if c == '\\' && end < len(source) {
+					end++
+				} else if c == '"' {
+					break
+				}
+			}
 			color = AmberColor
-		case token.Type.InSubCategory(chroma.LiteralNumber):
-			color = CyanColor
-		case token.Type.InCategory(chroma.Keyword):
-			color = LavenderColor
-		case token.Type.InCategory(chroma.Punctuation):
+		case '{', '}', '[', ']', ':', ',':
 			color = MutedColor
+		case ' ', '\t', '\r', '\n':
+			for end < len(source) && strings.ContainsRune(" \t\r\n", rune(source[end])) {
+				end++
+			}
+		default:
+			// Whitespace and non-JSON prose remain literal. Consume whole
+			// scalar candidates so embedded words/numbers are not colored.
+			for end < len(source) && !strings.ContainsRune(" \t\r\n\"{}[]:,", rune(source[end])) {
+				end++
+			}
+			token := source[start:end]
+			if token == "true" || token == "false" || token == "null" {
+				color = LavenderColor
+			} else if (source[start] == '-' || source[start] >= '0' && source[start] <= '9') && json.Valid([]byte(token)) {
+				color = CyanColor
+			}
 		}
 		if color == "" {
-			b.WriteString(token.Value)
+			b.WriteString(source[start:end])
 		} else {
-			b.WriteString(inspectionColor(token.Value, color))
+			b.WriteString(inspectionColor(source[start:end], color))
 		}
+		start = end
 	}
 	return b.String()
 }

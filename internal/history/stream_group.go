@@ -41,8 +41,18 @@ func (s *Store) BoundaryCaptures(ctx context.Context, id int64) ([]BoundaryCaptu
 	}
 	return s.boundaryCapturesAt(ctx, record, id)
 }
+
+// Keep the bounded ancestry outermost. An ordinary JOIN lets SQLite scan every
+// entry in ID order to avoid a small sort, making one inspection depend on the
+// entire database size rather than the selected attempt.
+const boundaryCapturesQuery = boundaryAttemptAncestry + `SELECT e.id,e.content_json
+ FROM ancestry a CROSS JOIN entries e ON e.id=a.id
+ WHERE e.kind='status' AND json_extract(e.content_json,'$.type')='presentation_stream'
+ AND json_extract(e.content_json,'$.request')=? AND json_extract(e.content_json,'$.attempt')=?
+ AND json_extract(e.content_json,'$.direction') IN ('request','response','outcome') ORDER BY e.id`
+
 func (s *Store) boundaryCapturesAt(ctx context.Context, record boundaryRecord, tip int64) ([]BoundaryCapture, error) {
-	rows, err := s.db.QueryContext(ctx, boundaryAttemptAncestry+`SELECT e.id,e.content_json FROM ancestry a JOIN entries e ON e.id=a.id WHERE e.kind='status' AND json_extract(e.content_json,'$.type')='presentation_stream' AND json_extract(e.content_json,'$.request')=? AND json_extract(e.content_json,'$.attempt')=? AND json_extract(e.content_json,'$.direction') IN ('request','response','outcome') ORDER BY e.id`, record.Request, record.Attempt, 0, tip, record.Request, record.Attempt)
+	rows, err := s.db.QueryContext(ctx, boundaryCapturesQuery, record.Request, record.Attempt, 0, tip, record.Request, record.Attempt)
 	if err != nil {
 		return nil, err
 	}

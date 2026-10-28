@@ -160,6 +160,10 @@ func boundaryActions(revision int64) []messagestream.Action {
 	return []messagestream.Action{{Kind: messagestream.Inspect, Target: revision}, {Kind: messagestream.Raw, Target: revision}}
 }
 
+// Force ancestry-driven primary-key acquisition: an ordinary JOIN lets SQLite
+// scan the entire entries table to satisfy ORDER BY, including other sessions.
+const streamItemsSQL = boundaryAncestry + `SELECT e.id,e.actor_id,e.content_json FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND e.kind='status' AND json_extract(e.content_json,'$.type')='presentation_stream' ORDER BY e.id`
+
 // StreamItems replays the latest revision per request attempt on selected
 // ancestry, preserving header order. Old per-part change entries are ignored.
 func (s *Store) StreamItems(ctx context.Context, session string) ([]messagestream.Item, error) {
@@ -167,7 +171,7 @@ func (s *Store) StreamItems(ctx context.Context, session string) ([]messagestrea
 	if err := s.db.QueryRowContext(ctx, "SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, boundaryAncestry+`SELECT e.id,e.actor_id,e.content_json FROM ancestry a JOIN entries e ON e.id=a.id WHERE e.kind='status' AND json_extract(e.content_json,'$.type')='presentation_stream' ORDER BY e.id`, tip)
+	rows, err := s.db.QueryContext(ctx, streamItemsSQL, tip)
 	if err != nil {
 		return nil, err
 	}
