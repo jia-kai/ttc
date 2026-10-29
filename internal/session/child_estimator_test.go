@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -11,6 +13,54 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/llm"
 )
+
+func TestRunChildOptionalEstimator(t *testing.T) {
+	for _, aside := range []bool{false, true} {
+		for _, provided := range []bool{false, true} {
+			name := map[bool]string{false: "coding", true: "aside"}[aside] + map[bool]string{false: "/fresh", true: "/provided"}[provided]
+			t.Run(name, func(t *testing.T) {
+				r, _ := runtimeFixture(t, nil)
+				seedRuntime(t, r, "Parent task")
+				actor := "main/child_optional_estimator"
+				turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.selection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var estimator *contextbuild.Estimator
+				if provided {
+					estimator = &contextbuild.Estimator{}
+				}
+				var received llm.Request
+				calls := 0
+				r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+					received = req
+					calls++
+					if err := emit(llm.StreamEvent{Kind: "text", Text: "Isolated answer"}); err != nil {
+						return err
+					}
+					return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
+				}}
+				var answer bytes.Buffer
+				err = r.runChild(context.Background(), childTask{
+					actor: actor, turn: turn, prompt: "Separate task", selection: r.selection,
+					tools: r.Tools.Filter(readOnlyTool), aside: aside, estimator: estimator,
+				}, &answer, io.Discard)
+				if err != nil || calls != 1 || answer.String() != "Isolated answer" {
+					t.Fatal("shared isolated execution failed", err, calls, answer.String())
+				}
+				if estimator != nil {
+					got := estimator.Estimate(contextbuild.InputSnapshot{
+						Selection: received.Selection, System: received.System, Tools: received.Tools,
+						Messages: received.Messages, Lineage: actor, TokenEstimator: r.Provider,
+					})
+					if got.Input != 1234 || got.Estimated {
+						t.Fatal("provided estimator did not receive its own feedback", got)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestChildAdmissionUsesReportedInput(t *testing.T) {
 	for _, aside := range []bool{false, true} {

@@ -963,9 +963,13 @@ The concrete boundaries above are TTC decisions, informed by:
   selected canonical history while idle. Model/context freeze at admission;
   shared system guidance plus the `Btw` section in
   [system.yaml](../prompt/system.yaml) constrain the quick answer.
-- The shared child loop advertises and dispatches only a filtered read-only
+- For asides, the shared child loop advertises and dispatches only a read-only
   registry: no shell, mutations, interactions, timers or child creation. Timer
-  listing is runtime-wide; job visibility still follows child ownership.
+  listing is runtime-wide; job visibility still follows child ownership. Coding
+  children, persistent follow-ups and asides share execution, admission and
+  compaction. The loop accepts an optional independently owned estimator; asides
+  seed it from compatible main feedback for the frozen input. See
+  [compaction calibration](compaction.md#trigger-and-retention).
 - Each aside has its own actor/cache identity, hidden inspectable records,
   supervisor captures and a 64 KiB final-answer limit. It shares the
   [supervisor limit](tools.md#subagent), survives compaction and is

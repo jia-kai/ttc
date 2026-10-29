@@ -44,6 +44,12 @@ them.
   model changes can still cause recoverable summary or handoff failures.
   Provider context-length rejection uses the bounded upstream retry budget; it
   does not trigger automatic compaction.
+- Asides fork compatible main calibration for their frozen input, adjusting
+  local system/tool overhead for the read-only role. The fork is approximate and
+  independent: pending requests and later main feedback are not shared. Without
+  compatible feedback, use local estimates. The shared child loop uses the
+  supplied estimator or creates a fresh one; actor feedback supersedes its
+  initial calibration, and successful compaction resets it.
 - `/force-compact [focus]` is an explicit idle main-actor command that bypasses
   only the estimated summary input-size check. It uses the same structured
   request and cache identity as `/compact`; automatic and child compaction keep

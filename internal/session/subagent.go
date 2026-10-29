@@ -195,7 +195,7 @@ type childTask struct {
 	selection           llm.Selection
 	prefix              []llm.Message
 	tools               *tool.Registry
-	estimator           *contextbuild.Estimator // Required; shared only with this persistent child, never another actor.
+	estimator           *contextbuild.Estimator // Optional input calibration; independently owned, retained only by this child.
 	aside               bool
 	child               *codingChild
 	assignment          *childAssignment
@@ -204,6 +204,9 @@ type childTask struct {
 }
 
 func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr io.Writer) error {
+	if task.estimator == nil {
+		task.estimator = &contextbuild.Estimator{}
+	}
 	actor, turn, prompt, selection := task.actor, task.turn, task.prompt, task.selection
 	defer r.clearActorImage(actor, "")
 	messages := append([]llm.Message(nil), task.prefix...)
