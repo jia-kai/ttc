@@ -67,7 +67,15 @@ func TestStartupMaintenanceSmallHistoryAndLoadedProtection(t *testing.T) {
 		t.Run(map[bool]string{false: "small", true: "protected large"}[large], func(t *testing.T) {
 			s, v, _ := startupHistoryFixture(t, large)
 			p, out, _ := testStartupProgress(false, 80)
-			notices, err := maintainHistory(context.Background(), s, v.ID, p)
+			var stdout bytes.Buffer
+			notices, err := maintainHistory(context.Background(), s, v.ID, p, &stdout)
+			want := ""
+			if large {
+				want = "History maintenance: removed 0 entries.\n"
+			}
+			if stdout.String() != want {
+				t.Fatal("unexpected sweep report", stdout.String())
+			}
 			if err != nil || len(notices) != 1 || !strings.Contains(notices[0], "History database:") || !strings.Contains(notices[0], "~") {
 				t.Fatal(notices, err)
 			}
@@ -94,12 +102,33 @@ func TestStartupMaintenanceReportsCommittedDeletionOnAssetFailure(t *testing.T) 
 		t.Fatal(err)
 	}
 	p, out, _ := testStartupProgress(false, 80)
-	notices, err := maintainHistory(context.Background(), s, "", p)
+	var stdout bytes.Buffer
+	notices, err := maintainHistory(context.Background(), s, "", p, &stdout)
+	if stdout.String() != "History maintenance: removed 2 entries.\n" {
+		t.Fatal("committed deletion count missing from stdout", stdout.String())
+	}
 	if err != nil || len(notices) != 2 || !strings.Contains(notices[0], "removed conversation families: 1") || !strings.Contains(notices[1], "~0 entries") {
 		t.Fatal("partial-commit warning/statistics lost", notices, err)
 	}
 	if !strings.Contains(out.String(), "History maintenance failed.") {
 		t.Fatal("failed sweep implied success", out.String())
+	}
+	if _, err := s.Session(v.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("fixture SQL deletion did not commit", err)
+	}
+}
+
+type failingMaintenanceWriter struct{ err error }
+
+func (w failingMaintenanceWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestStartupMaintenanceReportWriteFailure(t *testing.T) {
+	s, v, _ := startupHistoryFixture(t, true)
+	p, _, _ := testStartupProgress(false, 80)
+	writeErr := errors.New("stdout unavailable")
+	_, err := maintainHistory(context.Background(), s, "", p, failingMaintenanceWriter{writeErr})
+	if !errors.Is(err, writeErr) || !strings.Contains(err.Error(), "removed 2 entries") {
+		t.Fatal("missing report failure or committed count", err)
 	}
 	if _, err := s.Session(v.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal("fixture SQL deletion did not commit", err)
@@ -130,11 +159,18 @@ func TestStartupMaintenanceCancellation(t *testing.T) {
 			if phase == "before work" {
 				cancel()
 			}
-			notices, err := maintainHistory(ctx, s, "", p)
+			var stdout bytes.Buffer
+			notices, err := maintainHistory(ctx, s, "", p, &stdout)
 			if !errors.Is(err, context.Canceled) || len(notices) != 0 {
 				t.Fatal("canceled startup continued", notices, err)
 			}
 			committed := phase == "removing deleted conversation assets"
+			if committed && stdout.String() != "History maintenance: removed 2 entries.\n" {
+				t.Fatal("committed deletion missing on cancellation", stdout.String())
+			}
+			if phase == "discovering" && stdout.String() != "History maintenance: removed 0 entries.\n" {
+				t.Fatal("rolled back deletion counted", stdout.String())
+			}
 			if strings.Contains(err.Error(), "removed conversation families: 1") != committed {
 				t.Fatal("incorrect committed-deletion report", err)
 			}
@@ -183,14 +219,14 @@ func TestCLIMaintenanceBeforeFrontend(t *testing.T) {
 	cmd := exec.CommandContext(ctx, binary, "-test.run=^TestCLIMaintenanceBeforeFrontend$")
 	cmd.Env = append(os.Environ(), "TTC_MAINTENANCE_HELPER_DATA="+root, "TTC_MAINTENANCE_HELPER_WORK="+work, "TTC_MAINTENANCE_HELPER_SCRIPT="+script)
 	cmd.Stdin = strings.NewReader("/quit\n")
-	output, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err = cmd.Run()
 	if err != nil {
-		t.Fatalf("CLI startup: %v\n%s", err, output)
+		t.Fatalf("CLI startup: %v\nstdout: %s\nstderr: %s", err, &stdout, &stderr)
 	}
-	text := string(output)
-	finished, frontend := strings.Index(text, "History maintenance complete."), strings.Index(text, "TTC · Linux terminal agent")
-	if finished < 0 || frontend < finished {
-		t.Fatal("frontend/input preceded synchronous maintenance", text)
+	if !strings.Contains(stderr.String(), "History maintenance complete.") || !strings.Contains(stdout.String(), "History maintenance: removed 2 entries.\n") || strings.Index(stdout.String(), "History maintenance: removed 2 entries.") > strings.Index(stdout.String(), "TTC · Linux terminal agent") {
+		t.Fatal("missing maintenance result before frontend", stdout.String(), stderr.String())
 	}
 	s, err = history.Open(root)
 	if err != nil {

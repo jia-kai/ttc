@@ -20,63 +20,64 @@ const lineageRetention = 30 * 24 * time.Hour
 // conversation protects its whole family. SQL deletion is atomic and rechecks
 // activity under the write transaction; asset deletion is best effort, without
 // deletion journals or restart repair. The result counts committed deletions.
-func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSession string, report func(MaintenanceProgress)) (int, error) {
+func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSession string, report func(MaintenanceProgress)) (result MaintenanceResult, err error) {
 	reportMaintenance(report, "discovery", 0, 0)
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	// Refresh the loaded lineage so other instances' sweeps also retain it.
 	if err := s.refreshLoadedActivity(ctx, now, protectedSession); err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	cutoff := now.Add(-lineageRetention).UnixMilli()
 	rows, err := s.db.QueryContext(ctx, "SELECT lineage_id FROM sessions GROUP BY lineage_id HAVING max(last_activity_ms)<=? ORDER BY lineage_id", cutoff)
 	if err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, err
+			return MaintenanceResult{}, err
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	if len(ids) == 0 {
-		return 0, nil
+		return MaintenanceResult{}, nil
 	}
 	for _, id := range ids {
 		if !cleanupID(id) {
-			return 0, fmt.Errorf("invalid retention lineage ID %q", id)
+			return MaintenanceResult{}, fmt.Errorf("invalid retention lineage ID %q", id)
 		}
 	}
 	assets, err := openCleanupDir(-1, filepath.Join(s.Root, "lineages"), true)
 	if err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	defer assets.Close()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	defer tx.Rollback()
 	// A sweep builds child-key indexes only once, and removes them in this same
 	// transaction. A crash or failed sweep cannot leave schema additions behind.
 	if _, err := tx.ExecContext(ctx, "PRAGMA defer_foreign_keys=ON"); err != nil {
-		return 0, err
+		return MaintenanceResult{}, err
 	}
 	var deletedIDs []string
+	var deletedEntries int64
 	reportMaintenance(report, "candidates", 0, int64(len(ids)))
 	for i, id := range ids {
 		var activity sql.NullInt64
 		if err := tx.QueryRowContext(ctx, "SELECT max(last_activity_ms) FROM sessions WHERE lineage_id=?", id).Scan(&activity); err != nil {
-			return 0, err
+			return MaintenanceResult{}, err
 		}
 		if !activity.Valid || activity.Int64 > cutoff {
 			reportMaintenance(report, "candidates", int64(i+1), int64(len(ids)))
@@ -85,33 +86,37 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 		if len(deletedIDs) == 0 {
 			reportMaintenance(report, "indexes", 0, 0)
 			if err := indexCleanupReferences(ctx, tx); err != nil {
-				return 0, err
+				return MaintenanceResult{}, err
 			}
 			reportMaintenance(report, "candidates", int64(i), int64(len(ids)))
 		}
-		if err := deleteLineage(ctx, tx, id); err != nil {
-			return 0, fmt.Errorf("delete lineage %s history: %w", id, err)
+		entries, err := deleteLineage(ctx, tx, id)
+		if err != nil {
+			return MaintenanceResult{}, fmt.Errorf("delete lineage %s history: %w", id, err)
 		}
+		deletedEntries += entries
 		deletedIDs = append(deletedIDs, id)
 		reportMaintenance(report, "candidates", int64(i+1), int64(len(ids)))
 	}
 	if len(deletedIDs) == 0 {
-		return 0, nil
+		return MaintenanceResult{}, nil
 	}
 	reportMaintenance(report, "commit", 0, 0)
 	for _, index := range cleanupReferenceIndexes {
 		if _, err := tx.ExecContext(ctx, "DROP INDEX "+index.name); err != nil {
-			return 0, fmt.Errorf("drop cleanup reference index: %w", err)
+			return MaintenanceResult{}, fmt.Errorf("drop cleanup reference index: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit history cleanup: %w", err)
+		return MaintenanceResult{}, fmt.Errorf("commit history cleanup: %w", err)
 	}
+	result.RemovedLineages = len(deletedIDs)
+	result.RemovedEntries = deletedEntries
 	var assetErrors error
 	reportMaintenance(report, "assets", 0, 0)
 	for _, id := range deletedIDs {
 		if err := ctx.Err(); err != nil {
-			return len(deletedIDs), errors.Join(assetErrors, err)
+			return result, errors.Join(assetErrors, err)
 		}
 		if err := removeCleanupTree(ctx, assets, id); err != nil {
 			// SQL deletion has already committed for every family. Continue after
@@ -120,7 +125,7 @@ func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSessi
 			assetErrors = errors.Join(assetErrors, fmt.Errorf("delete lineage %s assets: %w", id, err))
 		}
 	}
-	return len(deletedIDs), assetErrors
+	return result, assetErrors
 }
 
 func (s *Store) refreshLoadedActivity(ctx context.Context, now time.Time, protectedSession string) error {
@@ -159,7 +164,7 @@ func openCleanupDir(parent int, name string, create bool) (*os.File, error) {
 	return f, nil
 }
 
-func deleteLineage(ctx context.Context, tx *sql.Tx, id string) error {
+func deleteLineage(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
 	const sessions = "SELECT id FROM sessions WHERE lineage_id=?"
 	queries := []string{
 		"DELETE FROM compactions WHERE continuation_id IN (" + sessions + ")",
@@ -172,12 +177,20 @@ func deleteLineage(ctx context.Context, tx *sql.Tx, id string) error {
 		"DELETE FROM turns WHERE session_id IN (" + sessions + ")",
 		"DELETE FROM sessions WHERE lineage_id=?",
 	}
+	var entries int64
 	for _, query := range queries {
-		if _, err := tx.ExecContext(ctx, query, id); err != nil {
-			return err
+		result, err := tx.ExecContext(ctx, query, id)
+		if err != nil {
+			return 0, err
+		}
+		if strings.HasPrefix(query, "DELETE FROM entries ") {
+			entries, err = result.RowsAffected()
+			if err != nil {
+				return 0, fmt.Errorf("count deleted entries: %w", err)
+			}
 		}
 	}
-	return nil
+	return entries, nil
 }
 
 // SQLite checks child keys for each deleted parent even with deferred checks.

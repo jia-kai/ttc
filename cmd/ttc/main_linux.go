@@ -299,7 +299,7 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 	}
 	// Maintenance owns the database before any runtime or frontend interaction.
 	// Its synchronous callbacks write startup stderr, never runtime events.
-	notices, e := maintainHistory(ctx, store, opts.load, progress)
+	notices, e := maintainHistory(ctx, store, opts.load, progress, os.Stdout)
 	if e != nil {
 		return e
 	}

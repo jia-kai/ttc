@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
@@ -13,10 +15,25 @@ import (
 // maintainHistory finishes the startup sweep before runtime construction. Errors
 // are warnings unless startup was canceled; committed deletions cannot be undone
 // when asset removal or reclamation fails. Returned messages are UI-only status.
-func maintainHistory(ctx context.Context, store *history.Store, protected string, progress *startupProgress) ([]string, error) {
+func maintainHistory(ctx context.Context, store *history.Store, protected string, progress *startupProgress, out io.Writer) ([]string, error) {
 	now := time.Now()
-	result, err := store.Maintain(ctx, now, protected, progress.maintenance)
+	swept := false
+	result, err := store.Maintain(ctx, now, protected, func(p history.MaintenanceProgress) {
+		if p.Phase == "discovery" {
+			swept = true
+		}
+		progress.maintenance(p)
+	})
 	progress.finish("History maintenance", err)
+	if swept {
+		label := "entries"
+		if result.RemovedEntries == 1 {
+			label = "entry"
+		}
+		if _, writeErr := fmt.Fprintf(out, "History maintenance: removed %d %s.\n", result.RemovedEntries, label); writeErr != nil {
+			return nil, errors.Join(fmt.Errorf("report history maintenance (removed %d %s): %w", result.RemovedEntries, label, writeErr), ctx.Err())
+		}
+	}
 	var notices []string
 	if err != nil && ctx.Err() == nil {
 		warning := "History maintenance failed: " + render.Clean(err.Error())

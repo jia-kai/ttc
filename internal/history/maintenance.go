@@ -16,11 +16,12 @@ const historyMaintenanceThreshold int64 = 2 * 1024 * 1024 * 1024
 const historyReclaimTimeout = 2 * time.Minute
 
 // MaintenanceResult reports the post-maintenance history footprint and the
-// number of whole conversation families removed. Deletions may have committed
+// numbers of whole conversation families and entry rows removed. Deletions may have committed
 // even if later asset removal, disk reclamation, or statistics collection fails.
 type MaintenanceResult struct {
 	Stats           StorageStats
 	RemovedLineages int
+	RemovedEntries  int64
 }
 
 // MaintenanceProgress describes one sweep phase. Total zero means the amount
@@ -52,7 +53,7 @@ func reportMaintenance(report func(MaintenanceProgress), phase string, completed
 // lifetime use and is deferred with an error while another Store is open; later
 // maintenance can retry reclaiming the remaining free pages. Cancellation while
 // waiting for this Store's mutex is checked once the current operation releases
-// it. On error, RemovedLineages still counts committed deletions; Stats is valid
+// it. On error, removal counts still describe committed deletions; Stats is valid
 // only on success.
 // The optional report callback runs synchronously under the Store mutex and
 // must not call Store methods. No cleanup progress is emitted below the threshold.
@@ -82,7 +83,7 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 		return result, fmt.Errorf("measure history before maintenance: %w", err)
 	}
 	if size >= threshold {
-		result.RemovedLineages, err = s.cleanupLocked(ctx, now, protectedSession, report)
+		result, err = s.cleanupLocked(ctx, now, protectedSession, report)
 		if err != nil {
 			err = fmt.Errorf("purge inactive history: %w", err)
 		}

@@ -20,6 +20,10 @@ func TestMaintenanceProgressCountsCandidatesNotDeletedFamilies(t *testing.T) {
 	for _, v := range []Session{first, second} {
 		ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	}
+	var expectedEntries int64
+	if err := s.db.QueryRow("SELECT count(*) FROM entries WHERE session_id=?", first.ID).Scan(&expectedEntries); err != nil || expectedEntries == 0 {
+		t.Fatal("missing fixture entries", expectedEntries, err)
+	}
 	// Simulate a candidate becoming protected after discovery, within the same
 	// transaction, without calling Store methods from a progress callback.
 	if _, err := s.db.Exec(fmt.Sprintf(`CREATE TRIGGER refresh_second_family
@@ -31,7 +35,7 @@ func TestMaintenanceProgressCountsCandidatesNotDeletedFamilies(t *testing.T) {
 	var reports []MaintenanceProgress
 	result, err := s.maintain(context.Background(), now, "", 1,
 		func(p MaintenanceProgress) { reports = append(reports, p) })
-	if err != nil || result.RemovedLineages != 1 {
+	if err != nil || result.RemovedLineages != 1 || result.RemovedEntries != expectedEntries {
 		t.Fatal(result, err)
 	}
 	if _, err := s.Session(first.ID); !errors.Is(err, sql.ErrNoRows) {
@@ -67,6 +71,10 @@ func TestMaintenanceProgressCancellationAtCommitBoundary(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			s, v, _, _ := historyFixture(t)
 			now := time.Now()
+			var entries int64
+			if err := s.db.QueryRow("SELECT count(*) FROM entries WHERE session_id=?", v.ID).Scan(&entries); err != nil || entries == 0 {
+				t.Fatal("missing fixture entries", entries, err)
+			}
 			ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -79,7 +87,7 @@ func TestMaintenanceProgressCancellationAtCommitBoundary(t *testing.T) {
 			if phase == "assets" {
 				want = 1 // SQL is already committed even when asset cleanup fails.
 			}
-			if !errors.Is(err, context.Canceled) || result.RemovedLineages != want {
+			if !errors.Is(err, context.Canceled) || result.RemovedLineages != want || result.RemovedEntries != int64(want)*entries {
 				t.Fatal("wrong committed deletion count", result, err)
 			}
 			_, err = s.Session(v.ID)
