@@ -69,8 +69,8 @@ These are TTC's complete target contracts. Current code:
 ## Saved presentation and live updates
 
 Each invocation saves a version-one portable Markdown record alongside its exact
-JSON. CLI, inspectors and exports share the saved presentation; it never
-replaces or changes model-facing results.
+JSON. CLI and inspectors use the saved presentation; transcript Markdown uses
+its own projection. Neither changes model-facing results.
 
 - `summary`: normally one clipped row with the primary argument and
   status/error. Glob shows only its pattern plus any failure. Commands use `sh`
@@ -122,13 +122,15 @@ Input: `{path, format?, scope?}`.
   including a symlink, or if path resolution escapes scratch. Do not overwrite
   files or create parent directories. Contents are streamed after creation: a
   partial file may be visible before success, not published by a final rename.
-- `format` is `markdown` (default) or `jsonl`. Markdown is a dense readable
-  transcript; JSONL preserves exact saved records, including envelopes, tool
-  records and replay metadata. Completed tool-result rows include
-  `delivered_result` for exact model-visible JSON separately from execution
-  evidence in `tool_record.result/files`; pending calls never expose a later
-  completion. This is one requested file, not `/export`'s Markdown/JSONL/assets
-  bundle. Use existing `grep`/`read` tools to inspect it.
+- `format` is `markdown` (default) or `jsonl`. Markdown presents user-facing
+  messages and call summaries, omitting tool result bodies except subagent final
+  answers. Previewed call parameters are clipped to 80 terminal cells; final
+  answers are not clipped. JSONL preserves exact saved records, including
+  envelopes, tool records and replay metadata. Completed tool-result rows
+  include `delivered_result` for exact model-visible JSON separately from
+  execution evidence in `tool_record.result/files`; pending calls never expose a
+  later completion. This is one requested file, not `/export`'s
+  Markdown/JSONL/assets bundle. Use existing `grep`/`read` tools to inspect it.
 - Success returns `path`, `bytes`, `actor`, `source_session`, `source_tip`,
   `scope` and `format`, identifying the frozen selection and file size in bytes.
 - `scope` is `full` (default) or `before_compaction`. Full freezes the selected
@@ -592,11 +594,14 @@ Input: `{path, format?, scope?}`.
   `job_read` for captured output. Watch metadata also includes `record_dir`;
   terminal metadata may include `signal`.
 - Include
-  `children:[{child_id:string,label:string,child_state:"running"|"idle",assignment_status:"running"|"completed"|"failed"|"cancelled",job_id:string,child_turn_id:string}]`
+  `children:[{child_id:string,label:string,easy?:boolean,child_state:"running"|"idle",assignment_status:"running"|"completed"|"failed"|"cancelled",job_id:string,child_turn_id:string}]`
   for retained coding children. The `running` filter excludes idle children;
   `all` includes them. `child_state` describes the context at observation;
   `assignment_status` describes its current/latest assignment. These snapshots
-  do not guarantee later state; generic job metadata retains `status`.
+  do not guarantee later state; generic job metadata retains `status`. `easy` is
+  present and true when easy routing was requested at child creation, including
+  fallback to the main model; it is omitted otherwise. It does not identify the
+  effective model and stays fixed for follow-ups.
 
 ### `job_read`
 

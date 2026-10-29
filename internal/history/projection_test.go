@@ -120,12 +120,12 @@ func TestPureToolAndFileExports(t *testing.T) {
 	if err != nil || inspection.Title != md.Summary || inspection.Text != md.Detail {
 		t.Fatal(inspection, err)
 	}
-	if text, err := projectExportText(data); err != nil || text != md.ExportText() {
+	if text, err := projectExportText(data); err != nil || text != "" {
 		t.Fatal("tool export", text, err)
 	}
 	data = entryPresentation{Entry: Entry{Kind: "tool_call"}, Call: &callPresentation{Name: "read", Arguments: json.RawMessage(`{"path":"fixture"}`), Result: json.RawMessage(`{"text":"outside-cut"}`)}}
 	text, err := projectExportText(data)
-	if err != nil || !strings.HasPrefix(text, "Pending call:\n\n") || strings.Contains(text, "outside-cut") {
+	if err != nil || !strings.Contains(text, "**read**") || strings.Contains(text, "outside-cut") {
 		t.Fatal("pending call acquired later result", text, err)
 	}
 	data = presentationMessage(t, llm.Message{Type: llm.TypeUserInput, Files: []llm.BinaryFile{{Path: "/not-opened/snapshot.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 4}}})
@@ -137,6 +137,40 @@ func TestPureToolAndFileExports(t *testing.T) {
 	data.Dimensions = nil
 	if text, err := projectExportText(data); err != nil || text != "Binary file: [snapshot](</not-opened/snapshot.png>)" {
 		t.Fatal("missing optional metadata lost durable link", text, err)
+	}
+}
+
+func TestTranscriptCallClipsPreviewOnly(t *testing.T) {
+	args, err := json.Marshal(map[string]string{"path": "short.txt", "content": strings.Repeat("x", 10000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := TranscriptCall("write", args); !strings.Contains(got, "short.txt") || strings.Contains(got, "xxxxx") {
+		t.Fatal(got)
+	}
+	args, _ = json.Marshal(map[string]string{"path": strings.Repeat("界", 100)})
+	if got := TranscriptCall("read", args); strings.Contains(got, strings.Repeat("界", 50)) || !strings.Contains(got, "…") {
+		t.Fatal(got)
+	}
+}
+
+func TestExportOmitsJobCompletionOutput(t *testing.T) {
+	data := entryPresentation{Entry: Entry{Kind: "status"}, Status: statusPresentation{
+		Type: "job_completion", Markdown: render.Markdown{Revision: 1, Summary: "stdout secret"},
+	}}
+	text, err := projectExportText(data)
+	if err != nil || text != "" {
+		t.Fatalf("job output leaked into transcript: %q, %v", text, err)
+	}
+}
+
+func TestExportChildNotificationPreservesFailureWithoutReference(t *testing.T) {
+	data := presentationMessage(t, llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"child_turn_finished","assignment_status":"failed","error":"failure","warning":"warning","answer":"partial"}`})
+	text, err := projectExportText(data)
+	for _, want := range []string{"Assignment status: failed", "Error: failure", "Warning: warning", "Subagent final answer:\n\npartial"} {
+		if err != nil || !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %q: %v", want, text, err)
+		}
 	}
 }
 
@@ -165,7 +199,7 @@ func TestPureRequestStatusAndInternalEvents(t *testing.T) {
 		if (inspection.Text == "## Reply") != (purpose == "compaction") {
 			t.Fatal("request-purpose inspection changed", purpose, inspection.Text)
 		}
-		if text, err := projectExportText(data); err != nil || text != purpose+" assistant · inspect" {
+		if text, err := projectExportText(data); err != nil || text != "" {
 			t.Fatal(text, err)
 		}
 	}
@@ -204,7 +238,7 @@ func TestPureRequestPlaceholderSkipsUnusedBody(t *testing.T) {
 		if view.Message != nil || view.Label != "compaction assistant · inspect" {
 			t.Fatal(view)
 		}
-		if text, err := projectExportText(data); err != nil || text != view.Label {
+		if text, err := projectExportText(data); err != nil || text != "" {
 			t.Fatal(text, err)
 		}
 	}

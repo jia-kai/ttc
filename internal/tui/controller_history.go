@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"ttc/internal/history"
@@ -149,6 +150,11 @@ func (c *frontendController) inspectSaved(id int64) {
 				if strings.HasPrefix(item.callID, "stream:") {
 					c.modal.window.CallID = item.callID
 					c.modal.window.Markdown, c.modal.window.System = true, false
+					break
+				}
+				// Replayed pending intents have no live detail yet; retain the
+				// saved inspection instead of replacing it with an empty string.
+				if item.detail == "" && item.jobID == "" {
 					break
 				}
 				c.modal.window.Markdown, c.modal.window.System = true, false
@@ -327,6 +333,28 @@ func (c *frontendController) navigateBoundaryRaw(delta int) {
 	c.sourceWindow(c.modal.window, page.Actor)
 }
 
+// replayToolResults indexes only the entries in the selected replay chain.
+func replayToolResults(entries []history.Entry) (map[int64]string, map[string]int64, error) {
+	results := make(map[string]int64)
+	callIDs := make(map[int64]string)
+	for _, entry := range entries {
+		if entry.Kind != "tool_call" && entry.Kind != "tool_result" {
+			continue
+		}
+		var ref struct {
+			CallID string `json:"call_id"`
+		}
+		if err := json.Unmarshal(entry.Content, &ref); err != nil || ref.CallID == "" {
+			return nil, nil, fmt.Errorf("invalid tool reference in entry %d", entry.ID)
+		}
+		callIDs[entry.ID] = ref.CallID
+		if entry.Kind == "tool_result" {
+			results[ref.CallID] = entry.ID
+		}
+	}
+	return callIDs, results, nil
+}
+
 func (c *frontendController) replay() {
 	c.view.reset()
 	c.streamRows = map[int64]int{}
@@ -345,6 +373,13 @@ func (c *frontendController) replay() {
 	entries, e := c.frontend.Runtime.Entries()
 	if e != nil {
 		c.add("Error: "+e.Error(), 0)
+		return
+	}
+	// Only results in this replay's selected entry chain supersede an intent.
+	// Looking up the latest result in storage would cross the frozen replay cut.
+	callIDs, results, err := replayToolResults(entries)
+	if err != nil {
+		c.add("History presentation failed: "+err.Error(), 0)
 		return
 	}
 	var stream []messagestream.Item
@@ -379,20 +414,34 @@ func (c *frontendController) replay() {
 		if v.InternalEvent() {
 			continue
 		}
+		callID := callIDs[v.ID]
+		if v.Kind == "tool_call" && results[callID] != 0 || v.Kind == "tool_result" && results[callID] != v.ID {
+			continue
+		}
 		entryView, err := c.history.ReadView(c.ctx, v)
 		if err != nil {
 			c.add("History presentation failed: "+err.Error(), 0)
 			return
 		}
-		if entryView.StatusType == "system_prompt" || entryView.StatusType == "request_message" {
+		if entryView.StatusType == "system_prompt" || entryView.StatusType == "request_message" || entryView.StatusType == "tool_stream" {
 			continue
+		}
+		if v.Kind == "tool_call" {
+			entryView.Label, err = c.history.ExportText(v)
+			if err != nil {
+				c.add("History presentation failed: "+err.Error(), 0)
+				return
+			}
 		}
 		item := c.attribute(line{text: strings.TrimSuffix(entryView.Label, " · inspect"), id: v.ID, system: v.Kind == "status" || v.Role == "system"}, v.Actor)
 		if v.Kind == "tool_call" || v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
 			item.action, item.inspectID = actionExecution, v.ID
 		}
-		if v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
+		if v.Kind == "tool_call" || v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
 			item.markdown, item.brief, item.system = true, true, false
+		}
+		if v.Kind == "tool_call" || v.Kind == "tool_result" {
+			item.callID, item.complete = callID, v.Kind == "tool_result"
 		}
 		if (v.Kind == "message" || v.Kind == "summary") && entryView.Message != nil {
 			message := *entryView.Message

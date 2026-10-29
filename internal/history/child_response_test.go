@@ -86,7 +86,7 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_test", Outcome: "completed", ContextState: "closed", ResultEntry: source, Answer: full[:MaxChildAnswerBytes], Truncated: true}
+			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_test", Outcome: "failed", ContextState: "closed", ResultEntry: source, Answer: full[:MaxChildAnswerBytes], Truncated: true, Error: "child error", Warning: "child warning"}
 			raw, err := json.Marshal(finish)
 			if err != nil {
 				t.Fatal(err)
@@ -139,7 +139,40 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 				if err := json.Unmarshal(entry.Content, &message); err != nil || message.Content != full || entry.SessionID != original.ID {
 					t.Fatal("lost original full response", generation, err)
 				}
+				saved, err := s.Session(current.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				transcript, err := s.ActorTranscript(current.ID, "main", saved.EntryTip)
+				if err != nil || !strings.Contains(string(transcript), full) || !strings.Contains(string(transcript), "Assignment status: failed") || !strings.Contains(string(transcript), "Error: child error") || !strings.Contains(string(transcript), "Warning: child warning") {
+					t.Fatal("full child answer missing from Markdown", generation, err)
+				}
+				if !strings.Contains(string(transcript), `### main/child\_test · subagent response · #`) {
+					t.Fatal("child response has wrong heading")
+				}
 			}
 		})
+	}
+}
+
+func TestTranscriptPreservesUncommittedSubagentAnswer(t *testing.T) {
+	s, session, turn, request := historyFixture(t)
+	call := llm.ToolCall{ID: "child", Name: "subagent", Arguments: []byte(`{"label":"helper"}`)}
+	callID, err := s.CallIntent(session.ID, turn, "main", request, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := strings.Repeat("answer ", 2000) + "end"
+	raw, err := json.Marshal(ChildFinish{Answer: answer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.CallResult(session.ID, turn, "main", callID, raw, nil, map[string]any{"result": "private"}, render.Tool("subagent", call.Arguments, raw), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := s.ActorTranscript(session.ID, "main", id)
+	if err != nil || !strings.Contains(string(body), answer) || strings.Contains(string(body), "private") {
+		t.Fatal("lost uncommitted answer or exposed result", err)
 	}
 }

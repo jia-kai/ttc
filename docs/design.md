@@ -563,11 +563,11 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
 - Delivered results, including background launch snapshots, are immutable;
   completion appends another entry. Historical IDs are not live handles.
 - `render.Markdown` separates bounded summary, detail and optional export body.
-  Persist its revision/document so CLI, inspector, export and compaction never
-  substitute a future renderer. Export defaults to detail; system-prompt
-  Markdown is empty while JSONL/inspection remains exact. Keep exact JSON and
-  click metadata separate; escape/fence untrusted values and filter terminal
-  controls.
+  Persist its revision/document for CLI and inspection. Transcript Markdown
+  instead projects messages and call summaries, omitting tool result bodies
+  except subagent final answers; system-prompt Markdown is empty while
+  JSONL/inspection remains exact. Keep exact JSON and click metadata separate;
+  escape/fence untrusted values and filter terminal controls.
 - `Execution.Update` replaces transient cards by call identity without history
   accumulation; final/completion cards are immutable/durable.
   [Tools](tools.md#saved-presentation-and-live-updates) defines update cadence

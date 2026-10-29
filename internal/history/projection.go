@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mattn/go-runewidth"
+
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
@@ -36,6 +38,36 @@ type callPresentation struct {
 }
 
 type imageDimensions struct{ Width, Height int }
+
+type exportChildCompletion struct {
+	ChildID          string `json:"child_id"`
+	AssignmentStatus string `json:"assignment_status"`
+	Outcome          string `json:"outcome"`
+	Answer           string `json:"answer"`
+	Error            string `json:"error"`
+	Warning          string `json:"warning"`
+}
+
+func (c exportChildCompletion) text(answer string) string {
+	status := c.AssignmentStatus
+	if status == "" {
+		status = c.Outcome
+	}
+	var parts []string
+	if status != "" {
+		parts = append(parts, "Assignment status: "+render.Clean(status))
+	}
+	if c.Error != "" {
+		parts = append(parts, "Error: "+render.Clean(c.Error))
+	}
+	if c.Warning != "" {
+		parts = append(parts, "Warning: "+render.Clean(c.Warning))
+	}
+	if answer != "" {
+		parts = append(parts, "Subagent final answer:\n\n"+render.Clean(answer))
+	}
+	return strings.Join(parts, "\n\n")
+}
 
 // decodePresentation reads only metadata needed by replay. In particular it
 // skips nested request messages and job details rather than copying large bodies.
@@ -261,12 +293,49 @@ func projectExportText(data entryPresentation) (string, error) {
 	if entry.InternalEvent() || data.Status.Type == "system_prompt" {
 		return "", nil
 	}
-	if data.Status.Type == "request_message" {
-		return render.Clean(projectLabel(data)), nil
+	if data.Status.Type == "request_message" || data.Status.Type == "tool_stream" {
+		return "", nil
 	}
 	if entry.Kind == "message" || entry.Kind == "summary" {
 		message := data.Message
-		content := message.Content
+		if message.Type == llm.TypeRuntimeContext || message.Type == llm.TypeCompactionContext || message.Type == llm.TypeSystemInstruction || message.Type == llm.TypeDeveloperInstruction {
+			return "", nil
+		}
+		if message.Type == llm.TypeRuntimeNotification {
+			var notice struct {
+				Type, Kind, Label, Status, Name, Message, Answer string
+				JobID                                            string `json:"job_id"`
+			}
+			if json.Unmarshal([]byte(message.Content), &notice) == nil {
+				if notice.Type == "child_turn_finished" {
+					var completion exportChildCompletion
+					if err := json.Unmarshal([]byte(message.Content), &completion); err != nil {
+						return "", err
+					}
+					if text := completion.text(completion.Answer); text != "" {
+						return text, nil
+					}
+				}
+				parts := []string{"Runtime notification"}
+				if notice.Type != "" {
+					parts = append(parts, strings.ReplaceAll(notice.Type, "_", " "))
+				}
+				for _, field := range []string{render.JobReference(notice.Kind, notice.Label, notice.JobID), notice.Name, notice.Status, notice.Message} {
+					if field != "" {
+						parts = append(parts, render.Clean(field))
+					}
+				}
+				return strings.Join(parts, " · "), nil
+			}
+			return "Runtime notification · " + render.Clean(message.Content), nil
+		}
+		if message.Type == llm.TypeChildGuidance {
+			var guidance struct{ Type, Message string }
+			if json.Unmarshal([]byte(message.Content), &guidance) == nil && guidance.Type == "child_message" {
+				return render.Clean(guidance.Message), nil
+			}
+		}
+		content := message.DisplayText()
 		if json.Valid([]byte(content)) {
 			content = render.Fence(content, "json")
 		}
@@ -287,13 +356,52 @@ func projectExportText(data entryPresentation) (string, error) {
 		return text, nil
 	}
 	if entry.Kind == "tool_call" {
-		// A pending intent must not include a result committed outside the cut.
-		return "Pending call:\n\n" + render.Tool(data.Call.Name, data.Call.Arguments, nil).Detail, nil
+		return TranscriptCall(data.Call.Name, data.Call.Arguments), nil
 	}
 	if entry.Kind == "tool_result" {
-		return data.Markdown.ExportText(), nil
+		return "", nil
 	}
-	return projectInspectionText(data)
+	if entry.Kind == "status" {
+		if data.Status.Type == "job_completion" && (data.Status.Markdown.Revision != 1 || data.Status.Markdown.Summary == "") {
+			return "", errors.New(prompts.HistoryJobCompletionPresentation)
+		}
+		if data.Status.Type == "job_completion" {
+			return "", nil // The summary can contain captured tool output.
+		}
+		if data.Status.Type == "child_message" {
+			var guidance struct{ Message string }
+			if err := json.Unmarshal(entry.Content, &guidance); err != nil {
+				return "", err
+			}
+			return render.Clean(guidance.Message), nil
+		}
+		return render.Clean(strings.TrimSuffix(projectLabel(data), " · inspect")), nil
+	}
+	return "", nil
+}
+
+// TranscriptCall projects an invocation without its result. Previewed parameters
+// are clipped to 80 terminal cells, independently of unpreviewed parameters.
+func TranscriptCall(name string, args json.RawMessage) string {
+	var values map[string]any
+	if json.Unmarshal(args, &values) == nil {
+		preview := make(map[string]any)
+		for _, key := range []string{"command", "query", "pattern", "path", "label", "name", "job_id", "child_id", "url", "document_id"} {
+			if value, ok := values[key].(string); ok {
+				preview[key] = runewidth.Truncate(strings.Join(strings.Fields(render.Clean(value)), " "), 80, "…")
+			}
+		}
+		args, _ = json.Marshal(preview)
+	} else {
+		args = nil
+	}
+	return render.Tool(runewidth.Truncate(render.Clean(name), 80, "…"), args, nil).Summary
+}
+
+// TranscriptMessage renders a message using the same projection as saved history.
+// It does not open binary snapshots to obtain optional image dimensions.
+func TranscriptMessage(message llm.Message) (string, error) {
+	return projectExportText(entryPresentation{Entry: Entry{Kind: "message"}, Message: &message})
 }
 
 func projectInspectionPage(page InspectionPage, role string, supported, encoded bool) InspectionPage {

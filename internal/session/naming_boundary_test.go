@@ -27,7 +27,7 @@ func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
 					if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= 14*time.Second || time.Until(deadline) > 15*time.Second {
 						t.Errorf("naming request must have a 15-second deadline, got %v (present: %v)", deadline, ok)
 					}
-					if !strings.Contains(req.Messages[0].Content, "Tool: glob") {
+					if !strings.Contains(req.Messages[0].Content, "Tool call: **glob** · ` *.go `") {
 						return errors.New("naming omitted first tool")
 					}
 					if fail {
@@ -98,7 +98,7 @@ func TestCompactionCancellationDoesNotWaitForBackgroundNaming(t *testing.T) {
 	namingStopped := make(chan struct{})
 	var summaryCalls atomic.Int32
 	r.Provider = &childProvider{stream: func(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		if strings.HasPrefix(req.System, "Name this coding session") {
+		if req.System == prompts.Naming {
 			close(namingStarted)
 			defer close(namingStopped)
 			<-ctx.Done()
@@ -154,5 +154,38 @@ func TestCompactionCancellationDoesNotWaitForBackgroundNaming(t *testing.T) {
 	case <-namingStopped:
 	default:
 		t.Fatal("naming shutdown did not join the provider")
+	}
+}
+
+func TestNamingUsesEasySelectionOrFallsBack(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fallback", true: "easy"}[configured], func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			r.AutoName = true
+			want := r.CurrentSelection()
+			if configured {
+				want.Model.ID = "easy-fixture"
+				want.Variant = "easy-variant"
+				if err := r.RestoreEasyModel(want); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selected := make(chan llm.Selection, 1)
+			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+				if req.NoTools {
+					selected <- req.Selection
+					return emit(llm.StreamEvent{Kind: "text", Text: "Project Research Session"})
+				}
+				return emit(llm.StreamEvent{Kind: "text", Text: "I will inspect the project."})
+			}}
+			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect the project"}); err != nil {
+				t.Fatal(err)
+			}
+			<-r.namingDone
+			got := <-selected
+			if got.Provider != want.Provider || got.Model.ID != want.Model.ID || got.Variant != want.Variant {
+				t.Fatalf("naming selection = %+v, want %+v", got, want)
+			}
+		})
 	}
 }

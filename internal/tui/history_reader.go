@@ -19,6 +19,7 @@ type historyReader interface {
 	BoundaryExpandedPage(context.Context, int64, int, int) (history.InspectionPage, error)
 	SubagentNames(context.Context, string) (map[string]string, error)
 	ReadView(context.Context, history.Entry) (history.EntryView, error)
+	ExportText(history.Entry) (string, error)
 	ReadInspection(context.Context, int64) (history.Inspection, error)
 	InspectPage(context.Context, int64, int, int) (history.InspectionPage, error)
 	ChildResponse(int64) (int64, error)

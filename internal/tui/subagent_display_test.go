@@ -347,7 +347,27 @@ func TestSubagentAwaitingToolIsNamedAndInspectable(t *testing.T) {
 	close(p.release)
 	u.wait(t, "[one two three four] Execution details · read")
 	u.key(tcell.KeyEscape)
-	u.wait(t, "Child handled missing file")
+	frame := u.wait(t, "Child handled missing file")
+	if strings.Count(frame, "[one two three four] read") != 1 || strings.Contains(frame, "Tool announced") || strings.Contains(frame, "tool_call") {
+		t.Fatal("live transcript contains duplicate tool rows", frame)
+	}
+	u.wait(t, "Turn complete")
+	if err := u.runtime.Store.RenameSession(u.runtime.Current(), "Reloaded child fixture"); err != nil {
+		t.Fatal(err)
+	}
+	u.typeText("/load " + u.runtime.Current())
+	u.key(tcell.KeyEnter)
+	frame = u.wait(t, "Reloaded child fixture")
+	if strings.Count(frame, "[one two three four] read") != 1 || strings.Contains(frame, "Tool announced") || strings.Contains(frame, "tool_call") {
+		t.Fatal("replayed transcript contains duplicate tool rows", frame)
+	}
+	for y, row := range strings.Split(frame, "\n") {
+		if strings.Contains(row, "[one two three four] read") {
+			u.screen.EventQ() <- tcell.NewEventMouse(3, y, tcell.Button1, 0)
+			break
+		}
+	}
+	u.wait(t, "Execution details · read")
 }
 
 func TestSubagentBadgeRowsPreserveGeometryAndIdentity(t *testing.T) {

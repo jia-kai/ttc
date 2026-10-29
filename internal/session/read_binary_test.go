@@ -96,7 +96,7 @@ func TestBinaryReadFrozenCapabilitiesAndHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, export := range []func(string, string, int64) ([]byte, error){r.Store.ActorTranscript, r.Store.ActorTranscriptJSONL} {
+			for _, export := range []func(string, string, int64) ([]byte, error){r.Store.ActorTranscriptJSONL} {
 				body, err := export(original, "main", saved.EntryTip)
 				if err != nil || !strings.Contains(string(body), want.SHA256) || strings.Contains(string(body), "base64") {
 					t.Fatal("history export lost document reference or copied bytes", err)

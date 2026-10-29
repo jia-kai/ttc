@@ -144,10 +144,10 @@ func TestTypedToolAndJobViewsAndFrozenExportReader(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE tool_records SET markdown_json=? WHERE entry_id=?", string(changed), id); err != nil {
 		t.Fatal(err)
 	}
-	if text, err := s.exportTextWith(ctx, q, view.Entry); err != nil || text != md.Detail {
+	if text, err := s.exportTextWith(ctx, q, view.Entry); err != nil || text != "" {
 		t.Fatal("export escaped frozen reader", len(text), err)
 	}
-	if text, err := s.ExportText(view.Entry); err != nil || text != "Outside snapshot" {
+	if text, err := s.ExportText(view.Entry); err != nil || text != "" {
 		t.Fatal("live export control", text, err)
 	}
 
@@ -215,7 +215,7 @@ func TestTypedRequestPlaceholderAndMissingToolRecord(t *testing.T) {
 	if err != nil || view.Label != "compaction assistant · inspect" || view.Message != nil {
 		t.Fatal("placeholder decoded request body", view, err)
 	}
-	if text, err := s.ExportText(view.Entry); err != nil || text != view.Label {
+	if text, err := s.ExportText(view.Entry); err != nil || text != "" {
 		t.Fatal("export decoded request body", text, err)
 	}
 	if _, err := s.ReadInspection(ctx, id); err == nil {

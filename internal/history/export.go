@@ -3,6 +3,7 @@ package history
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -23,7 +24,7 @@ import (
 
 // Transcript freezes the selected branch as dense, user-readable Markdown.
 // Exact envelopes/provider payloads belong in TranscriptJSONL, not this view.
-// Tool intents with a result in the selected cut are represented by that result.
+// Calls are summarized at their original position; tool results are omitted.
 func (s *Store) Transcript(session string, tip int64) ([]byte, error) {
 	v, err := s.Session(session)
 	if err != nil {
@@ -49,19 +50,21 @@ func (s *Store) transcriptEntriesContext(ctx context.Context, name string, entri
 }
 
 func (s *Store) writeTranscriptEntries(ctx context.Context, q historyReader, out io.Writer, name string, entries []Entry) error {
-	completed := map[string]bool{}
+	// Only suppress a delivery when its source status is in this selection. A
+	// pending status, or a child-only selection, must remain independently visible.
+	guidanceSources := make(map[int64]string)
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Kind == "tool_result" {
-			var ref struct {
-				CallID string `json:"call_id"`
+		if entry.Kind == "status" {
+			var status struct {
+				Type    string `json:"type"`
+				ChildID string `json:"child_id"`
 			}
-			if err := json.Unmarshal(entry.Content, &ref); err != nil {
-				return err
+			if json.Unmarshal(entry.Content, &status) == nil && status.Type == "child_message" && status.ChildID != "" {
+				guidanceSources[entry.EventSeq()] = status.ChildID
 			}
-			completed[ref.CallID] = true
 		}
 	}
 	if _, err := fmt.Fprintf(out, "# %s\n\n", render.Inline(name)); err != nil {
@@ -71,15 +74,29 @@ func (s *Store) writeTranscriptEntries(ctx context.Context, q historyReader, out
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Kind == "tool_call" {
-			var ref struct {
-				CallID string `json:"call_id"`
-			}
-			if err := json.Unmarshal(entry.Content, &ref); err != nil {
+		actor, kind := entry.Actor, entry.Role
+		if kind == "" {
+			kind = entry.Kind
+		}
+		if entry.Kind == "message" {
+			var message llm.Message
+			if err := json.Unmarshal(entry.Content, &message); err != nil {
 				return err
 			}
-			if completed[ref.CallID] {
+			if message.Type == llm.TypeChildGuidance && message.EventSeq != 0 && guidanceSources[message.EventSeq] == entry.Actor {
 				continue
+			}
+			if message.Type == llm.TypeRuntimeNotification {
+				var notice struct {
+					Type    string `json:"type"`
+					ChildID string `json:"child_id"`
+				}
+				if json.Unmarshal([]byte(message.Content), &notice) == nil && notice.Type == "child_turn_finished" {
+					actor, kind = notice.ChildID, "subagent response"
+					if actor == "" {
+						actor = "subagent"
+					}
+				}
 			}
 		}
 		text, err := s.exportTextWith(ctx, q, entry)
@@ -89,11 +106,21 @@ func (s *Store) writeTranscriptEntries(ctx context.Context, q historyReader, out
 		if text == "" {
 			continue
 		}
-		kind := entry.Role
-		if kind == "" {
-			kind = entry.Kind
+		if entry.Kind == "tool_result" {
+			var result string
+			if err := q.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, entry.ID).Scan(&result); err != nil {
+				return err
+			}
+			var completion exportChildCompletion
+			if err := json.Unmarshal([]byte(result), &completion); err != nil {
+				return err
+			}
+			actor, kind = completion.ChildID, "subagent response"
+			if actor == "" {
+				actor = "subagent"
+			}
 		}
-		if _, err := fmt.Fprintf(out, "### %s · %s · #%d\n\n%s\n\n", render.Inline(entry.Actor), render.Inline(kind), entry.ID, text); err != nil {
+		if _, err := fmt.Fprintf(out, "### %s · %s · #%d\n\n%s\n\n", render.Inline(actor), render.Inline(kind), entry.ID, text); err != nil {
 			return err
 		}
 	}
@@ -108,6 +135,61 @@ func (s *Store) ExportText(entry Entry) (string, error) {
 }
 
 func (s *Store) exportTextWith(ctx context.Context, q historyReader, entry Entry) (string, error) {
+	var subagentResult, subagentCall string
+	if entry.ID > 0 && entry.Kind == "tool_result" {
+		err := q.QueryRow(`SELECT c.result_json,c.call_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, entry.ID).Scan(&subagentResult, &subagentCall)
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		var call struct {
+			Background bool `json:"background"`
+		}
+		if json.Unmarshal([]byte(subagentCall), &call) == nil && call.Background {
+			return "", nil
+		}
+	}
+	if entry.ID > 0 && (entry.Kind == "tool_result" || entry.Kind == "message" && entry.Role == "user") {
+		var completion exportChildCompletion
+		if entry.Kind == "tool_result" {
+			if err := json.Unmarshal([]byte(subagentResult), &completion); err != nil {
+				return "", err
+			}
+			if completion.AssignmentStatus == "running" || completion.Outcome == "running" {
+				return "", nil
+			}
+		}
+		response, err := childResponseWith(q, entry.ID)
+		if err != nil {
+			return "", err
+		}
+		if response != 0 {
+			if entry.Kind == "message" {
+				var message llm.Message
+				if err := json.Unmarshal(entry.Content, &message); err != nil {
+					return "", err
+				}
+				if err := json.Unmarshal([]byte(message.Content), &completion); err != nil {
+					return "", err
+				}
+			}
+			child, err := entryWith(q, response)
+			if err != nil {
+				return "", err
+			}
+			data, err := loadExportPresentation(ctx, q, child)
+			if err != nil {
+				return "", err
+			}
+			text, err := projectExportText(data)
+			return completion.text(text), err
+		}
+		if entry.Kind == "tool_result" {
+			return completion.text(completion.Answer), nil
+		}
+	}
 	data, err := loadExportPresentation(ctx, q, entry)
 	if err != nil {
 		return "", err
@@ -122,6 +204,9 @@ func loadExportPresentation(ctx context.Context, q historyReader, entry Entry) (
 		return entryPresentation{}, err
 	}
 	if entry.InternalEvent() {
+		return entryPresentation{Entry: entry}, nil
+	}
+	if entry.Kind == "tool_result" {
 		return entryPresentation{Entry: entry}, nil
 	}
 	data, err := decodePresentation(entry)
@@ -154,13 +239,6 @@ func loadExportPresentation(ctx context.Context, q historyReader, entry Entry) (
 		}
 		data.Call = &callPresentation{Name: name, Arguments: json.RawMessage(call)}
 		return data, nil
-	}
-	if entry.Kind == "tool_result" {
-		md, err := toolMarkdownWith(q, entry.ID)
-		if err != nil {
-			return data, err
-		}
-		data.Markdown = md
 	}
 	if entry.Kind == "status" {
 		return decodeInspectionBody(data)

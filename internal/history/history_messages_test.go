@@ -177,7 +177,7 @@ func TestHistoryArchiveCaptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, err = s.ExportText(Entry{Kind: "tool_call", Content: ref})
-	if err != nil || !strings.HasPrefix(text, "Pending call:\n\n") {
+	if err != nil || !strings.Contains(text, "**read**") {
 		t.Fatalf("pending call caption = %q, %v", text, err)
 	}
 	pending := &llm.Message{Type: llm.TypeAssistant, Content: "Last partial reply"}
@@ -197,7 +197,7 @@ func TestHistoryArchiveCaptions(t *testing.T) {
 	_, err = s.ExportText(Entry{Kind: "status", Content: json.RawMessage(`{"type":"job_completion"}`)})
 	requireHistoryMessage(t, err, "invalid job completion presentation")
 	text, err = s.ExportText(Entry{Kind: "status", Content: json.RawMessage(`{"type":"request_message","purpose":"compaction","role":"assistant"}`)})
-	if err != nil || text != "compaction assistant · inspect" {
+	if err != nil || text != "" {
 		t.Fatalf("request message archive label = %q, %v", text, err)
 	}
 }

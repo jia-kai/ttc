@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gdamore/tcell/v3"
+
 	"ttc/internal/history"
+	"ttc/internal/llm"
 	"ttc/internal/session"
 )
 
@@ -19,6 +22,70 @@ type inspectorHistory struct {
 	pageErr    error
 	inspection history.Inspection
 	reads      []string
+}
+
+func TestReplayRetainsPendingToolAndReplacesWithResult(t *testing.T) {
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{
+		{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Choose?","options":[{"id":"a","label":"Yes"},{"id":"b","label":"No"}]}]}`)}}},
+		{Text: "Finished."},
+	}})
+	u.typeText("ask")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Choose?")
+	c := inspectionController(u.runtime.Store)
+	c.frontend.Runtime = u.runtime
+	c.sidebar = newSidebar()
+	c.replay()
+	var pending line
+	for _, item := range c.view.lines {
+		if item.callID != "" {
+			if pending.callID != "" {
+				t.Fatal("duplicate pending call", c.view.lines)
+			}
+			pending = item
+		}
+	}
+	if pending.callID == "" || !strings.Contains(pending.text, "question") || strings.Contains(pending.text, "tool_call") || pending.action != actionExecution || pending.complete {
+		t.Fatalf("pending call not rendered as inspectable execution: %+v", pending)
+	}
+	c.inspectSaved(pending.id)
+	if c.modal.window == nil || !strings.Contains(c.modal.window.Text, "Choose?") {
+		t.Fatalf("pending inspection lost saved details: %+v", c.modal.window)
+	}
+	updated := pending
+	updated.text = "updated"
+	if !c.view.publish(updated, "", false) || len(c.view.lines) == 0 || c.view.lines[c.view.calls[pending.callID]].text != "updated" {
+		t.Fatal("live updates did not replace replayed pending row")
+	}
+	u.key(tcell.KeyEnter)
+	u.wait(t, "[Submit]")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn complete")
+	c.replay()
+	var completed []line
+	for _, item := range c.view.lines {
+		if item.callID == pending.callID {
+			completed = append(completed, item)
+		}
+	}
+	if len(completed) != 1 || !completed[0].complete || completed[0].id == pending.id {
+		t.Fatalf("result did not replace pending call: %+v", completed)
+	}
+}
+
+func TestReplayToolResultsRespectsSelectedCut(t *testing.T) {
+	entries := []history.Entry{
+		{ID: 1, Kind: "tool_call", Content: []byte(`{"call_id":"call"}`)},
+		{ID: 2, Kind: "tool_result", Content: []byte(`{"call_id":"call"}`)},
+	}
+	ids, results, err := replayToolResults(entries[:1])
+	if err != nil || ids[1] != "call" || results["call"] != 0 {
+		t.Fatalf("result beyond replay cut affected pending intent: %v %v %v", ids, results, err)
+	}
+	_, results, err = replayToolResults(entries)
+	if err != nil || results["call"] != 2 {
+		t.Fatalf("result inside replay cut not selected: %v %v", results, err)
+	}
 }
 
 func (h *inspectorHistory) InspectPage(_ context.Context, id int64, offset, limit int) (history.InspectionPage, error) {

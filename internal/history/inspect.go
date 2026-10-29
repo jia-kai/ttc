@@ -39,12 +39,16 @@ func (q contextHistoryReader) QueryRow(query string, args ...any) *sql.Row {
 // Loaded sessions retain references to immutable entries in their source session.
 // The original entry remains independently inspectable for completion metadata.
 func (s *Store) ChildResponse(id int64) (int64, error) {
+	return childResponseWith(s.db, id)
+}
+
+func childResponseWith(q historyReader, id int64) (int64, error) {
 	// This lookup runs before paged inspection. Keep unrelated messages and the
 	// referenced assistant's potentially large replay envelope out of Go memory.
 	var entry Entry
 	entry.ID = id
 	var messageType string
-	if err := s.db.QueryRow(`SELECT session_id,kind,coalesce(role,''),
+	if err := q.QueryRow(`SELECT session_id,kind,coalesce(role,''),
 		CASE WHEN kind='message' AND role='user' THEN coalesce((
 			SELECT value FROM json_each(entries.content_json) AS field
 			WHERE lower(field.key)='type' AND field.type='text' ORDER BY field.id DESC LIMIT 1
@@ -55,7 +59,7 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 	var raw []byte
 	if entry.Kind == "tool_result" {
 		var result string
-		err := s.db.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, id).Scan(&result)
+		err := q.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, id).Scan(&result)
 		if err == sql.ErrNoRows {
 			return 0, nil
 		}
@@ -68,7 +72,7 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 		// Append validates with Go's canonical decoder, which accepts case-folded
 		// field names and uses the last non-null string among duplicate keys.
 		// Match those semantics without loading the complete message envelope.
-		if err := s.db.QueryRow(`SELECT coalesce((
+		if err := q.QueryRow(`SELECT coalesce((
 			SELECT value FROM json_each(entries.content_json) AS field
 			WHERE lower(field.key)='content' AND field.type='text' ORDER BY field.id DESC LIMIT 1
 		),'') FROM entries WHERE id=?`, id).Scan(&content); err != nil {
@@ -96,11 +100,11 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 	}
 	var target Entry
 	target.ID = reference.ResultEntry
-	if err := s.db.QueryRow("SELECT session_id,actor_id,kind,coalesce(role,'') FROM entries WHERE id=?", target.ID).Scan(&target.SessionID, &target.Actor, &target.Kind, &target.Role); err != nil {
+	if err := q.QueryRow("SELECT session_id,actor_id,kind,coalesce(role,'') FROM entries WHERE id=?", target.ID).Scan(&target.SessionID, &target.Actor, &target.Kind, &target.Role); err != nil {
 		return 0, fmt.Errorf("child response reference: %w", err)
 	}
 	var sameLineage bool
-	if err := s.db.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, target.SessionID, entry.SessionID).Scan(&sameLineage); err != nil {
+	if err := q.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, target.SessionID, entry.SessionID).Scan(&sameLineage); err != nil {
 		return 0, err
 	}
 	if !strings.HasPrefix(reference.ChildID, "main/child_") || !sameLineage || target.Actor != reference.ChildID || target.Kind != "message" || target.Role != "assistant" {

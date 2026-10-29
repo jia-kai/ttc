@@ -49,8 +49,8 @@ func TestAttachmentPayloadIsInspectableWithoutConversationExpansion(t *testing.T
 		t.Fatal("paged inspection lost canonical input", page, err)
 	}
 	markdown, err := u.runtime.Store.Transcript(u.runtime.Current(), 0)
-	if err != nil || !bytes.Contains(markdown, []byte(snapshot)) {
-		t.Fatal("export/compaction archive lost attachment information", err)
+	if err != nil || !bytes.Contains(markdown, []byte(authored)) || bytes.Contains(markdown, []byte(snapshot)) {
+		t.Fatal("Markdown export did not preserve the user-facing text without attachment expansion", err)
 	}
 	exact, err := u.runtime.Store.TranscriptJSONL(u.runtime.Current(), 0)
 	if err != nil || !bytes.Contains(exact, []byte(snapshot)) {

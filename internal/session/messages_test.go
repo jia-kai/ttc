@@ -10,6 +10,7 @@ import (
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
+	"ttc/internal/render"
 	"ttc/internal/tool"
 )
 
@@ -48,15 +49,31 @@ func TestSessionToolMessageAssets(t *testing.T) {
 	}
 }
 
+func TestNamingToolSummaryIsBoundedAndCallOnly(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Name this session")
+	call := llm.ToolCall{Name: "shell", Arguments: []byte(`{"command":"echo hello","label":"example"}`)}
+	large := llm.ToolCall{Name: "read", Arguments: []byte(`{"path":"` + strings.Repeat("x", 5000) + `"}`)}
+	r.Provider = &childProvider{stream: func(_ context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
+		got := request.Messages[0].Content
+		want := render.Tool(call.Name, call.Arguments, nil).Summary
+		if !strings.Contains(got, want) || !strings.Contains(got, "Tool call: **read** ·") || !strings.Contains(got, "…") || strings.Contains(got, strings.Repeat("x", 100)) || strings.Contains(got, "Result:") {
+			t.Fatalf("unexpected naming transcript: %q", got)
+		}
+		return emit(llm.StreamEvent{Kind: "text", Text: "Small Research Tool Session"})
+	}}
+	r.name(context.Background(), r.Current(), r.CurrentSelection(), "", llm.Message{Type: llm.TypeUserInput, Content: "goal"}, llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{call, large}})
+}
+
 func TestSessionNamingScaffoldBytes(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Name this session")
 	user := strings.Repeat("x", 4095) + "πtail"
-	assistant := llm.Message{Type: llm.TypeAssistant, Content: "raw %s\nassistant", Calls: []llm.ToolCall{{Name: "read"}, {Name: "glob"}, {Name: "grep"}, {Name: "shell"}, {Name: "ignored"}}}
+	assistant := llm.Message{Type: llm.TypeAssistant, Content: "raw %s\nassistant", Calls: []llm.ToolCall{{Name: "read", Arguments: []byte(`{"path":"README.md"}`)}, {Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)}, {Name: "grep", Arguments: []byte(`{}`)}, {Name: "shell", Arguments: []byte(`{}`)}, {Name: "ignored"}}}
 	calls := 0
 	r.Provider = &childProvider{stream: func(_ context.Context, request llm.Request, emit func(llm.StreamEvent) error) error {
 		calls++
-		want := strings.Repeat("x", 4095) + "\n[truncated]\n\nraw %s\nassistant\nTool: read\nTool: glob\nTool: grep\nTool: shell"
+		want := "User:\n" + strings.Repeat("x", 4095) + "\n[truncated]\n\nAssistant:\nraw %s\nassistant\n\nTool call: **read** · ` README.md `\n\nTool call: **glob** · ` *.go `\n\nTool call: **grep**\n\nTool call: **shell**\n[truncated]"
 		if len(request.Messages) != 1 || request.Messages[0].Content != want {
 			t.Fatalf("naming input bytes changed: %#v", request.Messages)
 		}

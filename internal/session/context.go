@@ -35,6 +35,9 @@ func (r *Runtime) startNaming(turn string, selection llm.Selection, user, assist
 	if !claimed {
 		return
 	}
+	if easy := r.EasyModelChoice(); easy != nil {
+		selection = *easy
+	}
 	done := make(chan struct{})
 	r.namingDone = done
 	ctx := r.namingCtx
@@ -94,12 +97,28 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 		r.namingFailure(ownerCtx, sessionID, turn, "save instructions: "+e.Error())
 		return
 	}
-	message := llm.Message{Type: llm.TypeUserInput, Content: text(user.Content) + "\n\n" + text(assistant.Content)}
+	user.Content, assistant.Content = text(user.Content), text(assistant.Content)
+	if user.UserText != nil {
+		bounded := text(*user.UserText)
+		user.UserText = &bounded
+	}
+	userText, e := history.TranscriptMessage(user)
+	if e != nil {
+		r.namingFailure(ownerCtx, sessionID, turn, "render user input: "+e.Error())
+		return
+	}
+	assistantText, e := history.TranscriptMessage(assistant)
+	if e != nil {
+		r.namingFailure(ownerCtx, sessionID, turn, "render assistant input: "+e.Error())
+		return
+	}
+	message := llm.Message{Type: llm.TypeUserInput, Content: prompts.SessionNamingUser + userText + prompts.SessionNamingAssistant + assistantText}
 	for i, call := range assistant.Calls {
 		if i == 4 {
+			message.Content += prompts.SessionNamingTruncated
 			break
 		}
-		message.Content += prompts.SessionNamingTool + render.Clean(call.Name)
+		message.Content += prompts.SessionNamingTool + history.TranscriptCall(call.Name, call.Arguments)
 	}
 	if _, e := r.Store.RequestMessages(sessionID, turn, "naming", request, []llm.Message{message}); e != nil {
 		r.namingFailure(ownerCtx, sessionID, turn, "save input: "+e.Error())

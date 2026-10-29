@@ -77,7 +77,9 @@ SessionUnusableAfterCompaction:
   "session unusable after compaction: %s; inspect/export history or start/load
   another session"
 SessionNamingTruncated: "\n[truncated]"
-SessionNamingTool: "\nTool: "
+SessionNamingUser: "User:\n"
+SessionNamingAssistant: "\n\nAssistant:\n"
+SessionNamingTool: "\n\nTool call: "
 SessionCompactionIdentity:
   compaction requires the actor's estimator and conversation identity
 SessionCompactionHeadroom: >-

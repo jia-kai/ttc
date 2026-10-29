@@ -98,7 +98,7 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(loaded.ID)
-	for _, export := range []func(string, int64) ([]byte, error){r.Store.Transcript, r.Store.TranscriptJSONL} {
+	for _, export := range []func(string, int64) ([]byte, error){r.Store.TranscriptJSONL} {
 		data, err := export(original, 0)
 		if err != nil || !bytes.Contains(data, []byte(checksum)) || bytes.Contains(data, []byte("data_url")) || bytes.Contains(data, []byte("base64")) {
 			t.Fatalf("history must retain references, not pixels: %v", err)

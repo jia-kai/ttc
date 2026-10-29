@@ -18,6 +18,98 @@ import (
 	"ttc/internal/render"
 )
 
+func TestTranscriptSubagentLaunchAndCompletion(t *testing.T) {
+	s, v, turn, request := historyFixture(t)
+	call := llm.ToolCall{ID: "launch", Name: "subagent", Arguments: []byte(`{"label":"helper","background":true}`)}
+	id, err := s.CallIntent(v.ID, turn, "main", request, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := json.RawMessage(`{"assignment_status":"running","child_id":"main/child_test"}`)
+	cut, err := s.CallResult(v.ID, turn, "main", id, result, nil, map[string]any{}, render.Tool(call.Name, call.Arguments, result), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish := `{"type":"child_turn_finished","child_id":"main/child_test","assignment_status":"failed","answer":"partial answer","error":"failure","warning":"warning"}`
+	if _, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeRuntimeNotification, Content: finish}); err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []bool{false, true} {
+		transcript := func(tip int64) []byte {
+			t.Helper()
+			var body []byte
+			var err error
+			if actor {
+				body, err = s.ActorTranscript(v.ID, "main", tip)
+			} else {
+				body, err = s.Transcript(v.ID, tip)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			return body
+		}
+		frozen := string(transcript(cut))
+		if strings.Contains(frozen, "Assignment status: running") || strings.Contains(frozen, "partial answer") {
+			t.Fatalf("launch result or later notification leaked into frozen cut: %s", frozen)
+		}
+		saved, err := s.Session(v.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(transcript(saved.EntryTip))
+		for _, want := range []string{`### main/child\_test · subagent response · #`, "Assignment status: failed", "partial answer", "Error: failure", "Warning: warning"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("missing %q: %s", want, body)
+			}
+		}
+		if strings.Contains(body, "Assignment status: running") {
+			t.Fatalf("incorrect transcript row: %s", body)
+		}
+	}
+	exact, err := s.ActorTranscriptJSONL(v.ID, "main", cut)
+	if err != nil || !bytes.Contains(exact, []byte(`"assignment_status":"running"`)) {
+		t.Fatalf("exact export lost launch: %s (%v)", exact, err)
+	}
+}
+
+func TestTranscriptBackgroundLaunchTerminalStatusWaitsForNotification(t *testing.T) {
+	for _, status := range []string{"running", "completed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			s, v, turn, request := historyFixture(t)
+			call := llm.ToolCall{ID: "launch", Name: "subagent", Arguments: []byte(`{"label":"helper","background":true}`)}
+			id, err := s.CallIntent(v.ID, turn, "main", request, call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := json.RawMessage(`{"assignment_status":"` + status + `","child_id":"main/child_test"}`)
+			cut, err := s.CallResult(v.ID, turn, "main", id, result, nil, map[string]any{}, render.Tool(call.Name, call.Arguments, result), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			finish := `{"type":"child_turn_finished","child_id":"main/child_test","assignment_status":"` + status + `","answer":"actual answer"}`
+			end, err := s.Append(v.ID, turn, "main", "message", "user", true, llm.Message{Type: llm.TypeRuntimeNotification, Content: finish})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, actor := range []bool{false, true} {
+				transcript := s.Transcript
+				if actor {
+					transcript = func(session string, tip int64) ([]byte, error) { return s.ActorTranscript(session, "main", tip) }
+				}
+				frozen, err := transcript(v.ID, cut)
+				if err != nil || strings.Contains(string(frozen), "Assignment status:") || strings.Contains(string(frozen), "actual answer") || strings.Contains(string(frozen), "subagent response") {
+					t.Fatalf("launch result leaked into frozen cut: %v\n%s", err, frozen)
+				}
+				body, err := transcript(v.ID, end)
+				if err != nil || strings.Count(string(body), "Assignment status: "+status) != 1 || strings.Count(string(body), "actual answer") != 1 || !strings.Contains(string(body), `### main/child\_test · subagent response · #`) {
+					t.Fatalf("notification projection: %v\n%s", err, body)
+				}
+			}
+		})
+	}
+}
+
 func TestInternalEventsRemainExactWithoutConversationDuplication(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	id, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{"type": "job_state", "job_id": "job", "state": "running"})
@@ -101,6 +193,84 @@ func TestChildMessageStatusExportsAndArchives(t *testing.T) {
 			t.Fatalf("child-message entry missing from %s.jsonl", path)
 		}
 	}
+}
+
+func TestGuidanceTranscriptDeduplicatesOnlySelectedSource(t *testing.T) {
+	s, v, turn, _ := historyFixture(t)
+	const actor = "main/child"
+	const delivered = "Review the measurements."
+	const pending = "Pending guidance stays visible."
+	source, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{
+		"type": "child_message", "child_id": actor, "message": delivered,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{"type": "child_message", "child_id": actor, "message": delivered, "event_seq": source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery, err := s.Append(v.ID, turn, actor, "message", "user", true, llm.Message{Type: llm.TypeChildGuidance, Content: string(payload), EventSeq: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingID, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{
+		"type": "child_message", "child_id": actor, "message": pending,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(label string, text []byte, expected string) {
+		t.Helper()
+		if strings.Count(string(text), expected) != 1 || strings.Contains(string(text), "```json") {
+			t.Fatalf("%s should contain readable guidance exactly once:\n%s", label, text)
+		}
+	}
+	for _, cut := range []int64{source, delivery, pendingID} {
+		text, err := s.Transcript(v.ID, cut)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("selected cut", text, delivered)
+		if cut == pendingID {
+			check("pending", text, pending)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "all.md")
+	if err := s.Export(v.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("all-actor export", text, delivered)
+	check("all-actor pending", text, pending)
+	exact, err := os.ReadFile(path + ".jsonl")
+	if err != nil || bytes.Count(exact, []byte(delivered)) != 2 {
+		t.Fatalf("exact records lost: %v\n%s", err, exact)
+	}
+	for _, selected := range []string{"main", actor} {
+		archive, err := s.ArchiveActorTranscript(v.ID, selected, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := os.ReadFile(archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(selected, text, delivered)
+	}
+	// A child delivery selected without its source must not consult other rows.
+	entry, err := s.Entry(delivery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err = s.transcriptEntries("child only", []Entry{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("child-only selection", text, delivered)
 }
 
 func TestCompactionReplyInspectorUsesRequestPurpose(t *testing.T) {
@@ -256,11 +426,11 @@ func TestTranscriptJSONLFreezesSelectedCutAndExactPayloads(t *testing.T) {
 		t.Fatal("pending intent exposed delivery outside its frozen cut")
 	}
 	pending, err := s.Transcript(v.ID, cut)
-	if err != nil || !strings.Contains(string(pending), "Pending call:") || strings.Contains(string(pending), prompt) || strings.Contains(string(pending), "future-result") {
+	if err != nil || !strings.Contains(string(pending), "**read**") || strings.Contains(string(pending), prompt) || strings.Contains(string(pending), "future-result") {
 		t.Fatalf("pending Markdown snapshot: %v\n%s", err, pending)
 	}
 	completed, err := s.Transcript(v.ID, resultID)
-	if err != nil || !strings.Contains(string(completed), exportBody) || strings.Contains(string(completed), "Pending call:") || strings.Contains(string(completed), "expanded details") {
+	if err != nil || strings.Count(string(completed), "**read**") != 1 || strings.Contains(string(completed), exportBody) || strings.Contains(string(completed), "expanded details") {
 		t.Fatalf("completed Markdown projection: %v\n%s", err, completed)
 	}
 	exactCompleted, err := s.TranscriptJSONL(v.ID, resultID)
