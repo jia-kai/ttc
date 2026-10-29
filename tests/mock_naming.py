@@ -1,9 +1,13 @@
 """Handle automatic session naming separately from scripted agent responses."""
 import json
+from pathlib import Path
+
+
+NAMING_INSTRUCTIONS = (Path(__file__).resolve().parent.parent / 'prompt' / 'naming.md').read_text()
 
 
 def respond_to_naming(handler, body):
-    if not body.get('instructions', '').startswith('Name this coding session'):
+    if body.get('instructions') != NAMING_INSTRUCTIONS:
         return False
     title = 'Fixture Research Session'
     events = [
