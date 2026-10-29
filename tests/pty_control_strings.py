@@ -21,6 +21,7 @@ import termios
 import time
 import traceback
 
+from pty_ready import INPUT_READY
 from scratch import private_scratch
 
 
@@ -140,7 +141,7 @@ def main():
         if pid == 0:
             os.execve(binary, argv, environment)  # No inherited TMUX, graphics or credentials.
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 38, 124, 0, 0))
-        expect('/help')
+        expect(INPUT_READY)
         # Finish startup queries/timeouts before opening a deliberately incomplete string.
         read_for(IDLE_SECONDS)
         phase = 'Ctrl-C clears nonempty prompt'

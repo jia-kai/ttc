@@ -458,7 +458,7 @@ path.write_text('Looks good.')
 
     try:
         if args.tui:
-            screen_expect('Ctrl+X M')
+            screen_expect('\n>\n')  # Screen text strips the empty composer's trailing space.
             os.write(master, b'\x18m')
             screen_expect('Model family')
             os.write(master, b'\x1b[B\r')

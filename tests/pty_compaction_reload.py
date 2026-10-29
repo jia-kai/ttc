@@ -22,6 +22,7 @@ import time
 import traceback
 from typing import Callable
 
+from pty_ready import INPUT_READY
 from scratch import private_scratch
 
 
@@ -379,7 +380,7 @@ def run_case(root, mode, status, binary):
             command += ['--session', source]
         terminal = Terminal(command, root / 'resume-terminal.log')
         if mode == 'load':
-            terminal.expect('/help')
+            terminal.expect(INPUT_READY)
             terminal.send(f'/load {source}\r'.encode())
         # No human prompt is sent: restored pending events start the turn.
         terminal.expect('Automatic recovery continuation verified.')
@@ -397,7 +398,7 @@ def run_case(root, mode, status, binary):
         idle.write_text('[]')  # Any unintended inference fails loudly.
         terminal = Terminal(base + ['--offline-script', str(idle), '--session', current],
                             root / 'reload-terminal.log')
-        terminal.expect('/help')
+        terminal.expect(INPUT_READY)
         terminal.read_for(1)
         terminal.stop()
         terminal.close()

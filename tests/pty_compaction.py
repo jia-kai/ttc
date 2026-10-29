@@ -173,7 +173,7 @@ def main():
         raise AssertionError(f'Missing PTY screen output {texts!r}; completed turns wanted={completed_turns}; history: {history_state()}; artifacts: {root}')
 
     try:
-        expect('/help')
+        expect('\n>\n')  # The screen reader strips the composer's trailing space.
         for i in range(1, 4):
             os.write(fd, f'grow {i}\r'.encode())
             # tcell can emit text as cursor-addressed patches, not contiguous

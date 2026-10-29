@@ -22,6 +22,7 @@ import termios
 import time
 import traceback
 
+from pty_ready import INPUT_READY
 from scratch import private_scratch
 
 
@@ -81,7 +82,7 @@ Formula fixture done.
             if not args.tmux and not answered and b'i=31337' in output:
                 os.write(fd, b'\x1b_Gi=31337;OK\x1b\\')
                 answered = True
-            if not submitted and b'/help' in output:
+            if not submitted and INPUT_READY.encode() in output:
                 os.write(fd, b'Render demo\r')
                 submitted = True
             normalized = bytes(output).replace(b'\x1b\x1b', b'\x1b')

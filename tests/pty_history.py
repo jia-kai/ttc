@@ -17,6 +17,7 @@ import tempfile
 import time
 import traceback
 
+from pty_ready import INPUT_READY
 from scratch import private_scratch
 
 
@@ -129,7 +130,7 @@ def main():
         stop(b'/quit\n')
         phase = 'recall'
         start()
-        expect('/help')
+        expect(INPUT_READY)
         send(b'unfinished draft\x1b[A')
         inspect_draft(newer, 1)
         send(b'\x1b[B')

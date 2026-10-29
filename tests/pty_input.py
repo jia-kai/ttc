@@ -17,6 +17,7 @@ import time
 import traceback
 
 
+from pty_ready import INPUT_READY
 from scratch import private_scratch
 
 def main():
@@ -112,7 +113,7 @@ path.write_text('Edited in external editor.\\nsecond line  \\n\\n \\t')
         os.write(fd, text)
 
     try:
-        expect('/help')
+        expect(INPUT_READY)
         with sqlite3.connect(data / 'history.sqlite') as db:
             assert db.execute('SELECT count(*) FROM sessions').fetchone()[0] == 0
         send(b'/new\r')

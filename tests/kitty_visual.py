@@ -162,7 +162,7 @@ def main():
             tmux('kill-window', '-t', other)
             assert difference.getbbox() is None, 'image changed after tmux window return: ' + name
 
-        wait('/help')
+        wait('\n> ')
         if args.question_only:
             send('Run demo\r')
             check_question_cursor(remote, wait, send, key, capture, root)
