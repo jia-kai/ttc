@@ -76,12 +76,12 @@ def main():
     skill.parent.mkdir(parents=True, mode=0o700)
     skill.write_text('---\nname: fixture\ndescription: Inspect the reproducible fixture.\n---\nKeep experiment units explicit.\n')
     script = root / 'script.json'
-    # Three rounds cross coding's proactive trigger only before grow 4, while
-    # leaving summary capacity for the original prefix plus system/tools and
-    # the final developer directive in the scripted 32768-token context.
+    # The first two outputs fill most of the scripted context; a smaller final
+    # output crosses the proactive trigger with enough room for the summary
+    # request, including the system, tools and final developer directive.
     responses = [
-        {'prefix': f'user: grow {i}', 'text': 'earlier evidence ' * 1200 + f'\nGrowth {i} complete.'}
-        for i in range(1, 4)
+        {'prefix': f'user: grow {i}', 'text': 'earlier evidence ' * size + f'\nGrowth {i} complete.'}
+        for i, size in enumerate((1550, 1550, 300), 1)
     ]
     responses.extend([
         # The summary directive is developer guidance; the offline prefix
