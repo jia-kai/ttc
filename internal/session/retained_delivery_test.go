@@ -77,9 +77,6 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 			r.selection.Model.Images = true
 			r.selection.Model.BinaryFiles = []llm.BinaryFileType{{MIMEType: "application/pdf", Extensions: []string{".pdf"}, Kind: "document", MaxBytes: 32 << 20}}
 			compactionBudget(t, r)
-			// Four native occurrences reserve 4096 tokens each; leave that
-			// capacity in both the overflowing request and the handoff.
-			r.selection.Model.Budget.ContextLimit += 4 * 4096
 			mainSession := r.Current()
 			mainBefore, err := r.Store.Messages(mainSession)
 			if err != nil {
@@ -95,6 +92,19 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 			if aside {
 				actor = "main/btw_retained_delivery"
 			}
+			// Size the fixture for the actual isolated role, not the main
+			// system prompt: their lengths may change independently. Four
+			// native occurrences reserve 4096 tokens each.
+			cm, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			system := childSystemTemplate
+			if aside {
+				system = asideSystemTemplate
+			}
+			usage := estimateUsage(r.selection, system, r.Tools.Definitions(), []llm.Message{*cm})
+			r.selection.Model.Budget.ContextLimit = usage.Input + usage.Reserved + 2600 + 4*4096
 			task := childTask{actor: actor, prompt: "Continue isolated work.", selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
 			task.turn, err = r.Store.BeginChildTurn(mainSession, task.actor, task.selection)
 			if err != nil {

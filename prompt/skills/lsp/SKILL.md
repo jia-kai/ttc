@@ -6,10 +6,12 @@ description:
 ---
 
 Use `lsp_query` when semantic navigation is more useful than text search. First
-use `job_list` to find an accessible live server for the project. Reuse it
-rather than launching one per query, including a server owned by another actor.
-Do not stop a borrowed server. If none is available and `shell` is absent,
-report the missing server and use read/grep navigation instead.
+use `job_list` to find a queryable live server for the project. Main can query
+servers owned by other actors; children can query their own or descendant
+servers, but a read grant alone does not permit `lsp_query` even if the server
+appears in `job_list`. Reuse a queryable server rather than launching one per
+query. Do not stop a borrowed server. If none is available and `shell` is
+absent, report the missing server and use read/grep navigation instead.
 
 With `shell` available, check that the server is installed (`command -v SERVER`)
 and that the project has its normal dependency/configuration files. Start it in
@@ -27,7 +29,7 @@ Common commands: `gopls`, `pyright-langserver --stdio`, `clangd`,
 project language; do not install dependencies merely to answer a query. Use
 `workdir` when the language-server workspace differs from cwd.
 
-Pass the accessible server's `job_id` to `lsp_query`. `definition`, `references`
+Pass the queryable server's `job_id` to `lsp_query`. `definition`, `references`
 and `hover` require `path`, `line` and `column`. Positions use **1-based Unicode
 code points**, including non-ASCII characters. `document_symbols` requires only
 `path`; `workspace_symbols` requires `query` (empty means all symbols). For
@@ -56,7 +58,7 @@ The client owns protocol stdin/stdout. Use `job_read` with `stream:"stderr"` for
 diagnostics, and `job_stop` when available to stop an owned server. Never send
 raw RPC through shell or read protocol stdout. Queries default to a 30-second
 timeout; increase `timeout_seconds` up to 120 for a cold index. On a stopped or
-failed initialization, inspect diagnostics, then reuse another accessible server
+failed initialization, inspect diagnostics, then reuse another queryable server
 or restart with available lifecycle tools; otherwise report the missing server.
 Compaction preserves these live handles; session switching or exit closes them.
 A disposable subagent also stops its owned server on completion. Queries are

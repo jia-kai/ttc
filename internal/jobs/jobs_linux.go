@@ -75,13 +75,14 @@ type job struct {
 
 // Manager owns jobs for one runtime. Close cancels and joins all process groups.
 type Manager struct {
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
-	jobs   map[string]*job
-	scopes map[string]*managed.Scope
-	closed bool
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	jobs       map[string]*job
+	readGrants map[string]map[string]struct{} // Actor-lifetime read-only capabilities.
+	scopes     map[string]*managed.Scope
+	closed     bool
 	// Notify delivers background completions outside the manager lock. Set before
 	// launching jobs; it must not synchronously stop or join the job being notified.
 	Notify func(Snapshot)
@@ -95,7 +96,47 @@ type Manager struct {
 // New constructs a live supervisor; foreground contexts do not own background jobs.
 func New(ctx context.Context, notify func(Snapshot)) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Manager{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, scopes: map[string]*managed.Scope{}, Notify: notify, pool: capture.NewPool(capture.SharedLimit), grepScans: make(chan struct{}, 2)}
+	return &Manager{ctx: ctx, cancel: cancel, jobs: map[string]*job{}, readGrants: map[string]map[string]struct{}{}, scopes: map[string]*managed.Scope{}, Notify: notify, pool: capture.NewPool(capture.SharedLimit), grepScans: make(chan struct{}, 2)}
+}
+
+// ValidateReadGrants checks that every handle is accessible to the grantor.
+func (m *Manager) ValidateReadGrants(grantor string, ids []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range ids {
+		j, ok := m.jobs[id]
+		if !ok || !allowed(grantor, j.view.Owner) {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+// AddReadGrants installs previously validated handles after delivery commits.
+func (m *Manager) AddReadGrants(actor string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readGrants[actor] == nil {
+		m.readGrants[actor] = map[string]struct{}{}
+	}
+	for _, id := range ids {
+		m.readGrants[actor][id] = struct{}{}
+	}
+}
+
+// ClearReadGrants releases capabilities when an actor context closes.
+func (m *Manager) ClearReadGrants(actor string) {
+	m.mu.Lock()
+	delete(m.readGrants, actor)
+	m.mu.Unlock()
+}
+
+func (m *Manager) canReadLocked(actor string, j *job) bool {
+	_, granted := m.readGrants[actor][j.view.ID]
+	return granted || allowed(actor, j.view.Owner)
 }
 
 // Start launches a closed-stdin shell in a dedicated process group.
@@ -484,7 +525,7 @@ func (m *Manager) Read(ctx context.Context, owner, id string, options ReadOption
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j, ok := m.jobs[id]
-	if !ok || !allowed(owner, j.view.Owner) {
+	if !ok || !m.canReadLocked(owner, j) {
 		return nil, ErrNotFound
 	}
 	stream := options.Stream

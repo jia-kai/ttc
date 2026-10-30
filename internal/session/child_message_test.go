@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -12,7 +13,9 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
+	"ttc/internal/jobs"
 	"ttc/internal/llm"
+	"ttc/internal/prompts"
 	"ttc/internal/tool"
 )
 
@@ -262,6 +265,10 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	seedRuntime(t, r, "parent")
+	grant, err := r.Jobs.StartTask("main", jobs.TaskOptions{Kind: "fixture"}, func(context.Context, io.Writer, io.Writer) (jobs.TaskResult, error) { return jobs.TaskResult{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
 	actor := "main/child_report_failure"
 	turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.selection)
 	if err != nil {
@@ -270,9 +277,25 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	assignment := &childAssignment{accepting: true, turn: turn, job: "job_fixture", queueTokenLimit: 1024}
 	child := &codingChild{id: actor, turn: turn, job: assignment.job, assignment: assignment, state: "running", selection: r.selection, tools: r.Tools}
 	r.children[actor] = child
-	result := sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "immutable parent evidence"})
+	invalid := sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": []string{grant, "missing"}})
+	if invalid["ok"] == true || len(assignment.queued) != 0 {
+		t.Fatal("invalid mixed grant was queued", invalid)
+	}
+	maxIDs := make([]string, maxJobReadGrants)
+	for i := range maxIDs {
+		maxIDs[i] = grant
+	}
+	oversized := append(append([]string(nil), maxIDs...), grant)
+	invalid = sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": oversized})
+	if invalid["ok"] == true || !strings.Contains(fmt.Sprint(invalid), "at most 128 IDs") || len(assignment.queued) != 0 {
+		t.Fatal("oversized grant was queued", invalid)
+	}
+	result := sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "immutable parent evidence", "job_read_grants": maxIDs})
 	if result["state"] != "queued" {
 		t.Fatal(result)
+	}
+	if !strings.Contains(assignment.queued[0].Content, prompts.ChildJobReadGrants) || strings.Contains(assignment.queued[0].Content, "%!") {
+		t.Fatal("bad guidance grant notice", assignment.queued[0].Content)
 	}
 	queuedTokens := assignment.queuedTokens
 	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment, estimator: &contextbuild.Estimator{}}
@@ -293,6 +316,9 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 	if len(assignment.queued) != 1 || assignment.queuedTokens != queuedTokens || len(r.notifications) != 0 {
 		t.Fatal("failed admission consumed or published queue")
 	}
+	if _, err := r.Jobs.Read(context.Background(), actor, grant, jobs.ReadOptions{Limit: 100}); err == nil {
+		t.Fatal("failed admission granted access")
+	}
 	var after, delivered, messages int
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&after); err != nil || after != before {
 		t.Fatal(before, after, err)
@@ -309,6 +335,20 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 	admitted, _, err = r.admitChild(context.Background(), task, input, contextCursor{})
 	if err != nil || admitted.RequestID == 0 || len(admitted.Notifications) != 1 || len(r.notifications) != 1 || len(assignment.queued) != 0 || assignment.queuedTokens != 0 {
 		t.Fatal(admitted, err)
+	}
+	if _, err := r.Jobs.Read(context.Background(), actor, grant, jobs.ReadOptions{Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(admitted.Messages[len(admitted.Messages)-1].Content, grant) {
+		found := false
+		for _, m := range admitted.Messages {
+			if strings.Contains(m.Content, grant) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("grant missing from delivered guidance")
+		}
 	}
 	if err := r.Store.FinishRequest(admitted.RequestID, history.RequestCompletion{Status: "completed"}); err != nil {
 		t.Fatal(err)

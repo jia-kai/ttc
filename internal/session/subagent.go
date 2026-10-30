@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,14 +27,18 @@ const maxChildSlots = 16
 func (r *Runtime) addSubagentTool() {
 	r.addChildMessageTool()
 	type args struct {
-		Prompt     string `json:"prompt"`
-		ChildID    string `json:"child_id,omitempty"`
-		Label      string `json:"label,omitempty"`
-		Background bool   `json:"background,omitempty"`
-		Persistent *bool  `json:"persistent"`
-		Easy       *bool  `json:"easy,omitempty"`
+		Prompt        string   `json:"prompt"`
+		ChildID       string   `json:"child_id,omitempty"`
+		Label         string   `json:"label,omitempty"`
+		Background    bool     `json:"background,omitempty"`
+		Persistent    *bool    `json:"persistent"`
+		Easy          *bool    `json:"easy,omitempty"`
+		JobReadGrants []string `json:"job_read_grants,omitempty"`
 	}
-	tool.Register(r.Tools, "subagent", fmt.Sprintf(prompts.ToolDescription("subagent"), maxChildSlots), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "easy": tool.Property("boolean")}, []string{"prompt", "persistent"}, func(a args) error {
+	tool.Register(r.Tools, "subagent", fmt.Sprintf(prompts.ToolDescription("subagent"), maxChildSlots), map[string]any{"prompt": tool.Property("string"), "child_id": tool.Property("string"), "label": tool.Property("string"), "background": tool.Property("boolean"), "persistent": tool.Property("boolean"), "easy": tool.Property("boolean"), "job_read_grants": map[string]any{"type": "array", "items": tool.Property("string"), "maxItems": maxJobReadGrants}}, []string{"prompt", "persistent"}, func(a args) error {
+		if err := validateReadGrantCount(a.JobReadGrants); err != nil {
+			return err
+		}
 		if err := tool.Required("prompt", a.Prompt); err != nil {
 			return err
 		}
@@ -53,6 +58,10 @@ func (r *Runtime) addSubagentTool() {
 		}
 		if err := r.checkContext(false); err != nil {
 			return nil, err
+		}
+		a.JobReadGrants = distinctReadGrants(a.JobReadGrants)
+		if err := r.Jobs.ValidateReadGrants(x.Actor, a.JobReadGrants); err != nil {
+			return nil, tool.Fail("not_found", err.Error())
 		}
 		selection, easySelection, err := r.Store.ToolModelSelections(ctx, x.CallID)
 		if err != nil {
@@ -116,14 +125,20 @@ func (r *Runtime) addSubagentTool() {
 			queueTokenLimit: min(maxChildMessageQueueTokens, selection.Model.Budget.NextTurnInputReserve),
 			turn:            turn, persistent: *a.Persistent, background: a.Background,
 			answer: child.lastAnswer, truncated: child.lastTruncated, result: child.lastResult,
-			inheritedAnswer: child.lastAnswer != "",
+			inheritedAnswer:   child.lastAnswer != "",
+			initialReadGrants: a.JobReadGrants,
 		}
 		child.assignment = assignment
 		r.Jobs.BeginOwned(child.id)
 		r.orderMu.Lock()
 		r.actorAssignments[child.id] = assignment
 		r.orderMu.Unlock()
-		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
+		prompt := a.Prompt
+		if len(a.JobReadGrants) != 0 {
+			body, _ := json.Marshal(map[string]any{"prompt": a.Prompt, "job_read_grants": a.JobReadGrants, "job_read_grant_notice": prompts.ChildJobReadGrants})
+			prompt = string(body)
+		}
+		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
 		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background, Easy: child.easy}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {

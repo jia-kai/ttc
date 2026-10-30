@@ -389,7 +389,7 @@ Input: `{path, format?, scope?}`.
 ### `subagent`
 
 - Input:
-  `{prompt:string, persistent:boolean, child_id?:string, label?:string, background?:boolean, easy?:boolean}`.
+  `{prompt:string, persistent:boolean, child_id?:string, label?:string, background?:boolean, easy?:boolean, job_read_grants?:[string]}`.
   Explicitly choose `persistent` on every assignment, including follow-ups;
   omission is invalid. Omit `child_id` to create a child; a nonblank single-line
   `label` of 1–4 words and at most 64 Unicode characters without controls is
@@ -402,6 +402,11 @@ Input: `{path, format?, scope?}`.
   match; the child's selection remains fixed. New assignments get distinct
   child-turn/job IDs. Running children return `child_busy` with wait guidance;
   closed/unknown handles require a new child.
+- `job_read_grants` lists up to 128 job IDs per call, counting duplicates, whose
+  data the child may read. Grants take effect on assignment delivery and
+  accumulate for the child's lifetime, including persistent follow-ups. If any
+  ID is invalid or inaccessible, the whole call is rejected, even when other IDs
+  are valid. See [job access](#job-list).
 - Coding-child contexts (including idle children) and running `/btw` asides
   share a limit of 16 slots. Close an unused child with `job_stop(child_id=...)`
   to free its slot. Children cannot spawn children, assign follow-ups or use
@@ -492,10 +497,15 @@ Input: `{path, format?, scope?}`.
 ### `child_message`
 
 - Input:
-  `{message:string, job_id?:string, child_id?:string, child_turn_id?:string}`.
+  `{message:string, job_id?:string, child_id?:string, child_turn_id?:string, job_read_grants?:[string]}`.
   Main only. Prefer the assignment's existing `job_id`; alternatively supply
   both `child_id` and `child_turn_id`; stale/inactive assignments reject the
   message rather than sending it to a later assignment.
+- Optional `job_read_grants` lists up to 128 job IDs per call, counting
+  duplicates, to grant read access. Grants take effect on delivery, not
+  queueing; undelivered messages confer no grants. Delivered grants accumulate
+  for the child's lifetime, including follow-ups. If any ID is invalid or
+  inaccessible, the whole call is rejected, even when other IDs are valid.
 - Result:
   `{state:"queued",delivered:false,message_event_seq:integer, child_id:string,child_turn_id:string,job_id:string}`.
   `state` here is message delivery state, not child or assignment lifecycle. The
@@ -580,6 +590,11 @@ Input: `{path, format?, scope?}`.
 
 - Input: `{state?:"running"|"all",details?:boolean}`; default `running`,
   compact.
+- Job read access is runtime-local: main can read all jobs; children can read
+  their own and descendant jobs plus jobs granted by main. Read access includes
+  listing metadata and `job_read`, including grep snapshots. A grant does not
+  authorize `job_stop` or `lsp_query`, subscribe the child to completion events,
+  or affect `await`. Job control and event delivery retain their existing scope.
 - Result:
   `{jobs:[{job_id:string, kind:"shell"|"lsp"|"subagent"|"btw"|"watch", status:"running"|"completed"|"failed"|"cancelled"|"interrupted", owner_actor_id:string, label:string, started_at:string, finished_at?:string, exit_code?:integer}]}`.
   `owner_actor_id` is `main` or a live child ID; it stays unchanged through
@@ -590,9 +605,10 @@ Input: `{path, format?, scope?}`.
   and `child_state` belong to child-specific results, completion notices and the
   separate `children` listing.
 - Routine lists contain metadata only, never stdout/stderr. Labels are bounded
-  short names, not commands. `details=true` adds exact `command` values; use
-  `job_read` for captured output. Watch metadata also includes `record_dir`;
-  terminal metadata may include `signal`.
+  short names, not commands. `details=true` adds exact `command` values for jobs
+  the actor owns or controls. Grant-only entries have `read_only:true` and omit
+  commands even with `details=true`. Use `job_read` for captured output. Watch
+  metadata also includes `record_dir`; terminal metadata may include `signal`.
 - Include
   `children:[{child_id:string,label:string,easy?:boolean,child_state:"running"|"idle",assignment_status:"running"|"completed"|"failed"|"cancelled",job_id:string,child_turn_id:string}]`
   for retained coding children. The `running` filter excludes idle children;
@@ -936,17 +952,17 @@ Fetch HTTP(S) text or inspect a retained immutable document without refetching.
 
 ## Async messages sent to the model
 
-Job operations are scoped to the current runtime and caller/descendant jobs;
-handles do not survive its end. Saved history and external-run records remain;
-externally owned workloads continue independently. The UI records terminal
-status. Foreground shell exits return results without `job_exit`; background
-shell and watch jobs always notify, including shells moved to background with
-Ctrl+B or after their foreground wait expires. Teardown suppresses model
-wakeups, not diagnostic recording. Completion notices include the exact
-`job_id`, job `kind`, optional display `label`, selected stdout/stderr,
-truncation/selection metadata and known exit code or signal. Labels are
-cosmetic; use `job_id` for follow-up tools. Coding children always deliver their
-turn event.
+Job handles are scoped to the current runtime and do not survive its end. Job
+read access and control have distinct scopes; see [job access](#job-list). Saved
+history and external-run records remain; externally owned workloads continue
+independently. The UI records terminal status. Foreground shell exits return
+results without `job_exit`; background shell and watch jobs always notify,
+including shells moved to background with Ctrl+B or after their foreground wait
+expires. Teardown suppresses model wakeups, not diagnostic recording. Completion
+notices include the exact `job_id`, job `kind`, optional display `label`,
+selected stdout/stderr, truncation/selection metadata and known exit code or
+signal. Labels are cosmetic; use `job_id` for follow-up tools. Coding children
+always deliver their turn event.
 
 Child runtime-event backlogs retain compact durable source references and drain
 in bounded admission batches (32 events / 2048 estimated tokens). Large events

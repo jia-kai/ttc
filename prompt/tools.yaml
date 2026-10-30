@@ -28,11 +28,13 @@ child_message:
     plus message. Queued is not delivered: messages enter at the next safe
     model-request boundary after the current response and foreground tools
     settle. Messages left at assignment completion are reported undelivered,
-    never forwarded to another assignment or used to start a new turn. At most
-    32 messages and min(4096, the child model's next-turn input reserve)
-    estimated envelope tokens may be pending. message_queue_capacity rejects
-    oversized sends without queuing them; shorten the message or wait for
-    delivery to free capacity.
+    never forwarded to another assignment or used to start a new turn. Optional
+    job_read_grants lists job IDs for read-only access, cumulative for the child
+    on delivery, not on queueing. Grants do not allow stop or LSP queries or
+    subscribe the child to completion. At most 32 messages and min(4096, the
+    child model's next-turn input reserve) estimated envelope tokens may be
+    pending. message_queue_capacity rejects oversized sends without queuing
+    them; shorten the message or wait for delivery to free capacity.
 edit:
   description: >-
     Replace old_text with new_text in path using exact matching. Read current
@@ -60,7 +62,9 @@ image_show:
     are zero-based source pixels, with terminal-cell precision.
 job_list:
   description: >-
-    List accessible jobs and coding children. state defaults to running;
+    List readable jobs and accessible coding children. Main can read all jobs;
+    children can read their own and descendant jobs plus jobs granted by main.
+    Read grants do not confer stop or LSP access. state defaults to running;
     state=all also includes finished jobs and idle retained children. Default
     results are compact metadata with labels, never captured output. jobs keep
     scheduler status even for subagents; children expose child_state and
@@ -68,20 +72,22 @@ job_list:
     job_read for output.
 job_read:
   description: >-
-    Read captured job_id output. stream defaults to stdout, or stderr for LSP
-    diagnostics. cursor defaults to the oldest retained byte, accepts an
-    absolute byte offset or eof:-N:bytes / eof:-N:lines. limit_bytes defaults to
-    16384. Nonempty grep searches the entire retained raw stream snapshot as a
-    case-sensitive RE2 expression; literal=true matches text and
-    case_sensitive=false ignores case. With grep, omit cursor. It creates a
-    completed virtual job containing matching physical lines and returns its new
-    job_id, grep_origin metadata and first page. Page that new job's stdout
-    using next_cursor without repeating grep. Cursors refer to the virtual
-    output, not original source positions. Later source writes do not change
-    matches; normal capture eviction can still discard output. truncated and
-    grep_origin.truncated disclose retention loss. status is scheduler status,
-    not assignment_status. strip_ansi defaults to true for presentation only;
-    matching always uses raw bytes. Set false to read raw output.
+    Read captured output from a readable job_id, including a job granted by
+    main. Read access does not subscribe to completion or change await. stream
+    defaults to stdout, or stderr for LSP diagnostics. cursor defaults to the
+    oldest retained byte, accepts an absolute byte offset or eof:-N:bytes /
+    eof:-N:lines. limit_bytes defaults to 16384. Nonempty grep searches the
+    entire retained raw stream snapshot as a case-sensitive RE2 expression;
+    literal=true matches text and case_sensitive=false ignores case. With grep,
+    omit cursor. It creates a completed virtual job containing matching physical
+    lines and returns its new job_id, grep_origin metadata and first page. Page
+    that new job's stdout using next_cursor without repeating grep. Cursors
+    refer to the virtual output, not original source positions. Later source
+    writes do not change matches; normal capture eviction can still discard
+    output. truncated and grep_origin.truncated disclose retention loss. status
+    is scheduler status, not assignment_status. strip_ansi defaults to true for
+    presentation only; matching always uses raw bytes. Set false to read raw
+    output.
 job_stop:
   description: >-
     Stop an accessible command process group with job_id. With child_id, main
@@ -175,12 +181,16 @@ subagent:
     Set persistent on every assignment; it retains conversation context, not
     executable work. Every assignment cleans up commands, watchers and timers
     before finishing. Supply child_id to follow up on an idle retained child;
-    omit label or repeat its existing normalized label. Calls wait for the
-    answer by default; background=true returns a job_id immediately and delivers
-    the answer on completion. easy defaults to false; set easy=true only for a
-    new child when the assignment is bounded, low-risk, and has clear, readily
-    verifiable success criteria. The easy model is shown in the runtime context;
-    consider its suitability, not just the task's length. Use the main model for
+    omit label or repeat its existing normalized label. Optional job_read_grants
+    lists job IDs to grant read-only access on delivery; grants accumulate for
+    the child's lifetime across assignments. They allow job_list and job_read
+    including grep, not job_stop or lsp_query, and do not subscribe to job
+    completion or change await. Calls wait for the answer by default;
+    background=true returns a job_id immediately and delivers the answer on
+    completion. easy defaults to false; set easy=true only for a new child when
+    the assignment is bounded, low-risk, and has clear, readily verifiable
+    success criteria. The easy model is shown in the runtime context; consider
+    its suitability, not just the task's length. Use the main model for
     uncertain, subtle, cross-cutting or high-impact work, including critical
     independent reviews. Verify results; completion does not imply correctness.
     Follow-ups retain the child's model. Child-specific results and completion

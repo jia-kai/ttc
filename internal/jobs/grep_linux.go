@@ -65,7 +65,7 @@ func (m *Manager) grep(ctx context.Context, owner, id string, options ReadOption
 	defer func() { <-m.grepScans }()
 	m.mu.Lock()
 	source, ok := m.jobs[id]
-	if !ok || !allowed(owner, source.view.Owner) {
+	if !ok || !m.canReadLocked(owner, source) {
 		m.mu.Unlock()
 		return nil, ErrNotFound
 	}

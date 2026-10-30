@@ -37,21 +37,23 @@ type codingChild struct {
 
 type childAssignment struct {
 	// orderMu protects the admission queue and terminal admission gate.
-	accepting       bool
-	queued          []llm.Message
-	runtimeNotices  []*pendingRuntimeNotice          // Durable source refs; bounded batches materialize only at admission.
-	runtimeTimers   map[string]*pendingRuntimeNotice // O(1) coalescing of pending timer firings.
-	queuedTokens    int                              // Conservative wire-token estimate, including event envelopes.
-	queueTokenLimit int                              // Bounded by the model's reserved next-turn input headroom.
-	turn, job       string
-	finish, result  int64 // childStartMu guards updates; each assignment retains distinct output refs.
-	answer          string
-	truncated       bool
-	persistent      bool                // Retain context after this assignment, independent of foreground/background execution.
-	background      bool                // Deliver the answer only through its completion notification.
-	completion      history.ChildFinish // Terminal handoff metadata, including a local completion-publication failure.
-	pending         *llm.Message        // Full emitted output until its assistant entry commits; export on local storage failure.
-	inheritedAnswer bool                // No newer assistant text has replaced the previous assignment's last reply.
+	accepting         bool
+	queued            []llm.Message
+	initialReadGrants []string
+	queuedReadGrants  map[int64][]string
+	runtimeNotices    []*pendingRuntimeNotice          // Durable source refs; bounded batches materialize only at admission.
+	runtimeTimers     map[string]*pendingRuntimeNotice // O(1) coalescing of pending timer firings.
+	queuedTokens      int                              // Conservative wire-token estimate, including event envelopes.
+	queueTokenLimit   int                              // Bounded by the model's reserved next-turn input headroom.
+	turn, job         string
+	finish, result    int64 // childStartMu guards updates; each assignment retains distinct output refs.
+	answer            string
+	truncated         bool
+	persistent        bool                // Retain context after this assignment, independent of foreground/background execution.
+	background        bool                // Deliver the answer only through its completion notification.
+	completion        history.ChildFinish // Terminal handoff metadata, including a local completion-publication failure.
+	pending           *llm.Message        // Full emitted output until its assistant entry commits; export on local storage failure.
+	inheritedAnswer   bool                // No newer assistant text has replaced the previous assignment's last reply.
 }
 
 // childAnswer returns a bounded final-answer prefix without retaining the backing
@@ -125,6 +127,7 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 			return nil, err
 		}
 		delete(r.children, id)
+		r.Jobs.ClearReadGrants(id)
 		r.childStartMu.Unlock()
 		return view, nil
 	}
@@ -142,6 +145,7 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 	r.Jobs.StopOwned(id)
 	r.childStartMu.Lock()
 	delete(r.children, id)
+	r.Jobs.ClearReadGrants(id)
 	view := child.view()
 	r.childStartMu.Unlock()
 	return view, nil
@@ -160,6 +164,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		}
 	}
 	task.assignment.queued = nil
+	task.assignment.queuedReadGrants = nil
 	task.assignment.queuedTokens = 0
 	task.assignment.runtimeNotices = nil
 	task.assignment.runtimeTimers = nil
@@ -222,6 +227,9 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		child.state = "closed"
 		delete(r.children, child.id)
 		r.orderError = errors.Join(r.orderError, commitErr)
+	}
+	if child.state == "closed" {
+		r.Jobs.ClearReadGrants(child.id)
 	}
 	r.orderMu.Unlock()
 	r.routeMu.RUnlock()
@@ -329,6 +337,12 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		if e == nil {
 			task.estimator.ObserveRequest(admitted.RequestID, observation)
 			if task.assignment != nil {
+				r.Jobs.AddReadGrants(task.actor, task.assignment.initialReadGrants)
+				task.assignment.initialReadGrants = nil
+				for _, notice := range notices {
+					r.Jobs.AddReadGrants(task.actor, task.assignment.queuedReadGrants[notice.EventSeq])
+				}
+				task.assignment.queuedReadGrants = nil
 				task.assignment.queued = nil
 				task.assignment.queuedTokens = 0
 				task.assignment.consumeRuntimeNotices(runtimeCount)

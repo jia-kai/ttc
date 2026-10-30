@@ -3,6 +3,11 @@ ChildMessageNonempty: message must be nonempty UTF-8
 ChildMessageTarget:
   prefer the assignment's job_id, or supply both child_id and child_turn_id
 ChildMessageOwnership: only main can message a child assignment
+ChildJobReadGrants: >-
+  Main granted you read access to the job IDs in job_read_grants. Grants
+  accumulate for your lifetime and allow job_list and job_read (including grep),
+  not job_stop or lsp_query. They do not subscribe you to completion events or
+  affect await.
 ChildMessageInactive:
   target child assignment is no longer active; message was not queued
 ChildAdmissionAfterCompaction: child request input does not fit after compaction

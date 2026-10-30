@@ -35,6 +35,7 @@ type Metadata struct {
 	ForegroundWaitSeconds *float64    `json:"max_fg_wait_seconds,omitempty"`
 	CancellationReason    string      `json:"cancellation_reason,omitempty"`
 	Command               string      `json:"command,omitempty"`
+	ReadOnly              bool        `json:"read_only,omitempty"` // Access is by grant, not ownership.
 	Grep                  *GrepOrigin `json:"grep_origin,omitempty"`
 }
 
@@ -87,9 +88,10 @@ func (m *Manager) ListMetadata(owner string, all, details bool) []Metadata {
 	m.mu.Lock()
 	out := []Metadata{}
 	for _, j := range m.jobs {
-		if allowed(owner, j.view.Owner) && (all || j.view.Status == "running") {
+		if m.canReadLocked(owner, j) && (all || j.view.Status == "running") {
 			v := j.view.Metadata()
-			if details {
+			v.ReadOnly = !allowed(owner, j.view.Owner)
+			if details && !v.ReadOnly {
 				v.Command = j.view.command
 			}
 			out = append(out, v)
