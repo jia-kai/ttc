@@ -89,13 +89,30 @@ func (t MessageType) Presentation() PresentationCategory { _, category := t.poli
 // Role returns the derived model role; it is never separately persisted.
 func (m Message) Role() string { return m.Type.Role() }
 
-// ModelContent marks runtime notifications and child guidance without changing
-// their payload type field. Human-authored JSON is never inspected or rewritten.
+// ModelContent projects steering into a receiver-facing envelope and marks
+// runtime notifications. Canonical content and input metadata remain unchanged;
+// human-authored JSON is never inspected to determine message semantics.
 func (m Message) ModelContent() (string, error) {
 	if err := m.Validate(); err != nil {
 		return "", err
 	}
-	if m.Type != TypeRuntimeNotification && m.Type != TypeChildGuidance {
+	if m.Type == TypeChildGuidance {
+		var guidance struct {
+			Message       *string  `json:"message"`
+			JobReadGrants []string `json:"job_read_grants,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(m.Content), &guidance); err != nil {
+			return "", fmt.Errorf(prompts.LLMInvalidChildSteer, err)
+		}
+		if guidance.Message == nil {
+			return "", fmt.Errorf(prompts.LLMChildSteerMissingMessage)
+		}
+		return modelSteer("main", *guidance.Message, guidance.JobReadGrants)
+	}
+	if m.Type == TypeUserInput && m.InputSource == "steer" {
+		return modelSteer("user", m.Content, nil)
+	}
+	if m.Type != TypeRuntimeNotification {
 		return m.Content, nil
 	}
 	var event map[string]json.RawMessage
@@ -108,6 +125,18 @@ func (m Message) ModelContent() (string, error) {
 	marker, _ := json.Marshal(string(m.Type))
 	event["message_type"] = marker
 	data, err := json.Marshal(event)
+	return string(data), err
+}
+
+// modelSteer shares one wire shape for human and parent guidance. Routing and
+// delivery bookkeeping stay canonical-only; grants describe new read access.
+func modelSteer(source, message string, grants []string) (string, error) {
+	data, err := json.Marshal(struct {
+		Type          string   `json:"type"`
+		Source        string   `json:"source"`
+		Message       string   `json:"message"`
+		JobReadGrants []string `json:"job_read_grants,omitempty"`
+	}{Type: "steer", Source: source, Message: message, JobReadGrants: grants})
 	return string(data), err
 }
 

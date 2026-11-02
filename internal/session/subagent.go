@@ -25,7 +25,7 @@ import (
 const maxChildSlots = 16
 
 func (r *Runtime) addSubagentTool() {
-	r.addChildMessageTool()
+	r.addChildSteerTool()
 	type args struct {
 		Prompt        string   `json:"prompt"`
 		ChildID       string   `json:"child_id,omitempty"`
@@ -101,7 +101,7 @@ func (r *Runtime) addSubagentTool() {
 				r.childStartMu.Unlock()
 				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
-			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), easy: easy, estimator: &contextbuild.Estimator{}, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_message" && name != "question" })}
+			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), easy: easy, estimator: &contextbuild.Estimator{}, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_steer" && name != "question" })}
 			r.children[child.id] = child
 		}
 		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, selection)

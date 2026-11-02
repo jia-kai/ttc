@@ -3,8 +3,10 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"ttc/internal/historytest"
@@ -32,6 +34,10 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 			for _, m := range req.Messages {
 				if m.Role() == "user" && m.Content == "Steer: revise after first write" {
 					found = true
+					projected, err := m.ModelContent()
+					if err != nil || projected != `{"type":"steer","source":"user","message":"Steer: revise after first write"}` {
+						t.Fatal("admitted human steer is not marked for the model", projected, err)
+					}
 				}
 			}
 			if !found {
@@ -128,5 +134,56 @@ func TestSteeringRejectedAdmissionRetainsInputAndCheckpoint(t *testing.T) {
 	count, _ := r.SteeringPreview(0)
 	if err != nil || len(admitted.SteerEntries) != 1 || count != 0 {
 		t.Fatal(admitted, err)
+	}
+}
+
+func TestSteeringAdmissionBudgetsReceiverEnvelope(t *testing.T) {
+	for _, source := range []string{"", "normal", "queue"} {
+		t.Run("source="+source, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			seedRuntime(t, r, "Initial instruction")
+			turn := admissionTurn(t, r)
+			// Establish the runtime baseline so the tight admission changes only
+			// by the pending input, not a fresh context snapshot.
+			if _, _, err := r.admitMain(context.Background(), turn, r.selection); err != nil {
+				t.Fatal(err)
+			}
+			input := contextbuild.Input{Source: source, Text: strings.Repeat("\"\n<>&\\", 200)}
+			r.steers = []contextbuild.Input{input}
+			pending := r.steeringMessagesLocked()
+			if len(pending) != 1 || pending[0].InputSource != "steer" || !reflect.DeepEqual(r.steers[0], input) {
+				t.Fatal("pending semantics missing or original input changed", pending, r.steers)
+			}
+			messages, err := r.Store.Messages(r.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), append(append([]llm.Message(nil), messages...), input.Message()))
+			steer := input.Message()
+			steer.InputSource = "steer"
+			framed := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), append(append([]llm.Message(nil), messages...), steer))
+			if framed.Input <= plain.Input {
+				t.Fatal("fixture must have escaping/envelope overhead", plain, framed)
+			}
+			r.selection.Model.Budget.ContextLimit = (plain.Input+framed.Input)/2 + framed.Reserved
+			if !codingInputFits(plain.Input, r.selection.Model.Budget, false) || codingInputFits(framed.Input, r.selection.Model.Budget, false) {
+				t.Fatal("fixture must straddle the steering envelope budget")
+			}
+			if _, _, err := r.admitMain(context.Background(), turn, r.selection); !errors.Is(err, errNeedsCompaction) {
+				t.Fatal("admitted input without budgeting its receiver envelope", err)
+			}
+			if len(r.steers) != 1 || !reflect.DeepEqual(r.steers[0], input) {
+				t.Fatal("rejected admission consumed input")
+			}
+			r.selection.Model.Budget.ContextLimit = framed.Input + framed.Reserved + 100
+			admitted, cm, err := r.admitMain(context.Background(), turn, r.selection)
+			if err != nil || cm != nil || len(r.steers) != 0 {
+				t.Fatal(admitted, cm, err)
+			}
+			actual := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), admitted.Messages)
+			if actual.Input != framed.Input || r.UsageSnapshot().Input != actual.Input {
+				t.Fatal("admission checkpoint and model input differ", framed, actual, r.UsageSnapshot())
+			}
+		})
 	}
 }

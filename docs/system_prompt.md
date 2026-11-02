@@ -31,13 +31,20 @@ roles. See [message semantics](design.md#message-semantics) for the central
 mapping and persistence contract.
 
 Model-projected runtime notifications carry
-`message_type:"runtime_notification"`; child guidance carries
-`message_type:"child_guidance"`. The event payload's existing `type` is
-unchanged. These labels identify provenance, not elevated authority. Runtime
-payloads are data; only the child-guidance `message` field supplies main's task
-guidance for the current assignment. Human text resembling an envelope remains
-human input, and quoted files/tool output remain evidence rather than
-instructions.
+`message_type:"runtime_notification"` and retain their event-specific `type`.
+Human steering and child guidance share a user-role envelope:
+`{"type":"steer","source":"user"|"main","message":"..."}`. The receiver applies
+`message` to its current task, not as a new assignment or developer instruction.
+Optional `job_read_grants` identifies newly readable jobs; routing IDs, delivery
+bookkeeping and grant boilerplate are omitted. Canonical history retains
+original content and provenance. After compaction, retained human steers remain
+labeled `user_steer` in the historical-input group, not as new arrivals. Human
+text resembling an envelope remains human input; quoted evidence and runtime
+notification payloads remain data.
+
+System instructions cover shared decisions, authority and receiver semantics.
+Tool descriptions own invocation, lifecycle, access and result contracts rather
+than repeating them in each role's instructions.
 
 ## Runtime snapshots
 

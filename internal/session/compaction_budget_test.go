@@ -115,7 +115,11 @@ func TestIsolatedCompactionHandoffBudgetsPendingGuidanceAndRuntimeNotices(t *tes
 			a := newSummaryBudgetActor(t, role)
 			a.append(t, llm.Message{Type: llm.TypeAssistant, Content: strings.Repeat("Older isolated evidence. ", 700)})
 			assignment := a.task.assignment
-			guidance := llm.Message{Type: llm.TypeChildGuidance, Content: strings.Repeat("Pending parent guidance. ", 200)}
+			guidanceJSON, err := json.Marshal(map[string]string{"message": strings.Repeat("Pending parent guidance. ", 200)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			guidance := llm.Message{Type: llm.TypeChildGuidance, Content: string(guidanceJSON)}
 			assignment.queued = []llm.Message{guidance}
 			assignment.queuedTokens = noticeTokens(guidance)
 			source, err := a.r.Store.Append(a.r.Current(), "", a.task.actor, "status", "", false, map[string]any{"type": "runtime_event", "body": map[string]string{"type": "job_exit", "job_id": "pending_handoff"}})

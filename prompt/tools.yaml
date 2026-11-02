@@ -21,20 +21,18 @@ conversation_export:
     successful compaction cut; fails if none). Children see their own history;
     asides also include their frozen main prefix. Returns path and export
     metadata, not transcript text; inspect with grep/read.
-child_message:
+child_steer:
   description: >-
-    Queue evidence or revised instructions for an active child assignment.
-    Prefer the assignment's job_id, or supply both child_id and child_turn_id,
-    plus message. Queued is not delivered: messages enter at the next safe
-    model-request boundary after the current response and foreground tools
-    settle. Messages left at assignment completion are reported undelivered,
-    never forwarded to another assignment or used to start a new turn. Optional
-    job_read_grants lists job IDs for read-only access, cumulative for the child
-    on delivery, not on queueing. Grants do not allow stop or LSP queries or
-    subscribe the child to completion. At most 32 messages and min(4096, the
-    child model's next-turn input reserve) estimated envelope tokens may be
-    pending. message_queue_capacity rejects oversized sends without queuing
-    them; shorten the message or wait for delivery to free capacity.
+    Steer a running child assignment with message: corrections, new evidence or
+    revised priorities. Requires job_id OR both child_id and child_turn_id from
+    subagent/job_list. To start a new assignment, use subagent instead. Queued
+    guidance reaches the child's next settled model request, not its current
+    response or tools. Completion reports undelivered guidance; it never carries
+    into another assignment. Optional job_read_grants lists job IDs for
+    read-only access, cumulative for the child on delivery, not on queueing.
+    Grants do not allow stop or LSP queries or subscribe the child to
+    completion. message_queue_capacity means nothing was queued: shorten the
+    message or wait for delivery to free capacity.
 edit:
   description: >-
     Replace old_text with new_text in path using exact matching. Read current
@@ -136,7 +134,7 @@ read:
     explicit notice instead of silently substituted contents. For
     text/directories, offset is a 1-based line or sorted entry number (default
     1); limit defaults to 200. Continue with next_offset. Paths may be absolute
-    or relative to cwd.
+    or relative to cwd. An empty binary_files catalog disables native reads.
 shell:
   description: >-
     Run command with /bin/sh and set -eu; strict=false disables errexit/nounset.
@@ -200,7 +198,11 @@ subagent:
     notification. Failed or cancelled assignments return the last assistant text
     with a partial-work/side-effect warning and durable full-transcript paths,
     or an explicit export error. Use job_read for bounded raw output. Generic
-    job surfaces retain scheduler status even for subagents.
+    job surfaces retain scheduler status even for subagents. Outcomes and child
+    states are snapshots, not current-state guarantees. Success normally leaves
+    a persistent child idle; failure or cancellation closes it. Background
+    controls waiting, not lifespan. Steer running assignments with child_steer.
+    Child handles survive compaction, not session changes, restoration or exit.
 tmux_watch_run:
   description: >-
     Launch command (a shell string) in a new detached tmux session and

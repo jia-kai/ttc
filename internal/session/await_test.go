@@ -484,12 +484,12 @@ func TestChildAwaitResumesOnParentGuidanceAndCleansTimer(t *testing.T) {
 	actor := result["child_id"].(string)
 	waitForAwait(t, events, actor)
 	wrong, _ := json.Marshal(map[string]any{"job_id": result["job_id"], "child_id": "main/another", "message": "must not route"})
-	rejected := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main", CallID: ids[0]}, "child_message", wrong)
+	rejected := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main", CallID: ids[0]}, "child_steer", wrong)
 	if strings.Contains(string(rejected.Result), `"ok":true`) {
 		t.Fatal("conflicting selector routed guidance")
 	}
 	args, _ := json.Marshal(map[string]any{"job_id": result["job_id"], "child_id": actor, "child_turn_id": result["child_turn_id"], "message": "resume child"})
-	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main", CallID: ids[0]}, "child_message", args)
+	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main", CallID: ids[0]}, "child_steer", args)
 	if !strings.Contains(string(record.Result), `"ok":true`) {
 		t.Fatal(string(record.Result))
 	}

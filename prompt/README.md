@@ -18,7 +18,8 @@ fixtures.
 - `system.yaml`: role instructions. Main receives `System` + `Coding` + `Main`;
   coding children receive `System` + `Coding` + `Child`, separated by newlines.
   Read-only asides receive `System`, with `Btw` as a separate developer message.
-- `child-messages.yaml`: active-assignment message diagnostics.
+- `child-messages.yaml`: active-assignment steering diagnostics and read-grant
+  notice.
 - `recovery.md`: continuation warning after a partial coding failure.
 - `retained-inputs.md`: `RetainedInputs` format guidance for the grouped
   model-facing projection. Provenance is typed message metadata, not prompt

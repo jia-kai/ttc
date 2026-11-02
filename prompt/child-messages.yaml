@@ -1,19 +1,18 @@
-# Active-assignment message diagnostics. Role instructions live in system.yaml.
+# Active-assignment steering diagnostics. Receiver guidance lives in system.yaml.
 ChildMessageNonempty: message must be nonempty UTF-8
-ChildMessageTarget:
-  prefer the assignment's job_id, or supply both child_id and child_turn_id
+ChildMessageTarget: >-
+  child_steer requires job_id OR both child_id and child_turn_id from
+  subagent/job_list; child_id alone is insufficient. No steering was queued.
 ChildMessageOwnership: only main can message a child assignment
 ChildJobReadGrants: >-
-  Main granted you read access to the job IDs in job_read_grants. Grants
-  accumulate for your lifetime and allow job_list and job_read (including grep),
-  not job_stop or lsp_query. They do not subscribe you to completion events or
-  affect await.
+  You can now read the jobs in job_read_grants, including across follow-ups.
 ChildMessageInactive:
-  target child assignment is no longer active; message was not queued
+  target assignment is inactive; no steering was queued. Use subagent to start a
+  new assignment.
 ChildAdmissionAfterCompaction: child request input does not fit after compaction
 ChildMessageEvidenceTarget:
   child message evidence does not match the admitted assignment
 ChildMessageQueueCapacity:
   "message was not queued: pending guidance has at most %d estimated wire tokens
   remaining and %d messages total; shorten it or wait for delivery before
-  sending more (routing/escaping overhead counts)"
+  sending more (envelope/escaping overhead counts)"

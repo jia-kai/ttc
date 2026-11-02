@@ -247,16 +247,21 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 		t.Run(actor, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
+			// Keep the same output headroom for each receiving role rather than
+			// depending on the size difference between main and aside prompts.
+			system := systemTemplate
+			if actor != "main" {
+				system = childSystemTemplate
+				if strings.Contains(actor, "/btw_") {
+					system = asideSystemTemplate
+				}
+			}
+			r.selection.Model.Budget.ContextLimit += contextbuild.Estimate(system) - contextbuild.Estimate(systemTemplate)
 			r.selection.Model.Budget.NextTurnInputReserve = 0
 			if err := r.selection.Model.Budget.Validate(); err != nil {
 				t.Fatal(err)
 			}
 			partialRepeats := 250
-			if strings.Contains(actor, "/btw_") {
-				// The aside system is smaller; keep its partial output large
-				// enough to trigger compaction while the structured prefix fits.
-				partialRepeats = 350
-			}
 			coding, summaries := 0, 0
 			var failedRequest int64
 			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {

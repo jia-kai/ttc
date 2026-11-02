@@ -64,11 +64,13 @@ sequence, request identity and input source remain separate metadata.
 - Producers assign types before admission. Human-authored JSON never changes its
   semantic identity. Unknown types and incompatible tool/replay/input metadata
   are rejected at persistence and provider boundaries.
-- Model projection adds `message_type` to notification and child-guidance JSON
-  objects, preserving their event-specific `type` and payload. This makes
-  provenance explicit without elevating payload authority. Provider roles are
-  derived from the semantic type; provider-native tool calls, attachments and
-  assistant replay state retain their specialized encoding.
+- Model projection marks notification JSON with `message_type`, preserving its
+  event-specific `type` and payload. Human steering and child guidance share a
+  concise `type:"steer"` envelope with `source:"user"` or `"main"`, `message`
+  and optional `job_read_grants`. Child routing/delivery metadata stays in
+  canonical history, not model input. Labels do not elevate authority. Provider
+  roles are derived from the semantic type; provider-native tool calls,
+  attachments and assistant replay state retain their specialized encoding.
 - `session.Event.MessageType` carries canonical identity to direct rendering.
   Presentation flags are derived view state, not another message classifier.
   Provider-boundary inspection exposes notifications in their actual
@@ -511,17 +513,18 @@ workers.
   reads refresh a 90-second interval. Each exchange owns its timer and
   cancelable context, released on EOF, body close, failure or caller
   cancellation. These operations retain their existing retry policies.
-- Main steering waits for a model boundary; children accept idle follow-ups
-  only. Native steering and resuming the same partial stream are outside v1.
-  Providers retry upstream HTTP, transport, stream and protocol failures except
-  explicit structured context-length rejection, which stops without automatic
-  compaction or invalidating existing context. Parser-private native items,
-  including reasoning, do not block retry and are discarded on failure. Zero
-  `MaxAttempts` selects nine total attempts; positive values bound the whole
-  retry/recovery chain; `PriorAttempts` carries failed attempts across
-  continuation requests and resets after a successful response. Naming and
-  compaction use the same default; no-tools replies are buffered until
-  completion and retried atomically.
+- Human and parent-to-child steering wait for a settled model boundary. New
+  child assignments use `subagent`, including idle follow-ups. Native streaming
+  steering and resuming the same partial stream are outside v1. Providers retry
+  upstream HTTP, transport, stream and protocol failures except explicit
+  structured context-length rejection, which stops without automatic compaction
+  or invalidating existing context. Parser-private native items, including
+  reasoning, do not block retry and are discarded on failure. Zero `MaxAttempts`
+  selects nine total attempts; positive values bound the whole retry/recovery
+  chain; `PriorAttempts` carries failed attempts across continuation requests
+  and resets after a successful response. Naming and compaction use the same
+  default; no-tools replies are buffered until completion and retried
+  atomically.
 - After partial output, only a provider-issued `PartialError` authorizes a new
   main/child/aside coding request. Persist canonical partial output without
   native replay state and settle emitted calls as not executed. Retain earlier

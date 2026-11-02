@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -43,9 +42,9 @@ func distinctReadGrants(ids []string) []string {
 	return out
 }
 
-// addChildMessageTool sends to an existing assignment, not to the retained
+// addChildSteerTool sends guidance to an existing assignment, not to the retained
 // context. Only the worker consumes its queue, at settled request boundaries.
-func (r *Runtime) addChildMessageTool() {
+func (r *Runtime) addChildSteerTool() {
 	type args struct {
 		ChildID       string   `json:"child_id,omitempty"`
 		TurnID        string   `json:"child_turn_id,omitempty"`
@@ -53,7 +52,7 @@ func (r *Runtime) addChildMessageTool() {
 		Message       string   `json:"message"`
 		JobReadGrants []string `json:"job_read_grants,omitempty"`
 	}
-	tool.Register(r.Tools, "child_message", prompts.ToolDescription("child_message"), map[string]any{
+	tool.Register(r.Tools, "child_steer", prompts.ToolDescription("child_steer"), map[string]any{
 		"child_id": tool.Property("string"), "child_turn_id": tool.Property("string"), "job_id": tool.Property("string"), "message": tool.Property("string"), "job_read_grants": map[string]any{"type": "array", "items": tool.Property("string"), "maxItems": maxJobReadGrants},
 	}, []string{"message"}, func(a args) error {
 		if err := validateReadGrantCount(a.JobReadGrants); err != nil {
@@ -109,12 +108,11 @@ func (r *Runtime) addChildMessageTool() {
 		body := map[string]any{"type": "child_message", "child_id": child.id, "child_turn_id": child.turn, "job_id": child.job, "message": a.Message, "parent_call_id": x.CallID}
 		if len(a.JobReadGrants) != 0 {
 			body["job_read_grants"] = a.JobReadGrants
-			body["job_read_grant_notice"] = prompts.ChildJobReadGrants
 		}
 		content, _ := json.Marshal(body)
-		// Reserve the widest possible event identity before committing evidence.
-		// Escaping and routing overhead count against the same queue budget.
-		tokens := contextbuild.Tokens([]llm.Message{{Type: llm.TypeChildGuidance, Content: eventContent(string(content), math.MaxInt64, 0)}})
+		// Count the same concise envelope the child model receives, including
+		// escaping and read grants. Routing metadata is canonical-only.
+		tokens := contextbuild.Tokens([]llm.Message{{Type: llm.TypeChildGuidance, Content: string(content)}})
 		if tokens > remaining {
 			return nil, tool.Fail("message_queue_capacity", fmt.Sprintf(prompts.ChildMessageQueueCapacity, remaining, maxChildMessageQueueCount))
 		}

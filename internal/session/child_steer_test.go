@@ -19,10 +19,10 @@ import (
 	"ttc/internal/tool"
 )
 
-func sendChildMessage(t *testing.T, r *Runtime, actor, call string, args map[string]any) map[string]any {
+func sendChildSteer(t *testing.T, r *Runtime, actor, call string, args map[string]any) map[string]any {
 	t.Helper()
 	data, _ := json.Marshal(args)
-	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: actor, CallID: call}, "child_message", data)
+	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: actor, CallID: call}, "child_steer", data)
 	var result map[string]any
 	if err := json.Unmarshal(record.Result, &result); err != nil {
 		t.Fatal(err)
@@ -30,7 +30,48 @@ func sendChildMessage(t *testing.T, r *Runtime, actor, call string, args map[str
 	return result
 }
 
-func TestChildMessagesFIFOContinueSameAssignment(t *testing.T) {
+func TestChildSteerRegistrationAndTargetValidation(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	steer, ok := r.Tools.Get("child_steer")
+	if !ok || steer.Definition().Description != prompts.ToolDescription("child_steer") {
+		t.Fatal("child_steer missing its registered tool description")
+	}
+	if _, ok := r.Tools.Get("child_message"); ok {
+		t.Fatal("obsolete child_message tool alias remains registered")
+	}
+	record := r.Tools.Invoke(context.Background(), tool.Execution{Actor: "main"}, "child_message", []byte(`{"job_id":"job","message":"guidance"}`))
+	var rejected struct {
+		OK    bool       `json:"ok"`
+		Error tool.Error `json:"error"`
+	}
+	if err := json.Unmarshal(record.Result, &rejected); err != nil {
+		t.Fatal(err)
+	}
+	if rejected.OK || rejected.Error.Code != "unknown_tool" {
+		t.Fatalf("obsolete tool name was not rejected: %s", record.Result)
+	}
+	for _, args := range []string{
+		`{"message":"guidance"}`,
+		`{"child_id":"child","message":"guidance"}`,
+		`{"child_turn_id":"turn","message":"guidance"}`,
+	} {
+		if _, err := steer.DecodeCall(1, []byte(args)); err == nil || err.Error() != tool.Fail("invalid_arguments", prompts.ChildMessageTarget).Error() {
+			t.Errorf("incomplete assignment selector %s: %v", args, err)
+		}
+	}
+	for _, args := range []string{
+		`{"job_id":"job","message":"guidance"}`,
+		`{"child_id":"child","child_turn_id":"turn","message":"guidance"}`,
+		`{"job_id":"job","child_id":"child","message":"guidance"}`,
+		`{"job_id":"job","child_id":"child","child_turn_id":"turn","message":"guidance"}`,
+	} {
+		if _, err := steer.DecodeCall(1, []byte(args)); err != nil {
+			t.Errorf("valid assignment selector %s: %v", args, err)
+		}
+	}
+}
+
+func TestChildSteerMessagesFIFOContinueSameAssignment(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	started, release := make(chan struct{}), make(chan struct{})
@@ -52,6 +93,17 @@ func TestChildMessagesFIFOContinueSameAssignment(t *testing.T) {
 			for _, m := range req.Messages {
 				if m.EventSeq != 0 && strings.Contains(m.Content, `"type":"child_message"`) {
 					got = append(got, m.Content)
+					projected, err := m.ModelContent()
+					var steer map[string]any
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal([]byte(projected), &steer); err != nil {
+						t.Fatal(err)
+					}
+					if m.Role() != "user" || steer["type"] != "steer" || steer["source"] != "main" || len(steer) != 3 {
+						t.Fatal("child did not receive concise steering", projected)
+					}
 				}
 			}
 			if len(got) != 2 || !strings.Contains(got[0], `"message":"first"`) || !strings.Contains(got[1], `"message":"second"`) {
@@ -64,15 +116,15 @@ func TestChildMessagesFIFOContinueSameAssignment(t *testing.T) {
 	first := childInvocation(t, r, ids[0], `{"persistent":true,"prompt":"task","label":"research","background":true}`)
 	receive(t, started)
 	for _, text := range []string{"first", "second"} {
-		result := sendChildMessage(t, r, "main", ids[0], map[string]any{"child_id": first["child_id"], "child_turn_id": first["child_turn_id"], "message": text})
+		result := sendChildSteer(t, r, "main", ids[0], map[string]any{"child_id": first["child_id"], "child_turn_id": first["child_turn_id"], "message": text})
 		if result["ok"] != true || result["state"] != "queued" || result["delivered"] != false {
 			t.Fatal(result)
 		}
 	}
-	if result := sendChildMessage(t, r, "main", ids[0], map[string]any{"child_id": first["child_id"], "child_turn_id": "stale", "message": "no"}); result["ok"] == true {
+	if result := sendChildSteer(t, r, "main", ids[0], map[string]any{"child_id": first["child_id"], "child_turn_id": "stale", "message": "no"}); result["ok"] == true {
 		t.Fatal(result)
 	}
-	if result := sendChildMessage(t, r, first["child_id"].(string), ids[0], map[string]any{"job_id": first["job_id"], "message": "no"}); result["ok"] == true {
+	if result := sendChildSteer(t, r, first["child_id"].(string), ids[0], map[string]any{"job_id": first["job_id"], "message": "no"}); result["ok"] == true {
 		t.Fatal(result)
 	}
 	close(release)
@@ -89,12 +141,12 @@ func TestChildMessagesFIFOContinueSameAssignment(t *testing.T) {
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE actor_id=? AND kind='message' AND json_extract(content_json,'$.event_seq') IS NOT NULL`, first["child_id"]).Scan(&childRows); err != nil || childRows != 2 {
 		t.Fatal(childRows, err)
 	}
-	if result := sendChildMessage(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "too late"}); result["ok"] == true {
+	if result := sendChildSteer(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "too late"}); result["ok"] == true {
 		t.Fatal(result)
 	}
 }
 
-func TestChildMessageCancellationReportsUndelivered(t *testing.T) {
+func TestChildSteerCancellationReportsUndelivered(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	started := make(chan struct{})
@@ -106,7 +158,7 @@ func TestChildMessageCancellationReportsUndelivered(t *testing.T) {
 	_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":false,"prompt":"task","label":"research","background":true}`)}})
 	first := childInvocation(t, r, ids[0], `{"persistent":false,"prompt":"task","label":"research","background":true}`)
 	receive(t, started)
-	result := sendChildMessage(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "original evidence"})
+	result := sendChildSteer(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "original evidence"})
 	if result["state"] != "queued" {
 		t.Fatal(result)
 	}
@@ -123,7 +175,7 @@ func TestChildMessageCancellationReportsUndelivered(t *testing.T) {
 	}
 }
 
-func TestChildMessageWaitsForForegroundBatch(t *testing.T) {
+func TestChildSteerWaitsForForegroundBatch(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	started, release := make(chan struct{}), make(chan struct{})
@@ -154,7 +206,7 @@ func TestChildMessageWaitsForForegroundBatch(t *testing.T) {
 	_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(`{"persistent":false,"prompt":"task","label":"research","background":true}`)}})
 	first := childInvocation(t, r, ids[0], `{"persistent":false,"prompt":"task","label":"research","background":true}`)
 	receive(t, started)
-	result := sendChildMessage(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "after tools"})
+	result := sendChildSteer(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": "after tools"})
 	if result["state"] != "queued" {
 		t.Fatal(result)
 	}
@@ -170,7 +222,7 @@ func TestChildMessageWaitsForForegroundBatch(t *testing.T) {
 	}
 }
 
-func TestChildMessageQueuedDuringCompaction(t *testing.T) {
+func TestChildSteerQueuedDuringCompaction(t *testing.T) {
 	for _, oversized := range []bool{false, true} {
 		name := "fits"
 		if oversized {
@@ -226,7 +278,7 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 			if oversized {
 				text = strings.Repeat("large parent instruction ", 5000)
 			}
-			result := sendChildMessage(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": text})
+			result := sendChildSteer(t, r, "main", ids[0], map[string]any{"job_id": first["job_id"], "message": text})
 			if oversized {
 				if result["ok"] == true || !strings.Contains(fmt.Sprint(result), "message_queue_capacity") {
 					t.Fatal(result)
@@ -261,7 +313,7 @@ func TestChildMessageQueuedDuringCompaction(t *testing.T) {
 	}
 }
 
-func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
+func TestChildSteerDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	seedRuntime(t, r, "parent")
@@ -277,7 +329,7 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	assignment := &childAssignment{accepting: true, turn: turn, job: "job_fixture", queueTokenLimit: 1024}
 	child := &codingChild{id: actor, turn: turn, job: assignment.job, assignment: assignment, state: "running", selection: r.selection, tools: r.Tools}
 	r.children[actor] = child
-	invalid := sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": []string{grant, "missing"}})
+	invalid := sendChildSteer(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": []string{grant, "missing"}})
 	if invalid["ok"] == true || len(assignment.queued) != 0 {
 		t.Fatal("invalid mixed grant was queued", invalid)
 	}
@@ -286,16 +338,16 @@ func TestChildMessageDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 		maxIDs[i] = grant
 	}
 	oversized := append(append([]string(nil), maxIDs...), grant)
-	invalid = sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": oversized})
+	invalid = sendChildSteer(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": oversized})
 	if invalid["ok"] == true || !strings.Contains(fmt.Sprint(invalid), "at most 128 IDs") || len(assignment.queued) != 0 {
 		t.Fatal("oversized grant was queued", invalid)
 	}
-	result := sendChildMessage(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "immutable parent evidence", "job_read_grants": maxIDs})
+	result := sendChildSteer(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "immutable parent evidence", "job_read_grants": maxIDs})
 	if result["state"] != "queued" {
 		t.Fatal(result)
 	}
-	if !strings.Contains(assignment.queued[0].Content, prompts.ChildJobReadGrants) || strings.Contains(assignment.queued[0].Content, "%!") {
-		t.Fatal("bad guidance grant notice", assignment.queued[0].Content)
+	if !strings.Contains(assignment.queued[0].Content, grant) || strings.Contains(assignment.queued[0].Content, "job_read_grant_notice") {
+		t.Fatal("steering must identify grants without redundant prose", assignment.queued[0].Content)
 	}
 	queuedTokens := assignment.queuedTokens
 	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment, estimator: &contextbuild.Estimator{}}
@@ -355,19 +407,19 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 	}
 }
 
-func TestChildMessageCumulativeQueueCapacity(t *testing.T) {
+func TestChildSteerCumulativeQueueCapacity(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Emit = nil
 	seedRuntime(t, r, "parent")
-	assignment := &childAssignment{accepting: true, turn: "turn_fixture", job: "job_fixture", queueTokenLimit: 200}
+	assignment := &childAssignment{accepting: true, turn: "turn_fixture", job: "job_fixture", queueTokenLimit: 150}
 	child := &codingChild{id: "main/child_capacity", turn: assignment.turn, job: assignment.job, assignment: assignment, state: "running", selection: r.selection}
 	r.children[child.id] = child
-	first := sendChildMessage(t, r, "main", "call", map[string]any{"job_id": child.job, "message": strings.Repeat("a", 180)})
+	first := sendChildSteer(t, r, "main", "call", map[string]any{"job_id": child.job, "message": strings.Repeat("a", 180)})
 	if first["state"] != "queued" {
 		t.Fatal(first)
 	}
 	tokens := assignment.queuedTokens
-	second := sendChildMessage(t, r, "main", "call", map[string]any{"job_id": child.job, "message": strings.Repeat("b", 180)})
+	second := sendChildSteer(t, r, "main", "call", map[string]any{"job_id": child.job, "message": strings.Repeat("b", 180)})
 	if second["ok"] == true || !strings.Contains(fmt.Sprint(second), "message_queue_capacity") || len(assignment.queued) != 1 || assignment.queuedTokens != tokens {
 		t.Fatal(second, assignment)
 	}

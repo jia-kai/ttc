@@ -413,7 +413,7 @@ func TestChildDeliveryReceiptWakesMainBeforeAndDuringAwait(t *testing.T) {
 			_, ids := batchIntents(t, r, "main", []llm.ToolCall{{ID: "spawn", Name: "subagent", Arguments: []byte(args)}})
 			child := childInvocation(t, r, ids[0], args)
 			receive(t, started)
-			result := sendChildMessage(t, r, "main", ids[0], map[string]any{"job_id": child["job_id"], "message": "Continue work"})
+			result := sendChildSteer(t, r, "main", ids[0], map[string]any{"job_id": child["job_id"], "message": "Continue work"})
 			if result["state"] != "queued" {
 				t.Fatal(result)
 			}

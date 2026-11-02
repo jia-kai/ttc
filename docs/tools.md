@@ -502,13 +502,14 @@ Input: `{path, format?, scope?}`.
   explicit session changes, restoration or exit. Reloading history cannot resume
   a child.
 
-### `child_message`
+### `child_steer`
 
 - Input:
   `{message:string, job_id?:string, child_id?:string, child_turn_id?:string, job_read_grants?:[string]}`.
-  Main only. Prefer the assignment's existing `job_id`; alternatively supply
-  both `child_id` and `child_turn_id`; stale/inactive assignments reject the
-  message rather than sending it to a later assignment.
+  Main only; steers a running assignment, never starts one. Use `subagent` for
+  new assignments. Supply the assignment's existing `job_id`; alternatively
+  supply both `child_id` and `child_turn_id`; stale/inactive assignments reject
+  the message rather than sending it to a later assignment.
 - Optional `job_read_grants` lists up to 128 job IDs per call, counting
   duplicates, to grant read access. Grants take effect on delivery, not
   queueing; undelivered messages confer no grants. Delivered grants accumulate
@@ -521,21 +522,23 @@ Input: `{path, format?, scope?}`.
   queued messages FIFO at its next settled model-request boundary, after
   foreground tools finish. Retries use the frozen admitted payload; later
   arrivals wait for another request.
-- Messages are main-agent task guidance in runtime user-message envelopes, not
-  higher-priority instructions. Admission acknowledges them once; later
-  compaction summarizes them rather than counting them as independently retained
-  human inputs. A message arriving during a final response can continue the same
-  assignment. Completion closes admission; undelivered messages are reported,
-  never carried into a persistent follow-up or used to start another assignment.
+- Messages are main-agent task guidance in `type:"steer",source:"main"`
+  user-message envelopes, not higher-priority instructions. Admission
+  acknowledges them once; later compaction summarizes them rather than counting
+  them as independently retained human inputs. A message arriving during a final
+  response can continue the same assignment. Completion closes admission;
+  undelivered messages are reported, never carried into a persistent follow-up
+  or used to start another assignment.
 - Parent notifications `child_message_delivered` and `child_message_undelivered`
   identify `message_event_seq`, child, turn and job; delivery also includes
   `request_id`. Queued is not proof of delivery or action.
 - Pending capacity is 32 messages and at most `min(4096, NextTurnInputReserve)`
-  estimated wire tokens per assignment, counting JSON escaping and routing
-  overhead. Zero reserved headroom rejects sends. `message_queue_capacity`
-  rejects oversized individual/cumulative submissions before recording them;
-  shorten guidance or wait for admission to free capacity. Request admission,
-  evidence acknowledgments and delivery reports commit in one transaction.
+  estimated model-facing tokens per assignment, counting JSON escaping and
+  envelope overhead. Zero reserved headroom rejects sends.
+  `message_queue_capacity` rejects oversized individual/cumulative submissions
+  before recording them; shorten guidance or wait for admission to free
+  capacity. Request admission, evidence acknowledgments and delivery reports
+  commit in one transaction.
 
 ### `tmux_watch_run`
 
@@ -1033,10 +1036,11 @@ Coding child events use the same generic ordering/delivery contract:
 Wakeups send
 `{"message_type":"runtime_notification","type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}`.
 
-Child assignment guidance instead uses `message_type:"child_guidance"` with
-`type:"child_message"`. It remains user-role task guidance from main for the
-current assignment, not developer instructions. Quoted evidence in its `message`
-field remains data. Assignment `job_id` is the preferred routing handle.
+Steering uses `{"type":"steer","source":"user"|"main","message":"..."}` in a
+user-role message. It updates the current task, not developer instructions or a
+new assignment. Human steers use `source:"user"`; `child_steer` delivers
+`source:"main"` with optional `job_read_grants`. Routing IDs and delivery
+bookkeeping are not sent to the receiving model. Quoted evidence remains data.
 
 - A foreground child result carries its finish event; otherwise enqueue one main
   message. Emit `child_compacted` only after successful handoff. Payloads

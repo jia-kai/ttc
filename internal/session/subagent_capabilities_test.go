@@ -21,7 +21,7 @@ func assertChildCapabilities(t *testing.T, r *Runtime, request llm.Request) {
 	mainQuestion := false
 	for _, definition := range r.Tools.Definitions() {
 		mainQuestion = mainQuestion || definition.Name == "question"
-		if definition.Name != "question" && definition.Name != "subagent" && definition.Name != "child_message" {
+		if definition.Name != "question" && definition.Name != "subagent" && definition.Name != "child_steer" {
 			want = append(want, definition)
 		}
 	}
@@ -29,7 +29,7 @@ func assertChildCapabilities(t *testing.T, r *Runtime, request llm.Request) {
 		t.Error("main lost the question tool")
 	}
 	if !reflect.DeepEqual(request.Tools, want) {
-		t.Errorf("child capabilities differ from main minus question/subagent/child_message: %v", request.Tools)
+		t.Errorf("child capabilities differ from main minus question/subagent/child_steer: %v", request.Tools)
 	}
 	if request.System != prompts.System+"\n"+prompts.Coding+"\n"+prompts.Child {
 		t.Error("child system does not contain only shared, coding and child guidance")

@@ -86,6 +86,9 @@ func (r *Runtime) steeringMessagesLocked() []llm.Message {
 	messages := make([]llm.Message, len(r.steers))
 	for i, input := range r.steers {
 		messages[i] = input.Message()
+		// Mark before estimation and compaction fit checks, not only when
+		// history commits admission. Preserve the original input for cancellation.
+		messages[i].InputSource = "steer"
 	}
 	return messages
 }
