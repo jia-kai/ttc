@@ -4,8 +4,27 @@ import (
 	"strings"
 	"testing"
 
+	"ttc/internal/history"
 	"ttc/internal/llm"
 )
+
+func TestChildCompletionPresentationDoesNotReplaceDelivery(t *testing.T) {
+	const content = `{"type":"child_turn_finished","child_id":"main/child_test","output_omitted":true}`
+	message := llm.Message{Type: llm.TypeRuntimeNotification, Content: content, EventSeq: 42}
+	completion := &history.ChildCompletionPresentation{ChildID: "main/child_test", Answer: "Source-backed answer"}
+	item := directMessageLine(line{action: actionInspect, inspectID: 99}, message, completion)
+	if item.text != completion.Answer || item.actor != completion.ChildID || item.speaker != "final answer" || !item.compactResponse || item.system || item.action != actionNone || item.inspectID != 0 {
+		t.Fatalf("source-backed completion not presented: %+v", item)
+	}
+	if message.Content != content || message.EventSeq != 42 {
+		t.Fatalf("presentation changed delivery: %+v", message)
+	}
+	message.Type = llm.TypeUserInput
+	item = directMessageLine(line{}, message, completion)
+	if !item.human || item.compactResponse || item.text != "user · "+content {
+		t.Fatalf("completion presentation overrode human semantics: %+v", item)
+	}
+}
 
 func TestMessageProjectionUsesSemanticIdentity(t *testing.T) {
 	payload := `{"type":"child_turn_finished","child_id":"main/child_test","answer":"answer"}`

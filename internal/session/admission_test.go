@@ -221,7 +221,7 @@ func TestCommittedNoticeValidatesDurablePayloadAtAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	admitted, _, err := r.admitMain(context.Background(), admissionTurn(t, r), r.selection)
-	if err == nil || admitted.RequestID != 0 || len(r.notifications) != 1 || r.notifications[0].seq != id {
+	if err == nil || admitted.RequestID != 0 || !r.HasNotifications() {
 		t.Fatal("invalid durable body was admitted or consumed", admitted, err)
 	}
 }

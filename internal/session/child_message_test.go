@@ -313,7 +313,7 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 	if err == nil || !strings.Contains(err.Error(), "injected child delivery report failure") || admitted.RequestID != 0 || len(admitted.Notifications) != 0 || !reflect.DeepEqual(cursor, contextCursor{}) {
 		t.Fatal(admitted, cursor, err)
 	}
-	if len(assignment.queued) != 1 || assignment.queuedTokens != queuedTokens || len(r.notifications) != 0 {
+	if len(assignment.queued) != 1 || assignment.queuedTokens != queuedTokens || len(pendingMainNotices(t, r)) != 0 {
 		t.Fatal("failed admission consumed or published queue")
 	}
 	if _, err := r.Jobs.Read(context.Background(), actor, grant, jobs.ReadOptions{Limit: 100}); err == nil {
@@ -333,7 +333,7 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 		t.Fatal(err)
 	}
 	admitted, _, err = r.admitChild(context.Background(), task, input, contextCursor{})
-	if err != nil || admitted.RequestID == 0 || len(admitted.Notifications) != 1 || len(r.notifications) != 1 || len(assignment.queued) != 0 || assignment.queuedTokens != 0 {
+	if err != nil || admitted.RequestID == 0 || len(admitted.Notifications) != 1 || len(pendingMainNotices(t, r)) != 1 || len(assignment.queued) != 0 || assignment.queuedTokens != 0 {
 		t.Fatal(admitted, err)
 	}
 	if _, err := r.Jobs.Read(context.Background(), actor, grant, jobs.ReadOptions{Limit: 100}); err != nil {

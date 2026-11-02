@@ -36,19 +36,10 @@ type State struct {
 
 // PathChange records exact before/after state and actual application outcome.
 type PathChange struct {
-	Path        string                 `json:"path"`
-	Before      State                  `json:"before"`
-	After       State                  `json:"after"`
-	Applied     bool                   `json:"applied"`
-	CreatedDirs []string               `json:"created_dirs,omitempty"`
-	DirIDs      map[string]DirectoryID `json:"created_dir_ids,omitempty"`
-}
-
-// DirectoryID identifies a directory actually created by a mutation. Historical
-// created_dirs without identities are readable but are not safe cleanup authority.
-type DirectoryID struct {
-	Device uint64 `json:"device"`
-	Inode  uint64 `json:"inode"`
+	Path    string `json:"path"`
+	Before  State  `json:"before"`
+	After   State  `json:"after"`
+	Applied bool   `json:"applied"`
 }
 
 // Mutation requests complete bytes or deletion. An optional Transform runs under the queue lock.
@@ -73,14 +64,11 @@ type Result struct {
 
 // Manager owns the local mutation queue shared by one runtime's actors.
 type Manager struct {
-	Root       string
-	Store      *history.Store
-	mu         sync.Mutex
-	atomicFile func(string, []byte, os.FileMode) error
-	// ownedDirs retains current identities across redo and shared-parent branch
-	// switches. Guarded by mu; only mkdir outcomes or identity-verified history
-	// grant ownership, never directory existence alone.
-	ownedDirs map[string]DirectoryID
+	Root        string
+	Store       *history.Store
+	mu          sync.Mutex
+	atomicFile  func(string, []byte, os.FileMode) error
+	directories directoryOwnership // Runtime-only cleanup authority; guarded by mu.
 }
 
 // Open resolves the workspace without locking it or recovering filesystem changes.
@@ -244,33 +232,38 @@ func snapshotData(s State) ([]byte, error) {
 	return data, nil
 }
 
-func (m *Manager) apply(c *PathChange) error {
-	path, s := c.Path, c.After
+// mutationEffect describes one filesystem attempt, independently of its history
+// record. A failed operation can still apply its target (rename before fsync).
+type mutationEffect struct {
+	applied bool
+	created []createdDirectory
+}
+
+// apply settles runtime ownership for both edits and restores. It does not
+// mutate historical file changes or derive authority from history.
+func (m *Manager) apply(path string, s State) (effect mutationEffect, err error) {
+	defer func() {
+		effect.applied = err == nil || current(path, s) == nil
+		m.directories.finish(effect)
+	}()
 	if e := safePath(path); e != nil {
-		return e
+		return effect, e
 	}
 	if !s.Exists {
 		if e := os.Remove(path); e != nil && !os.IsNotExist(e) {
-			return e
+			return effect, e
 		}
-		return privatefile.SyncDir(filepath.Dir(path))
+		return effect, privatefile.SyncDir(filepath.Dir(path))
 	}
 	data, e := snapshotData(s)
 	if e != nil {
-		return e
+		return effect, e
 	}
-	created := len(c.CreatedDirs)
-	e = createDirs(c)
-	if m.ownedDirs == nil {
-		m.ownedDirs = make(map[string]DirectoryID)
-	}
-	for _, path := range c.CreatedDirs[created:] {
-		m.ownedDirs[path] = c.DirIDs[path]
-	}
+	effect.created, e = createDirs(path)
 	if e != nil {
-		return e
+		return effect, e
 	}
-	return m.atomicFile(path, data, os.FileMode(s.Mode))
+	return effect, m.atomicFile(path, data, os.FileMode(s.Mode))
 }
 
 // Apply serializes read, validation, filesystem writes and history commit locally.
@@ -377,25 +370,17 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 			failure = e
 			break
 		}
-		if e := m.apply(c); e != nil {
+		effect, e := m.apply(c.Path, c.After)
+		c.Applied = effect.applied
+		if e != nil {
 			failure = e // A rename may have succeeded before fsync failed.
-			if current(c.Path, c.After) == nil {
-				c.Applied = true
-			}
 			break
 		}
-		c.Applied = true
 	}
 	applied := 0
 	for _, c := range changes {
 		if c.Applied {
 			applied++
-		}
-	}
-	for _, c := range changes {
-		if !c.Applied {
-			c.After = State{}
-			m.cleanupDirs([]PathChange{c}, false)
 		}
 	}
 	if applied == 0 {
@@ -468,15 +453,8 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 					return errors.New("inconsistent file change chain")
 				}
 				existing.After = to
-				existing.CreatedDirs = append(existing.CreatedDirs, p.CreatedDirs...)
-				if existing.DirIDs == nil {
-					existing.DirIDs = make(map[string]DirectoryID)
-				}
-				for path, id := range p.DirIDs {
-					existing.DirIDs[path] = id
-				}
 			} else {
-				changes[p.Path] = &PathChange{Path: p.Path, Before: from, After: to, CreatedDirs: p.CreatedDirs, DirIDs: p.DirIDs}
+				changes[p.Path] = &PathChange{Path: p.Path, Before: from, After: to}
 			}
 		}
 		return nil
@@ -530,13 +508,19 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 		if e = ctx.Err(); e != nil {
 			return restoreFailure(paths, e)
 		}
-		if e = m.apply(c); e != nil {
-			c.Applied = current(c.Path, c.After) == nil
-			return restoreFailure(paths, e)
+		effect, err := m.apply(c.Path, c.After)
+		c.Applied = effect.applied
+		if err != nil {
+			return restoreFailure(paths, err)
 		}
-		c.Applied = true
 	}
-	m.cleanupDirs(paths, true)
+	var removed []string
+	for _, c := range paths {
+		if !c.After.Exists {
+			removed = append(removed, c.Path)
+		}
+	}
+	m.directories.removedFiles(removed)
 	if e = m.Store.CommitRestore(session, target); e != nil {
 		return restoreFailure(paths, e)
 	}

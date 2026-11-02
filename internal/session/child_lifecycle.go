@@ -41,10 +41,9 @@ type childAssignment struct {
 	queued            []llm.Message
 	initialReadGrants []string
 	queuedReadGrants  map[int64][]string
-	runtimeNotices    []*pendingRuntimeNotice          // Durable source refs; bounded batches materialize only at admission.
-	runtimeTimers     map[string]*pendingRuntimeNotice // O(1) coalescing of pending timer firings.
-	queuedTokens      int                              // Conservative wire-token estimate, including event envelopes.
-	queueTokenLimit   int                              // Bounded by the model's reserved next-turn input headroom.
+	runtimeNotices    runtimeNoticeBacklog // Durable sources, shared ordering and admission with main.
+	queuedTokens      int                  // Conservative wire-token estimate, including event envelopes.
+	queueTokenLimit   int                  // Bounded by the model's reserved next-turn input headroom.
 	turn, job         string
 	finish, result    int64 // childStartMu guards updates; each assignment retains distinct output refs.
 	answer            string
@@ -166,8 +165,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	task.assignment.queued = nil
 	task.assignment.queuedReadGrants = nil
 	task.assignment.queuedTokens = 0
-	task.assignment.runtimeNotices = nil
-	task.assignment.runtimeTimers = nil
+	task.assignment.runtimeNotices = runtimeNoticeBacklog{}
 	r.orderMu.Unlock()
 	status := "completed"
 	if err != nil {
@@ -291,7 +289,7 @@ func (r *Runtime) childNoticeBatchLocked(assignment *childAssignment) ([]llm.Mes
 		return nil, 0, nil
 	}
 	notices := append([]llm.Message(nil), assignment.queued...)
-	runtimeNotices, count, err := r.runtimeNoticeBatch(assignment.runtimeNotices, assignment.queueTokenLimit)
+	runtimeNotices, count, err := assignment.runtimeNotices.batch(r.projectRuntimeNotice, assignment.queueTokenLimit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -344,11 +342,14 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 				task.assignment.queuedReadGrants = nil
 				task.assignment.queued = nil
 				task.assignment.queuedTokens = 0
-				task.assignment.consumeRuntimeNotices(runtimeCount)
+				task.assignment.runtimeNotices.consume(runtimeCount)
 			}
 			next = candidate
 			for _, notice := range admitted.Notifications {
-				r.enqueueMainNotificationLocked(notice.EventSeq, "")
+				if err := r.enqueueMainNotificationLocked(notice.EventSeq, ""); err != nil {
+					r.orderError = errors.Join(r.orderError, err)
+					return err
+				}
 			}
 		}
 		return e

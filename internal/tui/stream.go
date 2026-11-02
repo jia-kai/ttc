@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/messagestream"
 )
@@ -54,8 +55,15 @@ func (c *frontendController) publishStream(item messagestream.Item) {
 
 // directMessageLine preserves readable runtime text without offering payload
 // inspection, independently of whether boundary captures exist for the session.
-func directMessageLine(item line, message llm.Message) line {
+// A separately acquired child completion supplies human preview data; it never
+// replaces the canonical message or becomes model input.
+func directMessageLine(item line, message llm.Message, completion *history.ChildCompletionPresentation) line {
 	item = messageLine(item, message)
+	if message.Type == llm.TypeRuntimeNotification && completion != nil {
+		item.actor, item.text = completion.ChildID, completion.Answer
+		item.speaker, item.compactResponse = "final answer", true
+		item.system, item.brief = false, false
+	}
 	item.action, item.inspectID = actionNone, 0
 	switch message.Type.Presentation() {
 	case llm.PresentationInstruction, llm.PresentationContext:

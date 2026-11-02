@@ -17,7 +17,7 @@ import (
 type preparedSession struct {
 	session     history.Session
 	selection   llm.Selection
-	notices     []*pendingRuntimeNotice
+	notices     runtimeNoticeBacklog
 	accounting  preparedAccounting
 	switchEntry int64
 	switchText  string
@@ -60,7 +60,9 @@ func (r *Runtime) prepareSession(id string, copySource bool) (preparedSession, e
 		if err := json.Unmarshal(event.Body, &timer); err != nil {
 			return preparedSession{}, fmt.Errorf("read recovered notification: %w", err)
 		}
-		target.notices = append(target.notices, &pendingRuntimeNotice{seq: event.EventSeq, timerID: timer.ID})
+		if err := target.notices.enqueue(event.EventSeq, timer.ID); err != nil {
+			return preparedSession{}, fmt.Errorf("queue recovered notification: %w", err)
+		}
 	}
 	target.accounting, err = r.prepareAccounting(v.ID, target.selection)
 	if err != nil {

@@ -20,13 +20,27 @@ import (
 	"ttc/internal/llm"
 )
 
-// pendingMainNotices inspects complete durable payloads, not the bounded model
-// batch. Callers serialize with publishers when their fixture has live work.
+// pendingMainNotices reads complete sources selected for the next bounded
+// delivery. Callers serialize with publishers when their fixture has live work.
 func pendingMainNotices(t *testing.T, r *Runtime) []llm.Message {
 	t.Helper()
+	return pendingNoticeSources(t, r, &r.notifications)
+}
+
+func pendingChildNotices(t *testing.T, r *Runtime, assignment *childAssignment) []llm.Message {
+	t.Helper()
+	return pendingNoticeSources(t, r, &assignment.runtimeNotices)
+}
+
+func pendingNoticeSources(t *testing.T, r *Runtime, backlog *runtimeNoticeBacklog) []llm.Message {
+	t.Helper()
+	batch, _, err := backlog.batch(r.projectRuntimeNotice, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var messages []llm.Message
-	for _, pending := range r.notifications {
-		message, err := r.runtimeNotice(pending.seq)
+	for _, pending := range batch {
+		message, err := r.projectRuntimeNotice(pending.EventSeq, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -35,20 +49,19 @@ func pendingMainNotices(t *testing.T, r *Runtime) []llm.Message {
 	return messages
 }
 
-func (r *Runtime) runtimeNotice(seq int64) (llm.Message, error) {
-	message, _, err := r.runtimeNoticeWithLimit(seq, 0)
-	return message, err
-}
-
 func queueMainBurst(t *testing.T, r *Runtime, count int) []int64 {
 	t.Helper()
 	var sources []int64
-	for range count {
-		body := jobExitContent(jobs.Snapshot{ID: fmt.Sprintf("job_%d", len(r.notifications)), Kind: "shell", Status: "completed", Stdout: strings.Repeat("x", 8192)})
+	for i := range count {
+		body := jobExitContent(jobs.Snapshot{ID: fmt.Sprintf("job_%d", i), Kind: "shell", Status: "completed", Stdout: strings.Repeat("x", 8192)})
 		if err := r.queueNotification(body); err != nil {
 			t.Fatal(err)
 		}
-		sources = append(sources, r.notifications[len(r.notifications)-1].seq)
+		saved, err := r.Store.Session(r.Current())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, saved.EntryTip)
 	}
 	return sources
 }
@@ -99,11 +112,18 @@ func TestMainNotificationBurstDrainsBoundedBatches(t *testing.T) {
 	seedCompactionHistory(t, r, strings.Repeat("Older completed evidence. ", 500))
 	sources := queueMainBurst(t, r, 80)
 	// The regression is specifically larger than a complete coding request.
-	full := pendingMainNotices(t, r)
+	var full []llm.Message
+	for _, source := range sources {
+		message, err := r.projectRuntimeNotice(source, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		full = append(full, message)
+	}
 	if contextbuild.Tokens(full) <= r.selection.Model.Budget.ContextLimit {
 		t.Fatal("fixture burst fits model budget")
 	}
-	batch, count, err := r.runtimeNoticeBatch(r.notifications, 0)
+	batch, count, err := r.notifications.batch(r.projectRuntimeNotice, 0)
 	if err != nil || count == 0 || count >= len(sources) || contextbuild.Tokens(batch) > maxRuntimeNoticeTokens {
 		t.Fatal("invalid bounded projection", count, err)
 	}
@@ -129,7 +149,7 @@ func TestMainNotificationBurstDrainsBoundedBatches(t *testing.T) {
 	}
 	assertMainAcknowledgments(t, r, sources)
 	for _, seq := range sources {
-		message, err := r.runtimeNotice(seq)
+		message, err := r.projectRuntimeNotice(seq, 0)
 		if err != nil || !strings.Contains(message.Content, strings.Repeat("x", 8192)) {
 			t.Fatal("batching changed durable payload", seq, err)
 		}
@@ -165,10 +185,11 @@ func TestMainBacklogArrivalsDuringCompactionAndRecovery(t *testing.T) {
 				if err := r.Load(sourceSession); err != nil {
 					t.Fatal(err)
 				}
-				if len(r.notifications) != len(sources) {
+				recovered, err := r.Store.PendingRecoveryNotifications(context.Background(), r.Current())
+				if err != nil || len(recovered) != len(sources) {
 					t.Fatal("boundary recovery lost pending references")
 				}
-				batch, _, err := r.runtimeNoticeBatch(r.notifications, 0)
+				batch, _, err := r.notifications.batch(r.projectRuntimeNotice, 0)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -181,7 +202,11 @@ func TestMainBacklogArrivalsDuringCompactionAndRecovery(t *testing.T) {
 						t.Fatal("bounded reference lost recovery provenance", message, err)
 					}
 				}
-				for i, message := range pendingMainNotices(t, r) {
+				for i, event := range recovered {
+					message, err := r.projectRuntimeNotice(event.EventSeq, 0)
+					if err != nil {
+						t.Fatal(err)
+					}
 					var provenance struct {
 						Recovered int64 `json:"recovered_from_event_seq"`
 					}
@@ -190,7 +215,7 @@ func TestMainBacklogArrivalsDuringCompactionAndRecovery(t *testing.T) {
 					}
 					sources[i] = message.EventSeq
 				}
-			} else if err != nil || r.Current() == sourceSession || len(r.notifications) != len(sources) {
+			} else if err != nil || r.Current() == sourceSession || !r.HasNotifications() {
 				t.Fatal("compaction dropped or tried to admit entire burst", err)
 			}
 			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
@@ -212,7 +237,7 @@ func TestMainBacklogCoalescesTimerAtLatestSourcePosition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	batch, count, err := r.runtimeNoticeBatch(r.notifications, 0)
+	batch, count, err := r.notifications.batch(r.projectRuntimeNotice, 0)
 	if err != nil || count != 2 || batch[0].EventSeq >= batch[1].EventSeq || !strings.Contains(batch[0].Content, "between") || !strings.Contains(batch[1].Content, `"fired_count":2`) {
 		t.Fatal("timer replacement reordered pending source events", batch, err)
 	}
@@ -225,16 +250,16 @@ func TestMainBacklogCoalescesTimerAtLatestSourcePosition(t *testing.T) {
 func TestMainOversizedChildCompletionKeepsActionableReference(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Observe child")
-	turn, err := r.Store.BeginChildTurn(r.Current(), "main/child", r.selection)
+	turn, err := r.Store.BeginChildTurn(r.Current(), "main/child_large", r.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
 	answer := strings.Repeat("Large evidence. ", 500)
-	result, err := r.Store.Append(r.Current(), turn, "main/child", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: answer})
+	result, err := r.Store.Append(r.Current(), turn, "main/child_large", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: answer})
 	if err != nil {
 		t.Fatal(err)
 	}
-	finish := history.ChildFinish{ChildID: "main/child", TurnID: turn, JobID: "child_job", Outcome: "failed", ContextState: "closed", ResultEntry: result, Answer: answer, Warning: "Partial evidence only", TranscriptExportError: "Fixture export unavailable"}
+	finish := history.ChildFinish{ChildID: "main/child_large", TurnID: turn, JobID: "child_job", Outcome: "failed", ContextState: "closed", ResultEntry: result, Answer: answer, Warning: "Partial evidence only", TranscriptExportError: "Fixture export unavailable"}
 	seq, err := r.Store.FinishChildTurn(r.Current(), finish)
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +267,7 @@ func TestMainOversizedChildCompletionKeepsActionableReference(t *testing.T) {
 	if err := r.queueCommittedNotification(seq); err != nil {
 		t.Fatal(err)
 	}
-	batch, count, err := r.runtimeNoticeBatch(r.notifications, 0)
+	batch, count, err := r.notifications.batch(r.projectRuntimeNotice, 0)
 	if err != nil || count != 1 {
 		t.Fatal(count, err)
 	}
@@ -267,8 +292,11 @@ func TestMainOversizedChildCompletionKeepsActionableReference(t *testing.T) {
 	}
 	var presentation string
 	r.Emit = func(event Event) {
-		if event.Kind == "message" {
-			presentation = event.Text
+		if event.Kind == "message" && event.ChildCompletion != nil {
+			presentation = event.ChildCompletion.Answer
+			if strings.Contains(event.Text, answer) {
+				t.Fatal("human presentation changed canonical event text")
+			}
 		}
 	}
 	if err := r.deliverNoticeEntries("main", admitted.NoticeEntries); err != nil || !strings.Contains(presentation, answer) {
@@ -290,7 +318,7 @@ func TestMainCommittedNotificationInsertedBySourceOrder(t *testing.T) {
 	if err := r.queueCommittedNotification(earlier); err != nil {
 		t.Fatal(err)
 	}
-	batch, count, err := r.runtimeNoticeBatch(r.notifications, 0)
+	batch, count, err := r.notifications.batch(r.projectRuntimeNotice, 0)
 	if err != nil || count != 2 || batch[0].EventSeq != earlier || batch[1].EventSeq <= earlier {
 		t.Fatal("late publication changed durable source ordering", batch, err)
 	}

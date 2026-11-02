@@ -43,7 +43,7 @@ func (r *Runtime) deliverNoticeEntries(actor string, entries []int64) error {
 		if json.Unmarshal([]byte(message.Content), &wake) == nil && wake.ID != "" {
 			r.timers.deliveredThrough(wake.ID, wake.Fired)
 		}
-		r.emit(Event{Kind: "message", Actor: actor, Text: message.Content, EntryID: id, MessageType: message.Type})
+		r.emit(Event{Kind: "message", Actor: actor, Text: message.Content, EntryID: id, MessageType: message.Type, ChildCompletion: view.ChildCompletion})
 	}
 	return nil
 }
@@ -100,7 +100,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if e != nil {
 			return e
 		}
-		notices, count, e := r.runtimeNoticeBatch(r.notifications, 0)
+		notices, count, e := r.notifications.batch(r.projectRuntimeNotice, 0)
 		if e != nil {
 			return e
 		}
@@ -135,11 +135,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if e != nil {
 			return e
 		}
-		clear(r.notifications[:count])
-		r.notifications = r.notifications[count:]
-		if len(r.notifications) == 0 {
-			r.notifications = nil
-		}
+		r.notifications.consume(count)
 		r.steers = nil
 		r.mainContext = next
 		r.estimator.ObserveRequest(admitted.RequestID, observation)
@@ -213,32 +209,17 @@ func (r *Runtime) queueCommittedNotificationLocked(eventID int64) error {
 	if entry.EventSeq() != eventID {
 		return errors.New(prompts.SessionNotificationSource)
 	}
-	for _, m := range r.notifications {
-		if m.seq == eventID {
-			return errors.New(prompts.SessionEventAlreadyPending)
-		}
-	}
-	r.enqueueMainNotificationLocked(eventID, "")
-	return nil
+	return r.enqueueMainNotificationLocked(eventID, "")
 }
 
 // enqueueMainNotificationLocked publishes an already committed reference and
-// wakeup atomically. Main coalesces timers at their newest source position;
-// committed child finishes may arrive out of order and are sorted by source.
-func (r *Runtime) enqueueMainNotificationLocked(eventID int64, timerID string) {
-	if timerID != "" {
-		for i, old := range r.notifications {
-			if old.timerID == timerID {
-				r.notifications = append(r.notifications[:i], r.notifications[i+1:]...)
-				break
-			}
-		}
+// wakeup atomically. Queue ordering/coalescing is shared with child admission.
+func (r *Runtime) enqueueMainNotificationLocked(eventID int64, timerID string) error {
+	if err := r.notifications.enqueue(eventID, timerID); err != nil {
+		return err
 	}
-	r.notifications = append(r.notifications, &pendingRuntimeNotice{seq: eventID, timerID: timerID})
 	r.signalActorLocked("main")
-	if len(r.notifications) > 1 && r.notifications[len(r.notifications)-2].seq > eventID {
-		sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].seq < r.notifications[j].seq })
-	}
+	return nil
 }
 
 func (r *Runtime) publishChild(v tool.ChildView) error {

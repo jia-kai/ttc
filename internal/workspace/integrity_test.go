@@ -62,20 +62,18 @@ func assertContents(t *testing.T, path, want string) {
 }
 
 func TestCreatedDirectoryCleanupOwnership(t *testing.T) {
-	for _, replacement := range []string{"none", "file", "symlink", "directory", "legacy"} {
+	for _, replacement := range []string{"none", "file", "symlink", "directory"} {
 		t.Run(replacement, func(t *testing.T) {
 			root := t.TempDir()
 			parent := filepath.Join(root, "new")
-			change := PathChange{Path: filepath.Join(parent, "nested", "file")}
-			if err := createDirs(&change); err != nil {
+			created, err := createDirs(filepath.Join(parent, "nested", "file"))
+			if err != nil {
 				t.Fatal(err)
 			}
-			if len(change.CreatedDirs) != 2 || len(change.DirIDs) != 2 {
-				t.Fatalf("actual creation was not tracked: %+v", change)
+			if len(created) != 2 {
+				t.Fatalf("actual creation was not tracked: %+v", created)
 			}
-			if replacement == "legacy" {
-				change.DirIDs = nil
-			} else if replacement != "none" {
+			if replacement != "none" {
 				// Keep the old inode alive so an inode cannot be immediately reused.
 				if err := os.Rename(parent, filepath.Join(root, "original")); err != nil {
 					t.Fatal(err)
@@ -95,9 +93,12 @@ func TestCreatedDirectoryCleanupOwnership(t *testing.T) {
 					}
 				}
 			}
-			manager := &Manager{}
-			manager.cleanupDirs([]PathChange{change}, false)
-			_, err := os.Lstat(parent)
+			var ownership directoryOwnership
+			ownership.finish(mutationEffect{created: created})
+			if len(ownership.owned) != 0 {
+				t.Fatalf("removed or replaced identities retained: %+v", ownership.owned)
+			}
+			_, err = os.Lstat(parent)
 			if replacement == "none" {
 				if !os.IsNotExist(err) {
 					t.Fatalf("owned empty directory remains: %v", err)
@@ -157,21 +158,22 @@ func TestFailureCleanupPreservesSubstitutedRegularFile(t *testing.T) {
 
 func TestDirectoryCreationDoesNotClaimExistingParents(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "external")
-	change := PathChange{Path: filepath.Join(parent, "file")}
-	if len(missingDirs(change.Path)) != 1 {
+	path := filepath.Join(parent, "file")
+	if len(missingDirs(path)) != 1 {
 		t.Fatal("parent should initially be absent")
 	}
 	if err := os.Mkdir(parent, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := createDirs(&change); err != nil {
+	created, err := createDirs(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(change.CreatedDirs) != 0 || len(change.DirIDs) != 0 {
-		t.Fatalf("claimed external creator's directory: %+v", change)
+	if len(created) != 0 {
+		t.Fatalf("claimed external creator's directory: %+v", created)
 	}
-	manager := &Manager{}
-	manager.cleanupDirs([]PathChange{change}, false)
+	var ownership directoryOwnership
+	ownership.finish(mutationEffect{created: created})
 	if _, err := os.Stat(parent); err != nil {
 		t.Fatal("removed external parent", err)
 	}
@@ -211,6 +213,9 @@ func TestMutationFailureCleanupAndAppliedSnapshots(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(w.Root, name)); !os.IsNotExist(err) {
 			t.Fatalf("unapplied directory survived: %s: %v", name, err)
 		}
+	}
+	if len(w.directories.owned) != 1 {
+		t.Fatalf("failed attempt retained directory authority: %+v", w.directories.owned)
 	}
 	assertFileTip(t, w, saved.ID, result.ChangeID)
 	changes, err := w.Store.Changes(result.ChangeID)

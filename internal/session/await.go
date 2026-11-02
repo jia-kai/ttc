@@ -48,18 +48,22 @@ func (r *Runtime) queueActorNotificationLocked(actor, content string) error {
 		r.orderError = errors.Join(r.orderError, err)
 		return err
 	}
-	// Coalesce repeated timer firings just as the main notification queue does.
+	// Both actors use the same durable-reference ordering and coalescing.
 	var incoming struct {
 		ID string `json:"wakeup_id"`
 	}
 	_ = json.Unmarshal([]byte(content), &incoming)
 	if assignment != nil {
-		assignment.queueRuntimeNotice(id, incoming.ID)
+		if err := assignment.runtimeNotices.enqueue(id, incoming.ID); err != nil {
+			r.orderError = errors.Join(r.orderError, err)
+			return err
+		}
 		r.signalActorLocked(actor)
 		return nil
 	}
-	r.enqueueMainNotificationLocked(id, incoming.ID)
-	return nil
+	err = r.enqueueMainNotificationLocked(id, incoming.ID)
+	r.orderError = errors.Join(r.orderError, err)
+	return err
 }
 
 // Awaiting reports transient inference suspension, not assignment completion.
@@ -139,10 +143,10 @@ func (r *Runtime) awaitActor(ctx context.Context, actor string, deadline time.Ti
 	case <-ch:
 	default:
 	}
-	pending := len(r.notifications) != 0 || len(r.steers) != 0
+	pending := r.notifications.len() != 0 || len(r.steers) != 0
 	if actor != "main" {
 		assignment := r.actorAssignments[actor]
-		pending = len(assignment.queued) != 0 || len(assignment.runtimeNotices) != 0
+		pending = len(assignment.queued) != 0 || assignment.runtimeNotices.len() != 0
 	}
 	if pending {
 		r.orderMu.Unlock()

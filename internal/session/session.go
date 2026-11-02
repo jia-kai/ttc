@@ -26,23 +26,24 @@ import (
 // Event contains a view update, never authentication state. Inspection actions
 // belong to stream items; EntryID also identifies direct execution records.
 type Event struct {
-	Generation  uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
-	Kind, Text  string
-	SessionID   string // Runtime conversation at emission; the frontend discards stale-view events.
-	EntryID     int64
-	RequestID   int64               // Producing model request for streamed/completed assistant text.
-	Actor       string              // Producing actor for any event; empty means the main actor.
-	CallID      string              // Stable tool-card identity across transient updates and the final record.
-	PendingKey  string              // Request-scoped streamed announcement to replace when intent is committed.
-	JobID       string              // Optional live job for bounded inspector polling; never revived from history.
-	Detail      string              // Bounded detail for a transient tool update; final detail is loaded from history.
-	MessageType llm.MessageType     // Canonical semantics for message events; zero for transient events.
-	InputSource string              // Human input source (normal, queue or steer); empty for non-input events.
-	InputTimeMS int64               // Original human-input commit time in Unix milliseconds; zero for non-input events.
-	Image       *ImageSnapshot      // Immutable image_show snapshot, not a live interaction handle.
-	Question    *QuestionForm       // Snapshot for question lifecycle events; never persisted as a live handle.
-	Retry       *llm.Retry          // Foreground retry backoff metadata; nil for background session naming.
-	StreamItem  *messagestream.Item // Provider-boundary presentation item; never model context.
+	Generation      uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
+	Kind, Text      string
+	SessionID       string // Runtime conversation at emission; the frontend discards stale-view events.
+	EntryID         int64
+	RequestID       int64                                // Producing model request for streamed/completed assistant text.
+	Actor           string                               // Producing actor for any event; empty means the main actor.
+	CallID          string                               // Stable tool-card identity across transient updates and the final record.
+	PendingKey      string                               // Request-scoped streamed announcement to replace when intent is committed.
+	JobID           string                               // Optional live job for bounded inspector polling; never revived from history.
+	Detail          string                               // Bounded detail for a transient tool update; final detail is loaded from history.
+	MessageType     llm.MessageType                      // Canonical semantics for message events; zero for transient events.
+	InputSource     string                               // Human input source (normal, queue or steer); empty for non-input events.
+	InputTimeMS     int64                                // Original human-input commit time in Unix milliseconds; zero for non-input events.
+	Image           *ImageSnapshot                       // Immutable image_show snapshot, not a live interaction handle.
+	Question        *QuestionForm                        // Snapshot for question lifecycle events; never persisted as a live handle.
+	Retry           *llm.Retry                           // Foreground retry backoff metadata; nil for background session naming.
+	StreamItem      *messagestream.Item                  // Provider-boundary presentation item; never model context.
+	ChildCompletion *history.ChildCompletionPresentation // Source-backed human presentation, separate from canonical Text.
 }
 
 // Inference is the protocol dependency consumed by sessions. Catalog discovery,
@@ -101,9 +102,9 @@ type Runtime struct {
 	persisted         bool   // False until the first user turn/message is committed atomically.
 	generation        uint64 // Advances on explicit transient resets, never compaction.
 	activeCancel      context.CancelCauseFunc
-	notifications     []*pendingRuntimeNotice // Durable references, materialized in bounded admission batches.
-	steers            []contextbuild.Input    // Original transient human inputs, admitted only at a model boundary.
-	activeTurn        string                  // Main inference turn, distinct from steering undo checkpoints.
+	notifications     runtimeNoticeBacklog // Durable references shared with child admission queues.
+	steers            []contextbuild.Input // Original transient human inputs, admitted only at a model boundary.
+	activeTurn        string               // Main inference turn, distinct from steering undo checkpoints.
 	AutoName          bool
 	timers            *wakeups
 	questions         questions
@@ -154,7 +155,7 @@ func (r *Runtime) resetLiveWork() {
 	r.awaiting = map[string]bool{}
 	r.awaitRequests = map[string]awaitRequest{}
 	r.orderError = nil
-	r.notifications = nil
+	r.notifications = runtimeNoticeBacklog{}
 	r.steers = nil
 	r.orderMu.Unlock()
 	r.mu.Lock()
@@ -303,7 +304,7 @@ func (r *Runtime) Close() {
 func (r *Runtime) HasNotifications() bool {
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
-	return len(r.notifications) > 0 || len(r.steers) > 0
+	return r.notifications.len() > 0 || len(r.steers) > 0
 }
 
 // Run executes one user or notification turn through complete tool/result cycles.

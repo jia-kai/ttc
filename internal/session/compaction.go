@@ -73,7 +73,7 @@ func (r *Runtime) compactionFailure(session string, err error) error {
 	r.timers.close()
 	r.clearImages()
 	r.orderMu.Lock()
-	r.notifications = nil
+	r.notifications = runtimeNoticeBacklog{}
 	r.steers = nil
 	r.orderMu.Unlock()
 	if invalid != nil {

@@ -73,6 +73,12 @@ sequence, request identity and input source remain separate metadata.
   Presentation flags are derived view state, not another message classifier.
   Provider-boundary inspection exposes notifications in their actual
   model-facing representation, independently of their direct-rendered summaries.
+- Notification sources, admitted messages and human previews are distinct.
+  History selects source data; session projection builds bounded model
+  deliveries; admission persists those exact messages. Replay and live UI attach
+  typed, source-backed child previews without changing message content. Preview,
+  inspection and export share source-reference validation; only export loads the
+  full explicitly referenced completion, never the child's private conversation.
 - Progress, redraws, tool-stream updates and other transient UI events are not
   conversation messages. They keep their own lifecycle rather than entering
   model context merely to share a renderer.
@@ -312,6 +318,12 @@ remain in the
   notifications in sequence order. Commit delivered IDs and versioned message
   counts, not another transcript. Unpublished updates cannot alter input; failed
   admission consumes nothing or advances no actor cursor.
+- Main and children use the same durable-reference backlog implementation for
+  source ordering, duplicate detection, timer coalescing and bounded batch
+  selection. Wakeups and actor lifecycle stay outside the queue. Selection,
+  admission and prefix consumption share the publication lock; only a successful
+  commit consumes references. Replacing a pending timer moves it to the newest
+  firing's source position, rather than ahead of older events.
 - [Runtime context](system_prompt.md#runtime-snapshots) supplies an initial
   baseline and developer-role field updates at admission, not repeated activity
   inventories. Retry an admitted request with identical in-memory input.
@@ -617,15 +629,18 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   before the input; Space inspects; arrows follow nearest human ancestry across
   hidden entries. Archived/blocked inputs stay inspectable. `/branch ID` accepts
   balanced cuts; `/redo` restores the previously selected branch.
-- All file tools share apply/restore: capture bytes, mode, absence and created
-  parent directories; moves are delete/create. Reject duplicate and
-  ancestor/descendant targets before writes, as well as symlinks, special files
-  and multiply linked regular files. Cleanup checks recorded directory identity
-  before attempting empty-directory removal; external replacements can still
-  race that check. Legacy records without directory identities do not authorize
-  removal. Outside-workspace effects are marked non-undoable; shell writes are
-  never checkpointed. Refuse restoration if affected paths differ from expected
+- All file tools share apply/restore: capture bytes, mode and absence; moves are
+  delete/create. Reject duplicate and ancestor/descendant targets before writes,
+  as well as symlinks, special files and multiply linked regular files.
+  Outside-workspace effects are marked non-undoable; shell writes are never
+  checkpointed. Refuse restoration if affected paths differ from expected
   snapshots. Other runtimes, shells and editors are independent writers.
+- A manager-lifetime directory owner receives actual mkdir receipts from the
+  shared filesystem apply path. Failed writes clean only their own new
+  directories; completed restores clean owned empty parents, retaining ownership
+  while shared parents remain nonempty. Historical file records never grant
+  cleanup authority. Removal checks identity through parent descriptors and is
+  directory-only; external replacement can still race the identity check.
 - Loading writable history snapshots its selected ancestry through the last
   balanced main tool exchange into an independent session, sharing immutable
   lineage assets. It preserves source records and retained-input provenance,

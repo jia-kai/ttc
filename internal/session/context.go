@@ -309,7 +309,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		if e != nil {
 			return e
 		}
-		notices, _, e := r.runtimeNoticeBatch(r.notifications, 0)
+		notices, _, e := r.notifications.batch(r.projectRuntimeNotice, 0)
 		if e != nil {
 			return e
 		}

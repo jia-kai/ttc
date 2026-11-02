@@ -447,7 +447,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 				// A final response and a parent send race on the same gate. A
 				// queued message continues this assignment, never a new turn.
 				r.orderMu.Lock()
-				pending := len(task.assignment.queued) != 0 || len(task.assignment.runtimeNotices) != 0
+				pending := len(task.assignment.queued) != 0 || task.assignment.runtimeNotices.len() != 0
 				if !pending {
 					task.assignment.accepting = false
 				}

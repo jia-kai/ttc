@@ -122,7 +122,9 @@ func TestIsolatedCompactionHandoffBudgetsPendingGuidanceAndRuntimeNotices(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			assignment.queueRuntimeNotice(source, "")
+			if err := assignment.runtimeNotices.enqueue(source, ""); err != nil {
+				t.Fatal(err)
+			}
 			notices, _, err := a.r.childNoticeBatchLocked(assignment)
 			if err != nil || len(notices) != 2 {
 				t.Fatal("fixture must contain both guidance and runtime notice", notices, err)
@@ -180,7 +182,8 @@ func TestIsolatedCompactionHandoffBudgetsPendingGuidanceAndRuntimeNotices(t *tes
 			if !errors.As(err, &capacity) || !recoverableCompaction(err) || result != nil || summaries != 1 {
 				t.Fatal("pending delivery should reject the handoff recoverably", result, next, err, summaries)
 			}
-			if a.r.Current() != before || !reflect.DeepEqual(cursor, next) || !reflect.DeepEqual(assignment.queued, []llm.Message{guidance}) || assignment.queuedTokens != queuedTokens || len(assignment.runtimeNotices) != 1 || assignment.runtimeNotices[0].seq != source {
+			pending := pendingChildNotices(t, a.r, assignment)
+			if a.r.Current() != before || !reflect.DeepEqual(cursor, next) || !reflect.DeepEqual(assignment.queued, []llm.Message{guidance}) || assignment.queuedTokens != queuedTokens || len(pending) != 1 || pending[0].EventSeq != source {
 				t.Fatal("failed handoff changed context/cursor or consumed pending delivery")
 			}
 			var successes, acknowledged int
@@ -491,7 +494,7 @@ func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *t
 					var source int64
 					source, err = a.r.Store.Append(a.r.Current(), "", actor, "status", "", false, map[string]any{"type": "runtime_event", "body": map[string]string{"type": "job_exit", "job_id": "pending_summary_budget"}})
 					if err == nil {
-						a.task.assignment.queueRuntimeNotice(source, "")
+						err = a.task.assignment.runtimeNotices.enqueue(source, "")
 					}
 				}
 				if err != nil {
@@ -523,10 +526,10 @@ func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *t
 				}
 				notices := append([]llm.Message(nil), pendingMainNotices(t, a.r)...)
 				cursor := a.r.mainContext
-				var runtimeNotices []*pendingRuntimeNotice
+				var runtimeNotices []llm.Message
 				if a.task != nil {
 					cursor = a.cursor
-					runtimeNotices = append(runtimeNotices, a.task.assignment.runtimeNotices...)
+					runtimeNotices = pendingChildNotices(t, a.r, a.task.assignment)
 				}
 				admitted, err := a.admit()
 				if a.task == nil {
@@ -557,7 +560,7 @@ func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *t
 					if !reflect.DeepEqual(cursor, a.r.mainContext) {
 						t.Error("summary-budget refusal advanced main runtime cursor")
 					}
-				} else if !reflect.DeepEqual(cursor, a.cursor) || !reflect.DeepEqual(runtimeNotices, a.task.assignment.runtimeNotices) {
+				} else if !reflect.DeepEqual(cursor, a.cursor) || !reflect.DeepEqual(runtimeNotices, pendingChildNotices(t, a.r, a.task.assignment)) {
 					t.Error("summary-budget refusal advanced isolated cursor or consumed runtime notices")
 				}
 				var acknowledged int

@@ -111,31 +111,72 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 	return result
 }
 
-// recoveredNotificationMessages is the history-to-model boundary. History owns
-// pending event identities and canonical bodies; session owns API serialization.
-func recoveredNotificationMessages(pending []history.PendingNotification) ([]llm.Message, error) {
-	messages := make([]llm.Message, 0, len(pending))
-	for _, event := range pending {
-		var header struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(event.Body, &header); err != nil {
-			return nil, fmt.Errorf(prompts.SessionRecoveredNotificationProjection, event.EventSeq, err)
-		}
-		body := event.Body
-		if header.Type == "child_turn_finished" {
-			var record history.ChildFinish
-			if err := json.Unmarshal(body, &record); err != nil {
-				return nil, fmt.Errorf(prompts.SessionRecoveredNotificationProjection, event.EventSeq, err)
-			}
-			var err error
-			notice := childCompletionNotification(record)
-			body, err = json.Marshal(notice)
-			if err != nil {
-				return nil, fmt.Errorf(prompts.SessionRecoveredNotificationProjection, event.EventSeq, err)
-			}
-		}
-		messages = append(messages, llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: event.EventSeq, Content: eventContent(string(body), event.EventSeq, event.RecoveredFrom)})
+// projectRuntimeNotice applies the delivery budget without changing the source
+// or its human presentation. Zero requests the complete source projection.
+func (r *Runtime) projectRuntimeNotice(seq int64, tokenLimit int) (llm.Message, error) {
+	// The local estimator charges at least one token per three content bytes.
+	// Larger bodies need scalar references, not megabyte reads under orderMu.
+	delivery, err := r.Store.ReadNotificationDelivery(seq, 3*tokenLimit)
+	if err != nil {
+		return llm.Message{}, err
 	}
-	return messages, nil
+	message, err := notificationDeliveryMessage(delivery)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	if tokenLimit == 0 || !delivery.OutputOmitted && noticeTokens(message) <= tokenLimit/2 {
+		return message, nil
+	}
+	var ref struct {
+		Type             string `json:"type"`
+		JobID            string `json:"job_id,omitempty"`
+		Kind             string `json:"kind,omitempty"`
+		ExitCode         *int   `json:"exit_code,omitempty"`
+		Signal           string `json:"signal,omitempty"`
+		WakeupID         string `json:"wakeup_id,omitempty"`
+		Fired            int    `json:"fired_count,omitempty"`
+		Status           string `json:"status,omitempty"`
+		ChildID          string `json:"child_id,omitempty"`
+		ChildTurnID      string `json:"child_turn_id,omitempty"`
+		AssignmentStatus string `json:"assignment_status,omitempty"`
+		ChildState       string `json:"child_state,omitempty"`
+		ResultEntry      int64  `json:"result_entry_id,omitempty"`
+		RecoveredFrom    int64  `json:"recovered_from_event_seq,omitempty"`
+		OutputOmitted    bool   `json:"output_omitted"`
+		Details          string `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(message.Content), &ref); err != nil {
+		return llm.Message{}, err
+	}
+	ref.Details, ref.OutputOmitted = prompts.RuntimeEventHistoryDetails, true
+	body, err := json.Marshal(ref)
+	if err != nil {
+		return llm.Message{}, err
+	}
+	message.Content = eventContent(string(body), seq, ref.RecoveredFrom)
+	return message, nil
+}
+
+// notificationDeliveryMessage is the history-to-model boundary. History owns
+// source identity and canonical data; session owns the delivery API schema.
+func notificationDeliveryMessage(delivery history.NotificationDelivery) (llm.Message, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(delivery.Body, &header); err != nil {
+		return llm.Message{}, fmt.Errorf(prompts.SessionRecoveredNotificationProjection, delivery.Source.EventSeq, err)
+	}
+	body := delivery.Body
+	if header.Type == "child_turn_finished" {
+		var record history.ChildFinish
+		if err := json.Unmarshal(body, &record); err != nil {
+			return llm.Message{}, fmt.Errorf(prompts.SessionRecoveredNotificationProjection, delivery.Source.EventSeq, err)
+		}
+		var err error
+		body, err = json.Marshal(childCompletionNotification(record))
+		if err != nil {
+			return llm.Message{}, fmt.Errorf(prompts.SessionRecoveredNotificationProjection, delivery.Source.EventSeq, err)
+		}
+	}
+	return llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: delivery.Source.EventSeq, Content: eventContent(string(body), delivery.Source.EventSeq, delivery.Source.RecoveredFrom)}, nil
 }

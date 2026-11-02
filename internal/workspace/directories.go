@@ -12,102 +12,118 @@ import (
 	"ttc/internal/prompts"
 )
 
-// createDirs records only successful mkdir calls, not directories merely absent
-// during preflight. Existing directories (including concurrent creators) are not ours.
-func createDirs(c *PathChange) error {
-	dirs := missingDirs(c.Path)
+// directoryIdentity identifies a directory observed after a successful mkdir.
+type directoryIdentity struct {
+	device uint64
+	inode  uint64
+}
+
+// createdDirectory is a runtime mkdir receipt, not a claim recovered from history.
+type createdDirectory struct {
+	path string
+	id   directoryIdentity
+}
+
+// directoryOwnership owns cleanup authority for one Manager lifetime, under its
+// mutation lock. Only successful mkdir receipts grant authority. Historical file
+// changes and directory existence never do.
+type directoryOwnership struct {
+	owned map[string]directoryIdentity
+}
+
+// finish registers an attempt's mkdirs even when its file write failed. Cleanup
+// of an unapplied attempt is limited to its receipts, not earlier owned parents.
+func (o *directoryOwnership) finish(effect mutationEffect) {
+	if len(effect.created) == 0 {
+		return
+	}
+	if o.owned == nil {
+		o.owned = make(map[string]directoryIdentity)
+	}
+	for _, dir := range effect.created {
+		o.owned[dir.path] = dir.id
+	}
+	if !effect.applied {
+		o.cleanup(effect.created)
+	}
+}
+
+// removedFiles cleans owned ancestors only after a completed restore. Parents
+// kept nonempty by other files remain owned, independent of the creating file's
+// history or presence on the selected branch.
+func (o *directoryOwnership) removedFiles(paths []string) {
+	candidates := make(map[string]directoryIdentity)
+	for _, file := range paths {
+		for path := filepath.Dir(file); ; path = filepath.Dir(path) {
+			if id, ok := o.owned[path]; ok {
+				candidates[path] = id
+			}
+			if path == filepath.Dir(path) {
+				break
+			}
+		}
+	}
+	dirs := make([]createdDirectory, 0, len(candidates))
+	for path, id := range candidates {
+		dirs = append(dirs, createdDirectory{path, id})
+	}
+	o.cleanup(dirs)
+}
+
+func (o *directoryOwnership) cleanup(dirs []createdDirectory) {
+	// Children must be removed before their parents. Copy so sorting does not
+	// mutate the attempt's receipt.
+	dirs = append([]createdDirectory(nil), dirs...)
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i].path) > len(dirs[j].path) })
+	for _, dir := range dirs {
+		if !removeCreatedDir(dir.path, dir.id) {
+			delete(o.owned, dir.path)
+		}
+	}
+}
+
+// createDirs returns only successful mkdir calls, including partial progress on
+// failure. Existing directories (including concurrent creators) are not ours.
+func createDirs(path string) ([]createdDirectory, error) {
+	var created []createdDirectory
+	dirs := missingDirs(path)
 	for i := len(dirs) - 1; i >= 0; i-- {
 		path := dirs[i]
 		err := os.Mkdir(path, 0755)
-		created := err == nil
+		ours := err == nil
 		if err != nil && !os.IsExist(err) {
-			return err
+			return created, err
 		}
 		info, err := os.Lstat(path)
 		if err != nil {
-			return err
+			return created, err
 		}
 		if !info.IsDir() {
-			return fmt.Errorf(prompts.WorkspaceParentNotDirectory, path)
+			return created, fmt.Errorf(prompts.WorkspaceParentNotDirectory, path)
 		}
-		if created {
-			if c.DirIDs == nil {
-				c.DirIDs = make(map[string]DirectoryID)
-			}
-			c.CreatedDirs = append(c.CreatedDirs, path)
-			c.DirIDs[path] = directoryID(info)
+		if ours {
+			created = append(created, createdDirectory{path, directoryID(info)})
 		}
 	}
-	return nil
+	return created, nil
 }
 
-func directoryID(info os.FileInfo) DirectoryID {
+func directoryID(info os.FileInfo) directoryIdentity {
 	stat := info.Sys().(*syscall.Stat_t) // Linux is the supported host platform.
-	return DirectoryID{Device: uint64(stat.Dev), Inode: stat.Ino}
-}
-
-// Restoration may remove a previously owned shared parent after its last file
-// disappears. Failed mutation cleanup is restricted to that attempt's mkdirs.
-func (m *Manager) cleanupDirs(changes []PathChange, includeOwnedParents bool) {
-	ids := make(map[string]DirectoryID)
-	for _, c := range changes {
-		if !c.After.Exists {
-			for _, path := range c.CreatedDirs {
-				if id, ok := c.DirIDs[path]; ok {
-					ids[path] = id
-				}
-			}
-			if includeOwnedParents {
-				// The creating file may have disappeared in an earlier branch
-				// switch while another file kept its shared parent nonempty.
-				for path := filepath.Dir(c.Path); ; path = filepath.Dir(path) {
-					if id, ok := m.ownedDirs[path]; ok {
-						ids[path] = id
-					}
-					if path == filepath.Dir(path) {
-						break
-					}
-				}
-			}
-		}
-	}
-	if m.ownedDirs == nil {
-		m.ownedDirs = make(map[string]DirectoryID)
-	}
-	// Prefer a current runtime identity over immutable historical identities,
-	// regardless of which file supplied the directory in this restore batch.
-	for path := range ids {
-		if id, ok := m.ownedDirs[path]; ok {
-			ids[path] = id
-		}
-	}
-	dirs := make([]string, 0, len(ids))
-	for path := range ids {
-		dirs = append(dirs, path)
-	}
-	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
-	for _, path := range dirs {
-		removeCreatedDir(path, ids[path])
-		info, err := os.Lstat(path)
-		if err == nil && info.IsDir() && directoryID(info) == ids[path] {
-			// Keep verified ownership when another file still needs this parent.
-			m.ownedDirs[path] = ids[path]
-		} else {
-			delete(m.ownedDirs, path)
-		}
-	}
+	return directoryIdentity{device: uint64(stat.Dev), inode: stat.Ino}
 }
 
 // Open each ancestor without following symlinks, then bind inspection and removal
 // to the same parent descriptor. Removal is directory-only even if the final
 // entry changes after inspection; external writers are not serialized by Manager.
-func removeCreatedDir(path string, id DirectoryID) {
+// The result retains authority only if the same directory verifiably remains.
+func removeCreatedDir(path string, id directoryIdentity) bool {
 	if !filepath.IsAbs(path) {
-		return
+		return false
 	}
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return
+		return false
 	}
 	defer func() { _ = unix.Close(fd) }()
 	for _, part := range strings.Split(strings.TrimPrefix(filepath.Dir(path), "/"), "/") {
@@ -116,15 +132,22 @@ func removeCreatedDir(path string, id DirectoryID) {
 		}
 		next, err := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
-			return
+			return false
 		}
 		_ = unix.Close(fd)
 		fd = next
 	}
-	var stat unix.Stat_t
 	name := filepath.Base(path)
-	if err := unix.Fstatat(fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || id != (DirectoryID{Device: uint64(stat.Dev), Inode: stat.Ino}) {
-		return
+	matches := func() bool {
+		var stat unix.Stat_t
+		return unix.Fstatat(fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW) == nil &&
+			stat.Mode&unix.S_IFMT == unix.S_IFDIR && id == (directoryIdentity{device: uint64(stat.Dev), inode: stat.Ino})
 	}
-	_ = unix.Unlinkat(fd, name, unix.AT_REMOVEDIR)
+	if !matches() {
+		return false
+	}
+	if unix.Unlinkat(fd, name, unix.AT_REMOVEDIR) == nil {
+		return false
+	}
+	return matches()
 }

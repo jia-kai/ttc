@@ -114,19 +114,19 @@ func TestChildCompletionStorageAndAPIContractsAreSeparate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			messages, err := recoveredNotificationMessages([]history.PendingNotification{{EventSeq: largeID + 2, RecoveredFrom: largeID + 1, Body: body}})
-			if err != nil || len(messages) != 1 {
-				t.Fatal(messages, err)
+			message, err := notificationDeliveryMessage(history.NotificationDelivery{Source: history.NotificationSourceRef{EventSeq: largeID + 2, RecoveredFrom: largeID + 1}, Body: body})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if messages[0].Type != llm.TypeRuntimeNotification || messages[0].EventSeq != largeID+2 {
-				t.Fatal("notification identity lost", messages[0])
+			if message.Type != llm.TypeRuntimeNotification || message.EventSeq != largeID+2 {
+				t.Fatal("notification identity lost", message)
 			}
 			var recovered map[string]json.RawMessage
-			if err := json.Unmarshal([]byte(messages[0].Content), &recovered); err != nil {
+			if err := json.Unmarshal([]byte(message.Content), &recovered); err != nil {
 				t.Fatal(err)
 			}
 			if string(recovered["event_seq"]) != strconv.FormatInt(largeID+2, 10) || string(recovered["recovered_from_event_seq"]) != strconv.FormatInt(largeID+1, 10) || string(recovered["result_entry_id"]) != strconv.FormatInt(largeID, 10) {
-				t.Fatal("routing or result identity lost precision", messages[0].Content)
+				t.Fatal("routing or result identity lost precision", message.Content)
 			}
 			delete(recovered, "event_seq")
 			delete(recovered, "recovered_from_event_seq")
@@ -179,18 +179,89 @@ func TestChildToolResultUsesExplicitExecutionFields(t *testing.T) {
 func TestRecoveredNonChildNotificationPreservesBodyAndPrecision(t *testing.T) {
 	const original = `{"type":"job_exit","job_id":"job","detail":{"exact":9007199254740993},"event_seq":1,"recovered_from_event_seq":{"stale":2}}`
 	body := json.RawMessage(original)
-	messages, err := recoveredNotificationMessages([]history.PendingNotification{{EventSeq: 9, RecoveredFrom: 8, Body: body}})
-	if err != nil || len(messages) != 1 {
-		t.Fatal(messages, err)
+	message, err := notificationDeliveryMessage(history.NotificationDelivery{Source: history.NotificationSourceRef{EventSeq: 9, RecoveredFrom: 8}, Body: body})
+	if err != nil {
+		t.Fatal(err)
 	}
 	var actual map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(messages[0].Content), &actual); err != nil {
+	if err := json.Unmarshal([]byte(message.Content), &actual); err != nil {
 		t.Fatal(err)
 	}
 	if string(actual["event_seq"]) != "9" || string(actual["recovered_from_event_seq"]) != "8" || string(actual["detail"]) != `{"exact":9007199254740993}` || string(body) != original {
-		t.Fatal("non-child body changed or used untrusted routing", messages[0].Content)
+		t.Fatal("non-child body changed or used untrusted routing", message.Content)
 	}
-	if _, err := recoveredNotificationMessages([]history.PendingNotification{{EventSeq: 9, Body: json.RawMessage(`{`)}}); err == nil {
+	if _, err := notificationDeliveryMessage(history.NotificationDelivery{Source: history.NotificationSourceRef{EventSeq: 9}, Body: json.RawMessage(`{`)}); err == nil {
 		t.Fatal("invalid recovered JSON accepted")
+	}
+}
+
+func TestChildNoticeOmissionPathsPreserveDeliveryMetadata(t *testing.T) {
+	const preciseID int64 = 9007199254740993
+	for _, path := range []struct {
+		name        string
+		answerBytes int
+		sqlOmitted  bool
+	}{
+		{"token_projection", 3500, false},
+		{"sql_projection", 8192, true},
+	} {
+		for _, recovered := range []bool{false, true} {
+			t.Run(path.name+"/recovered="+strconv.FormatBool(recovered), func(t *testing.T) {
+				r, _ := runtimeFixture(t, nil)
+				seedRuntime(t, r, "Observe bounded completion")
+				finish := history.ChildFinish{
+					Type: "child_turn_finished", ChildID: "main/child_bounded", TurnID: "child_turn", JobID: "child_job",
+					Outcome: "failed", ContextState: "closed", Persistent: true,
+					ResultEntry: preciseID, Answer: strings.Repeat("x", path.answerBytes),
+					Warning: "source-only warning", TranscriptPath: "source-only transcript",
+				}
+				var source any = finish
+				var provenance int64
+				actor := finish.ChildID
+				if recovered {
+					provenance, actor = preciseID+1, "main"
+					source = map[string]any{"type": "runtime_event", "body": finish, "recovered_from_event_seq": provenance}
+				}
+				seq, err := r.Store.Append(r.Current(), "", actor, "status", "", false, source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				delivery, err := r.Store.ReadNotificationDelivery(seq, 3*maxRuntimeNoticeTokens)
+				if err != nil || delivery.OutputOmitted != path.sqlOmitted {
+					t.Fatal("fixture did not exercise the intended omission path", delivery.OutputOmitted, err)
+				}
+				message, err := r.projectRuntimeNotice(seq, maxRuntimeNoticeTokens)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var actual map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(message.Content), &actual); err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]string{
+					"type": `"child_turn_finished"`, "child_id": `"main/child_bounded"`,
+					"child_turn_id": `"child_turn"`, "job_id": `"child_job"`,
+					"assignment_status": `"failed"`, "child_state": `"closed"`,
+					"result_entry_id": strconv.FormatInt(preciseID, 10), "event_seq": strconv.FormatInt(seq, 10),
+					"output_omitted": "true",
+				}
+				if recovered {
+					want["recovered_from_event_seq"] = strconv.FormatInt(provenance, 10)
+				}
+				for key, value := range want {
+					if string(actual[key]) != value {
+						t.Fatalf("%s=%s want=%s in %s", key, actual[key], value, message.Content)
+					}
+				}
+				for _, key := range []string{"answer", "warning", "transcript_path", "outcome", "context_state"} {
+					if actual[key] != nil {
+						t.Fatalf("source-only field %s entered bounded delivery", key)
+					}
+				}
+				if message.EventSeq != seq || string(actual["details"]) == "" || noticeTokens(message) > maxRuntimeNoticeTokens {
+					t.Fatal("bounded delivery lost identity/details or exceeded budget", message)
+				}
+			})
+		}
 	}
 }

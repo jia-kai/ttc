@@ -316,7 +316,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 			fmt.Fprintln(c.frontend.Output, c.plainActor(event.Actor, brief))
 		}
 	case "delta":
-		item := directMessageLine(line{}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID})
+		item := directMessageLine(line{}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID}, nil)
 		item.complete, item.markdown = false, false
 		item = c.attribute(item, event.Actor)
 		if c.view.publish(item, "", true) && c.frontend.Plain {
@@ -325,7 +325,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 			}
 		}
 	case "assistant":
-		item := c.attribute(directMessageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID}), event.Actor)
+		item := c.attribute(directMessageLine(line{id: event.EntryID}, llm.Message{Type: llm.TypeAssistant, Content: event.Text, RequestID: event.RequestID}, nil), event.Actor)
 		index, streamed := c.view.requests[event.RequestID]
 		streamed = streamed && !c.view.lines[index].complete
 		if c.view.publish(item, "", false) && c.frontend.Plain {
@@ -386,7 +386,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		}
 		item := line{text: event.Text, id: event.EntryID, actor: event.Actor}
 		if event.Kind == "message" {
-			item = directMessageLine(item, llm.Message{Type: event.MessageType, Content: event.Text, InputSource: event.InputSource, InputTimeMS: event.InputTimeMS})
+			item = directMessageLine(item, llm.Message{Type: event.MessageType, Content: event.Text, InputSource: event.InputSource, InputTimeMS: event.InputTimeMS}, event.ChildCompletion)
 		}
 		item = c.attribute(item, item.actor)
 		c.view.append(item)

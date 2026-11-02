@@ -48,12 +48,12 @@ func childResponseWith(q historyReader, id int64) (int64, error) {
 	var entry Entry
 	entry.ID = id
 	var messageType string
-	if err := q.QueryRow(`SELECT session_id,kind,coalesce(role,''),
+	if err := q.QueryRow(`SELECT session_id,kind,coalesce(role,''),actor_id,coalesce(source_id,0),
 		CASE WHEN kind='message' AND role='user' THEN coalesce((
 			SELECT value FROM json_each(entries.content_json) AS field
 			WHERE lower(field.key)='type' AND field.type='text' ORDER BY field.id DESC LIMIT 1
 		),'') ELSE '' END
-		FROM entries WHERE id=?`, id).Scan(&entry.SessionID, &entry.Kind, &entry.Role, &messageType); err != nil {
+		FROM entries WHERE id=?`, id).Scan(&entry.SessionID, &entry.Kind, &entry.Role, &entry.Actor, &entry.Source, &messageType); err != nil {
 		return 0, err
 	}
 	var raw []byte
@@ -79,10 +79,24 @@ func childResponseWith(q historyReader, id int64) (int64, error) {
 			return 0, err
 		}
 		var notice struct {
-			Type string `json:"type"`
+			Type    string `json:"type"`
+			Omitted bool   `json:"output_omitted"`
 		}
 		if json.Unmarshal([]byte(content), &notice) != nil || notice.Type != "child_turn_finished" {
 			return 0, nil
+		}
+		if notice.Omitted {
+			// The omitted delivery is not authoritative about its result target.
+			// Resolve the same immutable source used by replay and export.
+			fullEntry, err := entryWith(q, id)
+			if err != nil {
+				return 0, err
+			}
+			resolved, err := resolveOmittedChildNotice(q, fullEntry)
+			if err != nil {
+				return 0, err
+			}
+			return childResultReference(q, entry, resolved.Presentation.ChildID, resolved.ResultEntry, resolved.SourceID)
 		}
 		raw = []byte(content)
 	} else {
@@ -95,20 +109,26 @@ func childResponseWith(q historyReader, id int64) (int64, error) {
 	if err := json.Unmarshal(raw, &reference); err != nil {
 		return 0, err
 	}
-	if reference.ResultEntry == 0 {
+	return childResultReference(q, entry, reference.ChildID, reference.ResultEntry, entry.EventSeq())
+}
+
+// childResultReference closes only an explicit final-answer reference, never a
+// child's branch. Original semantic ordering survives load and compaction copies.
+func childResultReference(q historyReader, entry Entry, childID string, resultEntry, before int64) (int64, error) {
+	if resultEntry == 0 {
 		return 0, nil
 	}
 	var target Entry
-	target.ID = reference.ResultEntry
-	if err := q.QueryRow("SELECT session_id,actor_id,kind,coalesce(role,'') FROM entries WHERE id=?", target.ID).Scan(&target.SessionID, &target.Actor, &target.Kind, &target.Role); err != nil {
+	target.ID = resultEntry
+	if err := q.QueryRow("SELECT session_id,actor_id,kind,coalesce(role,''),coalesce(source_id,0) FROM entries WHERE id=?", target.ID).Scan(&target.SessionID, &target.Actor, &target.Kind, &target.Role, &target.Source); err != nil {
 		return 0, fmt.Errorf("child response reference: %w", err)
 	}
 	var sameLineage bool
 	if err := q.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, target.SessionID, entry.SessionID).Scan(&sameLineage); err != nil {
 		return 0, err
 	}
-	if !strings.HasPrefix(reference.ChildID, "main/child_") || !sameLineage || target.Actor != reference.ChildID || target.Kind != "message" || target.Role != "assistant" {
-		return 0, fmt.Errorf("invalid child response reference %d from entry %d", target.ID, id)
+	if !strings.HasPrefix(childID, entry.Actor+"/child_") || strings.Contains(strings.TrimPrefix(childID, entry.Actor+"/"), "/") || !sameLineage || target.Actor != childID || target.Kind != "message" || target.Role != "assistant" || target.Source != 0 || target.ID >= before {
+		return 0, fmt.Errorf("invalid child response reference %d from entry %d", target.ID, entry.ID)
 	}
 	return target.ID, nil
 }
@@ -139,8 +159,12 @@ func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err 
 		return EntryView{}, err
 	}
 	q := contextHistoryReader{ctx, s.db}
-	if err := restoreChildNoticeAnswer(q, entry, data.Message); err != nil {
-		return EntryView{}, err
+	var notice *resolvedChildNotice
+	if entry.Kind == "message" && data.Message != nil {
+		notice, err = resolveChildNoticeMessage(q, entry, *data.Message)
+		if err != nil {
+			return EntryView{}, err
+		}
 	}
 	if entry.Kind == "tool_result" {
 		var summary string
@@ -154,55 +178,11 @@ func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err 
 			return EntryView{}, err
 		}
 	}
-	return projectView(data), ctx.Err()
-}
-
-// restoreChildNoticeAnswer enriches presentation only. The canonical admitted
-// message and provider input remain the original bounded reference.
-func restoreChildNoticeAnswer(q historyReader, entry Entry, message *llm.Message) error {
-	if message == nil || message.Type != llm.TypeRuntimeNotification || message.EventSeq <= 0 {
-		return nil
+	view = projectView(data)
+	if notice != nil {
+		view.ChildCompletion = &notice.Presentation
 	}
-	var notice struct {
-		Type    string `json:"type"`
-		ChildID string `json:"child_id"`
-		Omitted bool   `json:"output_omitted"`
-	}
-	if err := json.Unmarshal([]byte(message.Content), &notice); err != nil {
-		return err
-	}
-	if notice.Type != "child_turn_finished" || !notice.Omitted {
-		return nil
-	}
-	if message.EventSeq >= entry.EventSeq() {
-		return fmt.Errorf(prompts.HistoryInvalidChildNotificationSource, message.EventSeq)
-	}
-	var kind, child, answer string
-	var sameLineage bool
-	err := q.QueryRow(`WITH source AS (
-		SELECT session_id, CASE WHEN json_extract(content_json,'$.type')='runtime_event'
-		THEN json_extract(content_json,'$.body') ELSE content_json END AS body
-		FROM entries WHERE id=? AND kind='status' AND source_id IS NULL
-	) SELECT coalesce(json_extract(body,'$.type'),''), coalesce(json_extract(body,'$.child_id'),''),
-		coalesce(json_extract(body,'$.answer'),''), a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id
-		FROM source JOIN sessions a ON a.id=source.session_id JOIN sessions b ON b.id=?`, message.EventSeq, entry.SessionID).Scan(&kind, &child, &answer, &sameLineage)
-	if err != nil {
-		return err
-	}
-	if kind != "child_turn_finished" || child != notice.ChildID || !sameLineage || len(answer) > MaxChildAnswerBytes {
-		return fmt.Errorf(prompts.HistoryInvalidChildNotificationSource, message.EventSeq)
-	}
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(message.Content), &body); err != nil {
-		return err
-	}
-	body["answer"], _ = json.Marshal(answer)
-	content, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	message.Content = string(content)
-	return nil
+	return view, ctx.Err()
 }
 
 // ReadEntryView loads an entry by ID and decodes its small replay view with

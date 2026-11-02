@@ -453,7 +453,7 @@ func (c *frontendController) replay() {
 				// caller-supplied message metadata.
 				message.InputTimeMS = v.CreatedMS
 			}
-			item = directMessageLine(item, message)
+			item = directMessageLine(item, message, entryView.ChildCompletion)
 			item = c.attribute(item, item.actor)
 		}
 		if v.Kind == "tool_result" && c.renderer != nil {

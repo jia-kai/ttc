@@ -16,9 +16,9 @@ func TestRuntimeNotificationSourceBoundsLargePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bounded, omitted, err := s.RuntimeNotificationSource(id, 6144)
-	if err != nil || !omitted || bounded.EventSeq != id || len(bounded.Body) > 1024 || strings.Contains(string(bounded.Body), "timer body") {
-		t.Fatal("large body escaped bounded source reader", len(bounded.Body), omitted, err)
+	bounded, err := s.ReadNotificationDelivery(id, 6144)
+	if err != nil || !bounded.OutputOmitted || bounded.Source.EventSeq != id || len(bounded.Body) > 1024 || strings.Contains(string(bounded.Body), "timer body") {
+		t.Fatal("large body escaped bounded source reader", len(bounded.Body), bounded.OutputOmitted, err)
 	}
 	var ref struct {
 		ID    string `json:"wakeup_id"`
@@ -27,8 +27,8 @@ func TestRuntimeNotificationSourceBoundsLargePayload(t *testing.T) {
 	if err := json.Unmarshal(bounded.Body, &ref); err != nil || ref.ID != "timer" || ref.Fired != 7 {
 		t.Fatal(ref, err)
 	}
-	full, omitted, err := s.RuntimeNotificationSource(id, 0)
-	if err != nil || omitted || !strings.Contains(string(full.Body), text) {
+	full, err := s.ReadNotificationDelivery(id, 0)
+	if err != nil || full.OutputOmitted || !strings.Contains(string(full.Body), text) {
 		t.Fatal("durable timer message changed", err)
 	}
 }
@@ -54,9 +54,9 @@ func TestOmittedChildNoticeViewRestoresOnlyPresentation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			bounded, omitted, err := s.RuntimeNotificationSource(seq, 6144)
+			bounded, err := s.ReadNotificationDelivery(seq, 6144)
 			var source ChildFinish
-			if err != nil || !omitted || json.Unmarshal(bounded.Body, &source) != nil || !source.Persistent || source.Answer != "" || source.ChildID != finish.ChildID {
+			if err != nil || !bounded.OutputOmitted || json.Unmarshal(bounded.Body, &source) != nil || !source.Persistent || source.Answer != "" || source.ChildID != finish.ChildID {
 				t.Fatal("bounded canonical child metadata changed", string(bounded.Body), err)
 			}
 			body, _ := json.Marshal(map[string]any{"type": "child_turn_finished", "child_id": finish.ChildID, "output_omitted": true})
@@ -66,8 +66,8 @@ func TestOmittedChildNoticeViewRestoresOnlyPresentation(t *testing.T) {
 				t.Fatal(err)
 			}
 			view, err := s.ReadEntryView(context.Background(), id)
-			if err != nil || view.Message == nil || !strings.Contains(view.Message.Content, answer) {
-				t.Fatal("missing source-backed preview", view, err)
+			if err != nil || view.Message == nil || view.Message.Content != message.Content || view.ChildCompletion == nil || view.ChildCompletion.Answer != answer || view.ChildCompletion.ChildID != finish.ChildID {
+				t.Fatal("canonical delivery or separate source-backed preview changed", view, err)
 			}
 			entry, err := s.Entry(id)
 			if err != nil {
@@ -81,7 +81,7 @@ func TestOmittedChildNoticeViewRestoresOnlyPresentation(t *testing.T) {
 				if _, err := s.ReadView(context.Background(), invalid); err == nil {
 					t.Fatal("presentation accepted future notification source")
 				}
-				if _, err := omittedChildNoticeSource(s.db, invalid); err == nil {
+				if _, err := resolveOmittedChildNotice(s.db, invalid); err == nil {
 					t.Fatal("export accepted future notification source")
 				}
 			}

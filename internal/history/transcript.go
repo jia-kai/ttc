@@ -173,12 +173,16 @@ func selectedActorEntries(ctx context.Context, q historyReader, session, actor s
 				}
 			}
 			unique[e.EventSeq()] = e
-			source, err := omittedChildNoticeSource(q, e)
+			notice, err := resolveOmittedChildNotice(q, e)
 			if err != nil {
 				return nil, err
 			}
-			if source != nil {
-				unique[source.EventSeq()] = *source
+			if notice != nil {
+				source, err := entryWith(q, notice.SourceID)
+				if err != nil {
+					return nil, err
+				}
+				unique[source.EventSeq()] = source
 			}
 		}
 	}
