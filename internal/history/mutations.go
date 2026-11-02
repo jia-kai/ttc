@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
 
@@ -98,6 +99,13 @@ func (s *Store) UndoTarget(session string) (RestoreTarget, error) {
 			break
 		}
 		if x.Kind == "message" && x.Actor == "main" && x.Role == "user" && x.TurnID != "" {
+			var message llm.Message
+			if err := json.Unmarshal(x.Content, &message); err != nil {
+				return RestoreTarget{}, err
+			}
+			if message.Type != llm.TypeUserInput {
+				continue
+			}
 			var start, tip sql.NullInt64
 			var trigger string
 			if e = s.db.QueryRow("SELECT start_entry_id,start_file_tip_id,trigger FROM turns WHERE id=? AND session_id=?", x.TurnID, session).Scan(&start, &tip, &trigger); e != nil {

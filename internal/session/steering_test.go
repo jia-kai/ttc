@@ -35,7 +35,7 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 				if m.Role() == "user" && m.Content == "Steer: revise after first write" {
 					found = true
 					projected, err := m.ModelContent()
-					if err != nil || projected != `{"type":"steer","source":"user","message":"Steer: revise after first write"}` {
+					if err != nil || projected != "<steer>\nSteer: revise after first write\n</steer>" {
 						t.Fatal("admitted human steer is not marked for the model", projected, err)
 					}
 				}
@@ -148,7 +148,7 @@ func TestSteeringAdmissionBudgetsReceiverEnvelope(t *testing.T) {
 			if _, _, err := r.admitMain(context.Background(), turn, r.selection); err != nil {
 				t.Fatal(err)
 			}
-			input := contextbuild.Input{Source: source, Text: strings.Repeat("\"\n<>&\\", 200)}
+			input := contextbuild.Input{Source: source, Text: "\"\n<>&\\"}
 			r.steers = []contextbuild.Input{input}
 			pending := r.steeringMessagesLocked()
 			if len(pending) != 1 || pending[0].InputSource != "steer" || !reflect.DeepEqual(r.steers[0], input) {
@@ -163,9 +163,9 @@ func TestSteeringAdmissionBudgetsReceiverEnvelope(t *testing.T) {
 			steer.InputSource = "steer"
 			framed := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), append(append([]llm.Message(nil), messages...), steer))
 			if framed.Input <= plain.Input {
-				t.Fatal("fixture must have escaping/envelope overhead", plain, framed)
+				t.Fatal("fixture must have raw steering-marker overhead", plain, framed)
 			}
-			r.selection.Model.Budget.ContextLimit = (plain.Input+framed.Input)/2 + framed.Reserved
+			r.selection.Model.Budget.ContextLimit = framed.Input + framed.Reserved
 			if !codingInputFits(plain.Input, r.selection.Model.Budget, false) || codingInputFits(framed.Input, r.selection.Model.Budget, false) {
 				t.Fatal("fixture must straddle the steering envelope budget")
 			}
@@ -175,7 +175,7 @@ func TestSteeringAdmissionBudgetsReceiverEnvelope(t *testing.T) {
 			if len(r.steers) != 1 || !reflect.DeepEqual(r.steers[0], input) {
 				t.Fatal("rejected admission consumed input")
 			}
-			r.selection.Model.Budget.ContextLimit = framed.Input + framed.Reserved + 100
+			r.selection.Model.Budget.ContextLimit++
 			admitted, cm, err := r.admitMain(context.Background(), turn, r.selection)
 			if err != nil || cm != nil || len(r.steers) != 0 {
 				t.Fatal(admitted, cm, err)

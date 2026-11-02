@@ -14,7 +14,7 @@ import (
 )
 
 // CurrentVersion is the schema version produced by Apply.
-const CurrentVersion = 12
+const CurrentVersion = 13
 
 // legacyMarker is the fixed schema-5 storage signature, not live model guidance.
 const legacyMarker = `The following user message is an original human input retained across compaction,
@@ -53,6 +53,7 @@ var upgrades = [...]struct {
 	{9, upgrade9},
 	{10, upgrade10},
 	{11, upgrade11},
+	{12, upgrade12},
 }
 
 // Apply runs ordered upgrades from MinimumVersion to CurrentVersion inside tx.

@@ -202,7 +202,7 @@ func generate(root, output string) error {
 			}
 		}
 	}
-	for name, slots := range map[string]int{"Compaction": 0, "CompactionFocus": 1, "CompactionContext": 1} {
+	for name, slots := range map[string]int{"Compaction": 0, "CompactionFocus": 1} {
 		text, found := texts[name]
 		if !found {
 			return fmt.Errorf("missing required prompt %s", name)

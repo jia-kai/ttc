@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 	"ttc/internal/llm"
-	"ttc/internal/prompts"
 )
 
 func TestRecentCycleRetentionAndBudgets(t *testing.T) {
@@ -65,7 +64,7 @@ func TestRetentionCompactsEarlierHistoryWhenNewestTurnHasNoOlderCycle(t *testing
 			for i := range cycles {
 				id := string(rune('a' + i))
 				messages = append(messages,
-					llm.Message{Type: llm.TypeRuntimeContext, Content: "Live metadata"},
+					llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"live_jobs":[]}}`},
 					llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: id}}},
 					llm.Message{Type: llm.TypeToolResult, CallID: id, Content: strings.Repeat("recent result ", 50)})
 			}
@@ -140,7 +139,7 @@ func TestRetentionPreservesUnconsumedBinaryCycle(t *testing.T) {
 		{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: "document"}}},
 		{Type: llm.TypeToolResult, CallID: "document", Files: []llm.BinaryFile{{Path: "/document.pdf", MIMEType: "application/pdf", Bytes: 20 << 10}}},
 	}
-	for _, trailing := range [][]llm.Message{nil, {{Type: llm.TypeUserInput, Content: "Continue"}}, {{Type: llm.TypeRuntimeContext, Content: "Live state"}}} {
+	for _, trailing := range [][]llm.Message{nil, {{Type: llm.TypeUserInput, Content: "Continue"}}, {{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"live_jobs":[]}}`}}} {
 		input := append(append([]llm.Message(nil), messages...), trailing...)
 		retained, err := Retain(input, 0, 100)
 		if err != nil || retained.Start != 3 {
@@ -210,7 +209,7 @@ func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
 		{Type: llm.TypeRuntimeNotification, InputSource: "steer", Content: "not a steer"},
 		{Type: llm.TypeUserInput, InputSource: "steer", Content: "second retained steer"},
 		{Type: llm.TypeUserInput, Content: "second retained ordinary"},
-		{Type: llm.TypeRuntimeContext, Content: "live state"},
+		{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"live_jobs":[]}}`},
 		{Type: llm.TypeAssistant, Content: "recent work"},
 	}
 	retention, err := Retain(messages, 0, 1000)
@@ -237,7 +236,7 @@ func TestRetentionSelectsCappedInputsInChronologicalOrder(t *testing.T) {
 
 func TestRetentionRequiresUnretainedHistoryForProgress(t *testing.T) {
 	messages := []llm.Message{
-		{Type: llm.TypeRuntimeContext, Content: "retained input metadata"},
+		{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context","actor":"main"}`},
 		{Type: llm.TypeUserInput, Content: "first ordinary"},
 		{Type: llm.TypeUserInput, InputSource: "steer", Content: "first steer"},
 		{Type: llm.TypeUserInput, InputSource: "queue", Content: "second ordinary"},
@@ -266,8 +265,12 @@ func TestRetainInputSourceAndOriginalAge(t *testing.T) {
 			t.Fatal(retained, err)
 		}
 		projected, err := ProjectRetainedInputs(retained)
-		if err != nil || len(projected) != 2 || projected[0].Role() != "developer" || projected[0].Content != prompts.RetainedInputs || projected[1].Role() != "user" || !strings.Contains(projected[1].Content, `"timestamp":"98.77 seconds before compaction"`) {
+		if err != nil || len(projected) != 1 {
 			t.Fatal(projected, err)
+		}
+		entries := retainedProjectionEntries(t, projected[0])
+		if len(entries) != 1 || entries[0].Timestamp != "98.77 seconds before compaction" {
+			t.Fatal(entries)
 		}
 		later, err := RetainedInputMessages(retained, []int{0}, at.Add(time.Second))
 		if err != nil || later[0].RetainedAtMS-later[0].InputTimeMS != 99765 {
@@ -330,15 +333,12 @@ func TestRetainedInputMessagesPreserveExactOriginals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var group struct {
-		Type   string `json:"type"`
-		Inputs []struct {
-			Content           string `json:"content"`
-			AttachmentIndices []int  `json:"attachment_indices"`
-		} `json:"inputs"`
+	if len(projected) != 1 {
+		t.Fatal(projected)
 	}
-	if len(projected) != 2 || projected[0].Content != prompts.RetainedInputs || json.Unmarshal([]byte(projected[1].Content), &group) != nil || group.Type != "retained_inputs" || len(group.Inputs) != 2 || group.Inputs[0].Content != original.Content || group.Inputs[1].Content != "steer" || !reflect.DeepEqual(group.Inputs[0].AttachmentIndices, []int{0}) || !reflect.DeepEqual(projected[1].Files, original.Files) || projected[1].State != nil {
-		t.Fatal("grouped projection lost text or attachment provenance", projected, group)
+	entries := retainedProjectionEntries(t, projected[0])
+	if len(entries) != 2 || entries[0].Content != original.Content || entries[1].Content != "steer" || !reflect.DeepEqual(entries[0].AttachmentIndices, []int{0}) || !reflect.DeepEqual(projected[0].Files, original.Files) || projected[0].State != nil {
+		t.Fatal("grouped projection lost text or attachment provenance", projected, entries)
 	}
 	if Tokens(retained) != Tokens(projected) {
 		t.Fatal("canonical and model projection budgets differ")

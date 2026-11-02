@@ -1,7 +1,6 @@
 package context
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -65,8 +64,8 @@ func ValidateRetainedInputs(messages []llm.Message) error {
 }
 
 // ProjectRetainedInputs replaces contiguous retained human messages with one
-// developer format instruction and one structured user message. Inputs sort by
-// exact original time ascending with stable ties. Original expanded text/source,
+// structured user message wrapped in retained_inputs. Inputs sort by
+// exact original time ascending with stable ties. Original expanded text,
 // explicit input types and two-decimal relative times are preserved. Attachment
 // indices identify occurrences in the combined native Files without deduplication.
 // Numeric timestamps stay canonical-only; history and other messages are unchanged.
@@ -85,13 +84,12 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 		return messages, nil
 	}
 	type entry struct {
-		Type              string `json:"type"`
-		Source            string `json:"source"`
-		Timestamp         string `json:"timestamp"`
-		Content           string `json:"content"`
-		AttachmentIndices []int  `json:"attachment_indices,omitempty"`
+		Type              string `yaml:"type"`
+		Timestamp         string `yaml:"timestamp"`
+		Content           string `yaml:"content"`
+		AttachmentIndices []int  `yaml:"attachment_indices,omitempty"`
 	}
-	out := make([]llm.Message, 0, len(messages)+1)
+	out := make([]llm.Message, 0, len(messages))
 	out = append(out, messages[:first]...)
 	for i := first; i < len(messages); {
 		if messages[i].RetainedAtMS == 0 {
@@ -106,9 +104,8 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 		inputs := append([]llm.Message(nil), messages[start:i]...)
 		sort.SliceStable(inputs, func(i, j int) bool { return inputs[i].InputTimeMS < inputs[j].InputTimeMS })
 		group := struct {
-			Type   string  `json:"type"`
-			Inputs []entry `json:"inputs"`
-		}{Type: "retained_inputs"}
+			Inputs []entry `yaml:"inputs"`
+		}{}
 		user := llm.Message{Type: llm.TypeUserInput}
 		for _, input := range inputs {
 			source, _ := inputSource(input) // Validated above.
@@ -125,16 +122,19 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 			case "btw":
 				kind = "aside_task"
 			}
-			item := entry{Type: kind, Source: source, Timestamp: fmt.Sprintf(prompts.ContextRetainedTimestamp, float64(input.RetainedAtMS-input.InputTimeMS)/1000), Content: input.Content}
+			item := entry{Type: kind, Timestamp: fmt.Sprintf(prompts.ContextRetainedTimestamp, float64(input.RetainedAtMS-input.InputTimeMS)/1000), Content: input.Content}
 			for _, file := range input.Files {
 				item.AttachmentIndices = append(item.AttachmentIndices, len(user.Files))
 				user.Files = append(user.Files, file)
 			}
 			group.Inputs = append(group.Inputs, item)
 		}
-		encoded, _ := json.Marshal(group) // Strings, integers and slices cannot fail encoding.
-		user.Content = string(encoded)
-		out = append(out, llm.Message{Type: llm.TypeDeveloperInstruction, Content: prompts.RetainedInputs}, user)
+		content, err := llm.FormatModelData("retained_inputs", group)
+		if err != nil {
+			return nil, err
+		}
+		user.Content = content
+		out = append(out, user)
 	}
 	return out, nil
 }

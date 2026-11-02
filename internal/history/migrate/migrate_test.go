@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -478,7 +479,7 @@ func TestInvisibleChildAdmissionsAndHistoricalRequestsAreUntouched(t *testing.T)
 }
 
 func TestUnsupportedVersions(t *testing.T) {
-	for _, version := range []string{"-1", "0", "1", "2", "3", "4", "13", "999"} {
+	for _, version := range []string{"-1", "0", "1", "2", "3", "4", strconv.Itoa(CurrentVersion + 1), "999"} {
 		t.Run(version, func(t *testing.T) {
 			db, err := sql.Open("sqlite", ":memory:")
 			if err != nil {

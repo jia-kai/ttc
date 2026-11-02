@@ -70,8 +70,12 @@ func TestRetentionCompactionContextDoesNotConsumeFreshResults(t *testing.T) {
 
 func TestRetentionRejectsMetadataOnlyOlderHistory(t *testing.T) {
 	for _, typ := range []llm.MessageType{llm.TypeSystemInstruction, llm.TypeDeveloperInstruction, llm.TypeRuntimeContext, llm.TypeRuntimeNotification, llm.TypeRuntimeInstruction, llm.TypeChildGuidance} {
+		content := "Metadata is not summarized work"
+		if typ == llm.TypeRuntimeContext {
+			content = `{"type":"runtime_context","actor":"main"}`
+		}
 		messages := []llm.Message{
-			{Type: typ, Content: "Metadata is not summarized work"},
+			{Type: typ, Content: content},
 			{Type: llm.TypeUserInput, Content: "Continue"},
 		}
 		if _, err := Retain(messages, 0, 1000); !errors.Is(err, ErrNoCompactableHistory) {

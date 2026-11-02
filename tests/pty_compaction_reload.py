@@ -259,15 +259,13 @@ def verify_compaction_context(db, session, summary):
         'SELECT role,content_json FROM entries WHERE session_id=? AND model_visible=1 ORDER BY id',
         (session,)).fetchall()
     messages = [(role, json.loads(raw)) for role, raw in rows]
-    assert messages and messages[0][0] == 'developer', messages[:1]
+    assert messages and messages[0][0] == 'user', messages[:1]
     context = messages[0][1]
     assert context['type'] == 'compaction_context', context
     assert sum(message['type'] == 'compaction_context' for _, message in messages) == 1, messages
     assert not any(role == 'assistant' and message.get('content') in (summary, context['content'])
                    for role, message in messages), 'Summary leaked into ordinary assistant history'
-    hint = ('The following is a summary of the conversation so far. '
-            'Use it to continue the active task.')
-    assert context['content'] == f'{hint}\n\n{summary}', context
+    assert context['content'] == summary, 'Model-facing summary wrapper leaked into canonical history'
 
 
 def verify_recovery(db, source, before, wanted, delivered, result, answer):

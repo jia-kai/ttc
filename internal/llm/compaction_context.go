@@ -1,13 +1,8 @@
 package llm
 
-import (
-	"fmt"
-
-	"ttc/internal/prompts"
-)
-
-// NewCompactionContext prepends a continuation hint to a generated Markdown
-// summary in a developer context message, preserving the summary verbatim.
+// NewCompactionContext records a generated Markdown summary as historical
+// user-role context, preserving its text verbatim. The shared system prompt
+// supplies continuation semantics; ModelContent adds its model-facing marker.
 func NewCompactionContext(summary string) Message {
-	return Message{Type: TypeCompactionContext, Content: fmt.Sprintf(prompts.CompactionContext, summary)}
+	return Message{Type: TypeCompactionContext, Content: summary}
 }

@@ -145,17 +145,9 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 					t.Fatal("opaque replay survived compaction")
 				}
 				found[message.Content] = true
-				if message.Role() == "user" {
-					var group struct {
-						Type   string `json:"type"`
-						Inputs []struct {
-							Content string `json:"content"`
-						} `json:"inputs"`
-					}
-					if json.Unmarshal([]byte(message.Content), &group) == nil && group.Type == "retained_inputs" {
-						for _, input := range group.Inputs {
-							found[input.Content] = true
-						}
+				if strings.HasPrefix(message.Content, "<retained_inputs>\n") {
+					for _, input := range sessionRetainedInputs(t, message) {
+						found[input.Content] = true
 					}
 				}
 				if message.Type == llm.TypeAssistant && strings.HasPrefix(message.Content, "Model reasoning 1") {
@@ -271,7 +263,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				for i := range cycles {
 					id := fmt.Sprintf("read-%d", i)
 					newest = append(newest,
-						llm.Message{Type: llm.TypeRuntimeContext, Content: "Current runtime metadata"},
+						llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"live_jobs":[]}}`},
 						llm.Message{Type: llm.TypeAssistant, Calls: []llm.ToolCall{{ID: id, Name: "read", Arguments: []byte(`{"path":"fixture.go"}`)}}},
 						llm.Message{Type: llm.TypeToolResult, CallID: id, Content: strings.Repeat("Recent tool result. ", 20)})
 				}

@@ -8,7 +8,7 @@ import (
 )
 
 func TestAppendPendingMessageIdentityAndPurity(t *testing.T) {
-	pending := llm.Message{Type: llm.TypeRuntimeContext, RequestID: 17, Content: "Recovery warning"}
+	pending := llm.Message{Type: llm.TypeRuntimeInstruction, RequestID: 17, Content: "Recovery warning"}
 	for _, field := range []string{"same", "runtime", "role", "content", "request"} {
 		t.Run(field, func(t *testing.T) {
 			existing := pending

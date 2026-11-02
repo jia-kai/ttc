@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
 from mock_naming import respond_to_naming
+from model_schema import model_data, runtime_context, scalar_field
 from retry_policy import default_max_attempts
 
 
@@ -76,8 +77,7 @@ def main():
                     return
                 # A continuation adds developer recovery instructions after
                 # runtime context; select the context rather than the last text.
-                context = next(json.loads(text) for text in texts(body, 'developer')
-                               if text.startswith('{') and 'actor' in json.loads(text))
+                context = runtime_context(body)
                 actor = context['actor']
                 child = actor != 'main'
                 with lock:
@@ -124,13 +124,17 @@ def main():
                     assert not {'stdout', 'answer', 'result_entry_id', 'finish_event_seq'} & launch.keys()
                     notices = []
                     for message in texts(body, 'user'):
-                        if message.startswith('{'):
-                            event = json.loads(message)
-                            if event.get('type') == 'child_turn_finished':
-                                notices.append(event)
+                        if message.startswith('<runtime_notification>\n'):
+                            data = model_data(message, 'runtime_notification')
+                            assert not any(line.startswith('message_type:') for line in data.splitlines()), data
+                            if scalar_field(data, 'type') == 'child_turn_finished':
+                                fields = ('type', 'answer', 'child_state', 'status', 'assignment_status',
+                                          'warning', 'error', 'transcript_path', 'transcript_jsonl_path',
+                                          'answer_truncated', 'result_entry_id', 'persistent')
+                                notices.append({key: scalar_field(data, key) for key in fields
+                                                if any(line.startswith(key + ':') for line in data.splitlines())})
                     if notices:
                         assert len(notices) == 1 and notices[0]['answer'] == answer
-                        assert notices[0]['message_type'] == 'runtime_notification'
                         assert notices[0]['child_state'] == 'closed'
                         assert 'status' not in notices[0]
                         if args.failure:

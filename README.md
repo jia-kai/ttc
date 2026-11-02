@@ -231,6 +231,11 @@ sends while idle or queues a new turn FIFO while busy. Neither key steers child
 agents. After dismissing a question, the next message redirects the current turn
 instead.
 
+TTC labels model-facing steering with `<steer>` and runtime data with XML-style
+markers containing YAML. Ordinary input stays unchanged; compaction summaries
+remain historical user-role content rather than developer instructions. See
+[message shapes](docs/system_prompt.md#message-shapes).
+
 Use `/help` for the keyboard and command guide. Up/Down recall prompts across
 sessions and restarts, even in multiline input. The composer soft-wraps without
 changing the text and grows to six rows, limited by terminal height. Ctrl+J/K

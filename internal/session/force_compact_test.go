@@ -113,7 +113,7 @@ func TestForceCompactCommandPreservesStructuredRequestAndPendingChildAnswer(t *t
 		t.Fatal(err)
 	}
 	wantContext := llm.NewCompactionContext("Evidence summarized; inspect fresh measurements next.")
-	if len(messages) == 0 || !reflect.DeepEqual(messages[0], wantContext) || messages[0].Role() != "developer" {
+	if len(messages) == 0 || !reflect.DeepEqual(messages[0], wantContext) || messages[0].Role() != "user" {
 		t.Fatal("force did not persist the same typed context used by normal compaction", messages)
 	}
 	for _, message := range messages {

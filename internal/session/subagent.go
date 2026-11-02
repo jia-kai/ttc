@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -133,12 +132,7 @@ func (r *Runtime) addSubagentTool() {
 		r.orderMu.Lock()
 		r.actorAssignments[child.id] = assignment
 		r.orderMu.Unlock()
-		prompt := a.Prompt
-		if len(a.JobReadGrants) != 0 {
-			body, _ := json.Marshal(map[string]any{"prompt": a.Prompt, "job_read_grants": a.JobReadGrants, "job_read_grant_notice": prompts.ChildJobReadGrants})
-			prompt = string(body)
-		}
-		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
+		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
 		ready := make(chan struct{})
 		r.childStartMu.Unlock()
 		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background, Easy: child.easy}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
@@ -225,6 +219,11 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	actor, turn, prompt, selection := task.actor, task.turn, task.prompt, task.selection
 	defer r.clearActorImage(actor, "")
 	messages := append([]llm.Message(nil), task.prefix...)
+	var grantNotice *llm.Message
+	if task.assignment != nil && len(task.assignment.initialReadGrants) != 0 {
+		notice := llm.NewJobReadGrantNotice(task.assignment.initialReadGrants)
+		grantNotice = &notice
+	}
 	r.routeMu.RLock()
 	if task.aside {
 		instruction := llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction}
@@ -246,12 +245,22 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		committed, err = r.Store.Entry(entry)
 		question.InputTimeMS = committed.CreatedMS
 	}
+	var grantEntry int64
+	if err == nil && grantNotice != nil {
+		// Assignment metadata has no source event to acknowledge. Persist it
+		// beside the task, once, rather than queueing it for request retries.
+		grantEntry, err = r.Store.Append(r.Current(), turn, actor, "message", "user", false, *grantNotice)
+	}
 	r.routeMu.RUnlock()
 	if err != nil {
 		return err
 	}
 	messages = append(messages, question)
 	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry, MessageType: question.Type})
+	if grantNotice != nil {
+		messages = append(messages, *grantNotice)
+		r.emit(Event{Kind: "message", Actor: actor, Text: grantNotice.Content, EntryID: grantEntry, MessageType: grantNotice.Type})
+	}
 	defs := task.tools.Definitions()
 	cursor := task.cursor
 	priorAttempts := 0

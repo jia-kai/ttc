@@ -241,6 +241,9 @@ func projectInspection(data entryPresentation) (Inspection, error) {
 		Title:  strings.Split(projectLabel(data), "\n")[0],
 		System: v.Kind == "status" || v.Role == "system" || v.Role == "developer", Markdown: true,
 	}
+	if data.Message != nil && (v.Kind == "message" || v.Kind == "summary") {
+		inspection.System = contextPresentation(data.Message.Type)
+	}
 	if data.Status.Type == "system_prompt" {
 		inspection.Markdown = false
 	}
@@ -419,11 +422,27 @@ func TranscriptMessage(message llm.Message) (string, error) {
 func projectInspectionPage(page InspectionPage, role string, supported, encoded bool) InspectionPage {
 	page.Supported = supported
 	page.System = role == "system" || role == "developer" || page.Type == "system_prompt"
+	if page.Kind == "message" || page.Kind == "summary" {
+		page.System = contextPresentation(llm.MessageType(page.Type))
+	}
 	page.JSON = encoded || page.Kind == "tool_call"
 	page.Markdown = !page.System
 	page.Title = strings.Join(strings.Fields(render.Clean(page.Title)), " ")
+	if (page.Kind == "message" || page.Kind == "summary") && page.Type == string(llm.TypeCompactionContext) {
+		page.Title = "Compaction context"
+	}
 	if page.Type == "system_prompt" {
 		page.Title = "System prompt"
 	}
 	return page
+}
+
+// contextPresentation controls inspectable context/instruction UI styling; it
+// does not imply a privileged model role (compaction contexts use the user role).
+func contextPresentation(typ llm.MessageType) bool {
+	if typ.Validate() != nil {
+		return false
+	}
+	category := typ.Presentation()
+	return category == llm.PresentationContext || category == llm.PresentationInstruction
 }

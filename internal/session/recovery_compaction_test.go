@@ -70,7 +70,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				// Count the exact framed developer context used by the actual handoff.
+				// Count the exact tagged user context used by the actual handoff.
 				summary := "Partial evidence summarized; continue carefully."
 				baseline := []llm.Message{llm.NewCompactionContext(summary)}
 				baseline = append(baseline, retained...)

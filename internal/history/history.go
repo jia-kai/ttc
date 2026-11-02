@@ -254,7 +254,7 @@ func (s *Store) transact(fn func(*sql.Tx) error) error {
 // user message. The caller owns id before saving; errors leave no partial rows.
 // It returns the turn and message entry IDs, without restoring workspace files.
 func (s *Store) StartSession(id, path string, model llm.Selection, message llm.Message) (turn string, entry int64, err error) {
-	if id == "" || !filepath.IsAbs(path) || message.Role() != "user" {
+	if id == "" || !filepath.IsAbs(path) || message.Type != llm.TypeUserInput {
 		return "", 0, errors.New("first session save requires an ID, absolute workspace path and user message")
 	}
 	wid := NewID("workspace")
@@ -363,7 +363,7 @@ func (s *Store) BeginTurn(session, trigger string, model llm.Selection) (string,
 // AdmitTurn commits a main checkpoint and optional human instruction atomically.
 // Call while owning the workspace admission gate so file mutations cannot cross it.
 func (s *Store) AdmitTurn(session, trigger string, model llm.Selection, message *llm.Message) (string, int64, error) {
-	if message != nil && trigger != "user" {
+	if message != nil && (trigger != "user" || message.Type != llm.TypeUserInput) {
 		return "", 0, errors.New("only user turns accept a human instruction")
 	}
 	id := NewID("turn")

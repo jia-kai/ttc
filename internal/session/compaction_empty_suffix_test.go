@@ -122,8 +122,8 @@ func TestMainCompactionEmptySuffixWithForeignEntryGap(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(got) != 1+len(prepared.inputs)+1 || !reflect.DeepEqual(got[0], llm.NewCompactionContext(summary)) || got[0].Role() != "developer" || !reflect.DeepEqual(got[len(got)-1], tail) {
-				t.Fatal("handoff must contain canonical developer context, retained human inputs, and own tail once", got)
+			if len(got) != 1+len(prepared.inputs)+1 || !reflect.DeepEqual(got[0], llm.NewCompactionContext(summary)) || got[0].Role() != "user" || !reflect.DeepEqual(got[len(got)-1], tail) {
+				t.Fatal("handoff must contain canonical user context, retained human inputs, and own tail once", got)
 			}
 			for i, input := range prepared.inputs {
 				if got[i+1].Type != llm.TypeUserInput || got[i+1].Content != input.Content {

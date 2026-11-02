@@ -20,7 +20,7 @@ func fixture(t *testing.T) string {
 		"prompt/system.yaml":              fixtureSystem,
 		"prompt/child-messages.yaml":      "ChildMessageNonempty: message must be nonempty UTF-8\n",
 		"prompt/compaction.md":            "Summarize.\n",
-		"prompt/compaction-messages.yaml": fixtureCompactionFocus + "CompactionContext: '%s Continue the task.'\n",
+		"prompt/compaction-messages.yaml": fixtureCompactionFocus,
 		"prompt/naming.md":                "Name it.\r\n\n",
 		"prompt/tools.yaml":               "read:\n  description: Read a file.\n  notes:\n    missing: Try another path.\n",
 		"prompt/runtime.yaml":             "RuntimeWarning: 'Synthetic warning: %s'\n",
@@ -99,7 +99,7 @@ func TestGenerationPreservesMarkdownAndYAMLBlockSemantics(t *testing.T) {
 		"Child: \"Child instructions.\\n\"\n",
 		"Child: >\n  First wrapped\n  paragraph.\n\n  Second paragraph.\n", 1))
 	put(t, root, "prompt/compaction.md", markdown)
-	put(t, root, "prompt/compaction-messages.yaml", "CompactionFocus: >-\n  Compaction focus:\n  %s\nCompactionContext: \"Continue using the summary below.\\n\\n%s\"\n")
+	put(t, root, "prompt/compaction-messages.yaml", "CompactionFocus: >-\n  Compaction focus:\n  %s\n")
 	if err := generate(root, "generated.go"); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,6 @@ func TestGenerationPreservesMarkdownAndYAMLBlockSemantics(t *testing.T) {
 		`const Child = "First wrapped paragraph.\nSecond paragraph.\n"`,
 		"const Compaction = " + strconv.Quote(markdown),
 		`const CompactionFocus = "Compaction focus: %s"`,
-		`const CompactionContext = "Continue using the summary below.\n\n%s"`,
 	} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("generated output missing %s", want)
@@ -144,14 +143,9 @@ func TestInvalidAssetsLeaveOutputUntouched(t *testing.T) {
 		{"empty compaction", "prompt/compaction.md", "", "nonempty UTF-8"},
 		{"compaction encoding", "prompt/compaction.md", "\xff", "UTF-8"},
 		{"compaction nul", "prompt/compaction.md", "Summary\x00.", "NUL"},
-		{"invalid focus template", "prompt/compaction-messages.yaml", "CompactionFocus: Focus\nCompactionContext: '%s'", "format"},
+		{"invalid focus template", "prompt/compaction-messages.yaml", "CompactionFocus: Focus\n", "format"},
 		{"invalid summary template", "prompt/compaction.md", "Summary %s", "format"},
-		{"empty context", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: ''", "nonempty UTF-8"},
-		{"missing context slot", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: Continue.", "format"},
-		{"extra context slot", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: '%s %s'", "format"},
-		{"invalid context format", "prompt/compaction-messages.yaml", fixtureCompactionFocus + "CompactionContext: '%s %d'", "format"},
 		{"compaction collision", "prompt/runtime.yaml", "Compaction: Duplicate.", "duplicate prompt"},
-		{"compaction context collision", "prompt/runtime.yaml", "CompactionContext: '%s'", "duplicate prompt"},
 		{"empty messages", "prompt/runtime.yaml", "{}", "model-facing messages"},
 		{"empty message", "prompt/runtime.yaml", "RuntimeWarning: ''", "nonempty"},
 		{"message nul", "prompt/runtime.yaml", "RuntimeWarning: \"bad\\0text\"", "NUL"},
@@ -234,23 +228,12 @@ func TestMissingRequiredMessageAsset(t *testing.T) {
 }
 
 func TestMissingRequiredCompactionPrompt(t *testing.T) {
-	for symbol, remaining := range map[string]string{
-		"Compaction":        "",
-		"CompactionContext": fixtureCompactionFocus,
-		"CompactionFocus":   "CompactionContext: '%s'\n",
-	} {
-		t.Run(symbol, func(t *testing.T) {
-			root := fixture(t)
-			if symbol == "Compaction" {
-				if err := os.Remove(filepath.Join(root, "prompt", "compaction.md")); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				put(t, root, "prompt/compaction-messages.yaml", remaining)
-			}
-			if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing required prompt "+symbol) {
-				t.Fatalf("missing %s was not rejected: %v", symbol, err)
-			}
-		})
+	root := fixture(t)
+	if err := generate(root, "generated.go"); err != nil {
+		t.Fatal(err)
+	}
+	put(t, root, "prompt/compaction-messages.yaml", "OtherMessage: Extra.\n")
+	if err := generate(root, "generated.go"); err == nil || !strings.Contains(err.Error(), "missing required prompt CompactionFocus") {
+		t.Fatalf("missing CompactionFocus was not rejected: %v", err)
 	}
 }

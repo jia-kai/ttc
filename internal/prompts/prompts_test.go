@@ -10,7 +10,6 @@ func TestCompactionMarkdownParagraphBreaks(t *testing.T) {
 		name, text, boundary string
 	}{
 		{"Compaction", Compaction, "\n\nKeep the handoff"},
-		{"CompactionContext", CompactionContext, "\n\n%s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(tc.text, tc.boundary) {

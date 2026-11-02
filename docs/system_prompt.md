@@ -21,43 +21,83 @@
 
 Messages store one canonical semantic `Type`, not independent role/runtime
 flags. Model role and presentation derive from that type: human input, runtime
-notifications and child guidance use `user`; assistant/tool messages use their
-corresponding roles; runtime context/instructions and compaction context use
-`developer`. Compaction context is one Markdown message: a short continuation
-hint from [compaction-messages.yaml](../prompt/compaction-messages.yaml)
-followed by the generated summary verbatim, serving as instructions for resuming
-the active task. System and developer instructions retain their respective
-roles. See [message semantics](design.md#message-semantics) for the central
-mapping and persistence contract.
-
-Model-projected runtime notifications carry
-`message_type:"runtime_notification"` and retain their event-specific `type`.
-Human steering and child guidance share a user-role envelope:
-`{"type":"steer","source":"user"|"main","message":"..."}`. The receiver applies
-`message` to its current task, not as a new assignment or developer instruction.
-Optional `job_read_grants` identifies newly readable jobs; routing IDs, delivery
-bookkeeping and grant boilerplate are omitted. Canonical history retains
-original content and provenance. After compaction, retained human steers remain
-labeled `user_steer` in the historical-input group, not as new arrivals. Human
-text resembling an envelope remains human input; quoted evidence and runtime
-notification payloads remain data.
+notifications, child guidance and compaction summaries use `user`;
+assistant/tool messages use their corresponding roles; runtime context and
+operational instructions use `developer`. Generated summaries are historical
+data, not new application policy. System and developer instructions retain their
+respective roles. See [message semantics](design.md#message-semantics) for the
+central mapping and persistence contract.
 
 System instructions cover shared decisions, authority and receiver semantics.
 Tool descriptions own invocation, lifecycle, access and result contracts rather
 than repeating them in each role's instructions.
+
+## Message shapes
+
+The provider API retains native roles and content blocks. Within text blocks,
+TTC uses a single XML-style marker for generated messages. Prose stays verbatim;
+structured data uses two-space-indented YAML. Tags are presentation, not
+provider-native types or authority. Classification comes only from typed
+metadata, never from matching authored text against tags.
+
+| Content                        | Role        | Model-facing shape                     |
+| ------------------------------ | ----------- | -------------------------------------- |
+| Human input, assignment, aside | `user`      | Original text, no wrapper              |
+| Human or parent steering       | `user`      | `<steer>` with original text           |
+| Runtime baseline/update        | `developer` | `<runtime_context[_update]>` with YAML |
+| Asynchronous event             | `user`      | `<runtime_notification>` with YAML     |
+| Generated compaction summary   | `user`      | `<compaction_context>` with Markdown   |
+| Historical retained inputs     | `user`      | `<retained_inputs>` with YAML          |
+| Runtime operational guidance   | `developer` | `<runtime_instruction>` with prose     |
+
+For example:
+
+```xml
+<steer>
+Only investigate the cause. Do not modify files yet.
+</steer>
+```
+
+```xml
+<runtime_notification>
+type: job_exit
+job_id: job_123
+exit_code: 0
+</runtime_notification>
+```
+
+Steering updates remaining work, not a separate assignment. Optional job grants
+arrive as an accompanying `job_read_grants` notification with `job_ids`, at the
+same admission boundary; instructions need no structured wrapper fields.
+Notification `type` selects the event, not its category or authority.
+`message_type`, source event sequence and child-steer routing fields are omitted
+from model-facing text, while canonical history preserves provenance.
+
+Compaction summaries preserve Markdown verbatim and do not acquire developer
+authority. Shared system instructions teach the receiver how to continue from
+them. Retained groups contain `inputs` entries with `type`, relative
+`timestamp`, original expanded `content` and optional native
+`attachment_indices`. Entry types are `user_input`, `queued_user_input`,
+`user_steer`, `child_task` and `aside_task`, without a redundant source field.
+These are historical inputs, not new arrivals.
+
+Ordinary system/developer instructions, assistant replies, tool calls/results
+and native image/document blocks keep their existing provider representations.
+Model-facing projection is shared with token estimation; it does not rewrite
+canonical JSON history or inspect user text to infer a message type.
 
 ## Runtime snapshots
 
 TTC freezes live runtime state at request admission. Each actor receives a full
 developer-role `runtime_context` baseline for a fresh, loaded or compacted
 context. Later developer-role `runtime_context_update` messages contain only
-changed environment/configuration fields in `set`:
+changed environment/configuration fields, without a `set` wrapper:
 
-```json
-{
-  "type": "runtime_context_update",
-  "set": { "image_input": false, "binary_files": [] }
-}
+```xml
+<runtime_context_update>
+image_input: false
+binary_files: []
+</runtime_context_update>
 ```
 
 Supplied fields replace their previous values; omission means unchanged. Empty

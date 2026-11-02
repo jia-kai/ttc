@@ -90,7 +90,7 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 		if view.StatusType == "system_prompt" {
 			prompts++
 			text, e := r.Store.ReadInspection(context.Background(), entry.ID)
-			if e != nil || !strings.Contains(text.Text, "You are TTC") {
+			if e != nil || text.Text != systemTemplate {
 				t.Fatal(text.Text, e)
 			}
 		}

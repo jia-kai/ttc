@@ -16,7 +16,6 @@ import (
 	"github.com/gdamore/tcell/v3"
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
-	"ttc/internal/prompts"
 	"ttc/internal/session"
 )
 
@@ -211,6 +210,7 @@ func originalInputCommitTime(t *testing.T, u *questionTestUI, content string) in
 	var committed int64
 	if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT count(*),coalesce(min(created_ms),0) FROM entries
 		WHERE kind='message' AND role='user' AND model_visible=1 AND source_id IS NULL
+		AND json_extract(content_json,'$.type')='user_input'
 		AND json_extract(content_json,'$.content')=?`, content).Scan(&count, &committed); err != nil || count != 1 || committed <= 0 {
 		t.Fatal("expected one original committed input", count, committed, err)
 	}
@@ -220,28 +220,8 @@ func originalInputCommitTime(t *testing.T, u *questionTestUI, content string) in
 func latestHumanInput(req llm.Request) llm.Message {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Type == llm.TypeUserInput {
-			// Tests asserting admitted input content should inspect the logical
-			// original, not the grouped retained-input transport envelope.
-			if i > 0 && req.Messages[i-1].Role() == "developer" && req.Messages[i-1].Content == prompts.RetainedInputs {
-				var group struct {
-					Type   string `json:"type"`
-					Inputs []struct {
-						Content string `json:"content"`
-						Source  string `json:"source"`
-						Files   []int  `json:"attachment_indices"`
-					} `json:"inputs"`
-				}
-				if err := json.Unmarshal([]byte(req.Messages[i].Content), &group); err != nil || group.Type != "retained_inputs" || len(group.Inputs) == 0 {
-					panic("invalid retained-input fixture")
-				}
-				last := group.Inputs[len(group.Inputs)-1]
-				// Canonical commit times are intentionally absent from wire JSON.
-				m := llm.Message{Type: llm.TypeUserInput, Content: last.Content, InputSource: last.Source}
-				for _, index := range last.Files {
-					m.Files = append(m.Files, req.Messages[i].Files[index])
-				}
-				return m
-			}
+			// Ordinary admission assertions use semantic identity, not user-role
+			// shortcuts. Compaction tests inspect retained transport separately.
 			return req.Messages[i]
 		}
 	}

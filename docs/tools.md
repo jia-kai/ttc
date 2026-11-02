@@ -522,8 +522,9 @@ Input: `{path, format?, scope?}`.
   queued messages FIFO at its next settled model-request boundary, after
   foreground tools finish. Retries use the frozen admitted payload; later
   arrivals wait for another request.
-- Messages are main-agent task guidance in `type:"steer",source:"main"`
-  user-message envelopes, not higher-priority instructions. Admission
+- Messages are main-agent task guidance enclosed directly in `<steer>` in a
+  user-role text block. Optional grants accompany it in a YAML
+  `<runtime_notification>` with `type: job_read_grants` and `job_ids`. Admission
   acknowledges them once; later compaction summarizes them rather than counting
   them as independently retained human inputs. A message arriving during a final
   response can continue the same assignment. Completion closes admission;
@@ -533,12 +534,11 @@ Input: `{path, format?, scope?}`.
   identify `message_event_seq`, child, turn and job; delivery also includes
   `request_id`. Queued is not proof of delivery or action.
 - Pending capacity is 32 messages and at most `min(4096, NextTurnInputReserve)`
-  estimated model-facing tokens per assignment, counting JSON escaping and
-  envelope overhead. Zero reserved headroom rejects sends.
-  `message_queue_capacity` rejects oversized individual/cumulative submissions
-  before recording them; shorten guidance or wait for admission to free
-  capacity. Request admission, evidence acknowledgments and delivery reports
-  commit in one transaction.
+  estimated model-facing tokens per assignment, including markers and any grant
+  notice. Zero reserved headroom rejects sends. `message_queue_capacity` rejects
+  oversized individual/cumulative submissions before recording them; shorten
+  guidance or wait for admission to free capacity. Request admission, evidence
+  acknowledgments and delivery reports commit in one transaction.
 
 ### `tmux_watch_run`
 
@@ -988,59 +988,51 @@ remains separate from this output budget. Committed child-message delivery
 receipts also wake an awaiting main agent.
 
 Events arrive at the owning actor's next model boundary or resume its awaiting
-inference as separate `user` messages containing JSON strings. The canonical
-semantic message type determines model role and presentation; neither a
-payload's event `type` nor human-authored JSON controls authority. Runtime
-notifications gain `message_type:"runtime_notification"` during model projection
-while preserving the event `type`. See
-[message semantics](design.md#message-semantics).
+inference as user-role messages containing YAML inside `<runtime_notification>`.
+The canonical semantic type determines role and presentation; payload text does
+not control authority. Projection preserves event-specific fields but omits
+`message_type` and source `event_seq`. See
+[message shapes](system_prompt.md#message-shapes).
 
-```json
-{
-  "message_type": "runtime_notification",
-  "type": "job_exit",
-  "job_id": "job_7",
-  "status": "completed"
-}
+```xml
+<runtime_notification>
+job_id: job_7
+status: completed
+type: job_exit
+</runtime_notification>
 ```
 
-Coding child events use the same generic ordering/delivery contract:
+Coding child events use the same ordering/delivery contract:
 
-```json
-{
-  "message_type": "runtime_notification",
-  "type": "child_compacted",
-  "event_seq": 39,
-  "child_id": "c7",
-  "turn_id": "t3",
-  "context_tokens_estimate": 12000
-}
+```xml
+<runtime_notification>
+child_id: c7
+context_tokens_estimate: 12000
+turn_id: t3
+type: child_compacted
+</runtime_notification>
 ```
 
-```json
-{
-  "message_type": "runtime_notification",
-  "type": "child_turn_finished",
-  "event_seq": 42,
-  "child_id": "c7",
-  "child_turn_id": "t3",
-  "job_id": "j9",
-  "assignment_status": "completed",
-  "child_state": "closed",
-  "persistent": false,
-  "result_entry_id": 123,
-  "answer": "Verified the fixture."
-}
+```xml
+<runtime_notification>
+answer: Verified the fixture.
+assignment_status: completed
+child_id: c7
+child_state: closed
+child_turn_id: t3
+job_id: j9
+persistent: false
+result_entry_id: 123
+type: child_turn_finished
+</runtime_notification>
 ```
 
-Wakeups send
-`{"message_type":"runtime_notification","type":"wakeup","wakeup_id":"wake_2","message":"Check the build"}`.
-
-Steering uses `{"type":"steer","source":"user"|"main","message":"..."}` in a
-user-role message. It updates the current task, not developer instructions or a
-new assignment. Human steers use `source:"user"`; `child_steer` delivers
-`source:"main"` with optional `job_read_grants`. Routing IDs and delivery
-bookkeeping are not sent to the receiving model. Quoted evidence remains data.
+Wakeups use the same wrapper with `type: wakeup`, `wakeup_id` and `message`.
+Human and parent steering instead enclose original instructions directly in
+`<steer>`, updating the current task rather than starting another assignment.
+Optional read grants accompany assignment/steering instructions as a
+`job_read_grants` notification with `job_ids`; routing IDs remain
+canonical-only.
 
 - A foreground child result carries its finish event; otherwise enqueue one main
   message. Emit `child_compacted` only after successful handoff. Payloads

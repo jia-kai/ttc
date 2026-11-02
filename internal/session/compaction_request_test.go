@@ -143,7 +143,7 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 				var displayed string
 				displayed, err = r.compactContext(context.Background(), focus, selection, nil, tc.force)
 				if err == nil {
-					if !strings.HasPrefix(displayed, "## Compacted · ") || !strings.HasSuffix(displayed, "\n\n"+rawSummary) || strings.Contains(displayed, llm.NewCompactionContext(rawSummary).Content) {
+					if !strings.HasPrefix(displayed, "## Compacted · ") || !strings.HasSuffix(displayed, "\n\n"+rawSummary) || strings.Contains(displayed, "<compaction_context>") {
 						t.Fatal("human-facing compaction result did not preserve the raw generated summary beneath its UI heading", displayed)
 					}
 					result, err = r.Store.Messages(r.Current())
@@ -155,18 +155,14 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 				t.Fatal("structured compaction failed", requests, err)
 			}
 			wantContext := llm.NewCompactionContext(rawSummary)
-			if len(result) == 0 || !reflect.DeepEqual(result[0], wantContext) || result[0].Type != llm.TypeCompactionContext || result[0].Role() != "developer" {
-				t.Fatalf("handoff is not the exact framed developer context: got %#v, want %#v", result, wantContext)
+			if len(result) == 0 || !reflect.DeepEqual(result[0], wantContext) || result[0].Type != llm.TypeCompactionContext || result[0].Role() != "user" {
+				t.Fatalf("handoff is not the exact canonical user context: got %#v, want %#v", result, wantContext)
 			}
-			if result[0].Content != fmt.Sprintf(prompts.CompactionContext, rawSummary) {
-				t.Fatal("handoff changed the Markdown summary or TTC framing", result[0])
+			if result[0].Content != rawSummary {
+				t.Fatal("canonical handoff changed the raw Markdown summary", result[0])
 			}
-			framing := strings.Split(prompts.CompactionContext, "%s")
-			if len(framing) != 2 {
-				t.Fatal("compaction context must frame exactly one summary value", framing)
-			}
-			if raw := strings.TrimSuffix(strings.TrimPrefix(result[0].Content, framing[0]), framing[1]); raw != rawSummary {
-				t.Fatal("framed summary Markdown was not preserved verbatim", raw)
+			if modelContent, err := result[0].ModelContent(); err != nil || modelContent != "<compaction_context>\n"+rawSummary+"\n</compaction_context>" {
+				t.Fatal("model handoff did not wrap the raw summary exactly once", modelContent, err)
 			}
 			contexts := 0
 			for _, message := range result {

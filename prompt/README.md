@@ -18,17 +18,12 @@ fixtures.
 - `system.yaml`: role instructions. Main receives `System` + `Coding` + `Main`;
   coding children receive `System` + `Coding` + `Child`, separated by newlines.
   Read-only asides receive `System`, with `Btw` as a separate developer message.
-- `child-messages.yaml`: active-assignment steering diagnostics and read-grant
-  notice.
+- `child-messages.yaml`: active-assignment steering diagnostics.
 - `recovery.md`: continuation warning after a partial coding failure.
-- `retained-inputs.md`: `RetainedInputs` format guidance for the grouped
-  model-facing projection. Provenance is typed message metadata, not prompt
-  prose; legacy marker decoding belongs only in `internal/history/migrate`.
 - `compaction.md`: the final summary instruction (`Compaction`).
-- `compaction-messages.yaml`: the short continuation hint (`CompactionContext`)
-  prepended to the verbatim Markdown summary, and the `CompactionFocus` message
-  included only for nonempty focus before the final summary instruction. Both
-  templates take one string slot. History remains structured.
+- `compaction-messages.yaml`: `CompactionFocus`, included only for nonempty
+  focus before the final summary instruction. Continuation and tagged-message
+  semantics live in `system.yaml`; summaries remain verbatim historical data.
 - `naming.md`: title instructions. Token/deadline limits belong to session code.
 - `tools.yaml`: descriptions keyed by tool name, with reusable notes.
 - `tool-messages.yaml`: tool validation/recovery text, including shell output,
@@ -49,8 +44,8 @@ fixtures.
 
 Use `.md` assets for long Markdown instructions, headings, lists and code
 fences; `make format` autoformats them. Each asset's hyphenated basename becomes
-an exported Go constant (`retained-inputs.md` becomes `RetainedInputs`). The
-generator preserves Markdown bytes, including the final newline.
+an exported Go constant (`recovery.md` becomes `Recovery`). The generator
+preserves Markdown bytes, including the final newline.
 
 Use YAML for short messages and plain prose. Folded blocks (`>`) allow source
 wrapping without significant line breaks; one blank source line becomes one

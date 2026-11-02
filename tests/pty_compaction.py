@@ -81,13 +81,13 @@ def main():
     # request, including the system, tools and final developer directive.
     responses = [
         {'prefix': f'user: grow {i}', 'text': 'earlier evidence ' * size + f'\nGrowth {i} complete.'}
-        for i, size in enumerate((1550, 1550, 300), 1)
+        for i, size in enumerate((1550, 1550, 400), 1)
     ]
     responses.extend([
         # The summary directive is developer guidance; the offline prefix
         # matcher skips it. Verify its actual persisted request below instead.
         {'text': '## Research checkpoint\n\nThree earlier research rounds completed; continue.'},
-        {'prefix': 'user: {"type":"retained_inputs",', 'text': 'Automatic continuation verified.'},
+        {'prefix': 'user: <retained_inputs>\n', 'text': 'Automatic continuation verified.'},
     ])
     responses.extend(export_responses(root))
     script.write_text(json.dumps(responses))

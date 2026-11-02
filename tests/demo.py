@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from scratch import private_scratch
 from mock_naming import respond_to_naming
+from model_schema import model_data, runtime_context, scalar_field
 from pty_screen import Screen
 from child_fixture import CHILD_ANSWER, CHILD_PREFIX, CHILD_TAIL, child_response_row, child_response_target, compact_rows, demo_completed, verify_child_answers
 
@@ -118,17 +119,7 @@ def main():
                 assert body['parallel_tool_calls'] is True
                 assert body['stream'] and not body['store'] and 'max_output_tokens' not in body
                 # Runtime context starts with a baseline followed by field updates.
-                contexts = [item for item in body['input'] if item.get('role') == 'developer']
-                assert contexts, 'missing initial runtime context'
-                context = json.loads(contexts[0]['content'][0]['text'])
-                assert context['type'] == 'runtime_context'
-                for item in contexts[1:]:
-                    payload = json.loads(item['content'][0]['text'])
-                    assert payload['type'] in ('runtime_context', 'runtime_context_update')
-                    if payload['type'] == 'runtime_context':
-                        context = payload
-                    else:
-                        assert isinstance(payload['set'], dict)
+                context = runtime_context(body)
                 last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 child = context['actor'] != 'main'
                 # Terminal job notifications now always arrive. Acknowledge
@@ -140,8 +131,10 @@ def main():
                 runtime_notice = False
                 if last.get('role') == 'user':
                     text = last['content'][0].get('text', '')
-                    notice = json.loads(text) if text.startswith('{') else {}
-                    runtime_notice = notice.get('message_type') == 'runtime_notification'
+                    runtime_notice = text.startswith('<runtime_notification>\n')
+                    if runtime_notice:
+                        notice = model_data(text, 'runtime_notification')
+                        assert 'message_type:' not in notice, notice
                     if runtime_notice and not new_results:
                         self.send_response(200)
                         self.send_header('Content-Type', 'text/event-stream')
@@ -221,9 +214,11 @@ def main():
                 elif stage == 5:
                     calls = []
                 elif stage == 6 and not child:
-                    click = json.loads(last['content'][0]['text'])
+                    notice = model_data(last['content'][0]['text'], 'runtime_notification')
+                    click = {key: scalar_field(notice, key) for key in ('type',)}
                     assert last['role'] == 'user' and click['type'] in ('image_click', 'image_click_cancelled')
                     if click['type'] == 'image_click':
+                        click.update({key: scalar_field(notice, key) for key in ('width', 'height', 'precision', 'x', 'y')})
                         assert click['width'] == 320 and click['height'] == 200 and click['precision'] == 'cell'
                         assert 0 <= click['x'] < 320 and 0 <= click['y'] < 200
                     calls = []

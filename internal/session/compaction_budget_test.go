@@ -91,7 +91,7 @@ func TestCodingInputFitsRejectsInvalidAndOverflowingBudgets(t *testing.T) {
 func TestCompactionHandoffReservesSummaryAndNextTurnHeadroom(t *testing.T) {
 	retained := []llm.Message{llm.NewCompactionContext("Summary handoff.")}
 	notices := []llm.Message{{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit","job_id":"pending"}`}}
-	runtime := &llm.Message{Type: llm.TypeRuntimeContext, Content: "Current runtime state"}
+	runtime := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context","actor":"main"}`}
 	messages := append(append(append([]llm.Message(nil), retained...), notices...), *runtime)
 	for _, extra := range []int{0, 1} {
 		t.Run(fmt.Sprintf("extra=%d", extra), func(t *testing.T) {

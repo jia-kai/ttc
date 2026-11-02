@@ -2,19 +2,11 @@ package llm
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
-	"strings"
 	"testing"
-
-	"ttc/internal/prompts"
 )
 
 func TestNewCompactionContextPreservesMarkdownSummary(t *testing.T) {
-	if strings.Count(prompts.CompactionContext, "%s") != 1 {
-		t.Fatal("compaction context must contain exactly one summary placeholder")
-	}
-	prefix, suffix, _ := strings.Cut(prompts.CompactionContext, "%s")
 	for _, summary := range []string{
 		"",
 		"Earlier work and pending checks.",
@@ -24,20 +16,14 @@ func TestNewCompactionContextPreservesMarkdownSummary(t *testing.T) {
 	} {
 		t.Run(summary, func(t *testing.T) {
 			message := NewCompactionContext(summary)
-			if message.Type != TypeCompactionContext || message.Role() != "developer" || message.Type.Presentation() != PresentationContext || !message.Type.IsRuntime() || message.Type.IsInput() {
+			if message.Type != TypeCompactionContext || message.Role() != "user" || message.Type.Presentation() != PresentationContext || !message.Type.IsRuntime() || message.Type.IsInput() {
 				t.Fatalf("incorrect summary semantics: %+v", message)
 			}
-			if message.Content != fmt.Sprintf(prompts.CompactionContext, summary) {
+			if message.Content != summary {
 				t.Fatalf("summary Markdown was changed: %q", message.Content)
 			}
-			if raw := strings.TrimSuffix(strings.TrimPrefix(message.Content, prefix), suffix); raw != summary {
-				t.Fatalf("summary was not embedded verbatim: %q", raw)
-			}
-			if prefix != "The following is a summary of the conversation so far. Use it to continue the active task.\n\n" || suffix != "" {
-				t.Fatalf("context must contain only a continuation hint and summary: %q", message.Content)
-			}
 			modelContent, err := message.ModelContent()
-			if err != nil || modelContent != message.Content {
+			if err != nil || modelContent != "<compaction_context>\n"+summary+"\n</compaction_context>" {
 				t.Fatalf("model projection changed context: %q, %v", modelContent, err)
 			}
 			data, err := json.Marshal(message)

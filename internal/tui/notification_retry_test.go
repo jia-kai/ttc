@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v3"
+	"go.yaml.in/yaml/v3"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -139,6 +140,27 @@ func assertNotificationDelivered(t *testing.T, u *questionTestUI, req llm.Reques
 	}
 }
 
+// latestRetainedInputText reads the known projected transport after a successful
+// fixture compaction. It does not classify ordinary authored messages by text.
+func latestRetainedInputText(t *testing.T, req llm.Request) string {
+	t.Helper()
+	message := latestHumanInput(req)
+	const start, end = "<retained_inputs>\n", "\n</retained_inputs>"
+	if message.Type != llm.TypeUserInput || !strings.HasPrefix(message.Content, start) || !strings.HasSuffix(message.Content, end) {
+		t.Fatalf("expected retained-input transport after compaction: %+v", message)
+	}
+	var group struct {
+		Inputs []struct {
+			Content string `yaml:"content"`
+		} `yaml:"inputs"`
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(message.Content, start), end)
+	if err := yaml.Unmarshal([]byte(body), &group); err != nil || len(group.Inputs) == 0 {
+		t.Fatalf("invalid retained-input fixture: %v\n%s", err, body)
+	}
+	return group.Inputs[len(group.Inputs)-1].Content
+}
+
 func TestNotificationCompactionFailurePausesAutomaticRetryAndExplicitRecoveryResumes(t *testing.T) {
 	for _, recovery := range []string{"compact", "force-compact", "prompt", "model", "load"} {
 		t.Run(recovery, func(t *testing.T) {
@@ -181,7 +203,7 @@ func TestNotificationCompactionFailurePausesAutomaticRetryAndExplicitRecoveryRes
 			}
 			assertNotificationDelivered(t, u, requests[3], id)
 			assertNotificationDelivered(t, u, requests[3], fresh)
-			if recovery == "prompt" && latestHumanInput(requests[3]).Content != "Retry the research" {
+			if recovery == "prompt" && latestRetainedInputText(t, requests[3]) != "Retry the research" {
 				t.Fatal("explicit retry prompt was not admitted")
 			}
 			// A successful explicit recovery must reopen later automatic wakeups.
@@ -205,7 +227,7 @@ func TestNotificationCompactionInterruptionDoesNotStarveQueuedPrompt(t *testing.
 	u.wait(t, "Pending notices delivered.")
 	u.wait(t, "Turn complete")
 	requests := p.snapshot()
-	if len(requests) != 4 || latestHumanInput(requests[3]).Content != "Queued retry after interruption" {
+	if len(requests) != 4 || latestRetainedInputText(t, requests[3]) != "Queued retry after interruption" {
 		t.Fatal("notifications starved queued retry input", len(requests))
 	}
 	assertNotificationDelivered(t, u, requests[3], id)

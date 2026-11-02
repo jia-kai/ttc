@@ -14,7 +14,6 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
-	"ttc/internal/prompts"
 )
 
 // assertRetainedProjection compares the complete canonical replacement, not
@@ -46,22 +45,17 @@ func assertRetainedProjection(t *testing.T, original, got []llm.Message, selecti
 	if err != nil {
 		t.Fatal(err)
 	}
-	var group struct {
-		Type   string `json:"type"`
-		Inputs []struct {
-			Content   string `json:"content"`
-			Source    string `json:"source"`
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-		} `json:"inputs"`
+	if len(projected) != len(got)-len(inputs)+1 {
+		t.Fatal("retained projection did not combine only the retained inputs", projected)
 	}
-	if projected[1].Role() != "developer" || projected[1].Content != prompts.RetainedInputs || projected[2].Role() != "user" || json.Unmarshal([]byte(projected[2].Content), &group) != nil || group.Type != "retained_inputs" || len(group.Inputs) != 4 {
-		t.Fatal("retained projection is not one structured developer/user pair", projected)
+	group := sessionRetainedInputs(t, projected[1])
+	if len(group) != 4 {
+		t.Fatal("retained projection is not one four-input user message", projected)
 	}
-	for i := range group.Inputs {
+	for i := range group {
 		input := inputs[i]
-		entry := group.Inputs[i]
-		if entry.Content != input.Content || entry.Source != input.InputSource || entry.Timestamp != fmt.Sprintf("%.2f seconds before compaction", float64(at-input.InputTimeMS)/1000) || entry.Type != map[string]string{"normal": "user_input", "queue": "queued_user_input", "steer": "user_steer", "task": "child_task", "btw": "aside_task"}[input.InputSource] {
+		entry := group[i]
+		if entry.Content != input.Content || entry.Timestamp != fmt.Sprintf("%.2f seconds before compaction", float64(at-input.InputTimeMS)/1000) || entry.Type != map[string]string{"normal": "user_input", "queue": "queued_user_input", "steer": "user_steer", "task": "child_task", "btw": "aside_task"}[input.InputSource] {
 			t.Fatal("grouped input lost chronological text or provenance", entry, input)
 		}
 	}

@@ -143,11 +143,12 @@ func testOpenWaitsForLifetimeReader(t *testing.T, oldVersion int) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("unblocked migration version %d: %v", version, err)
 	}
-	if oldVersion == 10 {
-		want := [][2]int{{10, 11}, {11, 12}}
-		if !reflect.DeepEqual(transitions, want) {
-			t.Fatalf("adjacent upgrades = %v, want %v", transitions, want)
-		}
+	var want [][2]int
+	for version := oldVersion; version < schemaVersion; version++ {
+		want = append(want, [2]int{version, version + 1})
+	}
+	if !reflect.DeepEqual(transitions, want) {
+		t.Fatalf("adjacent upgrades = %v, want %v", transitions, want)
 	}
 	second, err := OpenWithProgress(root, func(progress migrate.Progress) {
 		t.Errorf("current startup reported progress: %+v", progress)

@@ -1,11 +1,12 @@
 # Context compaction
 
-Compaction replaces an actor's input with a developer context message containing
-a short continuation hint and the generated Markdown summary verbatim, followed
-by retained inputs and recent messages. Main creates a continuation and freezes
-its predecessor; child compaction changes only child context. Jobs, timers,
-queued input and interactions stay live; explicit session changes/exit cancel
-them.
+Compaction replaces an actor's input with a user-role historical context message
+containing the generated Markdown summary verbatim, followed by retained inputs
+and recent messages. Shared system instructions teach continuation semantics;
+summaries do not become developer policy. Main creates a continuation and
+freezes its predecessor; child compaction changes only child context. Jobs,
+timers, queued input and interactions stay live; explicit session changes/exit
+cancel them.
 
 ## Trigger and retention
 
@@ -68,16 +69,16 @@ them.
   attachments. `retained_at_ms` records the compaction timestamp in UTC Unix
   milliseconds; no developer marker accompanies the input. Entry/source
   identities and undo checkpoints survive repeated compaction and loads. Model
-  requests project each contiguous group of retained inputs into one developer
-  format instruction and one structured user message, sorted by exact original
-  timestamps ascending with stable ties. Items include explicit input types,
-  original text/source, a relative timestamp formatted as
-  `%.2f seconds before compaction`, and native attachment occurrence indices
-  assigned after sorting. Epoch times remain canonical-only. Budget estimates
-  include this exact projection; summarization preserves typed provenance. Live
-  runtime notices do not survive ordinary loads. Only `RetainedInputs` guidance
-  in [retained-inputs.md](../prompt/retained-inputs.md) is supplied to models;
-  legacy marker decoding is isolated in startup migration.
+  requests project each contiguous group into one user message containing YAML
+  inside `<retained_inputs>`, sorted by exact original timestamps ascending with
+  stable ties. Items include explicit input types, original expanded text, a
+  relative timestamp formatted as `%.2f seconds before compaction`, and native
+  attachment occurrence indices assigned after sorting. Epoch times remain
+  canonical-only. Budget estimates include this exact projection; summarization
+  preserves typed provenance. Live runtime notices do not survive ordinary
+  loads. Shared system instructions explain retained-input semantics; no
+  per-group developer framing is added. Legacy marker decoding is isolated in
+  startup migration.
 - Retain complete assistant/tool cycles after the latest human input, not whole
   user/model turns. Target:
 
@@ -152,15 +153,15 @@ them.
   the summary and constructs the canonical replacement for main, children and
   asides. Actor adapters supply only ownership-specific commits, scope and live
   state; they do not format or reinterpret the handoff.
-- The first replacement message has type `compaction_context` and developer
-  role. It is one Markdown message: a short hint to continue the active task
-  using the summary below, followed by the generated summary verbatim. The hint
-  comes from [compaction-messages.yaml](../prompt/compaction-messages.yaml). The
-  summary supplies continuation instructions, without JSON quoting, an enclosing
-  code fence or reference-data disclaimers. All actors budget the exact
-  canonical message; main persists it unchanged and isolated actors keep it in
-  their input. A prior compaction context counts as summarized work for later
-  compaction, not as an assistant response consuming fresh tool results.
+- The first replacement message has type `compaction_context` and user role.
+  Canonical content is the raw generated Markdown; model projection encloses it
+  directly in `<compaction_context>` without JSON quoting or an instruction
+  prefix. Interpretation belongs to shared system instructions, not generated
+  higher-authority text. All actors budget the exact model projection; main
+  persists canonical content unchanged and isolated actors keep it in their
+  input. Historical summaries keep their saved text and project under the same
+  user-role policy. A prior compaction context counts as summarized work for
+  later compaction, not as an assistant response consuming fresh tool results.
 - Pause only the compacting actor; others may append committed tails. Main takes
   the routing gate, waits for file mutations and rechecks summary, retained
   input, committed tail, pending notices and fresh context together. Abort if
@@ -209,9 +210,10 @@ them.
 ## Reload recovery
 
 - Reload reads durable history and needs no compaction archive files. Historical
-  records, including assistant-summary roles/content, saved requests and archive
-  files remain unchanged; loading does not reclassify or wrap them. Schema 11
-  fences the expanded message vocabulary without converting existing records.
+  assistant summaries retain their assistant role and content. Schema 13
+  normalizes typed `compaction_context` role indexes to user; canonical text,
+  saved provider requests and archive bytes stay unchanged. Model-facing
+  projection applies the current marker schema without rewriting saved text.
 - `/load ID` and `--session ID` copy writable history at its last complete tool
   exchange. If selected history ends at main compaction or a handoff before the
   next coding request, recover committed, undelivered child completions and

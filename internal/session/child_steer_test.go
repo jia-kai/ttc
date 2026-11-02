@@ -94,14 +94,16 @@ func TestChildSteerMessagesFIFOContinueSameAssignment(t *testing.T) {
 				if m.EventSeq != 0 && strings.Contains(m.Content, `"type":"child_message"`) {
 					got = append(got, m.Content)
 					projected, err := m.ModelContent()
-					var steer map[string]any
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := json.Unmarshal([]byte(projected), &steer); err != nil {
+					var guidance struct {
+						Message string `json:"message"`
+					}
+					if err := json.Unmarshal([]byte(m.Content), &guidance); err != nil {
 						t.Fatal(err)
 					}
-					if m.Role() != "user" || steer["type"] != "steer" || steer["source"] != "main" || len(steer) != 3 {
+					if m.Role() != "user" || projected != "<steer>\n"+guidance.Message+"\n</steer>" {
 						t.Fatal("child did not receive concise steering", projected)
 					}
 				}
@@ -348,6 +350,19 @@ func TestChildSteerDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	}
 	if !strings.Contains(assignment.queued[0].Content, grant) || strings.Contains(assignment.queued[0].Content, "job_read_grant_notice") {
 		t.Fatal("steering must identify grants without redundant prose", assignment.queued[0].Content)
+	}
+	projected, err := assignment.queued[0].ModelContent()
+	const prefix = "<steer>\nimmutable parent evidence\n</steer>\n\n"
+	if err != nil || !strings.HasPrefix(projected, prefix) {
+		t.Fatal("steering text was not preserved before grant data", projected, err)
+	}
+	var notice struct {
+		Type   string   `yaml:"type"`
+		JobIDs []string `yaml:"job_ids"`
+	}
+	decodeSessionModelData(t, strings.TrimPrefix(projected, prefix), "runtime_notification", &notice)
+	if notice.Type != "job_read_grants" || !reflect.DeepEqual(notice.JobIDs, []string{grant}) {
+		t.Fatal("steering grant notice changed granted capabilities", notice)
 	}
 	queuedTokens := assignment.queuedTokens
 	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment, estimator: &contextbuild.Estimator{}}

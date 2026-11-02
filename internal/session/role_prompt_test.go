@@ -145,7 +145,7 @@ func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	messages := []llm.Message{{Type: llm.TypeRuntimeContext, Content: btwInstruction}, {Type: llm.TypeUserInput, Content: "Separate question"}}
+	messages := []llm.Message{{Type: llm.TypeRuntimeInstruction, Content: btwInstruction}, {Type: llm.TypeUserInput, Content: "Separate question"}}
 	cm, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
 	if err != nil {
 		t.Fatal(err)

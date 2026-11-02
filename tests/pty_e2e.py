@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from scratch import private_scratch
 from mock_naming import respond_to_naming
 from retry_policy import default_max_attempts
+from model_schema import model_data, runtime_context, scalar_field
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -108,16 +109,9 @@ def main():
                     assert results['parallel_left']['stdout'] == 'left-overlapped'
                     assert results['parallel_right']['stdout'] == 'right-overlapped'
                     assert all(results[call['id']]['ok'] for call in responses[index-1]['calls'])
-                contexts = [item for item in body['input'] if item.get('role') == 'developer']
-                assert contexts, 'missing initial runtime context'
-                context = json.loads(contexts[0]['content'][0]['text'])
-                assert context['type'] == 'runtime_context'
-                # Undo/redo can introduce another baseline; model switches use updates.
-                for item in contexts[1:]:
-                    payload = json.loads(item['content'][0]['text'])
-                    assert payload['type'] in ('runtime_context', 'runtime_context_update')
-                    if payload['type'] == 'runtime_context_update':
-                        assert isinstance(payload['set'], dict)
+                # Undo/redo can introduce another baseline; model switches use
+                # flattened YAML updates, never a nested set/type discriminator.
+                runtime_context(body)
                 last = next(item for item in reversed(body['input']) if item.get('role') != 'developer')
                 if last['type'] == 'function_call_output':
                     message = 'tool: ' + last['output']
@@ -126,7 +120,9 @@ def main():
                     message = last['role'] + ': ' + ''.join(part.get('text', '') for part in last['content'])
                 if 'event_type' in response:
                     assert last['role'] == 'user', message
-                    assert json.loads(message.removeprefix('user: '))['type'] == response['event_type'], message
+                    notice = model_data(message.removeprefix('user: '), 'runtime_notification')
+                    assert scalar_field(notice, 'type') == response['event_type'], message
+                    assert 'message_type:' not in notice, notice
                 else:
                     assert message.startswith(response['prefix']), (message, response['prefix'])
                 self.send_response(200)

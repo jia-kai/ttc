@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
@@ -14,7 +13,6 @@ import (
 
 	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
-	"ttc/internal/prompts"
 )
 
 func TestSummaryRequestPreservesRetainedProvenance(t *testing.T) {
@@ -29,29 +27,20 @@ func TestSummaryRequestPreservesRetainedProvenance(t *testing.T) {
 	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 		requests++
 		found := 0
-		for i, message := range req.Messages {
-			if message.Type != llm.TypeUserInput || !strings.Contains(message.Content, `"retained_inputs"`) {
+		for _, message := range req.Messages {
+			if message.Type != llm.TypeUserInput || !strings.HasPrefix(message.Content, "<retained_inputs>\n") {
 				continue
 			}
 			found++
-			if i == 0 || req.Messages[i-1].Role() != "developer" || req.Messages[i-1].Content != prompts.RetainedInputs || !reflect.DeepEqual(message.Files, input.Files) {
-				t.Fatal("summary lost retained-input developer format or native attachment", req.Messages)
+			if !reflect.DeepEqual(message.Files, input.Files) {
+				t.Fatal("summary lost retained-input native attachment", req.Messages)
 			}
-			var group struct {
-				Type   string `json:"type"`
-				Inputs []struct {
-					Type      string `json:"type"`
-					Source    string `json:"source"`
-					Timestamp string `json:"timestamp"`
-					Content   string `json:"content"`
-					Indices   []int  `json:"attachment_indices"`
-				} `json:"inputs"`
+			group := sessionRetainedInputs(t, message)
+			if len(group) != 1 {
+				t.Fatal("invalid retained-input summary projection", message)
 			}
-			if err := json.Unmarshal([]byte(message.Content), &group); err != nil || group.Type != "retained_inputs" || len(group.Inputs) != 1 {
-				t.Fatal("invalid retained-input summary projection", message, err)
-			}
-			got := group.Inputs[0]
-			if got.Type != "queued_user_input" || got.Source != "queue" || got.Timestamp != "8.00 seconds before compaction" || got.Content != input.Content || !reflect.DeepEqual(got.Indices, []int{0}) {
+			got := group[0]
+			if got.Type != "queued_user_input" || got.Timestamp != "8.00 seconds before compaction" || got.Content != input.Content || !reflect.DeepEqual(got.Indices, []int{0}) {
 				t.Fatal("summary changed original retained provenance", got)
 			}
 		}
@@ -131,10 +120,10 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 				if summaries != 1 || !reflect.DeepEqual(req.Messages[0], llm.NewCompactionContext("Isolated handoff.")) {
 					return fmt.Errorf("coding started without one compaction handoff")
 				}
-				formatIndex, formats, human := -1, 0, 0
+				groupIndex, groups, human := -1, 0, 0
 				for i, message := range req.Messages {
-					if message.Role() == "developer" && message.Content == prompts.RetainedInputs {
-						formatIndex, formats = i, formats+1
+					if strings.HasPrefix(message.Content, "<retained_inputs>\n") {
+						groupIndex, groups = i, groups+1
 					}
 					if message.Type == llm.TypeUserInput {
 						human++
@@ -147,22 +136,13 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 						return fmt.Errorf("aside scope instruction missing after handoff")
 					}
 				}
-				if formats != 1 || human != 1 || formatIndex != wantIndex || formatIndex+1 >= len(req.Messages) || req.Messages[formatIndex+1].Role() != "user" {
-					return fmt.Errorf("expected one developer/user retained pair, got %#v", req.Messages)
+				if groups != 1 || human != 1 || groupIndex != wantIndex || req.Messages[groupIndex].Role() != "user" {
+					return fmt.Errorf("expected one grouped retained user message, got %#v", req.Messages)
 				}
-				grouped := req.Messages[formatIndex+1]
-				var group struct {
-					Type   string `json:"type"`
-					Inputs []struct {
-						Source    string `json:"source"`
-						Type      string `json:"type"`
-						Timestamp string `json:"timestamp"`
-						Content   string `json:"content"`
-						Indices   []int  `json:"attachment_indices"`
-					} `json:"inputs"`
-				}
-				if err := json.Unmarshal([]byte(grouped.Content), &group); err != nil || group.Type != "retained_inputs" || len(group.Inputs) != 4 {
-					return fmt.Errorf("invalid grouped coding payload: %s (%v)", grouped.Content, err)
+				grouped := req.Messages[groupIndex]
+				group := sessionRetainedInputs(t, grouped)
+				if len(group) != 4 {
+					return fmt.Errorf("invalid grouped coding payload: %s", grouped.Content)
 				}
 				var committed int64
 				if err := historytest.DB(t, r.Store).QueryRow("SELECT created_ms FROM entries WHERE actor_id=? AND role='user' AND json_extract(content_json,'$.content')=? ORDER BY id LIMIT 1", task.actor, task.prompt).Scan(&committed); err != nil {
@@ -177,8 +157,8 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 				wantOriginals := []int64{1000, 2000, 3000, committed}
 				wantIndices := [][]int{{0, 1}, {2}, {3}, nil}
 				at := time.Now().UnixMilli()
-				for i, input := range group.Inputs {
-					if input.Source != wantSources[i] || input.Content != wantContents[i] || input.Type != map[string]string{"queue": "queued_user_input", "steer": "user_steer", "task": "child_task", "btw": "aside_task"}[wantSources[i]] || !regexp.MustCompile(`^[0-9]+\.[0-9]{2} seconds before compaction$`).MatchString(input.Timestamp) || !reflect.DeepEqual(input.Indices, wantIndices[i]) {
+				for i, input := range group {
+					if input.Content != wantContents[i] || input.Type != map[string]string{"queue": "queued_user_input", "steer": "user_steer", "task": "child_task", "btw": "aside_task"}[wantSources[i]] || !regexp.MustCompile(`^[0-9]+\.[0-9]{2} seconds before compaction$`).MatchString(input.Timestamp) || !reflect.DeepEqual(input.Indices, wantIndices[i]) {
 						return fmt.Errorf("input %d lost original order/content/provenance: %+v", i, input)
 					}
 				}
@@ -188,12 +168,12 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 				// Independently reconstruct canonical entries from the fixture to
 				// compare occupancy with the actual delivered request, including
 				// its summary, aside instructions and fresh runtime context.
-				canonical := append([]llm.Message(nil), req.Messages[:formatIndex]...)
+				canonical := append([]llm.Message(nil), req.Messages[:groupIndex]...)
 				wantFiles := [][]llm.BinaryFile{{shared, image}, {other}, {shared}, nil}
 				for i := range wantContents {
 					canonical = append(canonical, llm.Message{Type: llm.TypeUserInput, InputSource: wantSources[i], InputTimeMS: wantOriginals[i], RetainedAtMS: at, Content: wantContents[i], Files: wantFiles[i]})
 				}
-				canonical = append(canonical, req.Messages[formatIndex+2:]...)
+				canonical = append(canonical, req.Messages[groupIndex+1:]...)
 				if contextbuild.Tokens(canonical) != contextbuild.Tokens(req.Messages) || !contextbuild.Fits(req.Selection, req.System, req.Tools, req.Messages, false) {
 					return fmt.Errorf("canonical/grouped coding occupancy differs or exceeds capacity")
 				}

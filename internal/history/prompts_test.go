@@ -23,7 +23,8 @@ func TestPromptHistoryAcrossSessionsAndRestart(t *testing.T) {
 	appendMessage("main", "message", true, llm.Message{Type: llm.TypeAssistant, Content: "assistant text"})
 	appendMessage("main", "message", true, llm.Message{Type: llm.TypeRuntimeNotification, Content: "runtime notice"})
 	appendMessage("main/child", "message", true, llm.Message{Type: llm.TypeUserInput, Content: "child instruction"})
-	appendMessage("main", "summary", true, llm.Message{Type: llm.TypeUserInput, Content: "compaction summary"})
+	appendMessage("main", "summary", true, llm.NewCompactionContext("compaction summary"))
+	appendMessage("main", "message", true, llm.NewCompactionContext("message-kind compaction context"))
 	appendMessage("main", "message", false, llm.Message{Type: llm.TypeUserInput, Content: "internal naming input"})
 	copyID := appendMessage("main", "message", true, llm.Message{Type: llm.TypeUserInput, Content: "hello"})
 	var original int64

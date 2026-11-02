@@ -113,7 +113,7 @@ func TestInspectionItemsAvailabilityAndEmptyCollections(t *testing.T) {
 }
 
 func TestInspectionNativeRequest(t *testing.T) {
-	payload := json.RawMessage(`{ "model":"test", "instructions":"Be helpful", "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}], "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"{\"retained_inputs\":[{\"content\":\"remember\"}]}"}]},{"type":"function_call","name":"read","arguments":"{\"paths\":[\"a\",\"b\"],\"count\":9007199254740993}"}],"future":{"flags":[true,null,1.2300e+04]} }`)
+	payload := json.RawMessage(`{ "model":"test", "instructions":"Be helpful", "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}], "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"<retained_inputs>\ninputs:\n  - type: user_input\n    timestamp: 1.00 seconds before compaction\n    content: remember\n</retained_inputs>"}]},{"type":"function_call","name":"read","arguments":"{\"paths\":[\"a\",\"b\"],\"count\":9007199254740993}"}],"future":{"flags":[true,null,1.2300e+04]} }`)
 	before := string(payload)
 	doc, err := new(Adapter).InspectBoundary("request", payload)
 	if err != nil {
@@ -139,9 +139,9 @@ func TestInspectionNativeRequest(t *testing.T) {
 	message := doc.Items[4].Value
 	content := inspectionField(t, message.Fields, "content")
 	text := inspectionField(t, content.Items[0].Fields, "text")
-	retained := inspectionField(t, text.Fields, "retained_inputs")
-	if retained.Kind != llm.InspectionKindArray || inspectionField(t, retained.Items[0].Fields, "content").Text != "remember" {
-		t.Fatal(retained)
+	const retained = "<retained_inputs>\ninputs:\n  - type: user_input\n    timestamp: 1.00 seconds before compaction\n    content: remember\n</retained_inputs>"
+	if text.Kind != llm.InspectionKindString || text.Text != retained || len(text.Fields) != 0 {
+		t.Fatal("tagged model data must remain exact native text in inspection", text)
 	}
 	args := inspectionField(t, doc.Items[5].Value.Fields, "arguments")
 	paths := inspectionField(t, args.Fields, "paths")

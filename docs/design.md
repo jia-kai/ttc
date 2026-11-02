@@ -56,7 +56,7 @@ sequence, request identity and input source remain separate metadata.
 | `system_instruction`    | `system`    | Inspectable instructions                |
 | `developer_instruction` | `developer` | Inspectable instructions                |
 | `runtime_context`       | `developer` | Compact runtime context                 |
-| `compaction_context`    | `developer` | Inspectable Markdown compaction context |
+| `compaction_context`    | `user`      | Inspectable Markdown compaction context |
 | `runtime_notification`  | `user`      | Runtime notice; attributed child result |
 | `runtime_instruction`   | `developer` | Inspectable runtime instructions        |
 | `child_guidance`        | `user`      | Main-agent assignment guidance          |
@@ -64,13 +64,17 @@ sequence, request identity and input source remain separate metadata.
 - Producers assign types before admission. Human-authored JSON never changes its
   semantic identity. Unknown types and incompatible tool/replay/input metadata
   are rejected at persistence and provider boundaries.
-- Model projection marks notification JSON with `message_type`, preserving its
-  event-specific `type` and payload. Human steering and child guidance share a
-  concise `type:"steer"` envelope with `source:"user"` or `"main"`, `message`
-  and optional `job_read_grants`. Child routing/delivery metadata stays in
-  canonical history, not model input. Labels do not elevate authority. Provider
-  roles are derived from the semantic type; provider-native tool calls,
-  attachments and assistant replay state retain their specialized encoding.
+- `llm.Message.ModelContent` projects typed records into one text schema: raw
+  `<steer>`, `<runtime_instruction>` and `<compaction_context>` blocks; YAML
+  inside `<runtime_context>`, `<runtime_context_update>` and
+  `<runtime_notification>`. Retained-input grouping uses the same YAML formatter
+  under `<retained_inputs>`. Ordinary authored text stays unwrapped. Routing and
+  delivery metadata stays canonical-only; event payload IDs remain available.
+  Roles derive from semantic type, not tags. Compaction summaries remain
+  historical user-role data; shared developer instructions teach continuation
+  semantics. Native tool calls/results, attachments and assistant replay retain
+  their provider encoding. See
+  [message shapes](system_prompt.md#message-shapes).
 - `session.Event.MessageType` carries canonical identity to direct rendering.
   Presentation flags are derived view state, not another message classifier.
   Provider-boundary inspection exposes notifications in their actual
@@ -666,14 +670,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 12;
-  startup supports schemas 5–12 and runs ordered, adjacent upgrades (5 → 6 → 7 →
-  8 → 9 → 10 → 11 → 12) in one transaction, validating before commit. Each step
-  reports its own progress; completion of a step is not a committed upgrade.
-  Rebuilding entries temporarily indexes all incoming foreign-key lookups to
-  avoid per-entry table scans. Schemas below 5, nonempty unversioned databases
-  and unknown newer versions fail explicitly; no automatic resets or credential
-  deletion.
+- Empty databases initialize in one immediate transaction. Current schema is 13;
+  startup supports schemas 5–13 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9 → 10 → 11 → 12 → 13) in one transaction, validating before commit. Each
+  step reports its own progress; completion of a step is not a committed
+  upgrade. Rebuilding entries temporarily indexes all incoming foreign-key
+  lookups to avoid per-entry table scans. Schemas below 5, nonempty unversioned
+  databases and unknown newer versions fail explicitly; no automatic resets or
+  credential deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
   instances sharing that directory before upgrading: pre-lock binaries cannot be
@@ -707,6 +711,10 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   events, then removes the obsolete mutable attempt-diagnostics column. Original
   input JSON, immutable audit events and archive bytes are preserved; copies
   resolve observations through source identities rather than duplicating them.
+  The 12 → 13 step normalizes compaction-message role indexes from `developer`
+  to `user`, preserving canonical content, source identities and original
+  request/response evidence. Runtime role checks remain strict; no historical
+  role fallback is needed after migration.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting

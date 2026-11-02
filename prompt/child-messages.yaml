@@ -4,8 +4,6 @@ ChildMessageTarget: >-
   child_steer requires job_id OR both child_id and child_turn_id from
   subagent/job_list; child_id alone is insufficient. No steering was queued.
 ChildMessageOwnership: only main can message a child assignment
-ChildJobReadGrants: >-
-  You can now read the jobs in job_read_grants, including across follow-ups.
 ChildMessageInactive:
   target assignment is inactive; no steering was queued. Use subagent to start a
   new assignment.
@@ -15,4 +13,4 @@ ChildMessageEvidenceTarget:
 ChildMessageQueueCapacity:
   "message was not queued: pending guidance has at most %d estimated wire tokens
   remaining and %d messages total; shorten it or wait for delivery before
-  sending more (envelope/escaping overhead counts)"
+  sending more (markers and grant notices count)"
