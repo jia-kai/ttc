@@ -151,7 +151,7 @@ func TestChildBusyFollowupAndBackgroundCancellationNotifyOnce(t *testing.T) {
 		t.Fatal("background cancellation did not notify main")
 	}
 	r.orderMu.Lock()
-	count, content := len(r.notifications), r.notifications[0].Content
+	count, content := len(pendingMainNotices(t, r)), pendingMainNotices(t, r)[0].Content
 	r.orderMu.Unlock()
 	if count != 1 || !strings.Contains(content, "child_turn_finished") || !strings.Contains(content, "cancelled") {
 		t.Fatal(count, content)
@@ -223,7 +223,7 @@ func TestChildLifecycleFieldsForSuccessfulAssignments(t *testing.T) {
 						t.Fatal(err)
 					}
 					r.orderMu.Lock()
-					content := r.notifications[0].Content
+					content := pendingMainNotices(t, r)[0].Content
 					r.orderMu.Unlock()
 					if err := json.Unmarshal([]byte(content), &result); err != nil {
 						t.Fatal(err)

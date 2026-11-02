@@ -32,6 +32,9 @@ func recoverableCompaction(err error) bool {
 	if _, ok := err.(*compactionCapacityError); ok {
 		return true
 	}
+	if _, ok := err.(*llm.ContextLengthError); ok {
+		return true
+	}
 	if err == contextbuild.ErrNoCompactableHistory {
 		return true
 	}

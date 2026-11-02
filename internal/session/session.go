@@ -101,9 +101,9 @@ type Runtime struct {
 	persisted         bool   // False until the first user turn/message is committed atomically.
 	generation        uint64 // Advances on explicit transient resets, never compaction.
 	activeCancel      context.CancelCauseFunc
-	notifications     []llm.Message
-	steers            []contextbuild.Input // Original transient human inputs, admitted only at a model boundary.
-	activeTurn        string               // Main inference turn, distinct from steering undo checkpoints.
+	notifications     []*pendingRuntimeNotice // Durable references, materialized in bounded admission batches.
+	steers            []contextbuild.Input    // Original transient human inputs, admitted only at a model boundary.
+	activeTurn        string                  // Main inference turn, distinct from steering undo checkpoints.
 	AutoName          bool
 	timers            *wakeups
 	questions         questions

@@ -59,9 +59,12 @@ ToolLineTooLong:
   byte range, otherwise report this read limitation"
 ToolNoCodingChildren: "no coding children in this runtime"
 ToolNotRegularFile: "not a regular file"
-ToolPartialPatch:
+ToolAppliedMutation:
   "%v; some changes were applied: read the applied paths before retrying only
   the remaining changes"
+ToolMutationHistoryMissing:
+  "; these filesystem effects were not recorded in history and cannot be undone
+  by TTC"
 ToolPatchAddPrefix: "add file line requires +"
 ToolPatchAnchorMissing:
   "hunk anchor not found; read current contents and correct or omit the text

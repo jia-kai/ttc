@@ -65,6 +65,7 @@ HistoryNotificationCutoff:
 HistoryNotificationDelivered:
   "notification source is copied or already delivered"
 HistoryNotificationSource: "notification source: %w"
+HistoryInvalidChildNotificationSource: "invalid child notification source %d"
 HistoryRuntimeContext:
   "runtime context must be a nonempty developer runtime message"
 HistorySessionReadOnly: "session is read-only"

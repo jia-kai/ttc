@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -16,7 +17,7 @@ import (
 type preparedSession struct {
 	session     history.Session
 	selection   llm.Selection
-	notices     []llm.Message
+	notices     []*pendingRuntimeNotice
 	accounting  preparedAccounting
 	switchEntry int64
 	switchText  string
@@ -49,11 +50,17 @@ func (r *Runtime) prepareSession(id string, copySource bool) (preparedSession, e
 		target.selection = v.Model
 	}
 	pending, err := r.Store.PendingRecoveryNotifications(r.ctx, v.ID)
-	if err == nil {
-		target.notices, err = recoveredNotificationMessages(pending)
-	}
 	if err != nil {
 		return preparedSession{}, fmt.Errorf("read recovered notifications: %w", err)
+	}
+	for _, event := range pending {
+		var timer struct {
+			ID string `json:"wakeup_id"`
+		}
+		if err := json.Unmarshal(event.Body, &timer); err != nil {
+			return preparedSession{}, fmt.Errorf("read recovered notification: %w", err)
+		}
+		target.notices = append(target.notices, &pendingRuntimeNotice{seq: event.EventSeq, timerID: timer.ID})
 	}
 	target.accounting, err = r.prepareAccounting(v.ID, target.selection)
 	if err != nil {

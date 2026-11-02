@@ -223,7 +223,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 				assertImmediateOccupancy := func() {
 					t.Helper()
 					r.orderMu.Lock()
-					pending := append(append([]llm.Message(nil), r.notifications...), r.steeringMessagesLocked()...)
+					pending := append(append([]llm.Message(nil), pendingMainNotices(t, r)...), r.steeringMessagesLocked()...)
 					fresh, _, err := r.runtimeContextLocked(context.Background(), "main", selection, r.mainContext)
 					r.orderMu.Unlock()
 					if err != nil {

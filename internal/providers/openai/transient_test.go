@@ -22,7 +22,6 @@ func TestTerminalStreamFailuresCarryRecoverability(t *testing.T) {
 		{"lost after output", 200, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"},
 		{"malformed JSON", 200, "data: invalid\n\n"},
 		{"server event", 200, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\"}}}\n\n"},
-		{"context event", 200, "data: {\"type\":\"error\",\"code\":\"context_length_exceeded\"}\n\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(test.status); io.WriteString(w, test.body) })
@@ -47,8 +46,8 @@ func TestTerminalTransportErrorDoesNotExposePrivateDetails(t *testing.T) {
 	}
 }
 
-func TestUncommittedSSEFailuresRetryRegardlessOfCode(t *testing.T) {
-	for _, code := range []string{"server_error", "rate_limit_exceeded", "temporarily_unavailable", "context_length_exceeded", "invalid_request_error", "unknown_failure"} {
+func TestUncommittedSSEFailuresOtherThanContextLengthRetry(t *testing.T) {
+	for _, code := range []string{"server_error", "rate_limit_exceeded", "temporarily_unavailable", "invalid_request_error", "unknown_failure"} {
 		for _, kind := range []string{"response.failed", "error"} {
 			t.Run(kind+"/"+code, func(t *testing.T) {
 				requests, retries := 0, 0

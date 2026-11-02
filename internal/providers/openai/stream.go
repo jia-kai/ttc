@@ -248,12 +248,14 @@ type wireEvent struct {
 	} `json:"response"`
 }
 
-// Stream retries upstream failures within one bounded attempt budget.
-// Committed failures return PartialError when another attempt is allowed;
+// Stream retries eligible upstream failures within one bounded attempt budget.
+// Committed retryable failures return PartialError when another attempt is allowed;
 // only the runtime may continue them, with a new request and retained partial history.
 // Local validation, callback failures and cancellation never authorize retries.
-// NoTools replies are buffered until completion, so their failed partial text is
-// discarded and retried within the same budget without a runtime continuation.
+// Explicit context-length rejection stops immediately without a continuation or
+// automatic compaction; already delivered partial output belongs to the caller.
+// NoTools replies are buffered until completion, so failed partial text is
+// discarded; eligible retries use the same budget without a runtime continuation.
 // The subscription endpoint has no verified output cap; OutputTokens reserves context only.
 func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	maxAttempts := req.MaxAttempts
@@ -459,8 +461,12 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			return exchange.withCleanupError(final)
 		}
 		upstreamErr = exchange.withCleanupError(upstreamErr)
-		// Every upstream failure shares this budget, regardless of its code or
-		// whether it came from HTTP, SSE, transport or response validation.
+		var capacity *llm.ContextLengthError
+		if errors.As(upstreamErr, &capacity) {
+			return upstreamErr
+		}
+		// Other upstream failures share this budget, whether they came from
+		// HTTP, SSE, transport or response validation.
 		err := &llm.TransientError{Err: fmt.Errorf(prompts.OpenAIUpstreamAttemptFailed, attempt+1, maxAttempts, upstreamErr)}
 		if attempt == maxAttempts-1 {
 			return err

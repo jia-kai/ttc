@@ -143,7 +143,10 @@ Input: `{path, format?, scope?}`.
   frozen main prefix plus its own history, not main messages arriving later.
   Durable SQLite selection follows compaction and load-copy ancestry,
   deduplicates source identities and excludes sibling branches and unrelated
-  actors. This is not a dump of the lineage or live runtime state.
+  actors. An admitted omitted child completion also includes its exact source
+  event, preserving answers, failure details and transcript paths without
+  exporting the child's private conversation. This is not a dump of the lineage
+  or live runtime state.
 - Migration from schemas 5–8 does not backfill isolated `actor_compacted` or
   `actor_context_prefix` records. Historical child/aside cuts are therefore
   unavailable to `before_compaction`; historical aside exports include only
@@ -277,9 +280,9 @@ Input: `{path, format?, scope?}`.
   `*** Delete File:` sections, then `*** End Patch`. An update can contain
   `*** Move to:`. File paths resolve from the session directory.
 - Result: `{files:[{path:string,action:"add"|"update"|"move"|"delete"}]}`.
-  Reject invalid context, duplicate/conflicting targets, or missing sources
-  before writing. If a filesystem failure interrupts application, return
-  `partial_patch` with `error.details.applied` listing changed paths.
+  Reject invalid context, duplicate or ancestor/descendant targets, or missing
+  sources before writing. If application or history recording fails after any
+  path changes, return `partial_patch` with the effect details below.
 
 ### Reversible file operations
 
@@ -292,6 +295,11 @@ Input: `{path, format?, scope?}`.
   commits are independent; no crash repair. See
   [design](design.md#serialized-edits-and-shared-undo) for ordering and
   restoration conflict checks.
+- Failed mutations with applied effects include `error.details.applied` and
+  `remaining` path lists, `history_recorded`, `undoable`, and
+  `retry_safe:false`. `change_id` appears only after a successful history
+  commit. Inspect applied paths before retrying remaining work; unrecorded
+  effects cannot be undone by TTC. Successful result shapes are unchanged.
 
 ## Execution and jobs
 
@@ -661,10 +669,12 @@ Input: `{path, format?, scope?}`.
   the grep job's concatenated matches, not original source line/byte positions.
   `status` is scheduler job status, including for `kind:"subagent"`, not the
   semantic child assignment outcome. `truncated` describes retained loss in the
-  selected stream or grep source, rather than whether another page exists. A
-  running job always returns a next cursor; a finished stream at EOF returns
-  null. Captured bytes disappear when the runtime ends and are never revived
-  from history. Saved `job_read` results remain inspectable after reload; their
+  selected stream or grep source, rather than whether another page exists.
+  EOF-relative requests extending before the original stream start clamp to zero
+  without reporting loss; actual eviction still reports truncation. A running
+  job always returns a next cursor; a finished stream at EOF returns null.
+  Captured bytes disappear when the runtime ends and are never revived from
+  history. Saved `job_read` results remain inspectable after reload; their
   output is fenced literal text, with large inspector records paged
   independently of the capture cursor. Paging preserves split code delimiters;
   fence-row metadata over 64 KiB switches to explicitly labeled plain-text
@@ -964,12 +974,15 @@ selected stdout/stderr, truncation/selection metadata and known exit code or
 signal. Labels are cosmetic; use `job_id` for follow-up tools. Coding children
 always deliver their turn event.
 
-Child runtime-event backlogs retain compact durable source references and drain
-in bounded admission batches (32 events / 2048 estimated tokens). Large events
-may omit output explicitly while preserving source/job identity and known
-outcome; full payloads remain in history. Every admitted source is acknowledged
-separately. Unadmitted events keep the assignment active rather than being lost
-at completion.
+Main and child runtime-event backlogs retain compact durable source references
+and drain in bounded admission batches (32 events / 2048 estimated tokens;
+children may have a smaller input reserve). Large events may omit output
+explicitly while preserving source/job identity, known outcome, and child
+completion references; full payloads remain in history. Every admitted source is
+acknowledged separately. Unadmitted events keep inference active rather than
+being lost at completion; failed admission consumes nothing. Human steering
+remains separate from this output budget. Committed child-message delivery
+receipts also wake an awaiting main agent.
 
 Events arrive at the owning actor's next model boundary or resume its awaiting
 inference as separate `user` messages containing JSON strings. The canonical

@@ -111,6 +111,5 @@ SessionInvalidToolProgress: provider emitted invalid tool progress
 SessionReadProjectInstructions: "read project instructions %s: %w"
 SessionNotificationSource:
   notification source must be an original committed event
-SessionNotificationJSON: notification must contain valid JSON
 SessionEventAlreadyPending: event already pending delivery
 SessionRecoveredNotificationProjection: "project recovered notification %d: %w"

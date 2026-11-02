@@ -185,7 +185,7 @@ func TestChildFailureHandoffBackgroundFailureAndCancellation(t *testing.T) {
 				}
 			}
 			r.orderMu.Lock()
-			notifications := append([]llm.Message(nil), r.notifications...)
+			notifications := append([]llm.Message(nil), pendingMainNotices(t, r)...)
 			r.orderMu.Unlock()
 			if len(notifications) != 1 {
 				t.Fatal("completion did not notify exactly once", notifications)
@@ -343,7 +343,7 @@ func TestChildFailureHandoffLocalLaunchFailureForegroundAndBackground(t *testing
 					t.Fatal("launch duplicated background handoff", result)
 				}
 				r.orderMu.Lock()
-				notifications := append([]llm.Message(nil), r.notifications...)
+				notifications := append([]llm.Message(nil), pendingMainNotices(t, r)...)
 				r.orderMu.Unlock()
 				if len(notifications) != 1 {
 					t.Fatal("local launch failure did not notify once", notifications)

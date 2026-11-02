@@ -71,6 +71,8 @@ WorkspaceParentNotDirectory: "parent is not a directory: %s"
 WorkspaceMutationTooLarge: file exceeds 8 MiB mutation limit
 WorkspaceEmptyMutation: empty mutation
 WorkspaceDuplicateTarget: duplicate mutation target %s
+WorkspaceConflictingTargets:
+  "conflicting mutation targets: %s is an ancestor of %s"
 WorkspaceSourceNotFound: "source not found: %s"
 WorkspaceTargetExists:
   "target exists: %s; read it and use an update for intended changes, or choose
@@ -80,6 +82,11 @@ WorkspaceCorruptSnapshot: corrupt snapshot blob
 WorkspaceUnusableSession: "session unusable after compaction: %s"
 WorkspaceRecordMutationFailure: "record file mutation: %w"
 WorkspacePartialMutation: "partial mutation: %w"
+WorkspaceRestoreSnapshot: "restore snapshot for %s: %w"
+WorkspacePartialRestore:
+  "restore failed: %v; applied paths: %q; remaining paths: %q; history cursors
+  are unchanged. Inspect affected files before manual recovery; do not retry the
+  original restore blindly"
 ImageNotRegularFile:
   image is not a regular file; provide a regular PNG, JPEG or GIF
 ImageTooLarge: image exceeds %d bytes; resize or compress it before retrying

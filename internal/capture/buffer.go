@@ -260,7 +260,8 @@ type PresentedLine struct {
 
 // Read accepts an absolute byte cursor or eof:-N:bytes / eof:-N:lines. Empty starts
 // at the oldest retained byte. EOF is resolved from one locked snapshot. Lost
-// prefixes clamp to the retained range; cursor beyond EOF is an error.
+// prefixes clamp to the retained range; an EOF-relative overshoot before the
+// original stream clamps to zero without implying loss. Cursor beyond EOF is an error.
 func (b *Buffer) Read(cursor string, limit int) (Page, error) {
 	p := b.pool
 	p.mu.Lock()
@@ -289,7 +290,7 @@ func (b *Buffer) read(cursor string, limit int) (Page, error) {
 		}
 		switch parts[2] {
 		case "bytes":
-			pos = b.total + n
+			pos = max(0, b.total+n)
 		case "lines":
 			if n == 0 {
 				pos = b.total

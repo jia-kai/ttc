@@ -25,7 +25,6 @@ func TestUncommittedUpstreamFailureMatrixRecoversOrExhausts(t *testing.T) {
 		{"unknown nested shape", sseFrames(map[string]any{"type": "error", "error": map[string]any{"new_field": "private scalar"}}), []string{"error details missing", `"new_field":string`}},
 		{"failed response", sseFrames(map[string]any{"type": "response.failed", "response": map[string]any{"id": "response_fixture", "error": map[string]string{"code": "invalid_request_error", "message": "Unsupported request option"}}}), []string{"response.failed", "response_id=response_fixture", "invalid_request_error", "Unsupported request option"}},
 		{"bare failed response", sseFrames(map[string]any{"type": "response.failed"}), []string{"response.failed", "error details missing"}},
-		{"context length", sseFrames(map[string]any{"type": "error", "code": "context_length_exceeded", "message": "Compact the conversation"}), []string{"context_length_exceeded", "Compact the conversation"}},
 		{"incomplete response", sseFrames(map[string]any{"type": "response.incomplete", "response": map[string]any{"incomplete_details": map[string]string{"reason": "max_output_tokens"}}}), []string{"response.incomplete", "reason=max_output_tokens"}},
 		{"unexpected terminal field type", `data: {"type":"error","response":{"id":123},"error":{"message":"Try another request"}}` + "\n\n", []string{"stream terminated: error", "Try another request"}},
 		{"malformed JSON", "data: invalid JSON containing private scalar\n\n", []string{"invalid Responses stream JSON"}},

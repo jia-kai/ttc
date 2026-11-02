@@ -32,7 +32,7 @@ func partialOutput(kind string) map[string]any {
 
 func TestCommittedUpstreamFailuresHandOffWithoutReplay(t *testing.T) {
 	for _, output := range []string{"text", "call_start", "finished_call"} {
-		for _, terminal := range []string{"disconnect", "error", "response.failed", "bare error", "unknown nested", "context length", "malformed JSON", "duplicate output"} {
+		for _, terminal := range []string{"disconnect", "error", "response.failed", "bare error", "unknown nested", "malformed JSON", "duplicate output"} {
 			t.Run(output+"/"+terminal, func(t *testing.T) {
 				var requests atomic.Int32
 				a := adapterFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -53,8 +53,6 @@ func TestCommittedUpstreamFailuresHandOffWithoutReplay(t *testing.T) {
 						io.WriteString(w, sseFrames(map[string]any{"type": "error"}))
 					case "unknown nested":
 						io.WriteString(w, sseFrames(map[string]any{"type": "error", "error": map[string]string{"code": "unknown_failure", "message": "Reduce tool count"}}))
-					case "context length":
-						io.WriteString(w, sseFrames(map[string]any{"type": "error", "code": "context_length_exceeded"}))
 					case "malformed JSON":
 						io.WriteString(w, "data: invalid JSON\n\n")
 					case "duplicate output":
@@ -248,7 +246,7 @@ func TestMixedPreOutputAndPartialFailuresShareContinuationBudget(t *testing.T) {
 				case 2:
 					io.WriteString(w, sseFrames(map[string]any{"type": "error", "error": map[string]string{"code": "unknown_backend_failure"}}))
 				case 3:
-					io.WriteString(w, sseFrames(partialOutput("text"), map[string]any{"type": "error", "code": "context_length_exceeded"}))
+					io.WriteString(w, sseFrames(partialOutput("text"), map[string]any{"type": "error", "code": "server_error"}))
 				case 4:
 					if recover {
 						io.WriteString(w, sseFrames(map[string]any{"type": "response.completed"}))
@@ -271,7 +269,7 @@ func TestMixedPreOutputAndPartialFailuresShareContinuationBudget(t *testing.T) {
 			if !errors.As(err, &partial) || requests != 3 || len(retries) != 2 {
 				t.Fatal("pre-output attempts were lost or committed output replayed", err, requests, retries)
 			}
-			if partial.Retry.Attempt != 4 || partial.Retry.MaxAttempts != 4 || partial.Retry.DelayMilliseconds != 0 || partial.Retry.Reason != err.Error() || !strings.Contains(err.Error(), "upstream attempt 3/4 failed:") || !strings.Contains(err.Error(), "context_length_exceeded") {
+			if partial.Retry.Attempt != 4 || partial.Retry.MaxAttempts != 4 || partial.Retry.DelayMilliseconds != 0 || partial.Retry.Reason != err.Error() || !strings.Contains(err.Error(), "upstream attempt 3/4 failed:") || !strings.Contains(err.Error(), "server_error") {
 				t.Fatal("incorrect continuation metadata", partial.Retry, err)
 			}
 			for i, retry := range retries {

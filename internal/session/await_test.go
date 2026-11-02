@@ -420,8 +420,8 @@ func TestAwaitCountdownStartsAtSettledBoundary(t *testing.T) {
 	}
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
-	if len(r.notifications) != 1 || !strings.Contains(r.notifications[0].Content, "await_deadline") {
-		t.Fatal("missing deadline event", r.notifications)
+	if len(pendingMainNotices(t, r)) != 1 || !strings.Contains(pendingMainNotices(t, r)[0].Content, "await_deadline") {
+		t.Fatal("missing deadline event", pendingMainNotices(t, r))
 	}
 }
 

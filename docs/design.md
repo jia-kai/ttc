@@ -501,14 +501,15 @@ workers.
   cancellation. These operations retain their existing retry policies.
 - Main steering waits for a model boundary; children accept idle follow-ups
   only. Native steering and resuming the same partial stream are outside v1.
-  Providers retry upstream HTTP, transport, stream and protocol failures
-  regardless of code. Parser-private native items, including reasoning, do not
-  block retry and are discarded on failure. Zero `MaxAttempts` selects nine
-  total attempts; positive values bound the whole retry/recovery chain;
-  `PriorAttempts` carries failed attempts across continuation requests and
-  resets after a successful response. Naming and compaction use the same
-  default; no-tools replies are buffered until completion and retried
-  atomically.
+  Providers retry upstream HTTP, transport, stream and protocol failures except
+  explicit structured context-length rejection, which stops without automatic
+  compaction or invalidating existing context. Parser-private native items,
+  including reasoning, do not block retry and are discarded on failure. Zero
+  `MaxAttempts` selects nine total attempts; positive values bound the whole
+  retry/recovery chain; `PriorAttempts` carries failed attempts across
+  continuation requests and resets after a successful response. Naming and
+  compaction use the same default; no-tools replies are buffered until
+  completion and retried atomically.
 - After partial output, only a provider-issued `PartialError` authorizes a new
   main/child/aside coding request. Persist canonical partial output without
   native replay state and settle emitted calls as not executed. Retain earlier
@@ -617,11 +618,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   hidden entries. Archived/blocked inputs stay inspectable. `/branch ID` accepts
   balanced cuts; `/redo` restores the previously selected branch.
 - All file tools share apply/restore: capture bytes, mode, absence and created
-  parent directories; moves are delete/create. Reject symlinks, special files
-  and multiply linked regular files. Outside-workspace effects are marked
-  non-undoable; shell writes are never checkpointed. Refuse restoration if
-  affected paths differ from expected snapshots. Other runtimes, shells and
-  editors are independent writers.
+  parent directories; moves are delete/create. Reject duplicate and
+  ancestor/descendant targets before writes, as well as symlinks, special files
+  and multiply linked regular files. Cleanup checks recorded directory identity
+  before attempting empty-directory removal; external replacements can still
+  race that check. Legacy records without directory identities do not authorize
+  removal. Outside-workspace effects are marked non-undoable; shell writes are
+  never checkpointed. Refuse restoration if affected paths differ from expected
+  snapshots. Other runtimes, shells and editors are independent writers.
 - Loading writable history snapshots its selected ancestry through the last
   balanced main tool exchange into an independent session, sharing immutable
   lineage assets. It preserves source records and retained-input provenance,
@@ -630,7 +634,9 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   files, tools or live handles are restored.
 - File writes use same-directory temporary files and atomic per-file renames.
   Multi-file edits/restores and their SQL commits are independent: partial edits
-  record their applied subset when possible; failed restores keep the old
+  record their applied subset when possible and report actual effects even if
+  recording fails. Restoration validates all target snapshots before writing;
+  unexpected partial restores report applied/remaining paths and keep the old
   cursor. Startup never settles unfinished requests, repairs files or replays
   operations. A crash may leave files ahead of saved history; manual loading
   uses saved context.

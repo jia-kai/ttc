@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -18,6 +19,47 @@ import (
 type fileResult struct {
 	value           any
 	summary, detail string
+}
+
+// mutationResult preserves actual filesystem effects even when recording history
+// failed. A committed ID is not evidence that a particular path was applied.
+func mutationResult(ctx context.Context, value any, res workspace.Result, err error, patch bool) (fileResult, error) {
+	if err != nil {
+		applied, remaining := []string{}, []string{}
+		for _, change := range res.Changes {
+			if change.Applied {
+				applied = append(applied, change.Path)
+			} else {
+				remaining = append(remaining, change.Path)
+			}
+		}
+		if len(applied) != 0 {
+			code := "execution_failed"
+			if errors.Is(err, context.Canceled) {
+				code = "cancelled"
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				code = "timeout"
+			}
+			if patch {
+				code = "partial_patch"
+			}
+			details := map[string]any{
+				"applied": applied, "remaining": remaining,
+				"history_recorded": res.HistoryRecorded,
+				"undoable":         res.HistoryRecorded && res.Reversible,
+				"retry_safe":       false,
+			}
+			message := fmt.Sprintf(prompts.ToolAppliedMutation, err)
+			if res.HistoryRecorded {
+				details["change_id"] = res.ChangeID
+			} else {
+				message += prompts.ToolMutationHistoryMissing
+			}
+			err = &Error{Code: code, Message: message, Details: details}
+		}
+	}
+	return presentFiles(ctx, value, res.Changes), err
 }
 
 type diffCapture struct {

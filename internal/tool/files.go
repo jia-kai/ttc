@@ -115,7 +115,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		if len(res.Changes) != 0 {
 			value["created"] = !res.Changes[0].Before.Exists
 		}
-		return presentFiles(ctx, value, res.Changes), e
+		return mutationResult(ctx, value, res, e, false)
 	})
 	Register(r, "edit", prompts.ToolDescription("edit"), map[string]any{"path": Property("string"), "old_text": Property("string"), "new_text": Property("string"), "replace_all": Property("boolean")}, []string{"path", "old_text", "new_text"}, func(a editArgs) error {
 		if e := Required("path", a.Path); e != nil {
@@ -163,7 +163,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		if e == nil && a.Old == *a.New {
 			value["replacements"], value["unchanged"] = 0, true
 		}
-		return presentFiles(ctx, value, res.Changes), e
+		return mutationResult(ctx, value, res, e, false)
 	})
 	addSearch(r, w)
 	addPatch(r, w)

@@ -153,6 +153,19 @@ func (s *Store) exportTextWith(ctx context.Context, q historyReader, entry Entry
 	}
 	if entry.ID > 0 && (entry.Kind == "tool_result" || entry.Kind == "message" && entry.Role == "user") {
 		var completion exportChildCompletion
+		source, err := omittedChildNoticeSource(q, entry)
+		if err != nil {
+			return "", err
+		}
+		if source != nil {
+			body, err := childNoticeSourceBody(*source)
+			if err != nil {
+				return "", err
+			}
+			if err := json.Unmarshal(body, &completion); err != nil {
+				return "", err
+			}
+		}
 		if entry.Kind == "tool_result" {
 			if err := json.Unmarshal([]byte(subagentResult), &completion); err != nil {
 				return "", err
@@ -166,7 +179,7 @@ func (s *Store) exportTextWith(ctx context.Context, q historyReader, entry Entry
 			return "", err
 		}
 		if response != 0 {
-			if entry.Kind == "message" {
+			if entry.Kind == "message" && source == nil {
 				var message llm.Message
 				if err := json.Unmarshal(entry.Content, &message); err != nil {
 					return "", err
@@ -186,7 +199,7 @@ func (s *Store) exportTextWith(ctx context.Context, q historyReader, entry Entry
 			text, err := projectExportText(data)
 			return completion.text(text), err
 		}
-		if entry.Kind == "tool_result" {
+		if entry.Kind == "tool_result" || source != nil {
 			return completion.text(completion.Answer), nil
 		}
 	}

@@ -53,7 +53,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 	if err := r.queueNotification(`{"type":"image_click_cancelled"}`); err != nil {
 		t.Fatal(err)
 	}
-	source := r.notifications[0].EventSeq
+	source := pendingMainNotices(t, r)[0].EventSeq
 	r.steers = []contextbuild.Input{{Text: "Also inspect units."}}
 	cursor := r.mainContext
 	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
@@ -62,7 +62,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 	if _, cm, err := r.admitMain(context.Background(), turn, r.selection); err == nil || cm != nil {
 		t.Fatal("failed admission unexpectedly succeeded or created snapshot", cm, err)
 	}
-	if !reflect.DeepEqual(r.mainContext, cursor) || len(r.notifications) != 1 || len(r.steers) != 1 {
+	if !reflect.DeepEqual(r.mainContext, cursor) || len(pendingMainNotices(t, r)) != 1 || len(r.steers) != 1 {
 		t.Fatal("failed admission consumed input")
 	}
 	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_admission"); err != nil {
@@ -72,7 +72,7 @@ func TestAdmissionWithoutSnapshotDeliversNoticeAndSteering(t *testing.T) {
 	if err != nil || cm != nil || admitted.ContextEntry != 0 || len(admitted.NoticeEntries) != 1 || len(admitted.SteerEntries) != 1 {
 		t.Fatal(admitted, cm, err)
 	}
-	if len(r.notifications) != 0 || len(r.steers) != 0 || admitted.Cutoff < source {
+	if len(pendingMainNotices(t, r)) != 0 || len(r.steers) != 0 || admitted.Cutoff < source {
 		t.Fatal("successful admission did not consume eligible input")
 	}
 	last := admitted.Messages[len(admitted.Messages)-1]

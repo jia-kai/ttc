@@ -1,5 +1,17 @@
 package llm
 
+// ContextLengthError marks an explicit structured provider rejection of input
+// capacity. Existing conversation data remains usable, but the unchanged request
+// must not be retried or automatically compacted, even after partial output.
+// Callers may explicitly compact or select a model with a larger context window.
+type ContextLengthError struct{ Err error } // Err is the non-nil provider diagnostic.
+
+// Error preserves the provider diagnostic and recovery guidance.
+func (e *ContextLengthError) Error() string { return e.Err.Error() }
+
+// Unwrap exposes the original failure for inspection.
+func (e *ContextLengthError) Unwrap() error { return e.Err }
+
 // TransientError marks an upstream failure that leaves existing conversation data
 // usable, including after the final attempt exhausts the retry budget. The name
 // does not promise another automatic attempt; callers may retry explicitly.

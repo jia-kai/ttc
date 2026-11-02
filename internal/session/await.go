@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
 	"ttc/internal/tool"
@@ -49,7 +48,6 @@ func (r *Runtime) queueActorNotificationLocked(actor, content string) error {
 		r.orderError = errors.Join(r.orderError, err)
 		return err
 	}
-	m := llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, id, 0), EventSeq: id}
 	// Coalesce repeated timer firings just as the main notification queue does.
 	var incoming struct {
 		ID string `json:"wakeup_id"`
@@ -60,19 +58,7 @@ func (r *Runtime) queueActorNotificationLocked(actor, content string) error {
 		r.signalActorLocked(actor)
 		return nil
 	}
-	if incoming.ID != "" {
-		for i, old := range r.notifications {
-			var prior struct {
-				ID string `json:"wakeup_id"`
-			}
-			if json.Unmarshal([]byte(old.Content), &prior) == nil && prior.ID == incoming.ID {
-				r.notifications = append(r.notifications[:i], r.notifications[i+1:]...)
-				break
-			}
-		}
-	}
-	r.notifications = append(r.notifications, m)
-	r.signalActorLocked(actor)
+	r.enqueueMainNotificationLocked(id, incoming.ID)
 	return nil
 }
 

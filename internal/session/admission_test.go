@@ -36,7 +36,7 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	if err := r.queueNotification(`{"type":"job_exit","job_id":"job"}`); err != nil {
 		t.Fatal(err)
 	}
-	before := append([]llm.Message(nil), r.notifications...)
+	before := append([]llm.Message(nil), pendingMainNotices(t, r)...)
 	cursor := r.mainContext
 	r.selection.Model.ID = "updated-model"
 	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_admission BEFORE INSERT ON model_requests BEGIN SELECT RAISE(ABORT,'forced admission failure'); END`); err != nil {
@@ -45,7 +45,7 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err == nil {
 		t.Fatal("forced failure succeeded")
 	}
-	if !reflect.DeepEqual(before, r.notifications) || !reflect.DeepEqual(cursor, r.mainContext) {
+	if !reflect.DeepEqual(before, pendingMainNotices(t, r)) || !reflect.DeepEqual(cursor, r.mainContext) {
 		t.Fatal("failed admission consumed events/cursor")
 	}
 	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_admission"); err != nil {
@@ -56,11 +56,11 @@ func TestFailedAndOversizedAdmissionRetainsNotificationsAndCursor(t *testing.T) 
 	if _, _, err := r.admitMain(context.Background(), turn, small); !errors.Is(err, errNeedsCompaction) {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(before, r.notifications) || !reflect.DeepEqual(cursor, r.mainContext) {
+	if !reflect.DeepEqual(before, pendingMainNotices(t, r)) || !reflect.DeepEqual(cursor, r.mainContext) {
 		t.Fatal("oversized admission consumed events/cursor")
 	}
 	admitted, cm, err := r.admitMain(context.Background(), turn, r.selection)
-	if err != nil || len(admitted.NoticeEntries) != 1 || len(r.notifications) != 0 || r.mainContext.snapshot == nil {
+	if err != nil || len(admitted.NoticeEntries) != 1 || len(pendingMainNotices(t, r)) != 0 || r.mainContext.snapshot == nil {
 		t.Fatal(admitted, err)
 	}
 	fields := runtimeFields(t, cm, "runtime_context_update")
@@ -77,13 +77,13 @@ func TestTimerCoalescingAndExactRequestAcknowledgment(t *testing.T) {
 	r.publishTimer(v)
 	v.Fired = 1
 	r.publishTimer(v)
-	first := r.notifications[0].EventSeq
+	first := pendingMainNotices(t, r)[0].EventSeq
 	v.Fired = 2
 	r.publishTimer(v)
-	if len(r.notifications) != 1 || r.notifications[0].EventSeq <= first {
-		t.Fatal(r.notifications)
+	if len(pendingMainNotices(t, r)) != 1 || pendingMainNotices(t, r)[0].EventSeq <= first {
+		t.Fatal(pendingMainNotices(t, r))
 	}
-	latest := r.notifications[0].EventSeq
+	latest := pendingMainNotices(t, r)[0].EventSeq
 	admitted, cm, err := r.admitMain(context.Background(), turn, r.selection)
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +106,8 @@ func TestTimerCoalescingAndExactRequestAcknowledgment(t *testing.T) {
 	// A firing committed after the cutoff remains pending for the next request.
 	v.Fired = 3
 	r.publishTimer(v)
-	if len(r.notifications) != 1 || r.notifications[0].EventSeq <= admitted.Cutoff {
-		t.Fatal(r.notifications, admitted)
+	if len(pendingMainNotices(t, r)) != 1 || pendingMainNotices(t, r)[0].EventSeq <= admitted.Cutoff {
+		t.Fatal(pendingMainNotices(t, r), admitted)
 	}
 	next, cm, err := r.admitMain(context.Background(), turn, r.selection)
 	if err != nil || next.Cutoff <= admitted.Cutoff {
@@ -183,15 +183,14 @@ func TestCommittedNoticeRejectsCopiedSourceAndDuplicatePending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := `{"type":"child_turn_finished","child_id":"main/child_fixture"}`
-	if err := r.queueCommittedNotification(content, id); err != nil {
+	if err := r.queueCommittedNotification(id); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.queueCommittedNotification(content, id); err == nil {
+	if err := r.queueCommittedNotification(id); err == nil {
 		t.Fatal("duplicate source queued")
 	}
-	if err := r.queueCommittedNotification("invalid JSON", id); err == nil {
-		t.Fatal("invalid JSON queued")
+	if err := r.queueCommittedNotification(0); err == nil {
+		t.Fatal("missing source queued")
 	}
 	copy, err := historytest.DB(t, r.Store).Exec(`INSERT INTO entries(session_id,parent_id,source_id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms) SELECT session_id,id,id,turn_id,main_turn_id,undo_owner_turn_id,actor_id,kind,role,model_visible,content_json,file_tip_id,created_ms FROM entries WHERE id=?`, id)
 	if err != nil {
@@ -201,13 +200,29 @@ func TestCommittedNoticeRejectsCopiedSourceAndDuplicatePending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.queueCommittedNotification(content, copyID); err == nil {
+	if err := r.queueCommittedNotification(copyID); err == nil {
 		t.Fatal("copy row accepted as a new semantic source")
 	}
 	turn := admissionTurn(t, r)
 	admitted, _, err := r.admitMain(context.Background(), turn, r.selection)
 	if err != nil || len(admitted.NoticeEntries) != 1 {
 		t.Fatal(admitted, err)
+	}
+}
+
+func TestCommittedNoticeValidatesDurablePayloadAtAdmission(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Observe durable projection")
+	id, err := r.Store.Append(r.Current(), "", "main", "status", "", false, map[string]any{"type": "runtime_event", "body": "not an event object"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.queueCommittedNotification(id); err != nil {
+		t.Fatal(err)
+	}
+	admitted, _, err := r.admitMain(context.Background(), admissionTurn(t, r), r.selection)
+	if err == nil || admitted.RequestID != 0 || len(r.notifications) != 1 || r.notifications[0].seq != id {
+		t.Fatal("invalid durable body was admitted or consumed", admitted, err)
 	}
 }
 

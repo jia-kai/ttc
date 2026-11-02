@@ -26,6 +26,9 @@ OpenAIMaxAttemptsNonnegative: "max attempts must be nonnegative"
 OpenAIPriorAttemptsRange:
   "prior attempts must be nonnegative and below max attempts"
 OpenAIUpstreamAttemptFailed: "upstream attempt %d/%d failed: %w"
+OpenAIContextLengthRejected:
+  "Provider rejected the context length; unchanged retries stopped. Explicitly
+  compact the conversation or select a model with a larger context window: %w"
 OpenAIEndpointHTTPHostRequired:
   "subscription endpoint requires an HTTP(S) URL with a host"
 OpenAIInvalidLocalHeader: "invalid local subscription header %s"

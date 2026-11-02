@@ -127,7 +127,8 @@ func entryWith(q historyReader, id int64) (Entry, error) {
 }
 
 // ReadView decodes a supplied entry for frontend replay, loading only tool summary
-// and prompt-purpose metadata. It never loads tool details or instruction files.
+// and prompt-purpose metadata, plus the bounded source answer for an omitted child
+// completion. It never loads tool details or instruction files.
 func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err error) {
 	defer func() { err = intentError(fmt.Sprintf("read entry #%d view", entry.ID), err) }()
 	if err := ctx.Err(); err != nil {
@@ -138,6 +139,9 @@ func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err 
 		return EntryView{}, err
 	}
 	q := contextHistoryReader{ctx, s.db}
+	if err := restoreChildNoticeAnswer(q, entry, data.Message); err != nil {
+		return EntryView{}, err
+	}
 	if entry.Kind == "tool_result" {
 		var summary string
 		if err := q.QueryRow("SELECT coalesce(json_extract(markdown_json,'$.summary'),'') FROM tool_records WHERE entry_id=?", entry.ID).Scan(&summary); err != nil {
@@ -151,6 +155,54 @@ func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err 
 		}
 	}
 	return projectView(data), ctx.Err()
+}
+
+// restoreChildNoticeAnswer enriches presentation only. The canonical admitted
+// message and provider input remain the original bounded reference.
+func restoreChildNoticeAnswer(q historyReader, entry Entry, message *llm.Message) error {
+	if message == nil || message.Type != llm.TypeRuntimeNotification || message.EventSeq <= 0 {
+		return nil
+	}
+	var notice struct {
+		Type    string `json:"type"`
+		ChildID string `json:"child_id"`
+		Omitted bool   `json:"output_omitted"`
+	}
+	if err := json.Unmarshal([]byte(message.Content), &notice); err != nil {
+		return err
+	}
+	if notice.Type != "child_turn_finished" || !notice.Omitted {
+		return nil
+	}
+	if message.EventSeq >= entry.EventSeq() {
+		return fmt.Errorf(prompts.HistoryInvalidChildNotificationSource, message.EventSeq)
+	}
+	var kind, child, answer string
+	var sameLineage bool
+	err := q.QueryRow(`WITH source AS (
+		SELECT session_id, CASE WHEN json_extract(content_json,'$.type')='runtime_event'
+		THEN json_extract(content_json,'$.body') ELSE content_json END AS body
+		FROM entries WHERE id=? AND kind='status' AND source_id IS NULL
+	) SELECT coalesce(json_extract(body,'$.type'),''), coalesce(json_extract(body,'$.child_id'),''),
+		coalesce(json_extract(body,'$.answer'),''), a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id
+		FROM source JOIN sessions a ON a.id=source.session_id JOIN sessions b ON b.id=?`, message.EventSeq, entry.SessionID).Scan(&kind, &child, &answer, &sameLineage)
+	if err != nil {
+		return err
+	}
+	if kind != "child_turn_finished" || child != notice.ChildID || !sameLineage || len(answer) > MaxChildAnswerBytes {
+		return fmt.Errorf(prompts.HistoryInvalidChildNotificationSource, message.EventSeq)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(message.Content), &body); err != nil {
+		return err
+	}
+	body["answer"], _ = json.Marshal(answer)
+	content, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	message.Content = string(content)
+	return nil
 }
 
 // ReadEntryView loads an entry by ID and decodes its small replay view with

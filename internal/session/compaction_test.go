@@ -467,7 +467,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 				t.Fatal("invalid on-demand Markdown history", err)
 			}
 			r.orderMu.Lock()
-			notices := append([]llm.Message(nil), r.notifications...)
+			notices := append([]llm.Message(nil), pendingMainNotices(t, r)...)
 			r.orderMu.Unlock()
 			if aside && len(notices) != 0 {
 				t.Fatal("aside leaked parent notification", notices)
@@ -515,7 +515,7 @@ func TestCanceledChildCompactionPreservesCursorAndPublishesNothing(t *testing.T)
 		t.Fatal("canceled child changed context", result, next, err)
 	}
 	r.orderMu.Lock()
-	n := len(r.notifications)
+	n := len(pendingMainNotices(t, r))
 	r.orderMu.Unlock()
 	if n != 0 || r.checkContext(false) != nil {
 		t.Fatal("canceled child invalidated parent or published event")

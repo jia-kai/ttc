@@ -67,6 +67,54 @@ func TestTailAndPageBoundaries(t *testing.T) {
 	}
 }
 
+func TestEOFCursorOvershootReportsOnlyActualRetentionLoss(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, want string
+		capacity         int
+		lost             bool
+	}{
+		{name: "empty", capacity: 32},
+		{name: "short", text: "short\n", want: "short\n", capacity: 32},
+		{name: "full", text: "short\n", want: "short\n", capacity: 6},
+		{name: "unicode", text: "界\n", want: "界\n", capacity: 32},
+		{name: "evicted", text: "old\nshort\n", want: "short\n", capacity: 6, lost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewPool(64).NewBuffer(tc.capacity)
+			b.Write([]byte(tc.text))
+			for _, cursor := range []string{"", "0", "eof:-100:bytes", "eof:-100:lines", "eof:-9223372036854775807:bytes"} {
+				page, err := b.Read(cursor, 100)
+				if err != nil || page.Output != tc.want || page.Truncated != tc.lost || page.Start != int64(len(tc.text)-len(tc.want)) || page.End != int64(len(tc.text)) {
+					t.Fatalf("cursor %q: %+v, %v", cursor, page, err)
+				}
+			}
+		})
+	}
+	// A small page has more output to read, but that is not retention loss.
+	b := NewPool(64).NewBuffer(32)
+	b.Write([]byte("short\n"))
+	page, err := b.Read("eof:-100:bytes", 2)
+	if err != nil || page.Output != "sh" || page.NextCursor != "2" || page.Truncated {
+		t.Fatal(page, err)
+	}
+	page, err = b.Read("eof:-6:bytes", 100)
+	if err != nil || page.Output != "short\n" || page.Truncated {
+		t.Fatal(page, err)
+	}
+	// Shared-pool eviction can leave a nonempty original stream with no bytes.
+	pool := NewPool(16)
+	evicted := pool.NewBuffer(8)
+	evicted.Write([]byte("short\n"))
+	pool.NewBuffer(8).Write([]byte("12345678"))
+	pool.NewBuffer(8).Write([]byte("abcdefgh"))
+	for _, cursor := range []string{"eof:-100:bytes", "eof:-100:lines"} {
+		page, err := evicted.Read(cursor, 100)
+		if err != nil || page.Output != "" || !page.Truncated || page.Start != 6 || page.End != 6 {
+			t.Fatal(page, err)
+		}
+	}
+}
+
 func TestConcurrentSharedBudget(t *testing.T) {
 	p := NewPool(256)
 	var wg sync.WaitGroup

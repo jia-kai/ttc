@@ -20,3 +20,17 @@ func TestPartialErrorPreservesFailureAndRetry(t *testing.T) {
 		t.Fatal("partial failure lost its cause or handoff", wrapped, got, gotTransient)
 	}
 }
+
+func TestContextLengthErrorPreservesFailureWithoutRetryAuthorization(t *testing.T) {
+	cause := errors.New("structured provider context rejection")
+	capacity := &ContextLengthError{Err: cause}
+	wrapped := fmt.Errorf("request failed: %w", capacity)
+	var got *ContextLengthError
+	var partial *PartialError
+	var transient *TransientError
+	if capacity.Error() != cause.Error() || capacity.Unwrap() != cause ||
+		!errors.Is(wrapped, cause) || !errors.As(wrapped, &got) || got != capacity ||
+		errors.As(wrapped, &partial) || errors.As(wrapped, &transient) {
+		t.Fatal("capacity failure lost its identity or authorized retry", wrapped)
+	}
+}

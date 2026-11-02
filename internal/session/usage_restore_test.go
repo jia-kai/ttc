@@ -229,7 +229,7 @@ func TestCheckpointPersistenceFailureRollsBackAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.steers = []contextbuild.Input{{Text: "Also inspect units."}}
-	cursor, notice := r.mainContext, r.notifications[0]
+	cursor, notice := r.mainContext, pendingMainNotices(t, r)[0]
 	before, err := r.Store.Branch(r.Current(), 0)
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestCheckpointPersistenceFailureRollsBackAdmission(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM model_requests").Scan(&currentRequests); err != nil {
 		t.Fatal(err)
 	}
-	if currentRequests != requests || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(r.mainContext, cursor) || len(r.notifications) != 1 || r.notifications[0].EventSeq != notice.EventSeq || len(r.steers) != 1 {
+	if currentRequests != requests || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(r.mainContext, cursor) || len(pendingMainNotices(t, r)) != 1 || pendingMainNotices(t, r)[0].EventSeq != notice.EventSeq || len(r.steers) != 1 {
 		t.Fatal("checkpoint failure partially admitted request")
 	}
 }

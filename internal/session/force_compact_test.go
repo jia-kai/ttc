@@ -86,11 +86,11 @@ func TestForceCompactCommandPreservesStructuredRequestAndPendingChildAnswer(t *t
 		if err != nil {
 			return err
 		}
-		body, _ := json.Marshal(childCompletionNotification(completion))
 		r.orderMu.Lock()
-		err = r.queueCommittedNotificationLocked(string(body), finish)
+		err = r.queueCommittedNotificationLocked(finish)
 		if err == nil {
-			notice = r.notifications[len(r.notifications)-1]
+			notices := pendingMainNotices(t, r)
+			notice = notices[len(notices)-1]
 		}
 		r.orderMu.Unlock()
 		if err != nil {
@@ -128,11 +128,11 @@ func TestForceCompactCommandPreservesStructuredRequestAndPendingChildAnswer(t *t
 	if len(messages) < len(fresh) || !reflect.DeepEqual(messages[len(messages)-len(fresh):], canonicalFresh) {
 		t.Fatal("force lost or changed the fresh tool cycle")
 	}
-	if len(r.notifications) != 1 || !reflect.DeepEqual(r.notifications[0], notice) || notice.EventSeq != finish {
+	if notices := pendingMainNotices(t, r); len(notices) != 1 || !reflect.DeepEqual(notices[0], notice) || notice.EventSeq != finish {
 		t.Fatal("force consumed or changed a child completion queued during summary")
 	}
 	cm, _, err := r.runtimeContext(context.Background(), "main", selection, contextCursor{})
-	if err != nil || !compactionFits(selection, systemTemplate, r.Tools.Definitions(), messages, r.notifications, cm) {
+	if err != nil || !compactionFits(selection, systemTemplate, r.Tools.Definitions(), messages, pendingMainNotices(t, r), cm) {
 		t.Fatal("successful force handoff does not fit with pending completion/runtime", err)
 	}
 	admitted, _, err := r.admitMain(context.Background(), admissionTurn(t, r), selection)
@@ -334,6 +334,15 @@ func TestSummaryRejectsInvalidProjectionBeforeRequest(t *testing.T) {
 }
 
 func TestForceCompactHTTPContextRejectionPreservesContextLiveWorkAndQueues(t *testing.T) {
+	for _, partialSSE := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial_SSE=%t", partialSSE), func(t *testing.T) {
+			testForceCompactContextRejection(t, partialSSE)
+		})
+	}
+}
+
+func testForceCompactContextRejection(t *testing.T, partialSSE bool) {
+	t.Helper()
 	r := forceCompactionFixture(t)
 	source := r.Current()
 	original, err := r.Store.Messages(source)
@@ -352,23 +361,28 @@ func TestForceCompactHTTPContextRejectionPreservesContextLiveWorkAndQueues(t *te
 		t.Fatal(err)
 	}
 	r.steers = []contextbuild.Input{{Text: "Preserve the pending instruction.", Source: "steer"}}
-	notices := append([]llm.Message(nil), r.notifications...)
+	notices := pendingMainNotices(t, r)
 	steers := append([]contextbuild.Input(nil), r.steers...)
 	var attempts atomic.Int32
 	installRetryHTTPAdapter(t, r, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		attempt := attempts.Add(1)
 		w.Header().Set("Retry-After", "0")
 		w.Header().Set("x-request-id", fmt.Sprintf("force-context-%d", attempt))
+		if partialSSE {
+			fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Discarded capacity summary\"}\n\n")
+			fmt.Fprint(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"context_length_exceeded\"}}}\n\n")
+			return
+		}
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error":{"code":"context_length_exceeded","message":"Reduce input or compact the conversation."}}`)
 	}))
 	_, err = r.Command("/force-compact prioritize evidence")
-	var upstream *llm.TransientError
-	if !errors.As(err, &upstream) || !recoverableCompaction(err) || attempts.Load() != llm.DefaultMaxAttempts || r.Current() != source || r.checkContext(false) != nil {
+	var upstream *llm.ContextLengthError
+	if !errors.As(err, &upstream) || !recoverableCompaction(err) || attempts.Load() != 1 || r.Current() != source || r.checkContext(false) != nil {
 		t.Fatal("forced upstream 400 context rejection did not remain recoverable", attempts.Load(), err)
 	}
 	retained, readErr := r.Store.Messages(source)
-	if readErr != nil || !reflect.DeepEqual(retained, original) || !reflect.DeepEqual(r.notifications, notices) || !reflect.DeepEqual(r.steers, steers) {
+	if readErr != nil || !reflect.DeepEqual(retained, original) || !reflect.DeepEqual(pendingMainNotices(t, r), notices) || !reflect.DeepEqual(r.steers, steers) {
 		t.Fatal("upstream rejection changed prior context or consumed queues", readErr)
 	}
 	if live := r.Jobs.Live(); len(live) != 1 || live[0].ID != job {
@@ -377,12 +391,26 @@ func TestForceCompactHTTPContextRejectionPreservesContextLiveWorkAndQueues(t *te
 	if live := r.timers.list(); len(live) != 1 || live[0].ID != timer.ID || live[0].Status != "scheduled" {
 		t.Fatal("upstream rejection canceled unrelated timer", live)
 	}
+	if saved, err := r.Store.Session(source); err != nil || saved.CompactionError != "" || saved.ReadOnly {
+		t.Fatal("rejection persisted context invalidation", saved, err)
+	}
 	var status, attemptStatus, diagnostic string
-	if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].status'),json_extract(e.content_json,'$.attempts[0].error') FROM model_requests r JOIN request_observations o ON o.request_id=r.id JOIN entries e ON e.id=o.completion_entry_id WHERE r.session_id=? AND r.purpose='compaction' ORDER BY o.completion_entry_id DESC LIMIT 1`, source).Scan(&status, &attemptStatus, &diagnostic); err != nil || status != "failed" || attemptStatus != "failed" || diagnostic != upstream.Error() || !strings.Contains(diagnostic, "context_length_exceeded") || !strings.Contains(diagnostic, fmt.Sprintf("force-context-%d", llm.DefaultMaxAttempts)) {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT o.status,json_extract(e.content_json,'$.attempts[0].status'),json_extract(e.content_json,'$.attempts[0].error') FROM model_requests r JOIN request_observations o ON o.request_id=r.id JOIN entries e ON e.id=o.completion_entry_id WHERE r.session_id=? AND r.purpose='compaction' ORDER BY o.completion_entry_id DESC LIMIT 1`, source).Scan(&status, &attemptStatus, &diagnostic); err != nil || status != "failed" || attemptStatus != "failed" || !strings.Contains(diagnostic, upstream.Error()) || !strings.Contains(diagnostic, "context_length_exceeded") || !strings.Contains(diagnostic, "force-context-1") {
 		t.Fatal("forced rejection lost durable request-failed diagnostics", status, attemptStatus, diagnostic, err)
 	}
 	var forced int
 	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND json_extract(content_json,'$.type')='compaction_started' AND json_extract(content_json,'$.force')=1", source).Scan(&forced); err != nil || forced != 1 {
 		t.Fatal("forced attempt lost durable boundary metadata", forced, err)
+	}
+	exact, err := r.Store.TranscriptJSONL(source, 0)
+	if err != nil || strings.Contains(string(exact), "Discarded capacity summary") {
+		t.Fatal("failed NoTools summary escaped into history", err)
+	}
+	installRetryHTTPAdapter(t, r, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		attempts.Add(1)
+		streamMockResponse(w, "compaction", 2, nil, "Recovered summary after explicit action.")
+	}))
+	if _, err := r.Command("/force-compact"); err != nil || attempts.Load() != 2 || r.Current() == source || r.checkContext(false) != nil {
+		t.Fatal("explicit compaction retry failed after capacity rejection", attempts.Load(), err)
 	}
 }

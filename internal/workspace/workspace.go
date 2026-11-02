@@ -36,11 +36,19 @@ type State struct {
 
 // PathChange records exact before/after state and actual application outcome.
 type PathChange struct {
-	Path        string   `json:"path"`
-	Before      State    `json:"before"`
-	After       State    `json:"after"`
-	Applied     bool     `json:"applied"`
-	CreatedDirs []string `json:"created_dirs,omitempty"`
+	Path        string                 `json:"path"`
+	Before      State                  `json:"before"`
+	After       State                  `json:"after"`
+	Applied     bool                   `json:"applied"`
+	CreatedDirs []string               `json:"created_dirs,omitempty"`
+	DirIDs      map[string]DirectoryID `json:"created_dir_ids,omitempty"`
+}
+
+// DirectoryID identifies a directory actually created by a mutation. Historical
+// created_dirs without identities are readable but are not safe cleanup authority.
+type DirectoryID struct {
+	Device uint64 `json:"device"`
+	Inode  uint64 `json:"inode"`
 }
 
 // Mutation requests complete bytes or deletion. An optional Transform runs under the queue lock.
@@ -54,18 +62,25 @@ type Mutation struct {
 	MustAbsent bool
 }
 
-// Result describes the applied subset; partial failures retain their change ID.
+// Result describes the applied subset. ChangeID is nonzero only after history
+// commits, independently of whether all filesystem operations succeeded.
 type Result struct {
-	ChangeID   int64
-	Reversible bool
-	Changes    []PathChange
+	ChangeID        int64
+	HistoryRecorded bool
+	Reversible      bool
+	Changes         []PathChange
 }
 
 // Manager owns the local mutation queue shared by one runtime's actors.
 type Manager struct {
-	Root  string
-	Store *history.Store
-	mu    sync.Mutex
+	Root       string
+	Store      *history.Store
+	mu         sync.Mutex
+	atomicFile func(string, []byte, os.FileMode) error
+	// ownedDirs retains current identities across redo and shared-parent branch
+	// switches. Guarded by mu; only mkdir outcomes or identity-verified history
+	// grant ownership, never directory existence alone.
+	ownedDirs map[string]DirectoryID
 }
 
 // Open resolves the workspace without locking it or recovering filesystem changes.
@@ -85,7 +100,7 @@ func Open(root string, store *history.Store) (*Manager, error) {
 	if !info.IsDir() {
 		return nil, errors.New("workspace must be a directory")
 	}
-	return &Manager{Root: root, Store: store}, nil
+	return &Manager{Root: root, Store: store, atomicFile: privatefile.AtomicFile}, nil
 }
 
 // Path resolves a path without granting symlink mutation access.
@@ -215,7 +230,22 @@ func missingDirs(path string) []string {
 	}
 	return out
 }
-func apply(path string, s State) error {
+func snapshotData(s State) ([]byte, error) {
+	if !s.Exists {
+		return nil, nil
+	}
+	data, err := readFile(s.Blob)
+	if err != nil {
+		return nil, err
+	}
+	if hash(data) != s.Hash {
+		return nil, errors.New(prompts.WorkspaceCorruptSnapshot)
+	}
+	return data, nil
+}
+
+func (m *Manager) apply(c *PathChange) error {
+	path, s := c.Path, c.After
 	if e := safePath(path); e != nil {
 		return e
 	}
@@ -225,17 +255,22 @@ func apply(path string, s State) error {
 		}
 		return privatefile.SyncDir(filepath.Dir(path))
 	}
-	data, e := readFile(s.Blob)
+	data, e := snapshotData(s)
 	if e != nil {
 		return e
 	}
-	if hash(data) != s.Hash {
-		return errors.New(prompts.WorkspaceCorruptSnapshot)
+	created := len(c.CreatedDirs)
+	e = createDirs(c)
+	if m.ownedDirs == nil {
+		m.ownedDirs = make(map[string]DirectoryID)
 	}
-	if e = os.MkdirAll(filepath.Dir(path), 0755); e != nil {
+	for _, path := range c.CreatedDirs[created:] {
+		m.ownedDirs[path] = c.DirIDs[path]
+	}
+	if e != nil {
 		return e
 	}
-	return privatefile.AtomicFile(path, data, os.FileMode(s.Mode))
+	return m.atomicFile(path, data, os.FileMode(s.Mode))
 }
 
 // Apply serializes read, validation, filesystem writes and history commit locally.
@@ -256,8 +291,6 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 	if e := ctx.Err(); e != nil {
 		return Result{}, e
 	}
-	reversible := true
-	var changes []PathChange
 	seen := map[string]bool{}
 	for _, op := range ops {
 		path := m.Path(op.Path)
@@ -265,6 +298,23 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 			return Result{}, fmt.Errorf(prompts.WorkspaceDuplicateTarget, path)
 		}
 		seen[path] = true
+	}
+	// Validate the complete target set before capturing files or running transforms.
+	// Walking ancestors avoids quadratic pairwise comparisons and catches both orders.
+	for path := range seen {
+		for parent := filepath.Dir(path); parent != path; parent = filepath.Dir(parent) {
+			if seen[parent] {
+				return Result{}, fmt.Errorf(prompts.WorkspaceConflictingTargets, parent, path)
+			}
+			if parent == filepath.Dir(parent) {
+				break
+			}
+		}
+	}
+	reversible := true
+	var changes []PathChange
+	for _, op := range ops {
+		path := m.Path(op.Path)
 		before, data, e := m.capture(session, path)
 		if e != nil {
 			return Result{}, e
@@ -314,7 +364,7 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 		if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			reversible = false
 		}
-		changes = append(changes, PathChange{Path: path, Before: before, After: after, CreatedDirs: missingDirs(path)})
+		changes = append(changes, PathChange{Path: path, Before: before, After: after})
 	}
 	var failure error
 	for i := range changes {
@@ -327,7 +377,7 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 			failure = e
 			break
 		}
-		if e := apply(c.Path, c.After); e != nil {
+		if e := m.apply(c); e != nil {
 			failure = e // A rename may have succeeded before fsync failed.
 			if current(c.Path, c.After) == nil {
 				c.Applied = true
@@ -345,17 +395,18 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 	for _, c := range changes {
 		if !c.Applied {
 			c.After = State{}
-			cleanupDirs([]PathChange{c})
+			m.cleanupDirs([]PathChange{c}, false)
 		}
 	}
 	if applied == 0 {
 		return Result{}, failure
 	}
 	id, e := m.Store.CommitChange(session, call, changes, reversible)
-	r := Result{id, reversible, changes}
+	r := Result{Reversible: reversible, Changes: changes}
 	if e != nil {
-		return r, fmt.Errorf(prompts.WorkspaceRecordMutationFailure, e)
+		return r, errors.Join(failure, fmt.Errorf(prompts.WorkspaceRecordMutationFailure, e))
 	}
+	r.ChangeID, r.HistoryRecorded = id, true
 	if failure != nil {
 		return r, fmt.Errorf(prompts.WorkspacePartialMutation, failure)
 	}
@@ -418,8 +469,14 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 				}
 				existing.After = to
 				existing.CreatedDirs = append(existing.CreatedDirs, p.CreatedDirs...)
+				if existing.DirIDs == nil {
+					existing.DirIDs = make(map[string]DirectoryID)
+				}
+				for path, id := range p.DirIDs {
+					existing.DirIDs[path] = id
+				}
 			} else {
-				changes[p.Path] = &PathChange{Path: p.Path, Before: from, After: to, CreatedDirs: p.CreatedDirs}
+				changes[p.Path] = &PathChange{Path: p.Path, Before: from, After: to, CreatedDirs: p.CreatedDirs, DirIDs: p.DirIDs}
 			}
 		}
 		return nil
@@ -451,34 +508,69 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 	}
 	sort.Strings(keys)
 	for _, p := range keys {
+		if e = ctx.Err(); e != nil {
+			return e
+		}
 		c := changes[p]
 		if e = current(p, c.Before); e != nil {
 			return e
+		}
+		// Validate every target before any writes, with at most one bounded
+		// snapshot in memory. Application rechecks blobs against later corruption.
+		if _, e = snapshotData(c.After); e != nil {
+			return fmt.Errorf(prompts.WorkspaceRestoreSnapshot, p, e)
 		}
 		paths = append(paths, *c)
 	}
 	if e = ctx.Err(); e != nil {
 		return e
 	}
-	for _, c := range paths {
-		if e = apply(c.Path, c.After); e != nil {
-			return e
+	for i := range paths {
+		c := &paths[i]
+		if e = ctx.Err(); e != nil {
+			return restoreFailure(paths, e)
 		}
+		if e = m.apply(c); e != nil {
+			c.Applied = current(c.Path, c.After) == nil
+			return restoreFailure(paths, e)
+		}
+		c.Applied = true
 	}
-	cleanupDirs(paths)
-	return m.Store.CommitRestore(session, target)
+	m.cleanupDirs(paths, true)
+	if e = m.Store.CommitRestore(session, target); e != nil {
+		return restoreFailure(paths, e)
+	}
+	return nil
 }
-func cleanupDirs(changes []PathChange) {
-	var dirs []string
-	for _, c := range changes {
-		if !c.After.Exists {
-			dirs = append(dirs, c.CreatedDirs...)
+
+// RestoreError reports filesystem effects when restoration fails after applying
+// at least one target. History cursors remain unchanged; retry requires inspection.
+type RestoreError struct {
+	Applied   []string
+	Remaining []string
+	Err       error
+}
+
+func (e *RestoreError) Error() string {
+	return fmt.Sprintf(prompts.WorkspacePartialRestore, e.Err, e.Applied, e.Remaining)
+}
+
+// Unwrap exposes the filesystem, cancellation or history failure.
+func (e *RestoreError) Unwrap() error { return e.Err }
+
+func restoreFailure(paths []PathChange, err error) error {
+	failure := &RestoreError{Err: err, Applied: []string{}, Remaining: []string{}}
+	for _, c := range paths {
+		if c.Applied {
+			failure.Applied = append(failure.Applied, c.Path)
+		} else {
+			failure.Remaining = append(failure.Remaining, c.Path)
 		}
 	}
-	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
-	for _, p := range dirs {
-		_ = os.Remove(p)
+	if len(failure.Applied) == 0 {
+		return err
 	}
+	return failure
 }
 
 // Admit serializes a context/turn checkpoint with complete file mutations. The

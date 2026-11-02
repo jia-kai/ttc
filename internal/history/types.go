@@ -63,7 +63,9 @@ type PromptMetadata struct {
 func (p PromptMetadata) GroupKey() string { return p.Actor + "\x00" + p.Purpose }
 
 // EntryView is the typed, small presentation view used for history replay.
-// Message is canonical for message/summary entries; status bodies stay unloaded.
+// Message is canonical except that omitted child notifications regain their
+// bounded source answer for display; persisted/model messages stay unchanged.
+// Status bodies stay unloaded.
 // Prompt is nonnil only for system_prompt statuses. No instruction file or tool
 // detail is loaded to produce a view.
 type EntryView struct {

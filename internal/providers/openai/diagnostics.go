@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
 
@@ -23,14 +24,19 @@ const (
 	failureDetailsLimit = failureDiagnosticLimit - failureRequestIDLimit - 16
 )
 
-// streamFailure diagnoses terminal SSE events without assigning retry policy.
+// streamFailure diagnoses terminal SSE events and preserves explicit capacity
+// rejections as typed errors. Oversized events retain bounded diagnostics only.
 func streamFailure(accessToken string, raw []byte, kind string) error {
 	details := prompts.OpenAIEventDetailsOmitted
 	if len(raw) <= failureStreamLimit {
 		details = failureDetails(accessToken, raw, kind)
 	}
 	text := safeFailureValue(kind, 256, accessToken) + "; " + details
-	return fmt.Errorf(prompts.OpenAIStreamTerminated, safeFailureText(text, failureDetailsLimit))
+	err := fmt.Errorf(prompts.OpenAIStreamTerminated, safeFailureText(text, failureDetailsLimit))
+	if len(raw) <= failureStreamLimit {
+		return classifyContextLength(raw, err)
+	}
+	return err
 }
 
 // httpFailure consumes at most failureBodyLimit+1 bytes; the caller owns Close.
@@ -60,7 +66,24 @@ func httpFailure(accessToken string, resp *http.Response) error {
 		text = prompts.OpenAIBodyReadFailedPrefix + text
 	}
 	err := fmt.Errorf(prompts.OpenAIResponseHTTP, resp.StatusCode, safeFailureText(text, failureDetailsLimit))
+	if !truncated && readErr == nil {
+		err = classifyContextLength(raw, err)
+	}
 	return failureWithRequestID(err, redactAccessToken(resp.Header.Get("x-request-id"), accessToken))
+}
+
+// Only exact codes in recognized error envelopes classify capacity failures.
+// Messages, types, incomplete reasons and arbitrary nested fields are diagnostics,
+// not retry policy. Callers supply a complete, bounded JSON document.
+func classifyContextLength(raw []byte, err error) error {
+	root := failureObject(raw)
+	response := failureObject(root["response"])
+	for _, object := range []map[string]json.RawMessage{root, failureObject(root["error"]), failureObject(response["error"])} {
+		if failureString(object["code"]) == "context_length_exceeded" {
+			return &llm.ContextLengthError{Err: fmt.Errorf(prompts.OpenAIContextLengthRejected, err)}
+		}
+	}
+	return err
 }
 
 // failureWithRequestID retains the cause for errors.Is/As. The supplied error

@@ -3,7 +3,6 @@ package tool
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"ttc/internal/prompts"
 	"ttc/internal/workspace"
@@ -193,15 +192,6 @@ func addPatch(r *Registry, w *workspace.Manager) {
 			files = append(files, map[string]string{"path": w.Path(s.path), "action": s.action})
 		}
 		res, e := w.Apply(ctx, x.SessionID, x.CallID, ops)
-		if e != nil && res.ChangeID != 0 {
-			applied := []string{}
-			for _, p := range res.Changes {
-				if p.Applied {
-					applied = append(applied, p.Path)
-				}
-			}
-			return presentFiles(ctx, nil, res.Changes), &Error{Code: "partial_patch", Message: fmt.Sprintf(prompts.ToolPartialPatch, e), Details: map[string]any{"applied": applied}}
-		}
-		return presentFiles(ctx, map[string]any{"files": files}, res.Changes), e
+		return mutationResult(ctx, map[string]any{"files": files}, res, e, true)
 	})
 }

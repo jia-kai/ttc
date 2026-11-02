@@ -219,8 +219,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		}
 		commitErr = r.publishChildLocked(child.view())
 		if commitErr == nil && task.assignment.background {
-			body, _ := json.Marshal(childCompletionNotification(finish))
-			commitErr = r.queueCommittedNotificationLocked(string(body), id)
+			commitErr = r.queueCommittedNotificationLocked(id)
 		}
 	}
 	if commitErr != nil {
@@ -292,7 +291,7 @@ func (r *Runtime) childNoticeBatchLocked(assignment *childAssignment) ([]llm.Mes
 		return nil, 0, nil
 	}
 	notices := append([]llm.Message(nil), assignment.queued...)
-	runtimeNotices, count, err := r.runtimeNoticeBatch(assignment)
+	runtimeNotices, count, err := r.runtimeNoticeBatch(assignment.runtimeNotices, assignment.queueTokenLimit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -348,7 +347,9 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 				task.assignment.consumeRuntimeNotices(runtimeCount)
 			}
 			next = candidate
-			r.notifications = append(r.notifications, admitted.Notifications...)
+			for _, notice := range admitted.Notifications {
+				r.enqueueMainNotificationLocked(notice.EventSeq, "")
+			}
 		}
 		return e
 	})

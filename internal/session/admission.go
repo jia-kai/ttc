@@ -28,10 +28,14 @@ func (r *Runtime) deliverNoticeEntries(actor string, entries []int64) error {
 		if err != nil {
 			return err
 		}
-		var message llm.Message
-		if err := json.Unmarshal(entry.Content, &message); err != nil {
+		view, err := r.Store.ReadView(r.ctx, entry)
+		if err != nil {
 			return err
 		}
+		if view.Message == nil {
+			return fmt.Errorf("notification entry %d has no message", id)
+		}
+		message := *view.Message
 		var wake struct {
 			ID    string `json:"wakeup_id"`
 			Fired int    `json:"fired_count"`
@@ -96,7 +100,11 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if e != nil {
 			return e
 		}
-		messages = append(messages, r.notifications...)
+		notices, count, e := r.runtimeNoticeBatch(r.notifications, 0)
+		if e != nil {
+			return e
+		}
+		messages = append(messages, notices...)
 		steers := r.steeringMessagesLocked()
 		messages = append(messages, steers...)
 		if cm != nil {
@@ -122,12 +130,16 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		}
 		admitted, e = r.Store.AdmitRequest(history.RequestAdmission{
 			SessionID: r.Current(), TurnID: turn, Actor: "main", Selection: selection, EasySelection: next.easy,
-			Checkpoint: checkpoint, Context: cm, Notices: r.notifications, Steers: steers,
+			Checkpoint: checkpoint, Context: cm, Notices: notices, Steers: steers,
 		})
 		if e != nil {
 			return e
 		}
-		r.notifications = nil
+		clear(r.notifications[:count])
+		r.notifications = r.notifications[count:]
+		if len(r.notifications) == 0 {
+			r.notifications = nil
+		}
 		r.steers = nil
 		r.mainContext = next
 		r.estimator.ObserveRequest(admitted.RequestID, observation)
@@ -187,12 +199,13 @@ func (r *Runtime) committedTimers() []wakeup {
 // queueCommittedNotification makes an existing semantic event eligible for
 // parent delivery. Finish publication and the child's idle transition serialize
 // under childStartMu; this gate prevents a request from consuming a partial event.
-func (r *Runtime) queueCommittedNotification(content string, eventID int64) error {
+// The durable source body is projected and validated at admission, not enqueue.
+func (r *Runtime) queueCommittedNotification(eventID int64) error {
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
-	return r.queueCommittedNotificationLocked(content, eventID)
+	return r.queueCommittedNotificationLocked(eventID)
 }
-func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64) error {
+func (r *Runtime) queueCommittedNotificationLocked(eventID int64) error {
 	entry, err := r.Store.Entry(eventID)
 	if err != nil {
 		return err
@@ -200,18 +213,32 @@ func (r *Runtime) queueCommittedNotificationLocked(content string, eventID int64
 	if entry.EventSeq() != eventID {
 		return errors.New(prompts.SessionNotificationSource)
 	}
-	if !json.Valid([]byte(content)) {
-		return errors.New(prompts.SessionNotificationJSON)
-	}
 	for _, m := range r.notifications {
-		if m.EventSeq == eventID {
+		if m.seq == eventID {
 			return errors.New(prompts.SessionEventAlreadyPending)
 		}
 	}
-	r.notifications = append(r.notifications, llm.Message{Type: llm.TypeRuntimeNotification, Content: eventContent(content, eventID, 0), EventSeq: eventID})
-	r.signalActorLocked("main")
-	sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].EventSeq < r.notifications[j].EventSeq })
+	r.enqueueMainNotificationLocked(eventID, "")
 	return nil
+}
+
+// enqueueMainNotificationLocked publishes an already committed reference and
+// wakeup atomically. Main coalesces timers at their newest source position;
+// committed child finishes may arrive out of order and are sorted by source.
+func (r *Runtime) enqueueMainNotificationLocked(eventID int64, timerID string) {
+	if timerID != "" {
+		for i, old := range r.notifications {
+			if old.timerID == timerID {
+				r.notifications = append(r.notifications[:i], r.notifications[i+1:]...)
+				break
+			}
+		}
+	}
+	r.notifications = append(r.notifications, &pendingRuntimeNotice{seq: eventID, timerID: timerID})
+	r.signalActorLocked("main")
+	if len(r.notifications) > 1 && r.notifications[len(r.notifications)-2].seq > eventID {
+		sort.Slice(r.notifications, func(i, j int) bool { return r.notifications[i].seq < r.notifications[j].seq })
+	}
 }
 
 func (r *Runtime) publishChild(v tool.ChildView) error {

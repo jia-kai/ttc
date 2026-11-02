@@ -153,8 +153,8 @@ func (m *Manager) Inspect(ctx context.Context, owner, id string) (Inspection, er
 			continue
 		}
 		output.Text = page.Output
-		// EOF-relative reads mark an overshoot before byte zero as lost, even
-		// when all source bytes fit. Only a positive start omits a real prefix.
+		// Inspection also discloses retained output omitted by its tail budget,
+		// not just the retention loss reported by Page.Truncated.
 		output.Truncated = page.Start > 0
 	}
 	if err := ctx.Err(); err != nil {

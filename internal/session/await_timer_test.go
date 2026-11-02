@@ -43,7 +43,7 @@ func TestChildAwaitReceivesOnlyItsTimerAndMarksDelivery(t *testing.T) {
 			}
 			r.orderMu.Lock()
 			defer r.orderMu.Unlock()
-			for _, message := range r.notifications {
+			for _, message := range pendingMainNotices(t, r) {
 				if strings.Contains(message.Content, "timer evidence") {
 					t.Fatal("child timer leaked to parent", message)
 				}

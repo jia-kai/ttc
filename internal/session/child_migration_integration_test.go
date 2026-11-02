@@ -208,10 +208,10 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 					t.Fatal("API lost observed child state", message.Content)
 				}
 			}
-			if len(restarted.notifications) != 1 {
-				t.Fatal("New did not project recovered notifications", restarted.notifications)
+			if len(pendingMainNotices(t, restarted)) != 1 {
+				t.Fatal("New did not project recovered notifications", pendingMainNotices(t, restarted))
 			}
-			assertAPI(restarted.notifications[0])
+			assertAPI(pendingMainNotices(t, restarted)[0])
 			calls := 0
 			restarted.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 				calls++

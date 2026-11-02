@@ -40,12 +40,15 @@ type callPresentation struct {
 type imageDimensions struct{ Width, Height int }
 
 type exportChildCompletion struct {
-	ChildID          string `json:"child_id"`
-	AssignmentStatus string `json:"assignment_status"`
-	Outcome          string `json:"outcome"`
-	Answer           string `json:"answer"`
-	Error            string `json:"error"`
-	Warning          string `json:"warning"`
+	ChildID               string `json:"child_id"`
+	AssignmentStatus      string `json:"assignment_status"`
+	Outcome               string `json:"outcome"`
+	Answer                string `json:"answer"`
+	Error                 string `json:"error"`
+	Warning               string `json:"warning"`
+	TranscriptPath        string `json:"transcript_path"`
+	TranscriptJSONLPath   string `json:"transcript_jsonl_path"`
+	TranscriptExportError string `json:"transcript_export_error"`
 }
 
 func (c exportChildCompletion) text(answer string) string {
@@ -62,6 +65,15 @@ func (c exportChildCompletion) text(answer string) string {
 	}
 	if c.Warning != "" {
 		parts = append(parts, "Warning: "+render.Clean(c.Warning))
+	}
+	if c.TranscriptPath != "" {
+		parts = append(parts, "Transcript: "+render.Clean(c.TranscriptPath))
+	}
+	if c.TranscriptJSONLPath != "" {
+		parts = append(parts, "Exact transcript: "+render.Clean(c.TranscriptJSONLPath))
+	}
+	if c.TranscriptExportError != "" {
+		parts = append(parts, "Transcript export error: "+render.Clean(c.TranscriptExportError))
 	}
 	if answer != "" {
 		parts = append(parts, "Subagent final answer:\n\n"+render.Clean(answer))

@@ -42,8 +42,9 @@ them.
   without updating its anchor. It reserves `Q + M`. The reserves are proactive
   slack: uncapped output, heuristic estimates, oversized committed input or
   model changes can still cause recoverable summary or handoff failures.
-  Provider context-length rejection uses the bounded upstream retry budget; it
-  does not trigger automatic compaction.
+  Explicit provider context-length rejection stops retries and leaves the
+  existing context usable; it does not trigger automatic compaction. Use
+  explicit compaction or select a larger-context model before retrying.
 - Asides fork compatible main calibration for their frozen input, adjusting
   local system/tool overhead for the read-only role. The fork is approximate and
   independent: pending requests and later main feedback are not shared. Without

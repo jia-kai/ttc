@@ -47,7 +47,7 @@ func TestBackgroundCompletionDeliversSelectedOutputAndExitCode(t *testing.T) {
 	var content string
 	for content == "" {
 		r.orderMu.Lock()
-		for _, notice := range r.notifications {
+		for _, notice := range pendingMainNotices(t, r) {
 			var body struct {
 				ID string `json:"job_id"`
 			}

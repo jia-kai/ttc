@@ -161,7 +161,7 @@ func TestImageImmutableSnapshotAndPendingLifecycle(t *testing.T) {
 		t.Fatal("model not notified")
 	}
 	r.mu.Lock()
-	content := r.notifications[0].Content
+	content := pendingMainNotices(t, r)[0].Content
 	r.mu.Unlock()
 	if !strings.Contains(content, `"x":3`) || !strings.Contains(content, `"precision":"cell"`) {
 		t.Fatal(content)

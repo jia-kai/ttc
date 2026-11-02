@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
@@ -41,47 +42,49 @@ func (assignment *childAssignment) queueRuntimeNotice(seq int64, timerID string)
 // runtimeNoticeBatch materializes only a bounded count/token batch. Remaining
 // references stay pending and cause the next inference boundary to continue,
 // rather than disappearing into an aggregate with incomplete acknowledgments.
-func (r *Runtime) runtimeNoticeBatch(assignment *childAssignment) ([]llm.Message, int, error) {
+func (r *Runtime) runtimeNoticeBatch(pendingNotices []*pendingRuntimeNotice, tokenLimit int) ([]llm.Message, int, error) {
 	var notices []llm.Message
 	tokens := 0
 	limit := maxRuntimeNoticeTokens
-	if assignment.queueTokenLimit > 0 && assignment.queueTokenLimit < limit {
-		limit = assignment.queueTokenLimit
+	if tokenLimit > 0 && tokenLimit < limit {
+		limit = tokenLimit
 	}
-	for _, pending := range assignment.runtimeNotices {
+	for _, pending := range pendingNotices {
 		if len(notices) == maxRuntimeNoticeBatch {
 			break
 		}
-		source, err := r.Store.Entry(pending.seq)
+		// The local estimator charges at least one token per three content
+		// bytes. A larger durable body cannot fit this batch; fetch only its
+		// scalar reference metadata instead of copying megabytes under orderMu.
+		message, omitted, err := r.runtimeNoticeWithLimit(pending.seq, 3*limit)
 		if err != nil {
 			return nil, 0, err
 		}
-		var event struct {
-			Body json.RawMessage `json:"body"`
-		}
-		if err := json.Unmarshal(source.Content, &event); err != nil {
-			return nil, 0, err
-		}
-		message := llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: pending.seq, Content: eventContent(string(event.Body), pending.seq, 0)}
 		cost := noticeTokens(message)
-		if cost > limit/2 {
+		if omitted || cost > limit/2 {
 			var ref struct {
-				Type          string `json:"type"`
-				JobID         string `json:"job_id,omitempty"`
-				Kind          string `json:"kind,omitempty"`
-				ExitCode      *int   `json:"exit_code,omitempty"`
-				Signal        string `json:"signal,omitempty"`
-				WakeupID      string `json:"wakeup_id,omitempty"`
-				Fired         int    `json:"fired_count,omitempty"`
-				Status        string `json:"status,omitempty"`
-				OutputOmitted bool   `json:"output_omitted"`
-				Details       string `json:"details"`
+				Type             string `json:"type"`
+				JobID            string `json:"job_id,omitempty"`
+				Kind             string `json:"kind,omitempty"`
+				ExitCode         *int   `json:"exit_code,omitempty"`
+				Signal           string `json:"signal,omitempty"`
+				WakeupID         string `json:"wakeup_id,omitempty"`
+				Fired            int    `json:"fired_count,omitempty"`
+				Status           string `json:"status,omitempty"`
+				ChildID          string `json:"child_id,omitempty"`
+				ChildTurnID      string `json:"child_turn_id,omitempty"`
+				AssignmentStatus string `json:"assignment_status,omitempty"`
+				ChildState       string `json:"child_state,omitempty"`
+				ResultEntry      int64  `json:"result_entry_id,omitempty"`
+				RecoveredFrom    int64  `json:"recovered_from_event_seq,omitempty"`
+				OutputOmitted    bool   `json:"output_omitted"`
+				Details          string `json:"details"`
 			}
-			_ = json.Unmarshal(event.Body, &ref)
+			_ = json.Unmarshal([]byte(message.Content), &ref)
 			ref.Details = prompts.RuntimeEventHistoryDetails
 			ref.OutputOmitted = true
 			body, _ := json.Marshal(ref)
-			message.Content = eventContent(string(body), pending.seq, 0)
+			message.Content = eventContent(string(body), pending.seq, ref.RecoveredFrom)
 			cost = noticeTokens(message)
 		}
 		if len(notices) > 0 && tokens+cost > limit {
@@ -91,6 +94,20 @@ func (r *Runtime) runtimeNoticeBatch(assignment *childAssignment) ([]llm.Message
 		tokens += cost
 	}
 	return notices, len(notices), nil
+}
+
+// runtimeNoticeWithLimit projects bounded canonical source data, preserving
+// recovery provenance and child API fields without changing source ownership.
+func (r *Runtime) runtimeNoticeWithLimit(seq int64, maxSourceBytes int) (llm.Message, bool, error) {
+	source, omitted, err := r.Store.RuntimeNotificationSource(seq, maxSourceBytes)
+	if err != nil {
+		return llm.Message{}, false, err
+	}
+	messages, err := recoveredNotificationMessages([]history.PendingNotification{source})
+	if err != nil {
+		return llm.Message{}, false, err
+	}
+	return messages[0], omitted, nil
 }
 
 func (assignment *childAssignment) consumeRuntimeNotices(count int) {

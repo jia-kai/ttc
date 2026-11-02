@@ -433,7 +433,7 @@ func (a *summaryBudgetActor) snapshot(t *testing.T) contextbuild.InputSnapshot {
 		t.Fatal(err)
 	}
 	if a.task == nil {
-		messages = append(messages, a.r.notifications...)
+		messages = append(messages, pendingMainNotices(t, a.r)...)
 		messages = append(messages, a.r.steeringMessagesLocked()...)
 	} else {
 		actor, system, lineage, cursor = a.task.actor, childSystemTemplate, a.task.actor, a.cursor
@@ -521,7 +521,7 @@ func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-				notices := append([]llm.Message(nil), a.r.notifications...)
+				notices := append([]llm.Message(nil), pendingMainNotices(t, a.r)...)
 				cursor := a.r.mainContext
 				var runtimeNotices []*pendingRuntimeNotice
 				if a.task != nil {
@@ -550,7 +550,7 @@ func TestCodingAdmissionUsesCalibratedInputWithInstructionAndSummaryReserve(t *t
 				if err != nil {
 					t.Fatal(err)
 				}
-				if after.EntryTip != before.EntryTip || !reflect.DeepEqual(notices, a.r.notifications) {
+				if after.EntryTip != before.EntryTip || !reflect.DeepEqual(notices, pendingMainNotices(t, a.r)) {
 					t.Error("summary-budget refusal consumed pending notices or changed history")
 				}
 				if a.task == nil {
