@@ -76,7 +76,7 @@ func TestLoadJoinsLateChildMutation(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Child remains running"})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start child"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start child"}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

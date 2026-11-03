@@ -93,7 +93,7 @@ func TestAutomaticCompactionRetainsQueuedAndSteeredAttachmentSnapshots(t *testin
 		// Completed model output fills context. Both earlier human prompts and
 		// their small snapshots must now survive independently of the cycle cap.
 		seed := (contextbuild.Input{Text: "Earlier task", Attachments: []contextbuild.Attachment{{Path: "prior-notes.txt", Kind: "text", Text: "Earlier snapshot."}}}).Message()
-		if err := r.Run(&seed); err != nil {
+		if _, err := r.Run(&seed); err != nil {
 			t.Fatal(err)
 		}
 		if err := r.RequestModel(p.selection); err != nil {

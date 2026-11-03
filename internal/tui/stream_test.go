@@ -43,7 +43,7 @@ func TestStreamRowActionsDoNotFollowCorrelationID(t *testing.T) {
 	}
 	item.Actions = []messagestream.Action{{Kind: messagestream.Raw, Target: 10}, {Kind: messagestream.Inspect, Target: 9}}
 	row = streamLine(item)
-	if row.id != 7 || row.action != actionInspect || row.inspectID != 9 || row.rawID != 10 || row.text != "Request · Inspect" {
+	if row.id != 7 || row.action != actionInspect || row.inspectID != 9 || row.rawID != 10 || row.text != "Request" {
 		t.Fatalf("explicit action targets not preserved: %+v", row)
 	}
 	for _, width := range []int{12, 40, 80} {
@@ -71,7 +71,7 @@ func TestRequestRevisionsUpdateOneStableRow(t *testing.T) {
 	}
 }
 
-func TestDirectRowsNeverOfferPayloadInspection(t *testing.T) {
+func TestDirectRowsInspectOnlyTypedRuntimeNotifications(t *testing.T) {
 	c := inspectionController(nil)
 	for _, actor := range []string{"main", "main/child_test"} {
 		c.names[actor] = ""
@@ -89,6 +89,12 @@ func TestDirectRowsNeverOfferPayloadInspection(t *testing.T) {
 		}
 	}
 	for _, row := range c.view.lines {
+		if row.id == 4 {
+			if row.action != actionInspect || row.inspectID != 4 {
+				t.Fatalf("runtime notification lost its inspection target: %+v", row)
+			}
+			continue
+		}
 		if row.action != actionNone || row.inspectID != 0 || row.id < 0 {
 			t.Fatalf("direct row exposed payload inspection: %+v", row)
 		}
@@ -146,7 +152,7 @@ func TestUnifiedStreamLiveReloadAndReadableRawActions(t *testing.T) {
 	}
 	defer r.Close()
 	r.AutoName = false
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "hello"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	r.Close() // Join runtime work before comparing the complete timeline.
@@ -160,15 +166,15 @@ func TestUnifiedStreamLiveReloadAndReadableRawActions(t *testing.T) {
 		return &frontendController{frontend: &Frontend{Runtime: r, Output: io.Discard}, ctx: ctx, history: store, view: newTranscript(), sidebar: newSidebar(), names: map[string]string{}}
 	}
 	live, reload := controller(), controller()
+	r.Publish(session.Event{Kind: "job", Actor: "main", Generation: r.Generation(), EntryID: jobID, Text: "Saved background execution"})
 	mu.Lock()
 	defer mu.Unlock()
-	events = append(events, session.Event{Kind: "job", Actor: "main", Generation: r.Generation(), EntryID: jobID, Text: "Saved background execution"})
 	for _, event := range events {
 		if err := live.handleRuntimeEvent(event); err != nil {
 			t.Fatal(err)
 		}
 	}
-	reload.replay()
+	reload.replay(0)
 	boundaryRows := func(c *frontendController) []line {
 		var rows []line
 		for _, row := range c.view.lines {

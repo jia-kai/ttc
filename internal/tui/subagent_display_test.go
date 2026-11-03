@@ -122,15 +122,21 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 					break
 				}
 			}
+			// Both foreground tool completions and source-backed background
+			// notifications open the full saved Markdown answer and assignment.
+			details := u.wait(t, "D completion details")
+			for _, metadata := range []string{"Agent details", "Agent ID:", "Assignment turn:", "Started:", "Finished:", "Easy: false"} {
+				if !strings.Contains(details, metadata) {
+					t.Fatalf("saved answer lost assignment metadata %q: %s", metadata, details)
+				}
+			}
+			u.key(tcell.KeyEnd)
+			u.wait(t, "FULL ANSWER END")
 			if !background {
-				// The foreground completion is a tool row with execution details.
-				u.wait(t, "D completion details")
-				u.key(tcell.KeyEnd)
-				u.wait(t, "FULL ANSWER END")
 				u.typeText("d")
 				u.wait(t, "Parameters:")
-				u.key(tcell.KeyEscape)
-			} // Background completion is direct runtime text, without an Inspect action.
+			}
+			u.key(tcell.KeyEscape)
 			var id int64
 			if err := historytest.DB(t, u.runtime.Store).QueryRow(`SELECT id FROM entries WHERE actor_id LIKE 'main/child_%' AND role='assistant' AND kind='message' ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
 				t.Fatal(err)
@@ -184,13 +190,8 @@ func TestSubagentLongFinalAnswerPreviewInspectAndReload(t *testing.T) {
 					break
 				}
 			}
-			if background {
-				// Direct runtime completions remain non-inspectable after reload;
-				// an explicit legacy entry command is still available.
-				u.typeText(fmt.Sprintf("/inspect %d", id))
-				u.key(tcell.KeyEnter)
-			} else {
-				u.wait(t, "D completion details")
+			if details := u.wait(t, "D completion details"); !strings.Contains(details, "Agent details") {
+				t.Fatal("reloaded answer lost assignment metadata", details)
 			}
 			u.key(tcell.KeyEnd)
 			u.wait(t, "FULL ANSWER END")

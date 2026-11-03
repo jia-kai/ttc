@@ -231,9 +231,15 @@ path.write_text('Edited in external editor.\\nsecond line  \\n\\n \\t')
         while not export.exists() and time.monotonic() < deadline:
             read_for(0.1)
         assert export.exists() and Path(str(export) + '.jsonl').exists()
-        assert 'You are TTC' not in export.read_text()
-        exact = Path(str(export) + '.jsonl').read_text()
-        assert 'You are TTC' in exact
+        markdown = export.read_text()
+        records = [json.loads(line) for line in Path(str(export) + '.jsonl').read_text().splitlines()]
+        prompts = [record for record in records
+                   if record['entry']['Content'].get('type') == 'system_prompt']
+        assert prompts, 'Exact export omitted saved instruction snapshots'
+        for record in prompts:
+            instructions = record['instructions']
+            assert instructions and instructions == Path(record['entry']['Content']['path']).read_text()
+            assert instructions not in markdown, 'Readable export exposed system instructions'
         with sqlite3.connect(data / 'history.sqlite') as db:
             messages = [json.loads(row[0])['content'] for row in db.execute(
                 "SELECT content_json FROM entries WHERE kind='message' AND role='user' ORDER BY id")]

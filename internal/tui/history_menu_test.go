@@ -239,14 +239,17 @@ func TestHistoryPickerRestoresUserCheckpointAndRedoFiles(t *testing.T) {
 		u.typeText(text)
 		u.key(tcell.KeyEnter)
 		u.wait(t, []string{"First input result.", "Second input result."}[i])
-		// An earlier turn's completion remains in the transcript. Wait for
-		// this turn's completion frame before opening an idle-only picker.
+		// Earlier completion rows remain in the transcript. The current row
+		// must itself indicate settlement, without an extra idle-state wait.
 		deadline := time.After(3 * time.Second)
 	completion:
 		for {
 			select {
 			case frame := <-u.screen.frames:
 				if strings.Count(frame, "Turn complete") == i+1 {
+					if strings.Contains(frame, "Esc Esc interrupt") {
+						t.Fatal("completion displayed before the frontend became idle", frame)
+					}
 					break completion
 				}
 			case <-deadline:

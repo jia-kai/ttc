@@ -45,7 +45,7 @@ func TestNativeRequestInspectorUsesItemDeltaWithoutChangingWire(t *testing.T) {
 		return openai.AccessTokens{Access: "synthetic-token", AccountID: "synthetic-account"}, nil
 	}})
 	for _, text := range []string{"First request", "second addition"} {
-		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
+		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -59,7 +59,11 @@ func TestNativeRequestInspectorUsesItemDeltaWithoutChangingWire(t *testing.T) {
 	if count != 2 || !strings.Contains(string(wire), "available_skills") {
 		t.Fatal("fixture did not send the complete native context prefix")
 	}
-	items, err := r.Store.StreamItems(context.Background(), r.Current())
+	saved, err := r.CurrentSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.Store.StreamItems(context.Background(), saved.EntryTip)
 	if err != nil || len(items) != 2 {
 		t.Fatal(items, err)
 	}

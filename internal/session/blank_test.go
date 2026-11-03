@@ -36,7 +36,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 			t.Fatal(command, err)
 		}
 	}
-	if err := r.Run(nil); err == nil || !strings.Contains(err.Error(), "empty") {
+	if _, err := r.Run(nil); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatal("blank async turn", err)
 	}
 	next := r.CurrentSelection()
@@ -61,7 +61,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 		t.Fatal(choice, err)
 	}
 	id := r.Current()
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "First submission"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "First submission"}); err != nil {
 		t.Fatal(err)
 	}
 	assertStoredSessions(t, r, 1)
@@ -88,7 +88,7 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 	if _, err := r.Command("/load " + id); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Second submission"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Second submission"}); err != nil {
 		t.Fatal(err)
 	}
 	var users int
@@ -112,7 +112,7 @@ func TestBlankFirstSaveFailurePreservesIdentityAndCanRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := &llm.Message{Type: llm.TypeUserInput, Content: "Keep this first submission"}
-	if err := r.Run(message); err == nil || !strings.Contains(err.Error(), "save first message") {
+	if _, err := r.Run(message); err == nil || !strings.Contains(err.Error(), "save first message") {
 		t.Fatal(err)
 	}
 	assertStoredSessions(t, r, 0)
@@ -122,7 +122,7 @@ func TestBlankFirstSaveFailurePreservesIdentityAndCanRetry(t *testing.T) {
 	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER reject_first"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(message); err != nil || called != 1 || r.Current() != id {
+	if _, err := r.Run(message); err != nil || called != 1 || r.Current() != id {
 		t.Fatal(called, err)
 	}
 	assertStoredSessions(t, r, 1)

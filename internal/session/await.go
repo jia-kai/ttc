@@ -16,6 +16,9 @@ import (
 // signalActorLocked is paired with queue admission under orderMu. The channel
 // is only a hint: pending input is checked under that same lock before waiting.
 func (r *Runtime) signalActorLocked(actor string) {
+	if r.coordinator != nil {
+		r.coordinator.wake()
+	}
 	ch := r.actorSignalLocked(actor)
 	select {
 	case ch <- struct{}{}:

@@ -57,13 +57,7 @@ func newCatalogUpdateFixtureModels(t *testing.T, models []llm.ModelSpec) *catalo
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &gatedModelProvider{requests: make(chan llm.Request, 4), release: make(chan struct{})}
-	events := make(chan session.Event, 64)
-	r, err := session.New(ctx, store, w, p, llm.Selection{Provider: "script", Model: models[0], Variant: "low"}, "", &skills.Catalog{}, tool.WebSearchConfig{}, func(e session.Event) {
-		select {
-		case events <- e:
-		case <-ctx.Done():
-		}
-	})
+	r, err := session.New(ctx, store, w, p, llm.Selection{Provider: "script", Model: models[0], Variant: "low"}, "", &skills.Catalog{}, tool.WebSearchConfig{}, nil)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -71,7 +65,7 @@ func newCatalogUpdateFixtureModels(t *testing.T, models []llm.ModelSpec) *catalo
 	r.AutoName = false
 	screen := &catalogUpdateScreen{observedScreen: &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 256)}}
 	h := &catalogUpdateFixture{screen: screen, runtime: r, provider: p, updates: make(chan catalog.Update, 1), cancel: cancel, done: make(chan error, 1)}
-	f := Frontend{Runtime: r, Events: events, Screen: screen, Output: io.Discard, Models: models, ModelUpdates: h.updates}
+	f := Frontend{Runtime: r, Screen: screen, Output: io.Discard, Models: models, ModelUpdates: h.updates}
 	go func() { h.done <- f.Run(ctx) }()
 	t.Cleanup(func() {
 		cancel()

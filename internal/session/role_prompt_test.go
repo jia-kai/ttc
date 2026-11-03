@@ -29,7 +29,7 @@ func TestReceivingRolePromptsAndPersistedSystems(t *testing.T) {
 			switch role {
 			case "main":
 				message := llm.Message{Type: llm.TypeUserInput, Content: "Review the inputs"}
-				if err := r.Run(&message); err != nil {
+				if _, err := r.Run(&message); err != nil {
 					t.Fatal(err)
 				}
 			case "child":

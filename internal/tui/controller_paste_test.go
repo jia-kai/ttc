@@ -201,16 +201,32 @@ func TestPasteBatchDestinationOwnership(t *testing.T) {
 }
 
 func TestPasteBatchReceiveBoundedPartialFeedbackAndRuntime(t *testing.T) {
-	c := pasteTestController()
+	c := newAsyncTestController(t, nil, nil)
+	c.inputs = nil
+	// Drain setup's model/state publications through a control acknowledgement
+	// before gating the one update that must compete with the paste batch.
+	c.control(session.Request{Kind: session.RequestEasyModel})
+	waitControllerResult(t, c, session.RequestEasyModel)
+	waitControllerState(t, c, func(state session.CoordinatorState) bool { return !state.Busy })
+	c.view = newTranscript()
 	keys := make(chan tcell.Event, 3*frontendBatchEvents)
 	c.keys = keys
 	c.handlePaste(tcell.NewEventPaste(true))
 	for i := 0; i < cap(keys); i++ {
 		keys <- pasteRune("x")
 	}
-	events := make(chan session.Event, 1)
-	events <- session.Event{Kind: "status", Text: "runtime remains responsive"}
-	c.frontend.Events = events
+	dispatched := make(chan struct{})
+	c.frontend.Runtime.Emit = func(event session.Event) {
+		if event.Text == "runtime remains responsive" {
+			close(dispatched)
+		}
+	}
+	c.frontend.Runtime.Publish(session.Event{Kind: "status", Text: "runtime remains responsive"})
+	select {
+	case <-dispatched:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ordered runtime publication did not reach the dispatcher")
+	}
 	before := len(keys)
 	if next, stop, err := c.receive(); err != nil || stop || next.ready {
 		t.Fatalf("receive = %+v, %v, %v", next, stop, err)
@@ -222,7 +238,7 @@ func TestPasteBatchReceiveBoundedPartialFeedbackAndRuntime(t *testing.T) {
 	if c.draft.text == "" || !c.paste.active || c.paste.text.Len() != 0 || c.batchingEvents {
 		t.Fatal("receive did not flush partial paste before its end marker")
 	}
-	if len(events) != 0 || len(c.view.lines) != 1 || c.view.lines[0].text != "runtime remains responsive" {
+	if len(c.view.lines) != 1 || c.view.lines[0].text != "runtime remains responsive" {
 		t.Fatal("runtime event starved behind paste")
 	}
 }

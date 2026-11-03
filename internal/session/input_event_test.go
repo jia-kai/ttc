@@ -12,7 +12,7 @@ func TestHumanInputEventsUseCommittedMetadata(t *testing.T) {
 			r, events := runtimeFixture(t, []llm.ScriptResponse{{Text: "First reply"}, {Text: "Second reply"}})
 			for _, text := range []string{"First input", "Second input"} {
 				input := llm.Message{Type: llm.TypeUserInput, Content: text, InputSource: source, InputTimeMS: 1}
-				if err := r.Run(&input); err != nil {
+				if _, err := r.Run(&input); err != nil {
 					t.Fatal(err)
 				}
 				found := false

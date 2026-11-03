@@ -280,7 +280,7 @@ func TestTurnsContinueBeyond64Cycles(t *testing.T) {
 			r, _ := runtimeFixture(t, responses)
 			r.Emit = nil
 			m := llm.Message{Type: llm.TypeUserInput, Content: "continue"}
-			if err := r.Run(&m); err != nil {
+			if _, err := r.Run(&m); err != nil {
 				t.Fatal(err)
 			}
 			var count int

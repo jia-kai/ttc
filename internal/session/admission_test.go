@@ -236,7 +236,7 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER fail_human BEFORE INSERT ON entries WHEN NEW.role='user' BEGIN SELECT RAISE(ABORT,'forced user append failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Rejected instruction"}); err == nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Rejected instruction"}); err == nil {
 		t.Fatal("forced append failure succeeded")
 	}
 	var after string
@@ -253,7 +253,7 @@ func TestFailedHumanCheckpointDoesNotLeaveActiveTurnOrUndoOwner(t *testing.T) {
 	if _, err := historytest.DB(t, r.Store).Exec("DROP TRIGGER fail_human"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Retry instruction"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Retry instruction"}); err != nil {
 		t.Fatal("main admission did not recover", err)
 	}
 }

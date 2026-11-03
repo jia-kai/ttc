@@ -206,7 +206,7 @@ func TestToolDeliveryCompactsEarlierHistoryBeforeFreshBatch(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Comparison complete."})
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Compare source files."}); err != nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Compare source files."}); err != nil {
 				t.Fatal(err)
 			}
 			if coding != 2 || summaries != 1 || r.checkContext(false) != nil {

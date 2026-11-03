@@ -26,7 +26,7 @@ func TestRequestOutcomeUsesProviderNeutralState(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			items, err := s.StreamItems(context.Background(), session.ID)
+			items, err := s.StreamItems(context.Background(), streamTip(t, s, session.ID))
 			if err != nil || len(items) != 1 || !strings.HasSuffix(items[0].Title, " · "+state) {
 				t.Fatalf("state=%s items=%+v err=%v", state, items, err)
 			}

@@ -113,8 +113,10 @@ func (r *Runtime) addImageTool() {
 			published = true
 			r.images.mu.Unlock()
 		}
+		publications := r.reservePublications(1)
+		defer publications.release()
 		r.routeMu.RLock()
-		r.emit(Event{Kind: "image", Actor: x.Actor, CallID: x.CallID, Image: &v, SessionID: r.Current()})
+		r.emitReserved(publications, Event{Kind: "image", Actor: x.Actor, CallID: x.CallID, Image: &v, SessionID: r.Current()})
 		r.routeMu.RUnlock()
 		return v, nil
 	})

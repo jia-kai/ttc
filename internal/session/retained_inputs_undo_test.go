@@ -47,7 +47,7 @@ func TestRetainedInputsRepeatedCompactionUndoRedoBaseline(t *testing.T) {
 		arguments, _ := json.Marshal(map[string]string{"path": "result.txt", "content": fmt.Sprintf("version %d\n", step)})
 		return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: fmt.Sprintf("write-%d", step), Name: "write", Arguments: arguments}})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Second ordinary prompt", InputSource: "queue"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Second ordinary prompt", InputSource: "queue"}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 4 {

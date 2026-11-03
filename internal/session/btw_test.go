@@ -15,6 +15,35 @@ import (
 	"ttc/internal/llm"
 )
 
+func TestBTWAdmissionNeverBlocksFrontendBehindHandoff(t *testing.T) {
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Aside reply"}})
+	seedRuntime(t, r, "Seed aside context")
+	c := startCoordinator(t, r, ControlEffects{})
+	r.routeMu.Lock()
+	aside := coordinatorSubmit(t, c, Request{Kind: RequestBTW, Command: "An aside during handoff"})
+	eof := coordinatorSubmit(t, c, Request{Kind: RequestEOF})
+	// A different control result is delivered while the admission effect waits.
+	coordinatorResult(t, c, eof)
+	r.routeMu.Unlock()
+	if result := coordinatorResult(t, c, aside); result.Err != nil {
+		t.Fatal("asynchronous aside failed after handoff released", result.Err)
+	}
+}
+
+func TestBTWAdmissionNeverBlocksFrontendOnChildRegistry(t *testing.T) {
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Aside reply"}})
+	seedRuntime(t, r, "Seed aside context")
+	c := startCoordinator(t, r, ControlEffects{})
+	r.coordinator.childMu.Lock()
+	aside := coordinatorSubmit(t, c, Request{Kind: RequestBTW, Command: "An aside during child admission"})
+	eof := coordinatorSubmit(t, c, Request{Kind: RequestEOF})
+	coordinatorResult(t, c, eof)
+	r.coordinator.childMu.Unlock()
+	if result := coordinatorResult(t, c, aside); result.Err != nil {
+		t.Fatal("asynchronous aside failed after registry released", result.Err)
+	}
+}
+
 func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	if err := os.WriteFile(filepath.Join(r.Workspace.Root, "fixture.txt"), []byte("evidence\n"), 0600); err != nil {
@@ -103,7 +132,11 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 		return finish()
 	}}
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "Keep main working"}; done <- r.Run(&m) }()
+	go func() {
+		m := llm.Message{Type: llm.TypeUserInput, Content: "Keep main working"}
+		_, err := r.Run(&m)
+		done <- err
+	}()
 	select {
 	case <-mainReady:
 	case <-time.After(3 * time.Second):

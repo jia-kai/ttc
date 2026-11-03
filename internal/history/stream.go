@@ -164,12 +164,13 @@ func boundaryActions(revision int64) []messagestream.Action {
 // scan the entire entries table to satisfy ORDER BY, including other sessions.
 const streamItemsSQL = boundaryAncestry + `SELECT e.id,e.actor_id,e.content_json FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND e.kind='status' AND json_extract(e.content_json,'$.type')='presentation_stream' ORDER BY e.id`
 
-// StreamItems replays the latest revision per request attempt on selected
-// ancestry, preserving header order. Old per-part change entries are ignored.
-func (s *Store) StreamItems(ctx context.Context, session string) ([]messagestream.Item, error) {
-	var tip int64
-	if err := s.db.QueryRowContext(ctx, "SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); err != nil {
-		return nil, err
+// StreamItems replays the latest revision per request attempt on the immutable
+// ancestry ending at tip, preserving header order. Revisions after tip are never
+// included, even for earlier headers. Zero selects an empty history; negative
+// tips are invalid. Old per-part change entries are ignored.
+func (s *Store) StreamItems(ctx context.Context, tip int64) ([]messagestream.Item, error) {
+	if tip < 0 {
+		return nil, errors.New("stream replay tip must not be negative")
 	}
 	rows, err := s.db.QueryContext(ctx, streamItemsSQL, tip)
 	if err != nil {

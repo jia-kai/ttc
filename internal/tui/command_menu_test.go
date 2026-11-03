@@ -99,6 +99,9 @@ func TestLeaderNewQuestionAndExit(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")
 	u.key(tcell.KeyEscape)
+	// Consume the dismissed frame so the next wait cannot match a queued
+	// frame from the original dialog before the reopen request is processed.
+	u.wait(t, "What would you like to do instead?")
 	u.key(tcell.KeyCtrlX)
 	u.typeText("?")
 	u.wait(t, "Choose a method?")

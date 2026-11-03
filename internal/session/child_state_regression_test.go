@@ -50,11 +50,11 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	if err == nil {
 		t.Fatal("idle child accepted work outside an assignment")
 	}
-	r.childStartMu.Lock()
-	child := r.children[id]
+	r.coordinator.childMu.Lock()
+	child := r.coordinator.children[id]
 	beforeView, beforeSelection, beforeAssignment := child.view(), child.selection, child.assignment
 	beforeMessages, beforeCursor := append([]llm.Message(nil), child.messages...), child.cursor
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Unlock()
 
 	// Restrict the failure to this retained actor's next attempted turn, leaving
 	// parent/tool persistence untouched. Drop it before retrying the assignment.
@@ -83,10 +83,10 @@ func TestRetainedChildAdmissionFailurePreservesIdleState(t *testing.T) {
 	if len(published) != 1 || published[0] != beforeView {
 		t.Fatalf("failed admission changed published idle view: %+v; want %+v", published, beforeView)
 	}
-	r.childStartMu.Lock()
-	retained := r.children[id]
+	r.coordinator.childMu.Lock()
+	retained := r.coordinator.children[id]
 	unchanged := retained == child && !retained.closing && retained.assignment == beforeAssignment && reflect.DeepEqual(retained.selection, beforeSelection) && reflect.DeepEqual(retained.messages, beforeMessages) && reflect.DeepEqual(retained.cursor, beforeCursor)
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Unlock()
 	if !unchanged {
 		t.Fatal("failed admission mutated or removed retained context")
 	}
@@ -139,9 +139,9 @@ func TestStopChildSweepsOwnedJobsAfterLateClose(t *testing.T) {
 		// terminal publication. Cancellation is a deterministic barrier here,
 		// not a cancelled assignment: the answer was already complete.
 		<-ctx.Done()
-		r.childStartMu.Lock()
+		r.coordinator.childMu.Lock()
 		if !child.closing {
-			r.childStartMu.Unlock()
+			r.coordinator.childMu.Unlock()
 			err := fmt.Errorf("StopChild did not set closing before cancelling worker")
 			workerErr <- err
 			return jobs.TaskResult{}, err
@@ -151,10 +151,10 @@ func TestStopChildSweepsOwnedJobsAfterLateClose(t *testing.T) {
 		if err == nil {
 			assignment.finish, assignment.completion = seq, finish
 			child.state = "closed"
-			delete(r.children, id)
+			delete(r.coordinator.children, id)
 			err = r.publishChild(child.view())
 		}
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		// Intentionally omit StopOwned: this is the late-close interleaving
 		// whose missed worker cleanup StopChild must fence after joining.
 		workerErr <- err
@@ -163,11 +163,11 @@ func TestStopChildSweepsOwnedJobsAfterLateClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.childStartMu.Lock()
+	r.coordinator.childMu.Lock()
 	child.job, assignment.job = job, job
-	r.children[id] = child
+	r.coordinator.children[id] = child
 	err = r.publishChild(child.view())
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Unlock()
 	close(ready)
 	if err != nil {
 		t.Fatal(err)

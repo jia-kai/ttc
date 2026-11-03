@@ -227,7 +227,7 @@ func TestSchema7ChildCompletionMigrationThroughSessionAdmission(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Historical evidence received."})
 			}}
-			if err := restarted.Run(nil); err != nil {
+			if _, err := restarted.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			if calls != 1 || restarted.HasNotifications() {

@@ -36,7 +36,10 @@ func TestAwaitDefersResultUntilUserInputResumes(t *testing.T) {
 		{Text: "Resumed answer"},
 	})
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "wait for input"}) }()
+	go func() {
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "wait for input"})
+		done <- err
+	}()
 	waitForAwait(t, events, "main")
 	var pending int
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM tool_calls WHERE name='await' AND result_json IS NULL`).Scan(&pending); err != nil {

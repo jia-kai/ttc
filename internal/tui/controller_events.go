@@ -5,31 +5,12 @@ import (
 	"strings"
 	"time"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/render"
 	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v3"
 )
-
-func (c *frontendController) start(input *session.InputAdmission) {
-	if input != nil {
-		c.notificationPaused = false
-	}
-	c.busy = true
-	c.started = time.Now()
-	c.activity = turnActivity{}
-	c.pendingInput = input
-	runtime, done := c.frontend.Runtime, c.done
-	go func() {
-		if input == nil {
-			done <- operationResult{err: runtime.Run(nil)}
-		} else {
-			done <- operationResult{err: runtime.RunInput(input)}
-		}
-	}()
-}
 
 func (c *frontendController) prepare() (bool, error) {
 	if generation := c.frontend.Runtime.Generation(); generation != c.queueGeneration {
@@ -38,13 +19,11 @@ func (c *frontendController) prepare() (bool, error) {
 			// cannot race the canceled worker or its shutdown join.
 			c.cancelAttachment()
 		}
-		c.queue = nil
-		c.pendingInput = nil
-		c.notificationPaused = false
 		c.queueGeneration = generation
 		c.activity = turnActivity{}
 		c.retainedQuestion = nil
 		c.deferredQuestionID = ""
+		c.questionReopenRequest = 0
 		c.questionRow = -1
 		if c.modal.question != nil {
 			c.modal.clear()
@@ -66,24 +45,8 @@ func (c *frontendController) prepare() (bool, error) {
 			c.showQuestion(form)
 		}
 	}
-	if !c.busy {
-		if event, err := c.frontend.Runtime.ApplyModel(""); err != nil {
-			return false, err
-		} else if event.Kind != "" {
-			c.notificationPaused = false
-			c.add(event.Text, event.EntryID)
-			c.view.lines[len(c.view.lines)-1].system = true
-		}
-		if !c.notificationPaused && c.frontend.Runtime.HasNotifications() {
-			c.start(nil)
-		} else if len(c.queue) > 0 {
-			input := c.frontend.Runtime.PrepareInput(c.queue[0])
-			c.queue[0] = contextbuild.Input{}
-			c.queue = c.queue[1:]
-			c.start(input)
-		} else if c.eof {
-			return true, nil
-		}
+	if c.ended {
+		return true, nil
 	}
 	c.draft.completion = nil
 	if c.screen != nil && c.modal.empty() && !c.fullscreen && !c.editing {
@@ -176,25 +139,86 @@ func (c *frontendController) handleEditorResult(result operationResult) error {
 	return nil
 }
 
-func (c *frontendController) handleOperationResult(result operationResult) {
+func (c *frontendController) handleUpdate(update session.Update) error {
+	if update.Drained {
+		c.ended = true
+	}
+	if state := update.State; state != nil {
+		if state.Generation != c.frontend.Runtime.Generation() {
+			return nil
+		}
+		if state.OperationID != c.operationID {
+			c.activity = turnActivity{}
+			c.started = time.Now()
+		}
+		c.operationID = state.OperationID
+		c.busy, c.commandBusy = state.Busy, state.CommandBusy
+		c.queue, c.notificationPaused = state.Queue, state.NotificationPaused
+	}
+	if event := update.Event; event != nil {
+		return c.handleRuntimeEvent(*event)
+	}
+	if result := update.Result; result != nil {
+		if result.RequestID == c.plainGateRequest {
+			c.plainGateRequest = 0
+		}
+		c.restoreResult(*result)
+		if result.Foreground {
+			if c.operationID != 0 && result.OperationID != c.operationID {
+				return nil
+			}
+			return c.handleOperationResult(operationResult{completion: result.Completion, text: result.Text, command: result.Command, markdown: result.Markdown, err: result.Err})
+		}
+		if result.Kind == session.RequestLogin {
+			c.frontend.Models = nil
+			if result.Err == nil {
+				c.frontend.Models = result.Models
+			}
+		}
+		if result.Kind == session.RequestEasyModel && c.modal.menu != nil {
+			c.modal.menu.easy = c.frontend.Runtime.EasyModelChoice()
+			c.modal.menu.update()
+		}
+		if result.Kind == session.RequestReopenQuestion && result.RequestID == c.questionReopenRequest {
+			c.questionReopenRequest = 0
+			if result.Err == nil && result.Generation == c.frontend.Runtime.Generation() {
+				form := c.frontend.Runtime.PendingQuestion()
+				c.syncQuestionState(form)
+				if form != nil && !form.Dismissed {
+					c.showQuestion(form)
+				}
+			}
+		}
+		if result.Err != nil {
+			c.add("Error: "+result.Err.Error(), 0)
+		} else if result.Text != "" {
+			c.add(result.Text, 0)
+		}
+	}
+	return nil
+}
+
+func (c *frontendController) handleOperationResult(result operationResult) error {
 	c.activity = turnActivity{}
 	if c.modal.generation != 0 && c.modal.generation != c.frontend.Runtime.Generation() {
 		c.modal.clear()
 	}
-	c.busy = false
-	c.commandBusy = false
+	if end := result.completion; end != nil {
+		if err := c.handleRuntimeEvent(session.Event{Kind: "status", Generation: end.Generation, SessionID: end.SessionID, EntryID: end.EntryID, Text: end.Text}); err != nil {
+			return err
+		}
+	}
 	if result.err != nil {
 		c.add("Error: "+result.err.Error(), 0)
 		if result.command == "" || result.command == "/compact" || result.command == "/force-compact" {
-			c.notificationPaused = true
 			c.add("Auto-wake paused after failure/interruption; pending notifications remain queued. Send a prompt, successfully /compact, /force-compact or /load, or change session/model to resume.", 0)
 		}
 	} else if result.command != "" {
+		c.replay(0)
 		switch result.command {
-		case "/compact", "/force-compact", "/load", "/new":
-			c.notificationPaused = false
+		case "/new", "/clear", "/load", "/branch", "/undo", "/redo":
+			c.syncFrame = true
 		}
-		c.replay()
 		if c.frontend.Plain {
 			c.add(result.text, 0)
 		} else {
@@ -211,6 +235,7 @@ func (c *frontendController) handleOperationResult(result operationResult) {
 		}
 	}
 	c.focused = len(c.view.lines) - 1
+	return nil
 }
 
 func (c *frontendController) handleRuntimeEvent(event session.Event) error {
@@ -228,12 +253,15 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		// Rebuild the committed history before rendering subsequent coding
 		// events. Compaction keeps drafts, queued input and live dialogs.
 		following, firstLine := c.view.followTail, c.view.firstLine
-		c.replay()
+		if event.Continuation == nil || event.Continuation.EntryTip <= 0 {
+			return fmt.Errorf("continuation event is missing its saved handoff tip")
+		}
+		c.replay(event.Continuation.EntryTip)
 		if !following {
 			c.view.followTail, c.view.firstLine = false, firstLine
 		}
 		if c.frontend.Plain {
-			fmt.Fprintln(c.frontend.Output, render.Clean(event.Text))
+			fmt.Fprintln(c.frontend.Output, render.Clean(event.Continuation.Text))
 		}
 	case "btw_result":
 		if c.frontend.Plain {
@@ -369,14 +397,6 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		// closure must not clear that round's activity or dialog.
 		c.syncQuestionState(c.frontend.Runtime.PendingQuestion())
 	case "awaiting":
-		// Input may have entered the FIFO while inference was busy immediately
-		// before it parked. Transfer that input at this serialized transition;
-		// submitPrompt handles input arriving after the transition instead.
-		if (event.Actor == "" || event.Actor == "main") && c.frontend.Runtime.Awaiting("main") {
-			if err := c.steerQueuedInputs(); err != nil {
-				c.add("Queued input could not resume awaiting turn: "+err.Error(), 0)
-			}
-		}
 		c.addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
 	case "status", "wake", "resumed":
 		c.addActor(line{text: event.Text, id: event.EntryID, system: true}, event.Actor)
@@ -435,9 +455,9 @@ func (c *frontendController) receive() (next frontendSubmission, stop bool, err 
 			return c.receiveCanceled()
 		case ev, ok := <-c.keys:
 			next, err = c.receiveScreenEvent(ev, ok)
-		case event := <-c.frontend.Events:
+		case update := <-c.updates:
 			c.flushPaste()
-			err = c.handleRuntimeEvent(event)
+			err = c.handleUpdate(update)
 		case <-timer.C:
 			return next, false, nil
 		}
@@ -449,11 +469,7 @@ func (c *frontendController) receive() (next frontendSubmission, stop bool, err 
 }
 
 func (c *frontendController) receiveCanceled() (frontendSubmission, bool, error) {
-	c.frontend.Runtime.CancelForeground()
-	if c.busy {
-		waitForTurn(c.done, c.frontend.Events)
-		c.busy = false
-	}
+	c.coordinator.Close()
 	return frontendSubmission{}, true, c.ctx.Err()
 }
 
@@ -473,6 +489,10 @@ func (c *frontendController) receiveScreenEvent(ev tcell.Event, ok bool) (fronte
 }
 
 func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, err error) {
+	var plainInputs <-chan input = c.inputs
+	if c.plainGateRequest != 0 {
+		plainInputs = nil
+	}
 	select {
 	case <-c.ctx.Done():
 		return c.receiveCanceled()
@@ -515,16 +535,13 @@ func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, e
 		if err := c.handleEditorResult(result); err != nil {
 			return next, false, err
 		}
-	case result := <-c.done:
-		c.handleOperationResult(result)
-	case event := <-c.frontend.Events:
-		// Aside results belong to the live generation, which survives
-		// compaction. Explicit session changes still discard old popups.
-		if err := c.handleRuntimeEvent(event); err != nil {
+	case update := <-c.updates:
+		if err := c.handleUpdate(update); err != nil {
 			return next, false, err
 		}
-	case v := <-c.inputs:
+	case v := <-plainInputs:
 		next.text = v.text
+		next.generation, next.operationID = c.observedGeneration, c.observedOperationID
 		next.ready = true
 	case ev, ok := <-c.keys:
 		next, err = c.receiveScreenEvent(ev, ok)
@@ -534,14 +551,4 @@ func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, e
 	case <-c.ticker.C:
 	}
 	return next, false, nil
-}
-
-func waitForTurn(done <-chan operationResult, events <-chan session.Event) {
-	for {
-		select {
-		case <-done:
-			return
-		case <-events:
-		}
-	}
 }

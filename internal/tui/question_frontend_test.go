@@ -59,6 +59,10 @@ func newQuestionTestUIWithEditor(t *testing.T, p session.Inference, editor func(
 }
 
 func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(context.Context, string) (string, error), setup func(*session.Runtime), sinks ...*graphics.Kitty) *questionTestUI {
+	return newQuestionTestUIWithFrontend(t, p, editor, setup, nil, sinks...)
+}
+
+func newQuestionTestUIWithFrontend(t *testing.T, p session.Inference, editor func(context.Context, string) (string, error), setup func(*session.Runtime), configure func(*Frontend), sinks ...*graphics.Kitty) *questionTestUI {
 	t.Helper()
 	if _, err := scratch.Verify(); err != nil {
 		t.Fatal(err)
@@ -78,15 +82,13 @@ func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(c
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := make(chan session.Event, 64)
 	questionEvents := make(chan struct{}, 8)
 	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
-		select {
-		case events <- e:
-			if e.Kind == "question" {
-				questionEvents <- struct{}{}
+		if e.Kind == "question" {
+			select {
+			case questionEvents <- struct{}{}:
+			case <-ctx.Done():
 			}
-		case <-ctx.Done():
 		}
 	})
 	if err != nil {
@@ -99,7 +101,10 @@ func newQuestionTestUIWithSetup(t *testing.T, p session.Inference, editor func(c
 	}
 	s := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 128)}
 	ui := &questionTestUI{screen: s, runtime: r, done: make(chan error, 1), questionEvents: questionEvents, cancel: cancel}
-	f := Frontend{Runtime: r, Events: events, Screen: s, Output: io.Discard, Models: []llm.ModelSpec{selection.Model}, EditInput: editor}
+	f := Frontend{Runtime: r, Screen: s, Output: io.Discard, Models: []llm.ModelSpec{selection.Model}, EditInput: editor}
+	if configure != nil {
+		configure(&f)
+	}
 	if len(sinks) > 0 {
 		f.Graphics = sinks[0]
 	}
@@ -275,7 +280,7 @@ func TestQuestionArrivingDuringModelPickerOpensAfterPickerCloses(t *testing.T) {
 	}
 	// The event channel is ordered. A later status line visible to the left of
 	// the picker proves the question was handled while that picker was open.
-	u.runtime.Emit(session.Event{Kind: "status", Text: "REVIEW_BARRIER", SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "status", Text: "REVIEW_BARRIER", SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
 	u.wait(t, "RE│")
 	u.key(tcell.KeyEscape)
 	u.wait(t, "Second (Recommended)")
@@ -360,9 +365,9 @@ func TestQuestionFrontendSequentialRoundsPreserveNextDraft(t *testing.T) {
 	u.wait(t, "Text: next draft")
 	// Late initial publication and closure for the previous round must not
 	// clear the current dialog or replace its retained draft.
-	u.runtime.Emit(session.Event{Kind: "question", Question: first, SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
-	u.runtime.Emit(session.Event{Kind: "question_closed", Question: first, SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
-	u.runtime.Emit(session.Event{Kind: "status", Text: "◆◆ previous round closed", SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "question", Question: first, SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "question_closed", Question: first, SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "status", Text: "◆◆ previous round closed", SessionID: u.runtime.Current(), Generation: u.runtime.Generation()})
 	if frame := u.wait(t, "◆◆"); !strings.Contains(frame, "Text: next draft") {
 		t.Fatal("previous round closure lost the next draft", frame)
 	}

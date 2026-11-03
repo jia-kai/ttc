@@ -41,6 +41,10 @@ func ResponsePrefix(text string) string {
 // Full message contents belong to the caller's inspection source, not this row.
 func SubagentResponse(actor, name, speaker, text string, width int, colors bool) string {
 	badge := SubagentBadge(actor, name, max(1, width/2), colors)
+	if speaker == "final answer" && colors {
+		// Emphasize the label, not the answer or a success/failure outcome.
+		speaker = "\x1b[1m" + speaker + "\x1b[22m"
+	}
 	row := badge + " " + speaker + " " + ResponsePrefix(text) + " ..."
 	return ansi.Truncate(row, max(1, width), "…")
 }

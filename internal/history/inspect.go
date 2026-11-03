@@ -43,6 +43,17 @@ func (s *Store) ChildResponse(id int64) (int64, error) {
 }
 
 func childResponseWith(q historyReader, id int64) (int64, error) {
+	resolved, err := resolveChildResponseWith(q, id)
+	return resolved.ResponseID, err
+}
+
+type childResponseResolution struct {
+	Entry      Entry
+	ResponseID int64
+	Metadata   childCompletionMetadata
+}
+
+func resolveChildResponseWith(q historyReader, id int64) (resolved childResponseResolution, err error) {
 	// This lookup runs before paged inspection. Keep unrelated messages and the
 	// referenced assistant's potentially large replay envelope out of Go memory.
 	var entry Entry
@@ -54,17 +65,19 @@ func childResponseWith(q historyReader, id int64) (int64, error) {
 			WHERE lower(field.key)='type' AND field.type='text' ORDER BY field.id DESC LIMIT 1
 		),'') ELSE '' END
 		FROM entries WHERE id=?`, id).Scan(&entry.SessionID, &entry.Kind, &entry.Role, &entry.Actor, &entry.Source, &messageType); err != nil {
-		return 0, err
+		return resolved, err
 	}
+	resolved.Entry = entry
 	var raw []byte
+	var sourceID int64
 	if entry.Kind == "tool_result" {
 		var result string
 		err := q.QueryRow(`SELECT c.result_json FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE r.entry_id=? AND c.name='subagent'`, id).Scan(&result)
 		if err == sql.ErrNoRows {
-			return 0, nil
+			return resolved, nil
 		}
 		if err != nil {
-			return 0, err
+			return resolved, err
 		}
 		raw = []byte(result)
 	} else if messageType == string(llm.TypeRuntimeNotification) {
@@ -75,41 +88,63 @@ func childResponseWith(q historyReader, id int64) (int64, error) {
 		if err := q.QueryRow(`SELECT coalesce((
 			SELECT value FROM json_each(entries.content_json) AS field
 			WHERE lower(field.key)='content' AND field.type='text' ORDER BY field.id DESC LIMIT 1
-		),'') FROM entries WHERE id=?`, id).Scan(&content); err != nil {
-			return 0, err
+		),''),coalesce((SELECT value FROM json_each(entries.content_json) AS field
+		 WHERE lower(field.key)='event_seq' AND field.type='integer' ORDER BY field.id DESC LIMIT 1),0)
+		 FROM entries WHERE id=?`, id).Scan(&content, &sourceID); err != nil {
+			return resolved, err
 		}
 		var notice struct {
 			Type    string `json:"type"`
 			Omitted bool   `json:"output_omitted"`
 		}
 		if json.Unmarshal([]byte(content), &notice) != nil || notice.Type != "child_turn_finished" {
-			return 0, nil
+			return resolved, nil
 		}
 		if notice.Omitted {
 			// The omitted delivery is not authoritative about its result target.
 			// Resolve the same immutable source used by replay and export.
 			fullEntry, err := entryWith(q, id)
 			if err != nil {
-				return 0, err
+				return resolved, err
 			}
-			resolved, err := resolveOmittedChildNotice(q, fullEntry)
+			notice, err := resolveOmittedChildNotice(q, fullEntry)
 			if err != nil {
-				return 0, err
+				return resolved, err
 			}
-			return childResultReference(q, entry, resolved.Presentation.ChildID, resolved.ResultEntry, resolved.SourceID)
+			resolved.Metadata = notice.Metadata
+			resolved.ResponseID, err = childResultReference(q, entry, notice.Presentation.ChildID, notice.ResultEntry, notice.SourceID)
+			return resolved, err
 		}
 		raw = []byte(content)
 	} else {
-		return 0, nil
+		return resolved, nil
 	}
-	var reference struct {
-		ChildID     string `json:"child_id"`
-		ResultEntry int64  `json:"result_entry_id"`
-	}
+	var reference childCompletionMetadata
 	if err := json.Unmarshal(raw, &reference); err != nil {
-		return 0, err
+		return resolved, err
 	}
-	return childResultReference(q, entry, reference.ChildID, reference.ResultEntry, entry.EventSeq())
+	resolved.Metadata = reference
+	if entry.Kind == "tool_result" {
+		sourceID = reference.FinishEventSeq
+	}
+	if sourceID != 0 {
+		source, err := resolveChildNoticeSource(q, entry, sourceID, reference)
+		if err != nil {
+			return resolved, err
+		}
+		resolved.Metadata = source.Metadata
+		// Historical foreground execution metadata remains useful when the
+		// canonical completion predates saved label/easy fields.
+		resolved.Metadata.Kind = reference.Kind
+		if resolved.Metadata.Label == "" {
+			resolved.Metadata.Label = reference.Label
+		}
+		if resolved.Metadata.Easy == nil {
+			resolved.Metadata.Easy = reference.Easy
+		}
+	}
+	resolved.ResponseID, err = childResultReference(q, entry, reference.ChildID, reference.ResultEntry, entry.EventSeq())
+	return resolved, err
 }
 
 // childResultReference closes only an explicit final-answer reference, never a

@@ -102,7 +102,7 @@ func TestLoadCompactionBoundaryDeliversPendingChildAnswer(t *testing.T) {
 						t.Fatal("manual handoff dropped recovered answer")
 					}
 				}
-				if err := r.Run(nil); err != nil {
+				if _, err := r.Run(nil); err != nil {
 					t.Fatal(err)
 				}
 				if summaries != 1 || coding != 1 || r.HasNotifications() || delivered == 0 {

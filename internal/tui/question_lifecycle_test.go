@@ -3,7 +3,6 @@ package tui
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gdamore/tcell/v3"
 	"ttc/internal/llm"
@@ -24,7 +23,9 @@ func TestQuestionDismissReopenDoesNotBlockOnFullEventSink(t *testing.T) {
 				case <-release:
 				}
 			default:
-				emit(e)
+				if emit != nil {
+					emit(e)
+				}
 			}
 		}
 	})
@@ -49,50 +50,26 @@ func TestQuestionDismissReopenDoesNotBlockOnFullEventSink(t *testing.T) {
 }
 
 func TestDelayedInitialQuestionEventDoesNotReopenDismissal(t *testing.T) {
-	entered, release := make(chan struct{}), make(chan struct{})
-	u := newQuestionTestUIWithSetup(t, &llm.Script{Responses: questionScript()}, nil, func(r *session.Runtime) {
-		emit := r.Emit
-		r.Emit = func(e session.Event) {
-			if e.Kind == "question" {
-				close(entered)
-				<-release
-			}
-			emit(e)
-		}
-	})
-	// Keep cancellation safe even if a precondition fails before publication.
-	t.Cleanup(func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	})
+	u := newQuestionTestUI(t, &llm.Script{Responses: questionScript()})
 	u.typeText("ask")
 	u.key(tcell.KeyEnter)
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("question publication did not reach the gate")
-	}
-	u.typeText("/questions")
-	u.key(tcell.KeyEnter)
 	u.wait(t, "Choose a method?")
+	initial := u.runtime.PendingQuestion()
+	if initial == nil || initial.Dismissed {
+		t.Fatal("initial question was not live", initial)
+	}
 	u.key(tcell.KeyEnd)
 	u.key(tcell.KeyEnter)
 	u.typeText("retained answer")
 	u.key(tcell.KeyEscape) // Leave text editing before dismissing the form.
 	u.key(tcell.KeyEscape)
 	u.wait(t, "What would you like to do instead?")
-	close(release)
-	select {
-	case <-u.questionEvents:
-	case <-time.After(3 * time.Second):
-		t.Fatal("delayed question event was not published")
-	}
+	// Replay the original immutable snapshot after the dismissal control has
+	// settled. It must not override the newer live question state.
+	u.runtime.Publish(session.Event{Kind: "question", Question: initial})
 	// Both events use the same ordered sink; drawing this marker proves that
 	// the delayed initial event has been handled without reopening the form.
-	u.runtime.Emit(session.Event{Kind: "status", Text: "◆◆ delayed question processed", Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "status", Text: "◆◆ delayed question processed", Generation: u.runtime.Generation()})
 	frame := u.wait(t, "◆◆")
 	if form := u.runtime.PendingQuestion(); form == nil || !form.Dismissed {
 		t.Fatal("delayed initial event reopened a user dismissal", form, frame)

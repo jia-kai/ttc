@@ -23,6 +23,7 @@ import (
 	"ttc/internal/llm"
 	"ttc/internal/privatefile"
 	"ttc/internal/prompts"
+	"ttc/internal/providerhttp"
 )
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -404,6 +405,9 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		if errors.Is(e, providerhttp.ErrClosed) {
+			return result, providerhttp.ErrClosed
+		}
 		if errors.Is(e, context.Canceled) {
 			return result, context.Canceled
 		}
@@ -429,6 +433,9 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		if errors.Is(readErr, providerhttp.ErrClosed) {
+			return result, providerhttp.ErrClosed
+		}
 		if errors.Is(readErr, context.Canceled) {
 			return result, context.Canceled
 		}
@@ -445,6 +452,9 @@ func (a *Authenticator) json(ctx context.Context, endpoint string, body any, out
 	raw, e := io.ReadAll(io.LimitReader(resp.Body, maxCredentialBytes+1))
 	if err := ctx.Err(); err != nil {
 		return result, err
+	}
+	if errors.Is(e, providerhttp.ErrClosed) {
+		return result, providerhttp.ErrClosed
 	}
 	if errors.Is(e, context.Canceled) {
 		return result, context.Canceled

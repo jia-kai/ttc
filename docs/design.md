@@ -104,6 +104,7 @@ One Go module uses direct construction and small interfaces at their consumers:
 | `internal/session`           | Main/child turns, admission, input and timers        |
 | `internal/llm`               | Neutral LLM values and offline scripting             |
 | `internal/providers`         | Neutral modules, configuration and selection         |
+| `internal/providerhttp`      | Provider-wide HTTP pool reset and shutdown ownership |
 | `internal/providers/builtin` | Explicit production-module registration              |
 | `internal/providers/openai`  | OpenAI auth, protocol, codecs and module wiring      |
 | `internal/catalog`           | Neutral discovery, budgets, cache and workers        |
@@ -177,14 +178,29 @@ One Go module uses direct construction and small interfaces at their consumers:
   inspectors retain bounded SQL slices and streamed instruction snapshots rather
   than loading complete records. Replay and request-inspection ancestry
   projections keep selected IDs outermost and look up entries by primary key,
-  avoiding full-table scans of unrelated saved history. Plain inspection uses
-  complete records.
-- The frontend controller owns mutable UI state on one event loop. Lifecycle,
-  input, runtime events, replay, inspection and drawing have separate handlers;
-  workers return results to the loop rather than mutate that state.
-  Cancellation, worker joins and generation checks remain explicit. The TUI
-  consumes a small history-reader interface and does not decode storage
-  envelopes.
+  avoiding full-table scans of unrelated saved history. Plain final-answer
+  inspection streams bounded pages; other plain inspectors use complete records.
+- `SessionCoordinator` owns live admission, FIFO scheduling and execution state.
+  Human controls carry their observed generation and execution identity; stale
+  same-generation steering becomes FIFO normal input with a notice, never
+  guidance for another execution. Input targeting an obsolete session/history
+  generation is returned with its attachment snapshots. Blocking effects run
+  outside the frontend, which owns drafts, navigation and dialog presentation.
+- Main, coding-child and aside execution use one `AgentRunner`
+  request/tool/recovery cycle. Explicit context and completion policies preserve
+  independent calibration, capabilities, assignment journals and resource
+  lifetimes. A retained child keeps context only; assignment work is joined
+  before completion, while main-owned background work survives ordinary turn
+  completion.
+- Runtime updates and settled operation results share one ordered, bounded
+  stream. Slow consumers apply backpressure outside shared locks; publication
+  inside short routing commits uses capacity reserved before taking those locks.
+  Shutdown disables delivery before joining producers. The frontend neither
+  joins separate completion channels nor drains a guessed event snapshot.
+  Completion is per-turn, not global inactivity. Continuation replay uses the
+  committed handoff tip for both entries and grouped stream revisions, excluding
+  later publications even if storage has advanced. The TUI consumes typed
+  history reads, not storage envelopes.
 - Model inspection captures provider-formatted request bodies immediately before
   HTTP attempts and assembled native output items as they complete. Headers and
   credentials are excluded. Attempts retain distinct outcomes; inspection
@@ -196,9 +212,18 @@ One Go module uses direct construction and small interfaces at their consumers:
   than silently losing inspection evidence.
 - The presentation stream merges boundary-derived inspection rows with direct
   human/assistant rendering and tool execution updates. Stable row identities
-  are separate from explicit actions: direct conversation rows do not expose
-  payload inspection, while tool execution details retain live refresh. Boundary
-  rows expose readable structured content and the captured JSON separately.
+  are separate from explicit actions: ordinary authored conversation rows do not
+  expose payload inspection. Runtime-notification rows open their saved details
+  in both live and replayed views. Compact child-completion previews instead
+  open the source-validated full Markdown answer and saved assignment metadata,
+  with completion details available separately. Tool execution details retain
+  live refresh. Boundary rows expose readable structured content and captured
+  JSON separately, without an action suffix in their transcript titles.
+- Subagent job inspection captures a bounded assignment prompt and recent
+  accepted parent guidance in an immutable presentation snapshot. Reads take no
+  runtime admission locks; a finished job keeps its own prompts when a
+  persistent child is reused. This cache neither replaces canonical messages nor
+  enters model input.
 - Each attempt has one stable request row, updated as native response items and
   the outcome arrive. Immutable revision targets keep inspections branch-safe;
   live delivery and replay share the same projection. Full sent payloads remain
@@ -381,6 +406,7 @@ production provider registration or services. Sessions consume only
 ```go
 type Inference interface {
     Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
+    Cancel(context.Context, string) error
     EstimateReplay(llm.Message) int
     TokenizerID(llm.ModelSpec) string
 }
@@ -403,12 +429,14 @@ also fail, even when set to their default values.
 The factory receives a context and `Environment` (`DataDir`, optional HTTP
 `Client`, and `ResolveBinary`) and returns `Components`: required `Inference`,
 optional `Catalog` (`Bind` and `CachePath`), optional
-`Authorize(context.Context, auth.UI) error`, and a non-secret startup `Notice`.
-Construction starts no workers or resources requiring closure. The CLI owns
-catalog policy, deadlines, manager workers and shutdown. Normal interactive
-startup requires a catalog; fixed models can use a static `catalog.Source`.
-Login orchestration invalidates the catalog, calls authorization, then refreshes
-choices; modules do not own that lifecycle or presentation.
+`Authorize(context.Context, auth.UI) error`, optional `Connections` (`Reset` and
+`Close`), and a non-secret startup `Notice`. Construction starts no workers. The
+CLI owns catalog policy, deadlines and shutdown, and closes returned connections
+after runtime and catalog consumers stop, including startup failure paths.
+Normal interactive startup requires a catalog; fixed models can use a static
+`catalog.Source`. Login orchestration invalidates the catalog, calls
+authorization, then refreshes choices; modules do not own that lifecycle or
+presentation.
 
 `builtin.Modules` returns a fresh explicit production-module list. Registration
 is separate so neutral `providers` never imports its concrete subpackages. The
@@ -419,6 +447,15 @@ separate deterministic test mode, not a registered production provider. It
 bypasses provider construction and rejects `--login`, explicit `--provider` and
 provider-specific flags rather than silently ignoring them.
 
+- `providerhttp.Manager` owns shared HTTP transport generations and active
+  exchanges for one configured provider, not one agent. It uses `http.Transport`
+  pooling and HTTP/2 rather than implementing another pool. Inference, naming,
+  children, asides, authorization and catalog operations share it but retain
+  their own contexts and retry budgets. Reset retires active/idle connections;
+  Close is permanent and rejects future exchanges. Neither operation changes
+  credentials. Standard transports are cloned, isolating caller-owned pools.
+  Custom transports keep their socket policy; custom TLS dialers cannot Reset,
+  and their Close cleanup depends on cancellation and idle-connection support.
 - Transports own context-bound protocol HTTP, wire/replay codecs and in-request
   retries, not files, caches, background workers, login UI or conversation
   state. OpenAI accepts injected credential and binary-resolution functions;
@@ -504,7 +541,7 @@ workers.
   Shorter caller deadlines still win. Expiry is a retryable upstream timeout,
   not user cancellation; committed output follows partial-response recovery
   below.
-- Cancellation is scoped to one request attempt, never shared mutable provider
+- Ordinary cancellation is scoped to one request attempt, not shared provider
   state. Abandonment immediately cancels the local request and closes its body,
   then invokes best-effort remote cancellation with a fresh bounded context
   before retry or return. Normal completion releases local resources without
@@ -517,6 +554,15 @@ workers.
   reads refresh a 90-second interval. Each exchange owns its timer and
   cancelable context, released on EOF, body close, failure or caller
   cancellation. These operations retain their existing retry policies.
+- On Linux, the watchdog's monotonic clock excludes system suspend. A connection
+  left silent after a network change can still time out after resume.
+  `/force-reconnect` resets the provider's connection manager without stopping
+  logical turns. OpenAI resets its shared inference, catalog and authorization
+  connections: active exchanges fail as retryable transport errors, and owned
+  transport generations close their raw sockets, including HTTP/2 connections.
+  Retry budgets, partial-response rules and credentials are unchanged. Injected
+  transports that cannot support reset return an explicit error; reconnect does
+  not probe the network or replay already failed turns.
 - Human and parent-to-child steering wait for a settled model boundary. New
   child assignments use `subagent`, including idle follow-ups. Native streaming
   steering and resuming the same partial stream are outside v1. Providers retry

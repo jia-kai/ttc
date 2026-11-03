@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"ttc/internal/catalog"
+	"ttc/internal/providerhttp"
 	"ttc/internal/providers"
 )
 
@@ -30,21 +31,21 @@ func Module() providers.Module {
 			if strings.TrimSpace(env.DataDir) == "" {
 				return providers.Components{}, errors.New("OpenAI provider requires a data directory")
 			}
+			client, connections := providerhttp.New(env.Client)
 			owner := NewAuthenticator(filepath.Join(env.DataDir, "openai-auth.json"))
-			if env.Client != nil {
-				owner.Client = env.Client
-			}
-			transport := NewAdapter(Config{Client: env.Client, BaseURL: *endpoint, TokenSource: owner.AccessTokens, ResolveBinary: env.ResolveBinary})
+			owner.Client = client
+			transport := NewAdapter(Config{Client: client, BaseURL: *endpoint, TokenSource: owner.AccessTokens, ResolveBinary: env.ResolveBinary})
 			components := providers.Components{
 				Inference: transport,
 				Catalog: &providers.Catalog{Bind: func(ctx context.Context) (catalog.Binding, error) {
 					return bindCatalog(ctx, owner, transport)
 				}, CachePath: filepath.Join(env.DataDir, "openai-models.json")},
-				Authorize: owner.Login,
+				Authorize:   owner.Login,
+				Connections: connections,
 			}
 			if *importAuth != "" {
 				if err := owner.ImportCodex(ctx, *importAuth); err != nil {
-					return providers.Components{}, err
+					return providers.Components{}, errors.Join(err, connections.Close())
 				}
 				components.Notice = "Imported subscription credentials into private TTC storage"
 			}

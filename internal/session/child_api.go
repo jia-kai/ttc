@@ -76,8 +76,8 @@ func childCompletionNotification(record history.ChildFinish) childNotification {
 }
 
 func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, view jobs.Snapshot) childToolResult {
-	r.childStartMu.Lock()
-	defer r.childStartMu.Unlock()
+	r.coordinator.childMu.Lock()
+	defer r.coordinator.childMu.Unlock()
 	result := childToolResult{
 		childCompletionFields: childCompletionFields{
 			ChildID: child.id, TurnID: assignment.turn, JobID: view.ID,

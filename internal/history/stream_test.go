@@ -21,6 +21,61 @@ import (
 func testInspection(text string) *llm.InspectionDocument {
 	return &llm.InspectionDocument{Sections: []llm.InspectionSection{{Title: "Content", Fields: []llm.InspectionField{{Name: "text", Value: llm.InspectionValue{Kind: "string", Text: text}}}}}}
 }
+
+func streamTip(t *testing.T, s *Store, session string) int64 {
+	t.Helper()
+	saved, err := s.Session(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return saved.EntryTip
+}
+
+func TestStreamItemsFreezesHeadersAndGroupedRevisionsAtTip(t *testing.T) {
+	s, session, turn, request := historyFixture(t)
+	ctx := context.Background()
+	save := func(direction string) messagestream.Item {
+		t.Helper()
+		items, err := s.RecordBoundary(session.ID, turn, "main", request, "context", llm.BoundaryEvent{
+			Attempt: 1, Direction: direction, Payload: json.RawMessage(`{}`), Inspection: testInspection(direction),
+		})
+		if err != nil || len(items) != 1 {
+			t.Fatal(items, err)
+		}
+		return items[0]
+	}
+	header := save("request")
+	cut, err := s.Append(session.ID, turn, "main", "status", "", false, map[string]string{"type": "test_cut"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := save("response")
+	outcome := save("outcome")
+	// A newer header must be excluded too; filtering only by the old header's
+	// ID would incorrectly include its newer response/outcome revision.
+	recordStream(t, s, session, turn, "main", "later", `{}`)
+	for _, tc := range []struct {
+		name string
+		tip  int64
+		want []messagestream.Item
+	}{
+		{"empty", 0, []messagestream.Item{}},
+		{"header", header.Revision, []messagestream.Item{header}},
+		{"handoff", cut, []messagestream.Item{header}},
+		{"response", response.Revision, []messagestream.Item{response}},
+		{"outcome", outcome.Revision, []messagestream.Item{outcome}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.StreamItems(ctx, tc.tip)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("replay crossed immutable tip %d: got=%+v want=%+v err=%v", tc.tip, got, tc.want, err)
+			}
+		})
+	}
+	if _, err := s.StreamItems(ctx, -1); err == nil {
+		t.Fatal("negative replay tip accepted")
+	}
+}
 func recordStream(t *testing.T, s *Store, session Session, turn, actor, conversation, payload string) []messagestream.Item {
 	t.Helper()
 	request, err := s.StartRequest(session.ID, turn, actor, "coding", session.Model)
@@ -55,7 +110,7 @@ func TestBoundaryPersistenceReplayInspectionAndIsolation(t *testing.T) {
 	if header.ID != response.ID || header.ID != outcome.ID || header.Revision >= response.Revision || response.Revision >= outcome.Revision {
 		t.Fatal(header, response, outcome)
 	}
-	replay, err := s.StreamItems(ctx, session.ID)
+	replay, err := s.StreamItems(ctx, streamTip(t, s, session.ID))
 	if err != nil || !reflect.DeepEqual(replay, []messagestream.Item{outcome}) {
 		t.Fatal(replay, outcome, err)
 	}
@@ -91,13 +146,13 @@ func TestBoundaryPersistenceReplayInspectionAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	copied, err := s.StreamItems(ctx, loaded.ID)
+	copied, err := s.StreamItems(ctx, loaded.EntryTip)
 	if err != nil || len(copied) != len(replay) || copied[0].Title != replay[0].Title {
 		t.Fatal(copied, err)
 	}
 	// Interrupted attempts remain distinct from retries, even on one request.
 	retry := save(2, "request", `{}`, "retry")
-	replay, err = s.StreamItems(ctx, session.ID)
+	replay, err = s.StreamItems(ctx, streamTip(t, s, session.ID))
 	if err != nil || len(replay) != 2 || replay[1].ID != retry.ID {
 		t.Fatal(replay, err)
 	}
@@ -128,7 +183,7 @@ func TestBoundarySelectedBranchAndConcurrentUpdates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	replay, err := s.StreamItems(ctx, session.ID)
+	replay, err := s.StreamItems(ctx, streamTip(t, s, session.ID))
 	if err != nil || len(replay) != 1 {
 		t.Fatal(replay, err)
 	}
@@ -198,12 +253,12 @@ func TestBoundaryAuditSurvivesCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := s.StreamItems(context.Background(), continued.ID)
+	replay, err := s.StreamItems(context.Background(), streamTip(t, s, continued.ID))
 	if err != nil || len(replay) != 1 || replay[0].Title != first[0].Title {
 		t.Fatal(replay, err)
 	}
 	recordStream(t, s, continued, turn, "main", "compacted", `{"input":["summary"]}`)
-	replay, err = s.StreamItems(context.Background(), continued.ID)
+	replay, err = s.StreamItems(context.Background(), streamTip(t, s, continued.ID))
 	if err != nil || len(replay) != 2 {
 		t.Fatal(replay, err)
 	}
@@ -250,7 +305,7 @@ func TestLegacyBoundaryArtifactsGroupWithoutNativeReparse(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	items, err := s.StreamItems(context.Background(), session.ID)
+	items, err := s.StreamItems(context.Background(), streamTip(t, s, session.ID))
 	if err != nil || len(items) != 1 || items[0].ID != header {
 		t.Fatal(items, err)
 	}
@@ -319,7 +374,7 @@ func TestBoundaryCompactExpandedAndImmutableHeaderSnapshots(t *testing.T) {
 	if err != nil || after.Text != initial.Text || after.Total != initial.Total {
 		t.Fatal(after, initial, err)
 	}
-	forkItems, err := s.StreamItems(ctx, fork.ID)
+	forkItems, err := s.StreamItems(ctx, fork.EntryTip)
 	if err != nil || len(forkItems) != 1 {
 		t.Fatal(forkItems, err)
 	}

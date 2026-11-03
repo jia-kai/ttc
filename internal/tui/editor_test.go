@@ -37,7 +37,7 @@ func TestHeldEditorDrainsEventsAndJoinsOnCancellation(t *testing.T) {
 	go func() {
 		// Exceed the event queue capacity while terminal ownership is suspended.
 		for range 128 {
-			u.runtime.Emit(session.Event{Generation: u.runtime.Generation(), SessionID: u.runtime.Current(), Kind: "status", Text: "While editing"})
+			u.runtime.Publish(session.Event{Generation: u.runtime.Generation(), SessionID: u.runtime.Current(), Kind: "status", Text: "While editing"})
 		}
 		close(drained)
 	}()

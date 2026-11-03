@@ -12,6 +12,7 @@ import (
 // buffer, while history recall places the cursor at the recalled draft's end.
 type composer struct {
 	text         string
+	revision     uint64 // Changes only on draft content mutation, not cursor/view movement.
 	cursor       int
 	killed       string
 	completion   *completionMenu // UI-owned dropdown; independent of editable text.
@@ -28,6 +29,7 @@ func newComposer(text string) composer {
 }
 
 func (c *composer) set(text string) {
+	c.revision++
 	c.text, c.cursor = text, utf8.RuneCountInString(text)
 	c.layout = nil
 	c.manualScroll = false
@@ -37,6 +39,7 @@ func (c *composer) insert(text string) {
 	if text == "" {
 		return
 	}
+	c.revision++
 	// Slice the original UTF-8 instead of decoding and re-encoding the draft.
 	// ASCII end insertion needs no scan; other positions only locate a boundary.
 	at := len(c.text)
@@ -60,6 +63,7 @@ func (c *composer) erase(start, end int, kill bool) {
 	if start == end {
 		return
 	}
+	c.revision++
 	runes := []rune(c.text)
 	if kill {
 		c.killed = string(runes[start:end])

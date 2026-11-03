@@ -175,7 +175,8 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				message := llm.Message{Type: llm.TypeUserInput, Content: "Audit the inputs"}
-				done <- r.Run(&message)
+				_, err := r.Run(&message)
+				done <- err
 			}()
 			if err := receive(t, done); err != nil {
 				t.Fatal(err)
@@ -194,7 +195,7 @@ func TestSubagentQuestionCallRejectedAndGapReportedToMain(t *testing.T) {
 				// Admit the completion notification whether it arrived during
 				// the first main turn or after that turn finished.
 				message := llm.Message{Type: llm.TypeUserInput, Content: "Review the child findings"}
-				if err := r.Run(&message); err != nil {
+				if _, err := r.Run(&message); err != nil {
 					t.Fatal(err)
 				}
 			}

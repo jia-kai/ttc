@@ -131,8 +131,8 @@ func TestSessionNameEventReadsPersistedManualTitle(t *testing.T) {
 	if err := u.runtime.Store.RenameSession(u.runtime.Current(), "My manual title"); err != nil {
 		t.Fatal(err)
 	}
-	u.runtime.Emit(session.Event{Kind: "session_name", Text: "Old automatic title", Generation: u.runtime.Generation(), SessionID: u.runtime.Current()})
-	u.runtime.Emit(session.Event{Kind: "status", Text: "Name event processed", Generation: u.runtime.Generation(), SessionID: u.runtime.Current()})
+	u.runtime.Publish(session.Event{Kind: "session_name", Text: "Old automatic title", Generation: u.runtime.Generation(), SessionID: u.runtime.Current()})
+	u.runtime.Publish(session.Event{Kind: "status", Text: "Name event processed", Generation: u.runtime.Generation(), SessionID: u.runtime.Current()})
 	frame := u.wait(t, "Name event processed")
 	if !strings.Contains(frame, "My manual title") || strings.Contains(frame, "Old automatic title") {
 		t.Fatal(frame)

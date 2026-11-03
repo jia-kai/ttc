@@ -214,7 +214,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
 	for _, prompt := range []string{"Initial request", "Same runtime state"} {
-		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
+		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestSessionReloadForcesFreshRuntimeSnapshot(t *testing.T) {
 	if r.mainContext.snapshot != nil {
 		t.Fatal("reload retained runtime cursor")
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "After reload"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "After reload"}); err != nil {
 		t.Fatal(err)
 	}
 	var snapshots int

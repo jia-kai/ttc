@@ -51,7 +51,7 @@ func TestProviderBoundaryStreamLiveReplayAndContextIsolation(t *testing.T) {
 		return observeBoundaryFixture(req, llm.BoundaryEvent{Attempt: 1, Direction: "outcome", Payload: json.RawMessage(`{"status":"success","category":"completed"}`)})
 	}}
 	input := llm.Message{Type: llm.TypeUserInput, Content: "original request"}
-	if err := r.Run(&input); err != nil {
+	if _, err := r.Run(&input); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -74,7 +74,11 @@ func TestProviderBoundaryStreamLiveReplayAndContextIsolation(t *testing.T) {
 			live = append(live, *event.StreamItem)
 		}
 	}
-	replayed, err := r.Store.StreamItems(context.Background(), r.Current())
+	saved, err := r.CurrentSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := r.Store.StreamItems(context.Background(), saved.EntryTip)
 	if err != nil || len(live) == 0 || !reflect.DeepEqual(live, replayed) {
 		t.Fatalf("live/replay differ: live=%+v replay=%+v err=%v", live, replayed, err)
 	}

@@ -247,7 +247,7 @@ func TestHeldQuestionEditorDrainsEventsAndJoinsOnCancellation(t *testing.T) {
 	drained := make(chan struct{})
 	go func() {
 		for range 128 { // Exceed the bounded frontend event queue while suspended.
-			u.runtime.Emit(session.Event{Generation: u.runtime.Generation(), SessionID: u.runtime.Current(), Kind: "status", Text: "While answering in editor"})
+			u.runtime.Publish(session.Event{Generation: u.runtime.Generation(), SessionID: u.runtime.Current(), Kind: "status", Text: "While answering in editor"})
 		}
 		close(drained)
 	}()

@@ -45,32 +45,40 @@ type frontendController struct {
 	copyFocused int
 	focused     int
 	dirty       bool
+	syncFrame   bool // Explicit source replay refreshes the terminal, not only its previous cell diff.
 	names       map[string]string
 	streamRows  map[int64]int // Grouped request header IDs to stable transcript positions.
 
-	done        chan operationResult
-	busy        bool
-	commandBusy bool
-	// Failures pause automatic notification retry until explicit input or recovery.
+	coordinator         *session.SessionCoordinator
+	updates             <-chan session.Update
+	operationID         uint64
+	observedOperationID uint64
+	observedGeneration  uint64
+	observedCommandBusy bool
+	plainGateRequest    uint64 // Plain command sequencing, not runtime admission ownership.
+	busy                bool
+	commandBusy         bool
+	// Read-only coordinator projection; never used to admit or schedule input.
 	notificationPaused bool
 	queue              []contextbuild.Input
-	pendingInput       *session.InputAdmission
 	queueGeneration    uint64
 	started            time.Time
 	activity           turnActivity
-	eof                bool
+	ended              bool // Read-only coordinator drained fence; the frontend never schedules EOF.
 
-	draft          composer
-	recall         promptHistory
-	attachments    []contextbuild.Attachment
-	completer      *pathCompleter
-	completion     *completionMenu
-	lastQuery      completionQuery
-	hadQuery       bool
-	esc            bool
-	viewChord      bool
-	paste          pasteBatch
-	batchingEvents bool // Paste edits flush once per bounded receive batch.
+	draft           composer
+	recall          promptHistory
+	attachments     []contextbuild.Attachment
+	attachmentEpoch uint64 // Advances when the draft attachment collection is replaced, not appended.
+	pendingRestores map[uint64]restoreBaseline
+	completer       *pathCompleter
+	completion      *completionMenu
+	lastQuery       completionQuery
+	hadQuery        bool
+	esc             bool
+	viewChord       bool
+	paste           pasteBatch
+	batchingEvents  bool // Paste edits flush once per bounded receive batch.
 
 	editorDone        chan operationResult
 	editing           bool
@@ -80,15 +88,18 @@ type frontendController struct {
 	attaching         bool
 	cancelAttachment  context.CancelFunc
 
-	retainedQuestion   *questionDialog
-	deferredQuestionID string
-	questionRow        int // Only the singleton live status row needs reconciliation; -1 means absent.
-	pendingBTW         []session.Event
+	retainedQuestion      *questionDialog
+	deferredQuestionID    string
+	questionReopenRequest uint64 // Only this acknowledgment may still open the question dialog.
+	questionRow           int    // Only the singleton live status row needs reconciliation; -1 means absent.
+	pendingBTW            []session.Event
 }
 
 type frontendSubmission struct {
 	text            string
 	ready, steering bool
+	generation      uint64
+	operationID     uint64
 }
 
 type attachmentResult struct {
@@ -134,9 +145,12 @@ func (c *frontendController) setup(ctx context.Context) error {
 		return err
 	}
 	c.setupInput()
-	c.done = make(chan operationResult, 1)
+	c.coordinator = c.frontend.Runtime.Coordinator()
+	c.updates = c.coordinator.Updates()
+	c.coordinator.Start(session.ControlEffects{Reconnect: c.frontend.Reconnect, Login: c.frontend.Login})
 	c.onClose(c.stopForeground)
 	c.queueGeneration = c.frontend.Runtime.Generation()
+	c.observedGeneration = c.queueGeneration
 	c.view = newTranscript()
 	c.sidebar = newSidebar()
 	c.copyFocused = -1
@@ -155,7 +169,10 @@ func (c *frontendController) setup(ctx context.Context) error {
 	c.names = map[string]string{}
 	c.questionRow = -1
 	c.add("TTC · Linux terminal agent · /help", 0)
-	c.replay()
+	c.replay(0)
+	for _, notice := range c.frontend.Notices {
+		c.add(notice, 0)
+	}
 	c.ticker = time.NewTicker(250 * time.Millisecond)
 	c.onClose(c.ticker.Stop)
 	return nil
@@ -246,8 +263,5 @@ func (c *frontendController) stopInteractions() {
 }
 
 func (c *frontendController) stopForeground() {
-	if c.busy {
-		c.frontend.Runtime.CancelForeground()
-		waitForTurn(c.done, c.frontend.Events)
-	}
+	c.coordinator.Close()
 }

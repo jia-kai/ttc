@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"reflect"
 	"sort"
+	"syscall"
 	"time"
 	"ttc/internal/llm"
+	"ttc/internal/providerhttp"
 	"unicode/utf8"
 )
 
@@ -48,6 +50,9 @@ func (a *Adapter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			if errors.Is(err, providerhttp.ErrClosed) {
+				return nil, providerhttp.ErrClosed
+			}
 			if invalidCertificate(err) {
 				return nil, errors.New("subscription TLS certificate verification failed")
 			}
@@ -62,11 +67,17 @@ func (a *Adapter) Models(ctx context.Context) ([]llm.ModelInfo, error) {
 			if err == nil {
 				break
 			}
+			if errors.Is(err, providerhttp.ErrClosed) {
+				return nil, providerhttp.ErrClosed
+			}
 			var idle *idleHTTPError
-			if !errors.As(err, &idle) {
+			if errors.As(err, &idle) {
+				err = fmt.Errorf("model catalog response inactive (attempt %d/%d): %w", attempt+1, catalogMaxAttempts, idle)
+			} else if errors.Is(err, syscall.ECONNABORTED) {
+				err = fmt.Errorf("model catalog transport failed (attempt %d/%d): %w", attempt+1, catalogMaxAttempts, err)
+			} else {
 				return nil, err
 			}
-			err = fmt.Errorf("model catalog response inactive (attempt %d/%d): %w", attempt+1, catalogMaxAttempts, idle)
 		} else {
 			status := resp.StatusCode
 			header = resp.Header.Get("Retry-After")

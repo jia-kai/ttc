@@ -216,6 +216,12 @@ func (r *Runtime) RedirectDismissedQuestion(input contextbuild.Input) (bool, err
 	if err := r.checkContext(false); err != nil {
 		return false, err
 	}
+	if !r.coordinator.mainAccepting {
+		return false, errMainNotSteerable
+	}
+	if err := r.checkMainSteeringCapacityLocked([]contextbuild.Input{input}); err != nil {
+		return false, err
+	}
 	r.steers = append(r.steers, input)
 	form.resolved = true
 	form.reply <- questionReply{Dismissed: true}

@@ -228,9 +228,11 @@
   excluding tools/queue/ waits; show one decimal or N/A. Persist outside model
   context.
 - Inspect model-bound inputs/outputs through one Request row per provider
-  attempt. Direct conversation rows have no payload-inspection action; tool rows
-  open execution details. Use the shared bordered scrollable window. Auth/login
-  stays outside history. Plain mode has `/inspect <entry-id>`.
+  attempt. Ordinary authored conversation rows have no payload-inspection
+  action; saved runtime notifications open details and child final-answer rows
+  open the full saved answer and assignment metadata. Tool rows open execution
+  details. Use the shared bordered scrollable window. Auth/login stays outside
+  history. Plain mode has `/inspect <entry-id>`.
 - Show compact highlighted running/failed tool summaries; click/focus opens
   parameters, result/error, retained output or diff. Page large details from
   storage. Shared portable Markdown serves UI/export/archives, adding no model

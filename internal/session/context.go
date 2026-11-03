@@ -169,56 +169,68 @@ func (r *Runtime) name(ctx context.Context, sessionID string, selection llm.Sele
 // compact runs manual compaction after Command checks context writability.
 func (r *Runtime) compact(focus string, force bool) (string, error) {
 	ctx, cancel := context.WithCancelCause(r.ctx)
-	r.mu.Lock()
-	r.activeCancel = cancel
-	r.mu.Unlock()
+	r.installForegroundCancel(cancel)
 	defer func() { cancel(nil); r.mu.Lock(); r.activeCancel = nil; r.mu.Unlock() }()
 	if force {
 		r.emit(Event{Kind: "status", Text: "Forcing compaction: local summary input-size check disabled; provider limits and handoff checks still apply."})
 	}
-	return r.compactContext(ctx, focus, r.CurrentSelection(), nil, force)
+	result, err := r.compactContext(ctx, focus, r.CurrentSelection(), nil, force)
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
+}
+
+// Continuation presents a committed compaction handoff. EntryTip freezes both
+// history entries and grouped stream revisions in the event's SessionID before
+// any subsequent coding response or foreground terminal status is committed.
+type Continuation struct {
+	EntryTip int64
+	Text     string
 }
 
 // compactContext shares the manual and automatic handoff. The main loop is
 // paused, but live children/jobs can append a tail until routeMu locks commit.
+// An active main turn publishes its continuation before releasing that lock;
+// idle manual compaction instead presents history through its command result.
 // pending is a persisted recovery warning required until coding succeeds.
 // force is a manual override of summary input-size preflight only.
-func (r *Runtime) compactContext(ctx context.Context, focus string, selection llm.Selection, pending *llm.Message, force bool) (result string, err error) {
+func (r *Runtime) compactContext(ctx context.Context, focus string, selection llm.Selection, pending *llm.Message, force bool) (result *Continuation, err error) {
 	session := r.Current()
 	defer func() { err = r.compactionFailure(session, err) }()
 	ctx, cancel := context.WithTimeout(ctx, compactionTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return nil, err
 	}
 	// Record the boundary before naming/summary preparation so a process killed
 	// before summary-request admission can still recover pending messages.
 	if _, err := r.Store.Append(session, "", "main", "status", "", false, map[string]any{"type": "compaction_started", "force": force}); err != nil {
-		return "", fmt.Errorf("record compaction boundary: %w", err)
+		return nil, fmt.Errorf("record compaction boundary: %w", err)
 	}
 	if r.namingDone != nil {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-r.namingDone:
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return nil, err
 	}
 	// Freeze the durable tip before projection. Later visible arrivals must be
 	// checked as committed tail, not silently included only in persistence.
 	entries, e := r.Store.Branch(session, 0)
 	if e != nil {
-		return "", e
+		return nil, e
 	}
 	if len(entries) == 0 {
-		return "", errors.New("nothing to compact")
+		return nil, errors.New("nothing to compact")
 	}
 	sourceTip := entries[len(entries)-1].ID
 	messages, e := r.Store.MessagesAt(session, sourceTip)
 	if e != nil {
-		return "", e
+		return nil, e
 	}
 	var retainFrom int64 // Zero until an actual retained branch entry is known.
 	var inputIDs []int64
@@ -249,22 +261,24 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		},
 	})
 	if e != nil {
-		return "", e
+		return nil, e
 	}
+	publications := r.reservePublications(2)
+	defer publications.release()
 	r.routeMu.Lock()
 	defer r.routeMu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return nil, err
 	}
 	// Re-read the frozen suffix and any committed child tail under the same lock
 	// as handoff. A tail which no longer fits aborts without changing sessions.
 	currentEntries, e := r.Store.Branch(r.Current(), 0)
 	if e != nil {
-		return "", e
+		return nil, e
 	}
 	if retainFrom == 0 {
 		if len(currentEntries) == 0 {
-			return "", errors.New("compaction history changed during projection")
+			return nil, errors.New("compaction history changed during projection")
 		}
 		// IDs are global across sessions. An empty frozen suffix starts at
 		// this branch's first post-cut entry, not necessarily sourceTip+1.
@@ -278,7 +292,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	}
 	currentMessages, e := r.Store.Messages(r.Current())
 	if e != nil {
-		return "", e
+		return nil, e
 	}
 	assembled := append([]llm.Message(nil), compacted.messages...)
 	visible := 0
@@ -287,7 +301,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			continue
 		}
 		if visible >= len(currentMessages) {
-			return "", errors.New("compaction history changed during projection")
+			return nil, errors.New("compaction history changed during projection")
 		}
 		message := currentMessages[visible]
 		message.State = nil
@@ -297,10 +311,11 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		}
 	}
 	if visible != len(currentMessages) {
-		return "", errors.New("invalid compaction projection")
+		return nil, errors.New("invalid compaction projection")
 	}
 	assembled, _ = contextbuild.AppendPendingMessage(assembled, pending)
-	var name string
+	result = &Continuation{}
+	var automatic bool
 	e = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
@@ -324,6 +339,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			return e
 		}
 		r.current = v.ID
+		automatic = r.activeTurn != ""
 		r.estimator.Reset()
 		r.mainContext = contextCursor{}
 		input := append(append([]llm.Message(nil), assembled...), notices...)
@@ -331,14 +347,23 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			input = append(input, *contextMessage)
 		}
 		r.usage = estimateUsage(selection, systemTemplate, r.Tools.Definitions(), input)
-		name = v.Name
+		// Continue returns the committed tip while routing remains locked. No
+		// later coding, child or stream revision may extend this replay cut.
+		result.EntryTip = v.EntryTip
+		result.Text = "## Compacted · " + v.Name + "\n\n" + compacted.summary
 		return nil
 	})
 	if e != nil {
-		return "", e
+		return nil, e
 	}
-	r.emit(Event{Kind: "usage"})
-	return "## Compacted · " + name + "\n\n" + compacted.summary, nil
+	r.emitReserved(publications, Event{Kind: "usage"})
+	if automatic {
+		// Fence post-handoff child publications as well as later main work.
+		// Publishing after routeMu unlock would allow a later event to appear
+		// before this replay, which would then erase its already-consumed row.
+		r.emitReserved(publications, Event{Kind: "continuation", Continuation: result})
+	}
+	return result, nil
 }
 
 func (r *Runtime) stopNaming() {

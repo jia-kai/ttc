@@ -48,7 +48,8 @@ func TestHelpCommandDoesNotWaitForActiveTurn(t *testing.T) {
 	go func() {
 		defer close(stopped)
 		m := llm.Message{Type: llm.TypeUserInput, Content: "start"}
-		done <- r.Run(&m)
+		_, err := r.Run(&m)
+		done <- err
 	}()
 	t.Cleanup(func() {
 		r.Interrupt()

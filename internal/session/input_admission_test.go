@@ -89,7 +89,10 @@ func TestInputCancellationBeforeInitialAdmissionLeavesNoHistory(t *testing.T) {
 	original := contextbuild.Input{Text: "  original\n\tλ  ", Attachments: []contextbuild.Attachment{{Path: "removed.txt", Kind: "text", Text: "immutable snapshot"}}}
 	input := r.PrepareInput(original)
 	done := make(chan error, 1)
-	go func() { done <- r.RunInput(input) }()
+	go func() {
+		_, err := r.RunInput(input)
+		done <- err
+	}()
 	waitInitialInputRun(t, r)
 	assertInputHistoryCounts(t, r, 0)
 	restored, err := input.Cancel()
@@ -131,7 +134,10 @@ func TestInputCancellationAfterInitialAdmissionDoesNotInterruptTurn(t *testing.T
 	r.Provider = p
 	input := r.PrepareInput(contextbuild.Input{Text: "admit me"})
 	done := make(chan error, 1)
-	go func() { done <- r.RunInput(input) }()
+	go func() {
+		_, err := r.RunInput(input)
+		done <- err
+	}()
 	select {
 	case <-p.ready:
 	case <-time.After(3 * time.Second):
@@ -155,7 +161,10 @@ func TestInputCancellationRacesInitialAdmission(t *testing.T) {
 		unlock := holdInputAdmission(t, r)
 		input := r.PrepareInput(contextbuild.Input{Text: "race"})
 		done := make(chan error, 1)
-		go func() { done <- r.RunInput(input) }()
+		go func() {
+			_, err := r.RunInput(input)
+			done <- err
+		}()
 		waitInitialInputRun(t, r)
 		cancelled := make(chan bool, 1)
 		go func() {
@@ -179,7 +188,10 @@ func TestInputCancellationDoesNotInterruptNotificationTurn(t *testing.T) {
 	p := &inputAdmissionProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Notification completed."}}}, ready: make(chan struct{}), release: make(chan struct{})}
 	r.Provider = p
 	done := make(chan error, 1)
-	go func() { done <- r.Run(nil) }()
+	go func() {
+		_, err := r.Run(nil)
+		done <- err
+	}()
 	select {
 	case <-p.ready:
 	case <-time.After(3 * time.Second):
@@ -191,7 +203,7 @@ func TestInputCancellationDoesNotInterruptNotificationTurn(t *testing.T) {
 	}
 	close(p.release)
 	finishInputRun(t, done)
-	if err := r.RunInput(input); err != nil {
+	if _, err := r.RunInput(input); err != nil {
 		t.Fatal(err)
 	}
 	var status string
@@ -213,7 +225,7 @@ func TestInputCancellationExplicitSessionResetDiscardsTicket(t *testing.T) {
 	if _, err := input.Cancel(); err == nil {
 		t.Fatal("old generation restored into new session")
 	}
-	if err := r.RunInput(input); err != nil {
+	if _, err := r.RunInput(input); err != nil {
 		t.Fatal(err)
 	}
 	assertInputHistoryCounts(t, r, 0)

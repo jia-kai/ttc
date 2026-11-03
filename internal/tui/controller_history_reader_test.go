@@ -35,7 +35,7 @@ func TestReplayRetainsPendingToolAndReplacesWithResult(t *testing.T) {
 	c := inspectionController(u.runtime.Store)
 	c.frontend.Runtime = u.runtime
 	c.sidebar = newSidebar()
-	c.replay()
+	c.replay(0)
 	var pending line
 	for _, item := range c.view.lines {
 		if item.callID != "" {
@@ -61,7 +61,7 @@ func TestReplayRetainsPendingToolAndReplacesWithResult(t *testing.T) {
 	u.wait(t, "[Submit]")
 	u.key(tcell.KeyEnter)
 	u.wait(t, "Turn complete")
-	c.replay()
+	c.replay(0)
 	var completed []line
 	for _, item := range c.view.lines {
 		if item.callID == pending.callID {

@@ -141,7 +141,7 @@ func TestMainNotificationBurstDrainsBoundedBatches(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Processed events."})
 	}}
-	if err := r.Run(nil); err != nil {
+	if _, err := r.Run(nil); err != nil {
 		t.Fatal(err)
 	}
 	if !seenSteer {
@@ -221,7 +221,7 @@ func TestMainBacklogArrivalsDuringCompactionAndRecovery(t *testing.T) {
 			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 				return emit(llm.StreamEvent{Kind: "text", Text: "Processed remaining evidence."})
 			}}
-			if err := r.Run(nil); err != nil {
+			if _, err := r.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			assertMainAcknowledgments(t, r, sources)

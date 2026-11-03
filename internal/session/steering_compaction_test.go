@@ -110,7 +110,8 @@ func TestAutomaticCompactionRetainsSteeringSnapshotsAndCancellation(t *testing.T
 	done := make(chan error, 1)
 	stopped := make(chan struct{})
 	go func() {
-		done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue current work"})
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue current work"})
+		done <- err
 		close(stopped)
 	}()
 	t.Cleanup(func() {

@@ -86,7 +86,7 @@ func TestBinaryAttachmentFrozenNativeInputAndHistory(t *testing.T) {
 				check(req.Messages)
 				return script.Stream(ctx, req, emit)
 			}}
-			if err := r.RunInput(r.PrepareInput(input)); err != nil {
+			if _, err := r.RunInput(r.PrepareInput(input)); err != nil {
 				t.Fatal(err)
 			}
 			original := r.Current()
@@ -124,7 +124,7 @@ func TestBinaryAttachmentFrozenNativeInputAndHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			check(messages)
-			if err := r.Run(nil); err != nil {
+			if _, err := r.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			if requests != 2 {

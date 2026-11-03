@@ -26,9 +26,11 @@ import (
 // Event contains a view update, never authentication state. Inspection actions
 // belong to stream items; EntryID also identifies direct execution records.
 type Event struct {
+	OperationID     uint64 // Live execution identity; never reused across generations.
 	Generation      uint64 // Live-state owner; compaction preserves it, explicit resets advance it.
 	Kind, Text      string
-	SessionID       string // Runtime conversation at emission; the frontend discards stale-view events.
+	SessionID       string        // Runtime conversation at emission; the frontend discards stale-view events.
+	Continuation    *Continuation // Frozen handoff presentation; set only for continuation events.
 	EntryID         int64
 	RequestID       int64                                // Producing model request for streamed/completed assistant text.
 	Actor           string                               // Producing actor for any event; empty means the main actor.
@@ -62,8 +64,9 @@ type Inference interface {
 }
 
 // Runtime owns exactly one main session, and joins transient work before switching it.
-// Run, RunInput, and Command are called serially by the frontend;
-// Interrupt, CancelForeground and RequestModel are concurrent-safe.
+// SessionCoordinator serializes foreground execution and owns asynchronous human
+// admission. Synchronous Run/RunInput/Command remain serialized runtime entries;
+// Interrupt, CancelForeground and model preferences are concurrent-safe.
 type Runtime struct {
 	Store             *history.Store
 	Workspace         *workspace.Manager
@@ -77,7 +80,8 @@ type Runtime struct {
 	defaultTools      []llm.ToolDefinition // Owned immutable default schemas for this runtime config; never aliases Tools.
 	searchConfig      tool.WebSearchConfig // Operator settings, excluded from model context/history.
 	Jobs              *jobs.Manager
-	Emit              func(Event)
+	coordinator       *SessionCoordinator // Owns live admission, publication and execution identities.
+	Emit              func(Event)         // Optional observer, configured before work. Coordinator dispatch invokes it outside shared locks.
 	ctx               context.Context
 	cancel            context.CancelFunc
 	mu                sync.Mutex
@@ -95,9 +99,7 @@ type Runtime struct {
 	awaiting          map[string]bool             // orderMu; transient UI state, never restored.
 	awaitRequests     map[string]awaitRequest     // orderMu; consumed after sibling tool settlement.
 	activityStop      func()
-	children          map[string]*codingChild // Owned by childStartMu; live handles never restored.
-	childStartMu      sync.Mutex              // Serializes child capacity checks and admission, never child execution.
-	routeMu           sync.RWMutex            // Keeps child commits/file mutations within the current continuation.
+	routeMu           sync.RWMutex // Keeps child commits/file mutations within the current continuation.
 	current           string
 	persisted         bool   // False until the first user turn/message is committed atomically.
 	generation        uint64 // Advances on explicit transient resets, never compaction.
@@ -130,6 +132,7 @@ type Runtime struct {
 func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Inference, selection llm.Selection, session string, catalog *skills.Catalog, search tool.WebSearchConfig, emit func(Event)) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	r := &Runtime{Store: store, Workspace: w, Provider: p, selection: selection, providerID: selection.Provider, Skills: catalog, searchConfig: search, Emit: emit, ctx: ctx, cancel: cancel, current: history.NewID("session"), AutoName: true}
+	r.coordinator = newSessionCoordinator(r)
 	r.replaceAccounting(preparedAccounting{})
 	r.resetLiveWork()
 	if session != "" {
@@ -157,6 +160,7 @@ func (r *Runtime) resetLiveWork() {
 	r.orderError = nil
 	r.notifications = runtimeNoticeBacklog{}
 	r.steers = nil
+	r.coordinator.mainAccepting = false
 	r.orderMu.Unlock()
 	r.mu.Lock()
 	r.fatalCompaction = ""
@@ -253,22 +257,31 @@ func (r *Runtime) Entries() ([]history.Entry, error) {
 // Compaction preserves it so pending interactions remain usable.
 func (r *Runtime) Generation() uint64 { r.mu.Lock(); defer r.mu.Unlock(); return r.generation }
 func (r *Runtime) emit(e Event) {
-	r.mu.Lock()
-	if e.SessionID == "" {
-		e.SessionID = r.current
-	}
-	e.Generation = r.generation
-	r.mu.Unlock()
-	if r.Emit != nil {
-		r.Emit(e)
-	}
+	publications := r.reservePublications(1)
+	defer publications.release()
+	// Reserve before routing: publication cannot wait for a UI consumer while
+	// holding the continuation gate, and its session stamp matches queue order.
+	r.routeMu.RLock()
+	r.emitReserved(publications, e)
+	r.routeMu.RUnlock()
 }
+
+// Publish sends an external runtime presentation update through the same
+// ordered stream as runner updates and operation results. The runtime stamps
+// its current generation; it does not admit human input or change history.
+func (r *Runtime) Publish(e Event) { r.emit(e) }
 
 // Interrupt cancels foreground request/tools, leaving independent jobs until runtime
 // exit. An admitted main turn that stops records a developer interruption notice
 // after its tool results settle; calling Interrupt while idle records nothing.
 func (r *Runtime) Interrupt() {
+	registry := &r.coordinator.executions
+	registry.mu.Lock()
+	if id := registry.actors["main"]; id != 0 {
+		registry.interrupted[id] = true
+	}
 	r.cancelForeground(errUserInterrupted)
+	registry.mu.Unlock()
 }
 
 // CancelForeground cancels foreground work for cleanup without attributing the
@@ -283,19 +296,21 @@ func (r *Runtime) cancelForeground(cause error) {
 		r.activeCancel(cause)
 	}
 	r.mu.Unlock()
+	r.sealMainAdmission()
 }
 
 // Close stops the runtime and joins background naming, process groups and timers.
 // Call it after Run and Command return; Interrupt cancels active foreground work.
 func (r *Runtime) Close() {
+	if r.coordinator != nil {
+		r.coordinator.Close()
+	}
 	if r.activityStop != nil {
 		r.activityStop()
 		r.activityStop = nil
 	}
 	r.cancel()
 	r.CancelForeground()
-	r.stopNaming()
-	r.Jobs.Close()
 	r.timers.close()
 	r.clearImages()
 }
@@ -307,8 +322,23 @@ func (r *Runtime) HasNotifications() bool {
 	return r.notifications.len() > 0 || len(r.steers) > 0
 }
 
+// TurnCompletion is the saved terminal status of an admitted main turn. It is
+// returned only after foreground cleanup; it is not published on the event stream.
+// EntryID is zero if saving the status failed; an earlier turn error takes
+// precedence over that persistence error.
+type TurnCompletion struct {
+	Generation uint64
+	SessionID  string
+	TurnID     string
+	EntryID    int64
+	Text       string
+}
+
 // Run executes one user or notification turn through complete tool/result cycles.
-func (r *Runtime) Run(message *llm.Message) (err error) {
+// It returns a completion after settling an admitted turn, including on failure.
+// The completion is nil if no turn was admitted. Earlier view events are emitted
+// synchronously and must be consumed before presenting the returned completion.
+func (r *Runtime) Run(message *llm.Message) (*TurnCompletion, error) {
 	return r.run(message, nil)
 }
 
@@ -316,11 +346,13 @@ func (r *Runtime) Run(message *llm.Message) (err error) {
 // provider failures and cancellation inherited from the runtime's parent.
 var errUserInterrupted = errors.New("user interrupted turn")
 
-func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
+func (r *Runtime) run(message *llm.Message, input *InputAdmission) (completion *TurnCompletion, err error) {
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
+	finish := r.coordinator.enterMain()
+	defer finish()
 	if e := r.checkContext(false); e != nil {
-		return e
+		return nil, e
 	}
 	ctx, cancel := context.WithCancelCause(r.ctx)
 	defer cancel(nil)
@@ -329,22 +361,20 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		delete(r.awaitRequests, "main")
 		r.orderMu.Unlock()
 	}()
-	r.mu.Lock()
-	r.activeCancel = cancel
-	r.mu.Unlock()
+	r.installForegroundCancel(cancel)
 	defer func() { r.mu.Lock(); r.activeCancel = nil; r.activeTurn = ""; r.mu.Unlock() }()
 	trigger := "async"
 	if message != nil || input != nil {
 		trigger = "user"
 	}
 	if event, e := r.ApplyModel(""); e != nil {
-		return e
+		return nil, e
 	} else if event.Kind != "" {
 		r.emit(event)
 	}
 	selection := r.CurrentSelection()
 	if e := ctx.Err(); e != nil {
-		return e
+		return nil, e
 	}
 	r.mu.Lock()
 	id, persisted := r.current, r.persisted
@@ -384,18 +414,20 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		return e
 	})
 	if e != nil {
-		return e
+		return nil, e
 	}
 	r.mu.Lock()
 	r.activeTurn = turn
 	r.mu.Unlock()
+	r.openMainAdmission(ctx)
+	r.coordinator.executions.setPhase(r.coordinator.executions.actorID("main"), "running")
 	status := "failed"
 	started := time.Now()
 	modelTime := time.Duration(0)
 	outputTokens := 0
 	haveUsage := true
-	namingChecked := false
 	defer func() {
+		r.sealMainAdmission()
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			status = "interrupted"
 		}
@@ -435,22 +467,21 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		if err == nil && e != nil {
 			err = e
 		}
-		r.emit(Event{Kind: "status", Text: text, EntryID: id})
-
+		completion = &TurnCompletion{Generation: r.Generation(), SessionID: r.Current(), TurnID: turn, Text: text, EntryID: id}
 	}()
 	if message != nil {
 		entry := firstEntry
 		if entry == 0 {
 			entry, e = r.Store.Append(r.Current(), turn, "main", "message", "user", true, *message)
 			if e != nil {
-				return e
+				return nil, e
 			}
 		}
 		event := Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, MessageType: message.Type}
 		if message.Type == llm.TypeUserInput {
 			committed, err := r.Store.Entry(entry)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			event.InputSource = message.InputSource
 			if event.InputSource == "" {
@@ -460,179 +491,19 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (err error) {
 		}
 		r.emit(event)
 	}
-	priorAttempts := 0
-	var recovery *llm.Message
-	for {
-		if event, err := r.ApplyModel(turn); err != nil {
-			return err
-		} else if event.Kind != "" {
-			r.emit(event)
-		}
-		selection = r.CurrentSelection()
-		if e = ctx.Err(); e != nil {
-			return e
-		}
-		system := systemTemplate
-		admitted, _, e := r.admitMain(ctx, turn, selection)
-		if errors.Is(e, errNeedsCompaction) {
-			r.emit(Event{Kind: "status", Text: "Compacting context…"})
-			result, err := r.compactContext(ctx, "", selection, recovery, false)
-			if err != nil {
-				return fmt.Errorf("automatic compaction failed: %w", err)
-			}
-			r.emit(Event{Kind: "continuation", Text: result})
-			continue
-		}
-		if e != nil {
-			return e
-		}
-		request, messages := admitted.RequestID, admitted.Messages
-		defs := r.Tools.Definitions()
-		for _, entry := range admitted.SteerEntries {
-			v, e := r.Store.Entry(entry)
-			if e != nil {
-				return e
-			}
-			var m llm.Message
-			if e = json.Unmarshal(v.Content, &m); e != nil {
-				return e
-			}
-			r.emit(Event{Kind: "message", Text: m.DisplayText(), EntryID: entry, MessageType: m.Type, InputSource: "steer", InputTimeMS: v.CreatedMS})
-		}
-		if e = r.deliverNoticeEntries("main", admitted.NoticeEntries); e != nil {
-			return e
-		}
-		_, e = r.Store.RecordSystemPrompt(r.Current(), turn, "main", request, system)
-		if e != nil {
-			return e
-		}
-		reply := llm.Message{Type: llm.TypeAssistant}
-		var text strings.Builder
-		var usage *llm.Usage
-		responseID := ""
-		serviceTier := ""
-		requestStart := time.Now()
-		r.mu.Lock()
-		r.mainPrefix = append([]llm.Message(nil), messages...)
-		r.prefixSelection, r.prefixTurn = selection, turn
-		r.prefixSession, r.prefixTip = r.current, admitted.EntryTip
-		r.mu.Unlock()
-		projected, e := contextbuild.ProjectRetainedInputs(messages)
-		if e != nil {
-			return e
-		}
-		callbackFailed := false
-		streamErr := r.stream(ctx, turn, "main", request, llm.Request{ConversationID: r.Current(), Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(event llm.StreamEvent) (err error) {
-			defer func() { callbackFailed = callbackFailed || err != nil }()
-			if e := ctx.Err(); e != nil {
-				return e
-			}
-			switch event.Kind {
-			case "retry":
-				return r.retryNotice(turn, "main", request, "coding", event.Retry)
-			case "call_start":
-				return r.toolAnnouncement(turn, "main", request, event.CallStart)
-			case "call_progress":
-				return r.toolProgress("main", request, event.CallProgress)
-			case "text":
-				text.WriteString(event.Text)
-				r.emit(Event{Kind: "delta", Text: render.Clean(event.Text), RequestID: request})
-			case "call":
-				if event.Call == nil {
-					return errors.New("provider emitted nil call")
-				}
-				reply.Calls = append(reply.Calls, *event.Call)
-			case "phase":
-				reply.Phase = event.Phase
-			case "state":
-				return reply.AppendState(selection, event.StateVersion, event.StateItem)
-			case "completed":
-				usage = event.Usage
-				responseID = event.ResponseID
-				serviceTier = event.ServiceTier
-			}
-			return nil
-		})
-		reply.Content = text.String()
-		r.recordUsage(usage)
-		if streamErr != nil {
-			// State/call callbacks can be interrupted halfway through completion.
-			// Canonical partial output remains inspectable, but cannot replay a
-			// native payload whose corresponding calls were never committed.
-			reply.State = nil
-		}
-		r.emit(Event{Kind: "tool_stream_end", PendingKey: pendingToolKey(request, ""), Text: streamState(streamErr)})
-		elapsed := time.Since(requestStart)
-		modelTime += elapsed
-		if !usage.Usable() {
-			haveUsage = false
-		} else {
-			outputTokens += usage.OutputTokens
-		}
-		requestStatus := "completed"
-		if streamErr != nil {
-			requestStatus = "failed"
-		}
-		attempt := history.RequestAttempt{DurationMS: elapsed.Milliseconds(), ResponseID: responseID, ServiceTier: serviceTier, Usage: usage, Status: requestStatus}
-		if streamErr != nil {
-			attempt.Error = streamErr.Error()
-		}
-		if e = r.Store.FinishRequest(request, history.RequestCompletion{Status: requestStatus, Attempts: []history.RequestAttempt{attempt}}); e != nil {
-			return e
-		}
-		if streamErr == nil {
-			if usage.Usable() {
-				if result, ok := r.estimator.ObserveUsage(request, usage.InputTokens); ok {
-					r.mu.Lock()
-					r.usage = usageFromEstimate(selection, result)
-					r.mu.Unlock()
-				}
-			}
-			r.mu.Lock()
-			r.reported = nil
-			if usage.Usable() {
-				r.reported = copyReported(&ReportedUsage{Model: selection.Model.ID + " · " + selection.Variant, Tokens: *usage})
-			}
-			r.mu.Unlock()
-		}
-		r.emit(Event{Kind: "usage"})
-		var callIDs []string
-		if reply.Content != "" || len(reply.Calls) > 0 || reply.State != nil {
-			id, ids, e := r.Store.Assistant(r.Current(), turn, "main", request, reply)
-			if e != nil {
-				return e
-			}
-			callIDs = ids
-			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: id, RequestID: request})
-		}
-		if _, e = r.runToolBatch(ctx, turn, "main", r.Tools, reply.Calls, callIDs, streamErr); e != nil {
-			return e
-		}
-		r.emit(Event{Kind: "usage"})
-		if streamErr != nil {
-			var partial *llm.PartialError
-			if callbackFailed || !errors.As(streamErr, &partial) {
-				return streamErr
-			}
-			message, err := r.recoverPartial(ctx, turn, "main", request, priorAttempts, partial)
-			if err != nil {
-				return err
-			}
-			recovery = &message
-			priorAttempts = partial.Retry.Attempt - 1
-			continue
-		}
-		priorAttempts, recovery = 0, nil
-		if !namingChecked && message != nil && r.AutoName {
-			namingChecked = true
-			r.startNaming(turn, selection, *message, reply)
-		}
-		pending := r.HasNotifications()
-		if len(reply.Calls) == 0 && !pending {
-			status = "completed"
-			return nil
-		}
+	runner := AgentRunner{
+		runtime: r, actor: "main", turn: turn, tools: r.Tools,
+		context: &mainAgentContext{runtime: r, turn: turn},
+		policy:  &mainAgentPolicy{runtime: r, turn: turn, input: message},
+		output:  agentOutput{streamText: true, showReply: true, showUsage: true},
 	}
+	result, err := runner.run(ctx)
+	r.sealMainAdmission()
+	modelTime, outputTokens, haveUsage = result.ModelTime, result.OutputTokens, result.UsageKnown
+	if err == nil {
+		status = "completed"
+	}
+	return nil, err
 }
 
 // turnDuration formats elapsed time in whole seconds, omitting zero units.
@@ -664,6 +535,8 @@ func (r *Runtime) Command(text string) (string, error) {
 	}
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
+	finish := r.coordinator.enterMain()
+	defer finish()
 	parts := strings.SplitN(text, " ", 2)
 	switch parts[0] {
 	case "/new", "/clear", "/load", "/undo", "/redo", "/branch":

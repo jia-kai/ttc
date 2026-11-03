@@ -66,7 +66,7 @@ func seedRuntime(t *testing.T, r *Runtime, content string) {
 func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"result.txt","content":"verified\n"}`)}}}, {Text: "Saved result."}})
 	m := llm.Message{Type: llm.TypeUserInput, Content: "Write a result"}
-	if e := r.Run(&m); e != nil {
+	if _, e := r.Run(&m); e != nil {
 		t.Fatal(e)
 	}
 	b, e := os.ReadFile(filepath.Join(r.Workspace.Root, "result.txt"))
@@ -114,7 +114,11 @@ func TestTurnToolRoundTripUndoRedoAndSystemInspection(t *testing.T) {
 func TestQuestionAnswerAndPendingCancellation(t *testing.T) {
 	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"color","prompt":"Color?","options":[{"id":"red","label":"Red"},{"id":"blue","label":"Blue"}]}]}`)}}}, {Text: "Red selected."}})
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "Ask"}; done <- r.Run(&m) }()
+	go func() {
+		m := llm.Message{Type: llm.TypeUserInput, Content: "Ask"}
+		_, err := r.Run(&m)
+		done <- err
+	}()
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
@@ -178,7 +182,7 @@ func TestTimerCoalescingAndSwitchStopsJobs(t *testing.T) {
 func TestPartialFailureLeavesUndoableAndWellFormedHistory(t *testing.T) {
 	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "p", Name: "write", Arguments: []byte(`{"path":"x","content":"data"}`)}}}})
 	m := llm.Message{Type: llm.TypeUserInput, Content: "write"}
-	if e := r.Run(&m); e == nil {
+	if _, e := r.Run(&m); e == nil {
 		t.Fatal("expected script exhaustion")
 	}
 	if _, e := r.Command("/undo"); e != nil {
@@ -237,7 +241,7 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 	r.Provider = p
 	r.AutoName = true
 	m := llm.Message{Type: llm.TypeUserInput, Content: "first prompt"}
-	if e := r.Run(&m); e != nil {
+	if _, e := r.Run(&m); e != nil {
 		t.Fatal(e)
 	}
 	var firstTurn string
@@ -256,7 +260,11 @@ func TestNamingClaimIsFirstTurnAndDoesNotBlockNextTurn(t *testing.T) {
 		t.Fatal("naming not started")
 	}
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "second prompt"}; done <- r.Run(&m) }()
+	go func() {
+		m := llm.Message{Type: llm.TypeUserInput, Content: "second prompt"}
+		_, err := r.Run(&m)
+		done <- err
+	}()
 	select {
 	case e := <-done:
 		if e != nil {
@@ -353,7 +361,7 @@ func TestEarlyBackgroundCompletionHasIndependentDurableCard(t *testing.T) {
 		}
 		return initial, nil // Preserve the running launch snapshot after completion.
 	})
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "background"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "background"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.HasNotifications() {

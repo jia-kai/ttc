@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 	"ttc/internal/prompts"
 	"unicode"
 	"unicode/utf8"
@@ -15,7 +14,6 @@ import (
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
-	"ttc/internal/render"
 	"ttc/internal/tool"
 )
 
@@ -66,19 +64,19 @@ func (r *Runtime) addSubagentTool() {
 		if err != nil {
 			return nil, err
 		}
-		r.childStartMu.Lock()
-		child := r.children[a.ChildID]
+		r.coordinator.childMu.Lock()
+		child := r.coordinator.children[a.ChildID]
 		if a.ChildID != "" {
 			if child == nil {
-				r.childStartMu.Unlock()
+				r.coordinator.childMu.Unlock()
 				return nil, tool.Fail("not_found", prompts.ChildUnknownFollowup)
 			}
 			if a.Label != "" && strings.Join(strings.Fields(a.Label), " ") != child.label {
-				r.childStartMu.Unlock()
+				r.coordinator.childMu.Unlock()
 				return nil, tool.Fail("invalid_arguments", prompts.ChildFollowupLabel)
 			}
 			if child.state != "idle" || child.closing {
-				r.childStartMu.Unlock()
+				r.coordinator.childMu.Unlock()
 				return nil, tool.Fail("child_busy", prompts.ChildFollowupBusy)
 			}
 			selection = child.selection
@@ -96,19 +94,19 @@ func (r *Runtime) addSubagentTool() {
 					asideCount++
 				}
 			}
-			if len(r.children)+asideCount >= maxChildSlots {
-				r.childStartMu.Unlock()
+			if len(r.coordinator.children)+asideCount >= maxChildSlots {
+				r.coordinator.childMu.Unlock()
 				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
 			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), easy: easy, estimator: &contextbuild.Estimator{}, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_steer" && name != "question" })}
-			r.children[child.id] = child
+			r.coordinator.children[child.id] = child
 		}
 		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, selection)
 		if err != nil {
 			if a.ChildID == "" {
-				delete(r.children, child.id)
+				delete(r.coordinator.children, child.id)
 			}
-			r.childStartMu.Unlock()
+			r.coordinator.childMu.Unlock()
 			return nil, err
 		}
 		// Preserve the idle context and selection if durable admission fails.
@@ -120,6 +118,8 @@ func (r *Runtime) addSubagentTool() {
 		child.job = ""
 		child.turn = turn
 		assignment := &childAssignment{
+			executionID:     r.coordinator.executions.begin(child.id, "subagent", "", r.Generation()).ID,
+			inspection:      newChildPromptInspection(a.Prompt),
 			accepting:       true,
 			queueTokenLimit: min(maxChildMessageQueueTokens, selection.Model.Budget.NextTurnInputReserve),
 			turn:            turn, persistent: *a.Persistent, background: a.Background,
@@ -134,8 +134,8 @@ func (r *Runtime) addSubagentTool() {
 		r.orderMu.Unlock()
 		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child, estimator: child.estimator}
 		ready := make(chan struct{})
-		r.childStartMu.Unlock()
-		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background, Easy: child.easy}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
+		r.coordinator.childMu.Unlock()
+		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background, Easy: child.easy, Inspector: assignment.inspection.inspect}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
 			<-ready
 			defer func() {
 				task.cancelled = childCtx.Err() != nil
@@ -145,13 +145,13 @@ func (r *Runtime) addSubagentTool() {
 			}()
 			return jobs.TaskResult{}, r.runChild(childCtx, task, stdout, stderr)
 		})
-		r.childStartMu.Lock()
+		r.coordinator.childMu.Lock()
 		child.job = id
 		assignment.job = id
 		if err == nil {
 			err = r.publishChild(child.view())
 		}
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		close(ready)
 		if err != nil {
 			if id != "" {
@@ -182,12 +182,12 @@ func (r *Runtime) addSubagentTool() {
 		}
 		var warnings []tool.InputWarning
 		if a.Easy != nil {
-			r.childStartMu.Lock()
-			child := r.children[a.ChildID]
+			r.coordinator.childMu.Lock()
+			child := r.coordinator.children[a.ChildID]
 			if child != nil {
 				warnings = append(warnings, tool.InputWarning{Code: "input_ignored", Parameter: "easy", Requested: *a.Easy, Effective: child.easy, Message: prompts.ChildFollowupEasy})
 			}
-			r.childStartMu.Unlock()
+			r.coordinator.childMu.Unlock()
 		}
 		normalized := strings.Join(strings.Fields(a.Label), " ")
 		if normalized != a.Label {
@@ -216,13 +216,18 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	if task.estimator == nil {
 		task.estimator = &contextbuild.Estimator{}
 	}
-	actor, turn, prompt, selection := task.actor, task.turn, task.prompt, task.selection
+	actor, turn, prompt := task.actor, task.turn, task.prompt
 	defer r.clearActorImage(actor, "")
 	messages := append([]llm.Message(nil), task.prefix...)
 	var grantNotice *llm.Message
 	if task.assignment != nil && len(task.assignment.initialReadGrants) != 0 {
 		notice := llm.NewJobReadGrantNotice(task.assignment.initialReadGrants)
 		grantNotice = &notice
+	}
+	var publications *publicationReservation
+	if task.aside {
+		publications = r.reservePublications(1)
+		defer publications.release()
 	}
 	r.routeMu.RLock()
 	if task.aside {
@@ -232,7 +237,7 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 			r.routeMu.RUnlock()
 			return err
 		}
-		r.emit(Event{Kind: "message", Actor: actor, MessageType: instruction.Type, EntryID: id})
+		r.emitReserved(publications, Event{Kind: "message", Actor: actor, MessageType: instruction.Type, EntryID: id})
 		messages = append(messages, instruction)
 	}
 	question := llm.Message{Type: llm.TypeUserInput, Content: prompt, InputSource: "task"}
@@ -252,6 +257,9 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		grantEntry, err = r.Store.Append(r.Current(), turn, actor, "message", "user", false, *grantNotice)
 	}
 	r.routeMu.RUnlock()
+	if publications != nil {
+		publications.release()
+	}
 	if err != nil {
 		return err
 	}
@@ -261,218 +269,17 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		messages = append(messages, *grantNotice)
 		r.emit(Event{Kind: "message", Actor: actor, Text: grantNotice.Content, EntryID: grantEntry, MessageType: grantNotice.Type})
 	}
-	defs := task.tools.Definitions()
-	cursor := task.cursor
-	priorAttempts := 0
-	compactedForAdmission := false
-	var recovery *llm.Message
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		system := childSystemTemplate
-		if task.aside {
-			system = asideSystemTemplate
-		}
-		r.routeMu.RLock()
-		admitted, nextContext, err := r.admitChild(ctx, task, messages, cursor)
-		if errors.Is(err, errNeedsCompaction) {
-			r.routeMu.RUnlock()
-			if compactedForAdmission {
-				return errors.New(prompts.ChildAdmissionAfterCompaction)
-			}
-			messages, cursor, err = r.compactChild(ctx, task, messages, cursor, recovery)
-			if err != nil {
-				return err
-			}
-			compactedForAdmission = true
-			continue
-		}
-		if err != nil {
-			r.routeMu.RUnlock()
-			return err
-		}
-		request := admitted.RequestID
-		compactedForAdmission = false
-		cursor = nextContext
-		messages = admitted.Messages
-		_, err = r.Store.RecordSystemPrompt(r.Current(), turn, actor, request, system)
-		r.routeMu.RUnlock()
-		if err != nil {
-			return err
-		}
-		if err := r.deliverNoticeEntries(actor, admitted.NoticeEntries); err != nil {
-			return err
-		}
-		reply := llm.Message{Type: llm.TypeAssistant}
-		var text strings.Builder
-		started := time.Now()
-		var usage *llm.Usage
-		var responseID, serviceTier string
-		projected, err := contextbuild.ProjectRetainedInputs(messages)
-		if err != nil {
-			return err
-		}
-		callbackFailed := false
-		streamErr := r.stream(ctx, turn, actor, request, llm.Request{ConversationID: actor, Selection: selection, System: system, Messages: projected, Tools: defs, OutputTokens: selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts}, func(ev llm.StreamEvent) (err error) {
-			defer func() { callbackFailed = callbackFailed || err != nil }()
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			switch ev.Kind {
-			case "retry":
-				return r.retryNotice(turn, actor, request, "coding", ev.Retry)
-			case "call_start":
-				return r.toolAnnouncement(turn, actor, request, ev.CallStart)
-			case "call_progress":
-				return r.toolProgress(actor, request, ev.CallProgress)
-			case "completed":
-				usage, responseID, serviceTier = ev.Usage, ev.ResponseID, ev.ServiceTier
-			case "text":
-				limit := 32 << 20
-				if task.aside {
-					limit = 64 << 10
-				}
-				if text.Len()+len(ev.Text) > limit {
-					return fmt.Errorf(prompts.ChildResponseTooLarge, limit)
-				}
-				text.WriteString(ev.Text)
-				if task.aside {
-					return nil
-				}
-				_, err := io.WriteString(stdout, ev.Text)
-				if err == nil {
-					r.emit(Event{Kind: "delta", Text: render.Clean(ev.Text), RequestID: request, Actor: actor})
-				}
-				return err
-			case "call":
-				if ev.Call == nil {
-					return errors.New(prompts.SessionProviderNilCall)
-				}
-				reply.Calls = append(reply.Calls, *ev.Call)
-			case "phase":
-				reply.Phase = ev.Phase
-			case "state":
-				return reply.AppendState(selection, ev.StateVersion, ev.StateItem)
-			}
-			return nil
-		})
-		reply.Content = text.String()
-		if task.child != nil && strings.TrimSpace(reply.Content) != "" {
-			// Capture before storage/tool settlement: local failures must still
-			// hand back the last assistant text, including an interrupted stream.
-			r.childStartMu.Lock()
-			task.assignment.answer, task.assignment.truncated = childAnswer(reply.Content)
-			task.assignment.result = 0
-			task.assignment.inheritedAnswer = false
-			r.childStartMu.Unlock()
-		}
-		r.recordUsage(usage)
-		if streamErr == nil && usage.Usable() {
-			task.estimator.ObserveUsage(request, usage.InputTokens)
-		}
-		if streamErr != nil {
-			reply.State = nil // Interrupted completion callbacks may leave an incomplete replay payload.
-		}
-		if task.child != nil {
-			r.childStartMu.Lock()
-			task.assignment.pending = &reply
-			r.childStartMu.Unlock()
-		}
-		r.emit(Event{Kind: "tool_stream_end", PendingKey: pendingToolKey(request, ""), Text: streamState(streamErr)})
-		status := "completed"
-		if streamErr != nil {
-			status = "failed"
-		}
-		attempt := history.RequestAttempt{DurationMS: time.Since(started).Milliseconds(), Usage: usage, ResponseID: responseID, ServiceTier: serviceTier, Status: status}
-		if streamErr != nil {
-			attempt.Error = streamErr.Error()
-		}
-		if err := r.Store.FinishRequest(request, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}}); err != nil {
-			return err
-		}
-		r.routeMu.RLock()
-		entry, ids, err := r.Store.Assistant(r.Current(), turn, actor, request, reply)
-		r.routeMu.RUnlock()
-		if err != nil {
-			return err
-		}
-		if !task.aside {
-			r.emit(Event{Kind: "assistant", Text: reply.Content, EntryID: entry, RequestID: request, Actor: actor})
-		}
-		messages = append(messages, reply)
-		if task.child != nil {
-			r.childStartMu.Lock()
-			if strings.TrimSpace(reply.Content) != "" {
-				task.assignment.result = entry
-			}
-			task.assignment.pending = nil
-			r.childStartMu.Unlock()
-		}
-		records, err := r.runToolBatch(ctx, turn, actor, task.tools, reply.Calls, ids, streamErr)
-		if err != nil {
-			return err
-		}
-		for i, record := range records {
-			if _, err := fmt.Fprintln(stderr, record.Markdown.Summary); err != nil {
-				return err
-			}
-			messages = append(messages, llm.Message{Type: llm.TypeToolResult, CallID: reply.Calls[i].ID, Content: string(record.Result), Files: record.Files})
-		}
-		if streamErr != nil {
-			var partial *llm.PartialError
-			if callbackFailed || !errors.As(streamErr, &partial) {
-				return streamErr
-			}
-			message, err := r.recoverPartial(ctx, turn, actor, request, priorAttempts, partial)
-			if err != nil {
-				return err
-			}
-			messages = append(messages, message)
-			recovery = &message
-			priorAttempts = partial.Retry.Attempt - 1
-			continue
-		}
-		priorAttempts, recovery = 0, nil
-		if task.aside && len(reply.Calls) == 0 {
-			_, err := io.WriteString(stdout, reply.Content)
-			return err
-		}
-		notification, err := r.childImageReply(ctx, actor, len(reply.Calls) == 0)
-		if err != nil {
-			return err
-		}
-		if notification != nil {
-			r.routeMu.RLock()
-			id, err := r.Store.Append(r.Current(), turn, actor, "message", "user", false, *notification)
-			r.routeMu.RUnlock()
-			if err != nil {
-				return err
-			}
-			messages = append(messages, *notification)
-			r.emit(Event{Kind: "message", Actor: actor, Text: notification.Content, EntryID: id, MessageType: notification.Type})
-		} else if len(reply.Calls) == 0 {
-			if task.child != nil {
-				// A final response and a parent send race on the same gate. A
-				// queued message continues this assignment, never a new turn.
-				r.orderMu.Lock()
-				pending := len(task.assignment.queued) != 0 || task.assignment.runtimeNotices.len() != 0
-				if !pending {
-					task.assignment.accepting = false
-				}
-				r.orderMu.Unlock()
-				if pending {
-					continue
-				}
-				if strings.TrimSpace(reply.Content) == "" {
-					return errors.New(prompts.ChildCompletedWithoutText)
-				}
-				r.childStartMu.Lock()
-				task.child.messages = messages
-				task.child.cursor = cursor
-				r.childStartMu.Unlock()
-			}
-			return nil
-		}
+	actorContext := &assignmentAgentContext{
+		runtime: r, task: task, messages: messages, cursor: task.cursor, system: childSystemTemplate,
 	}
+	var policy agentPolicy = &assignmentAgentPolicy{runtime: r, context: actorContext}
+	output := agentOutput{stdout: stdout, stderr: stderr, textLimit: 32 << 20, streamText: true, showReply: true}
+	if task.aside {
+		actorContext.system = asideSystemTemplate
+		policy = &asideAgentPolicy{stdout: stdout}
+		output.textLimit, output.streamText, output.showReply = 64<<10, false, false
+	}
+	runner := AgentRunner{runtime: r, actor: actor, turn: turn, tools: task.tools, context: actorContext, policy: policy, output: output, saveEmpty: true}
+	_, err = runner.run(ctx)
+	return err
 }

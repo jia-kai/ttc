@@ -111,7 +111,7 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 	u.key(tcell.KeyEnter)
 	u.wait(t, "1 attachments")
 	// This unpersisted status disappears if help unnecessarily replays history.
-	u.runtime.Emit(session.Event{Kind: "status", Text: "STATUS_BEFORE_HELP", Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "status", Text: "STATUS_BEFORE_HELP", Generation: u.runtime.Generation()})
 	u.wait(t, "STATUS_BEFORE_HELP")
 	generation := u.runtime.Generation()
 	u.typeText(" /help ")
@@ -151,7 +151,7 @@ func TestBusyHelpPreservesTurnQueueSteersAndAttachments(t *testing.T) {
 func TestIdleHelpPreservesUnpersistedStatusWithoutInference(t *testing.T) {
 	p := &helpTestProvider{requests: make(chan llm.Request, 8), release: make(chan struct{})}
 	u := newQuestionTestUI(t, p)
-	u.runtime.Emit(session.Event{Kind: "status", Text: "IDLE_STATUS_BEFORE_HELP", Generation: u.runtime.Generation()})
+	u.runtime.Publish(session.Event{Kind: "status", Text: "IDLE_STATUS_BEFORE_HELP", Generation: u.runtime.Generation()})
 	u.wait(t, "IDLE_STATUS_BEFORE_HELP")
 	u.typeText("/help")
 	u.key(tcell.KeyEnter)
@@ -193,13 +193,7 @@ func TestPlainBusyHelpPrintsBeforeActiveResponseFinishes(t *testing.T) {
 	p := &helpTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "Plain response."}}}, requests: make(chan llm.Request, 8), release: make(chan struct{})}
 	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := make(chan session.Event, 64)
-	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
-		select {
-		case events <- e:
-		case <-ctx.Done():
-		}
-	})
+	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, nil)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -208,7 +202,7 @@ func TestPlainBusyHelpPrintsBeforeActiveResponseFinishes(t *testing.T) {
 	input, writer := io.Pipe()
 	t.Cleanup(func() { input.Close(); writer.Close() })
 	output := make(chan string, 128)
-	f := Frontend{Runtime: r, Events: events, Input: input, Output: eventWriter{output}, Plain: true}
+	f := Frontend{Runtime: r, Input: input, Output: eventWriter{output}, Plain: true}
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); _ = f.Run(ctx) }()
 	t.Cleanup(func() {

@@ -14,6 +14,7 @@ func TestSteerInputsPreservesUnitsAttachmentsAndAtomicCancellation(t *testing.T)
 	r.activeTurn = "active-fixture"
 	_, r.activeCancel = context.WithCancelCause(context.Background())
 	r.mu.Unlock()
+	r.openMainAdmission(context.Background())
 	inputs := []contextbuild.Input{
 		{Text: "first raw instruction", Source: "queue", Attachments: []contextbuild.Attachment{{Path: "first.txt", Kind: "file", Text: "first evidence"}}},
 		{Text: "second raw instruction", Source: "queue", Attachments: []contextbuild.Attachment{{Path: "second.txt", Kind: "file", Text: "second evidence"}}},

@@ -16,14 +16,17 @@ type Frontend struct {
 	Screen   tcell.Screen    // Optional injected terminal screen for deterministic UI tests.
 	Graphics *graphics.Kitty // Optional protocol sink for deterministic graphics tests.
 	Runtime  *session.Runtime
-	Events   <-chan session.Event
 	Input    io.Reader
 	Output   io.Writer
 	Plain    bool
+	Notices  []string // Startup maintenance notices, presented after history replay.
 	// Login authorizes and returns a fresh catalog. The owner must cancel/join
 	// old discovery and discard stale deliveries before returning, even on error.
 	// Nil disables interactive authorization; errors leave the picker unavailable.
-	Login     func(context.Context) ([]llm.ModelSpec, error)
+	Login func(context.Context) ([]llm.ModelSpec, error)
+	// Reconnect resets provider connections without stopping turns, jobs or timers.
+	// It must return promptly and be safe during active requests; nil is unsupported.
+	Reconnect func() error
 	EditInput func(context.Context, string) (string, error) // Optional editor override for embedding/tests.
 	Models    []llm.ModelSpec                               // Initial catalog; owned by the event loop during Run.
 	// ModelUpdates optionally delivers externally refreshed catalogs. Nil disables

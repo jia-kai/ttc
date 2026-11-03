@@ -19,15 +19,18 @@ import (
 const btwInstruction = prompts.Btw
 
 // StartBTW launches a read-only aside without interrupting the main turn. The
-// frontend calls it serially with lifecycle commands, but it may overlap Run.
+// coordinator fences admission against lifecycle commands; it may overlap Run.
 // Context and model selection freeze at admission. A blank session is rejected;
 // session changes and exit cancel and join the task through the job supervisor.
+// Human requests reach this method through asynchronous coordinator admission.
 func (r *Runtime) StartBTW(question string) (string, error) {
 	if err := r.checkContext(false); err != nil {
 		return "", err
 	}
-	// Keep the frozen source and its descriptor on the same selected continuation
-	// while main compaction may otherwise advance routing during aside admission.
+	// Use the child lifecycle lock order. Admission may wait for a handoff, but
+	// never blocks the frontend event loop or holds a lock needed by publication.
+	r.coordinator.childMu.Lock()
+	defer r.coordinator.childMu.Unlock()
 	r.routeMu.RLock()
 	defer r.routeMu.RUnlock()
 	question = strings.TrimSpace(question)
@@ -91,9 +94,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 		label = append(label[:63], '…')
 	}
 	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: tools, aside: true, estimator: estimator}
-	r.childStartMu.Lock()
-	defer r.childStartMu.Unlock()
-	count := len(r.children)
+	count := len(r.coordinator.children)
 	for _, v := range r.Jobs.Live() {
 		if v.Kind == "btw" {
 			count++
@@ -105,12 +106,17 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if err := r.Store.RecordActorPrefix(sessionID, turn, actor, prefixSession, prefixTip); err != nil {
 		return "", err
 	}
-	return r.Jobs.StartTask(task.actor, jobs.TaskOptions{
+	execution := r.coordinator.executions.begin(actor, "btw", "", r.Generation())
+	id, err := r.Jobs.StartTask(task.actor, jobs.TaskOptions{
 		Kind: "btw", Label: string(label), Background: true,
 		Inspector: btwInspector,
 	}, func(ctx context.Context, stdout, stderr io.Writer) (jobs.TaskResult, error) {
 		return jobs.TaskResult{}, r.runChild(ctx, task, stdout, stderr)
 	})
+	if err != nil {
+		r.coordinator.executions.finish(execution.ID)
+	}
+	return id, err
 }
 
 // btwInspector keeps the answer as Markdown and diagnostics as bounded literal

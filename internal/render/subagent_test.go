@@ -56,6 +56,27 @@ func TestSubagentResponseSingleLineAndToolFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestSubagentFinalAnswerHighlightsOnlyLabelAndKeepsCellBounds(t *testing.T) {
+	for _, width := range []int{1, 2, 8, 10, 16, 20, 30, 80} {
+		plain := SubagentResponse("child", "helper", "final answer", "heading 界 body", width, false)
+		colored := SubagentResponse("child", "helper", "final answer", "heading 界 body", width, true)
+		if strings.ContainsAny(plain, "\x1b\n\r\t") || !utf8.ValidString(colored) || ansi.StringWidth(colored) > width || ansi.Strip(colored) != plain {
+			t.Fatalf("width %d: plain=%q styled=%q", width, plain, colored)
+		}
+		if strings.Contains(colored, "\x1b[1m") && !strings.Contains(colored, "\x1b[22m") {
+			t.Fatalf("bold label leaked after truncation at width %d: %q", width, colored)
+		}
+	}
+	full := SubagentResponse("child", "helper", "final answer", "body", 80, true)
+	if !strings.Contains(full, "\x1b[1mfinal answer\x1b[22m body") {
+		t.Fatalf("label-only emphasis missing: %q", full)
+	}
+	ordinary := SubagentResponse("child", "helper", "assistant", "body", 80, true)
+	if strings.Contains(ordinary, "\x1b[1m") {
+		t.Fatalf("ordinary assistant label was emphasized: %q", ordinary)
+	}
+}
+
 func TestSubagentJobCompletionDoesNotRepeatAssistantOutputTail(t *testing.T) {
 	result := []byte(`{"status":"completed","stdout":"hidden assistant TAIL","stderr":"diagnostic"}`)
 	child := Tool("subagent", []byte(`{"label":"helper"}`), []byte(`{"assignment_status":"completed","stdout":"hidden assistant TAIL","stderr":"diagnostic"}`))

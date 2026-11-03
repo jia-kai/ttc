@@ -71,7 +71,7 @@ func newNotificationRetryUI(t *testing.T, oversized, interrupt bool) (*questionT
 	}
 	u := newQuestionTestUIWithSetup(t, p, nil, func(r *session.Runtime) {
 		seed := llm.Message{Type: llm.TypeUserInput, Content: "Seed research history"}
-		if err := r.Run(&seed); err != nil {
+		if _, err := r.Run(&seed); err != nil {
 			t.Fatal(err)
 		}
 		if oversized {
@@ -267,6 +267,7 @@ func TestForegroundFailurePausesFreshNotificationsUntilUserPrompt(t *testing.T) 
 			u.key(tcell.KeyEnter)
 			waitNotificationRetryRequest(t, p.ready)
 			if interrupt {
+				u.wait(t, "Working") // Interrupt targets the execution actually rendered to the human.
 				u.key(tcell.KeyEscape)
 				u.key(tcell.KeyEscape)
 			} else {

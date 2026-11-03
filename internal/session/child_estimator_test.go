@@ -186,7 +186,7 @@ func TestPersistentChildUnusableFeedbackPreservesEstimator(t *testing.T) {
 				t.Fatal(first)
 			}
 			childID := first["child_id"].(string)
-			child := r.children[childID]
+			child := r.coordinator.children[childID]
 			estimator := child.estimator
 			if estimator == nil {
 				t.Fatal("production child did not retain its estimator")

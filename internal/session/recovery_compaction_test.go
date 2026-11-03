@@ -301,7 +301,7 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 			}}
 			var err error
 			if actor == "main" {
-				err = r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Recover this task"})
+				_, err = r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Recover this task"})
 			} else {
 				seedRuntime(t, r, "Private main context")
 				turn, e := r.Store.BeginChildTurn(r.Current(), actor, r.selection)

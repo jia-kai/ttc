@@ -67,7 +67,7 @@ func TestHTTPContextLengthPartialCodingPreservesEvidenceWithoutContinuation(t *t
 					requests.Add(1)
 					streamMockResponse(w, "explicit-retry", 2, nil, "Explicit retry succeeded")
 				}))
-				if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Retry explicitly"}); err != nil || requests.Load() != 2 {
+				if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Retry explicitly"}); err != nil || requests.Load() != 2 {
 					t.Fatal("explicit recovery was blocked", err, requests.Load())
 				}
 			}

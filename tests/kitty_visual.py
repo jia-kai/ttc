@@ -615,7 +615,7 @@ def main():
         # inference request is needed; the saved audit stays explicitly inspectable.
         demo_root = Path(json.loads((root / 'demo.json').read_text())['root'])
         with sqlite3.connect(demo_root / 'data/history.sqlite') as db:
-            prompt = db.execute("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='system_prompt' ORDER BY id LIMIT 1").fetchone()[0]
+            prompt, prompt_path = db.execute("SELECT id,json_extract(content_json,'$.path') FROM entries WHERE json_extract(content_json,'$.type')='system_prompt' ORDER BY id LIMIT 1").fetchone()
             shell = db.execute("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='shell' AND json_extract(c.result_json,'$.exit_code')=0 ORDER BY r.entry_id LIMIT 1").fetchone()[0]
             job_read = db.execute("SELECT r.entry_id FROM tool_records r JOIN tool_calls c ON c.id=r.call_id WHERE c.name='job_read' ORDER BY r.entry_id LIMIT 1").fetchone()[0]
         send(f'/inspect {shell}\r')
@@ -637,7 +637,8 @@ def main():
         key('esc')
         wait('Esc closes', present=False)
         send(f'/inspect {prompt}\r')
-        wait('You are TTC')
+        # Match the saved prompt, keeping the prefix shorter than a wrapped row.
+        wait(Path(prompt_path).read_text().splitlines()[0][:48])
         capture('system-prompt')
         key('end')
         capture('system-prompt-end')

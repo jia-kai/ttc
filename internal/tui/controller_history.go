@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/messagestream"
@@ -173,25 +174,108 @@ func (c *frontendController) inspect(id int64) {
 		c.inspectSaved(id)
 		return
 	}
-	response, err := c.history.ChildResponse(id)
+	c.esc, c.viewChord = false, false
+	historyView := c.modal.history
+	c.modal.clear()
+	c.modal.history = historyView
+	c.modal.generation = c.frontend.Runtime.Generation()
+	answer, err := c.history.ReadChildAnswer(c.ctx, id)
 	if err != nil {
 		c.add("Child response inspection failed: "+err.Error(), 0)
 		return
 	}
-	if response == 0 {
+	if answer.ResponseID == 0 {
 		c.inspectSaved(id)
 		return
 	}
-	c.inspectSaved(response)
-	if c.modal.window != nil {
-		c.modal.window.completionEntry = id
-		c.modal.window.Hint = "D completion details · Esc closes"
+	metadata := childAnswerMetadata(answer)
+	load := func(offset int) (history.InspectionPage, error) {
+		page, err := c.history.InspectPage(c.ctx, answer.ResponseID, offset, history.InspectionPageChars)
+		if err != nil {
+			return page, err
+		}
+		if !page.Supported {
+			return page, fmt.Errorf("saved child response %d has no readable content", answer.ResponseID)
+		}
+		// A saved assistant's content is Markdown, even when it happens to be
+		// valid JSON. Never load its provider/native envelope or fence the body.
+		page.Title, page.Markdown, page.JSON, page.System, page.Structured = "Final answer", true, false, false, false
+		if offset == 0 {
+			page.Text = metadata + "\n\n## Final answer\n\n" + page.Text
+		}
+		return page, nil
 	}
+	page, err := load(0)
+	if err != nil {
+		c.add("Child response inspection failed: "+err.Error(), 0)
+		return
+	}
+	if c.frontend.Plain {
+		for {
+			fmt.Fprint(c.frontend.Output, render.Clean(page.Text))
+			if page.Offset+page.Limit >= page.Total {
+				fmt.Fprintln(c.frontend.Output)
+				return
+			}
+			page, err = load(page.Offset + page.Limit)
+			if err != nil {
+				c.add("Child response inspection failed: "+err.Error(), 0)
+				return
+			}
+		}
+	}
+	c.modal.window = NewPagedWindow(page, load)
+	c.modal.window.actor, c.modal.window.subagentName = answer.ChildID, answer.Label
+	c.modal.window.SourceAgent = answer.Label
+	if c.modal.window.SourceAgent == "" {
+		c.modal.window.SourceAgent = answer.ChildID
+	}
+	c.modal.window.completionEntry = id
+	c.modal.window.Hint = "D completion details · [ ] pages · Esc closes"
+}
+
+// Metadata belongs to the inspected assignment, never the current reused child.
+// Keep it separate from both the transcript preview and the answer's Markdown.
+func childAnswerMetadata(answer history.ChildAnswer) string {
+	value := func(text string) string {
+		if text == "" {
+			return "unavailable"
+		}
+		return render.Inline(text)
+	}
+	flag := func(v *bool) string {
+		if v == nil {
+			return "unavailable"
+		}
+		return fmt.Sprint(*v)
+	}
+	timestamp := func(ms *int64) string {
+		if ms == nil {
+			return "unavailable"
+		}
+		return time.UnixMilli(*ms).UTC().Format(time.RFC3339Nano)
+	}
+	elapsed := "unavailable"
+	if answer.ElapsedMS != nil {
+		elapsed = (time.Duration(*answer.ElapsedMS) * time.Millisecond).String()
+	}
+	model := answer.Model
+	if answer.Provider != "" {
+		model = answer.Provider + "/" + model
+	}
+	if answer.Variant != "" {
+		model += " · " + answer.Variant
+	}
+	return fmt.Sprintf("## Agent details\n\n- **Agent ID:** %s\n- **Label:** %s\n- **Assignment turn:** %s\n- **Job ID:** %s\n- **Elapsed:** %s\n- **Started:** %s\n- **Finished:** %s\n- **Easy:** %s\n- **Outcome:** %s\n- **Persistent:** %s\n- **Model:** %s\n- **Saved answer entry:** %d",
+		value(answer.ChildID), value(answer.Label), value(answer.TurnID), value(answer.JobID), elapsed,
+		timestamp(answer.StartedMS), timestamp(answer.FinishedMS), flag(answer.Easy), value(answer.Outcome), flag(answer.Persistent), value(model), answer.ResponseID)
 }
 
 // openRow dispatches only the interaction explicitly offered by a transcript row.
 func (c *frontendController) openRow(item line) {
 	switch item.action {
+	case actionAnswer:
+		c.inspect(item.inspectID)
 	case actionInspect:
 		c.inspectSaved(item.inspectID)
 		c.modal.requestHeader = item.id
@@ -355,7 +439,10 @@ func replayToolResults(entries []history.Entry) (map[int64]string, map[string]in
 	return callIDs, results, nil
 }
 
-func (c *frontendController) replay() {
+// replay rebuilds entries and grouped stream revisions through one immutable
+// tip. Zero snapshots the current selected tip; continuation supplies its saved
+// handoff tip so queued later publications remain live, not prematurely replayed.
+func (c *frontendController) replay(tip int64) {
 	c.view.reset()
 	c.streamRows = map[int64]int{}
 	loaded, err := c.history.SubagentNames(c.ctx, c.frontend.Runtime.Current())
@@ -370,10 +457,16 @@ func (c *frontendController) replay() {
 		return
 	}
 	c.sidebar.sessionName = saved.Name
-	entries, e := c.frontend.Runtime.Entries()
-	if e != nil {
-		c.add("Error: "+e.Error(), 0)
-		return
+	if tip == 0 {
+		tip = saved.EntryTip
+	}
+	var entries []history.Entry
+	if tip != 0 {
+		entries, err = c.history.Branch(saved.ID, tip)
+		if err != nil {
+			c.add("Error: "+err.Error(), 0)
+			return
+		}
 	}
 	// Only results in this replay's selected entry chain supersede an intent.
 	// Looking up the latest result in storage would cross the frozen replay cut.
@@ -383,8 +476,8 @@ func (c *frontendController) replay() {
 		return
 	}
 	var stream []messagestream.Item
-	if saved.EntryTip != 0 {
-		stream, err = c.history.StreamItems(c.ctx, c.frontend.Runtime.Current())
+	if tip != 0 {
+		stream, err = c.history.StreamItems(c.ctx, tip)
 		if err != nil {
 			c.add("Stream presentation failed: "+err.Error(), 0)
 			return

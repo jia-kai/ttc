@@ -382,10 +382,10 @@ func TestInterruptedNativeCompletionResumesCanonicalHistory(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Resumed"})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"}); err != context.Canceled {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"}); err != context.Canceled {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -428,7 +428,7 @@ func TestSuccessfulResponseWithoutUsageClearsOlderCounters(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "completed", Usage: usage})
 	}}
 	for _, prompt := range []string{"First", "Second"} {
-		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
+		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 			t.Fatal(err)
 		}
 		if (r.UsageSnapshot().Reported != nil) != (prompt == "First") {
@@ -447,7 +447,7 @@ func TestStableInstructionsAndAppendOnlyContextAtToolBoundaries(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 || requests[0].System != systemTemplate || requests[1].System != requests[0].System {
@@ -512,7 +512,7 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Initial"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Initial"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, text := range []string{strings.Repeat("old research ", 700), "Recent task"} {
@@ -527,7 +527,7 @@ func TestCompactionResuppliesUnchangedProjectContext(t *testing.T) {
 	if before == r.Current() {
 		t.Fatal("no continuation")
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil {
 		t.Fatal(err)
 	}
 	if coding != 2 {

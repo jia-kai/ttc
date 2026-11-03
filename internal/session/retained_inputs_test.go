@@ -274,7 +274,7 @@ func TestMainRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					return emit(llm.StreamEvent{Kind: "text", Text: "Continued."})
 				}}
 				if automatic {
-					err = r.Run(nil)
+					_, err = r.Run(nil)
 				} else {
 					_, err = r.Command("/compact")
 					replacement, _ = r.Store.Messages(r.Current())

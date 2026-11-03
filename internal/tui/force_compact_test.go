@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	contextbuild "ttc/internal/context"
+	"ttc/internal/llm"
 	"ttc/internal/messagestream"
 	"ttc/internal/session"
 )
@@ -16,7 +16,7 @@ import (
 // Blank runtime replay needs names and stream rows; other reads stay unused.
 type compactControllerHistory struct{ historyReader }
 
-func (compactControllerHistory) StreamItems(context.Context, string) ([]messagestream.Item, error) {
+func (compactControllerHistory) StreamItems(context.Context, int64) ([]messagestream.Item, error) {
 	return nil, nil
 }
 
@@ -28,7 +28,7 @@ func compactTestController() *frontendController {
 	return &frontendController{
 		frontend: &Frontend{Runtime: &session.Runtime{}},
 		ctx:      context.Background(), history: compactControllerHistory{},
-		view: newTranscript(), sidebar: newSidebar(), done: make(chan operationResult, 1),
+		view: newTranscript(), sidebar: newSidebar(),
 		draft: newComposer("preserved draft"), notificationPaused: true,
 		queue:       []contextbuild.Input{{Text: "queued input", Source: "queue"}},
 		attachments: []contextbuild.Attachment{{Path: "draft.txt"}},
@@ -38,14 +38,27 @@ func compactTestController() *frontendController {
 func TestCompactionCommandsUseGenericBusyGuard(t *testing.T) {
 	for _, command := range []string{"/compact", "/force-compact topic"} {
 		for _, commandBusy := range []bool{false, true} {
-			c := compactTestController()
-			c.busy, c.commandBusy = true, commandBusy
-			c.submitCommand(command)
-			if !c.busy || c.commandBusy != commandBusy || !c.notificationPaused || len(c.done) != 0 {
-				t.Fatal("busy compaction changed scheduling or notification state", command, commandBusy)
+			p := &helpTestProvider{requests: make(chan llm.Request, 4), release: make(chan struct{})}
+			c := newAsyncTestController(t, p, func(f *Frontend) {
+				if commandBusy {
+					f.Runtime.Provider = &llm.Script{Responses: []llm.ScriptResponse{{Text: "Seed answer"}}}
+					if _, err := f.Runtime.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Seed history"}); err != nil {
+						t.Fatal(err)
+					}
+					f.Runtime.Provider = p
+				}
+			})
+			if commandBusy {
+				c.submitCommand("/compact")
+			} else {
+				c.submit(frontendSubmission{ready: true, text: "active task"})
 			}
-			if len(c.view.lines) != 1 || !strings.Contains(c.view.lines[0].text, "Command requires an idle turn") {
-				t.Fatal("compaction bypassed the generic command busy guard", command)
+			waitControllerState(t, c, func(state session.CoordinatorState) bool { return state.Busy && state.CommandBusy == commandBusy })
+			paused := c.notificationPaused
+			c.submitCommand(command)
+			result := waitControllerResult(t, c, session.RequestCommand)
+			if result.Err == nil || !strings.Contains(result.Err.Error(), "idle turn") || result.Foreground || !c.busy || c.commandBusy != commandBusy || c.notificationPaused != paused {
+				t.Fatal("busy compaction changed scheduling or bypassed admission", command, commandBusy, result)
 			}
 		}
 	}
@@ -54,21 +67,24 @@ func TestCompactionCommandsUseGenericBusyGuard(t *testing.T) {
 func TestCompactionCommandSchedulingMarksMarkdownWithoutResumingEarly(t *testing.T) {
 	for _, command := range []string{"/compact", "/compact topic", "/force-compact", "/force-compact topic"} {
 		t.Run(command, func(t *testing.T) {
-			c := compactTestController()
+			c := newAsyncTestController(t, nil, nil)
+			// A failed initial attempt establishes coordinator-owned recovery pause.
+			c.submitCommand("/compact")
+			waitControllerResult(t, c, session.RequestCommand)
+			if c.busy || !c.notificationPaused {
+				t.Fatal("terminal result preceded its matching idle/paused projection")
+			}
 			c.submitCommand(command)
-			if !c.busy || !c.commandBusy || !c.notificationPaused || c.started.IsZero() {
-				t.Fatal("compaction did not use asynchronous command scheduling")
+			waitControllerState(t, c, func(state session.CoordinatorState) bool { return state.Busy && state.CommandBusy })
+			if !c.notificationPaused || c.started.IsZero() {
+				t.Fatal("starting asynchronous recovery resumed notifications")
 			}
-			select {
-			case result := <-c.done:
-				if result.command != strings.Fields(command)[0] || !result.markdown || result.err == nil || !strings.Contains(result.err.Error(), "session is empty") {
-					t.Fatalf("blank-session compaction result lost routing or Markdown: %+v", result)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("compaction command did not finish")
+			result := waitControllerResult(t, c, session.RequestCommand)
+			if result.Command != strings.Fields(command)[0] || !result.Markdown || result.Err == nil || !strings.Contains(result.Err.Error(), "session is empty") {
+				t.Fatalf("blank-session compaction result lost routing or Markdown: %+v", result)
 			}
-			if !c.notificationPaused {
-				t.Fatal("merely starting recovery resumed notifications")
+			if c.busy || !c.notificationPaused {
+				t.Fatal("failed recovery result preceded its matching idle/paused projection")
 			}
 		})
 	}
@@ -88,7 +104,12 @@ func TestCompactionCommandResultsPreservePendingInputAndResumeOnlyOnSuccess(t *t
 				c.notificationPaused = failure == nil
 				queue := append([]contextbuild.Input(nil), c.queue...)
 				attachments := append([]contextbuild.Attachment(nil), c.attachments...)
-				c.handleOperationResult(operationResult{command: command, text: "# Context summary", markdown: true, err: failure})
+				if err := c.handleUpdate(session.Update{
+					State:  &session.CoordinatorState{NotificationPaused: failure != nil, Queue: queue},
+					Result: &session.OperationResult{Foreground: true, Kind: session.RequestCommand, Command: command, Text: "# Context summary", Markdown: true, Err: failure},
+				}); err != nil {
+					t.Fatal(err)
+				}
 				if c.busy || c.commandBusy || c.notificationPaused != (failure != nil) {
 					t.Fatal("compaction result did not clear busy state or apply recovery policy")
 				}

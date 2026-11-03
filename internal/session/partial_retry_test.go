@@ -87,7 +87,8 @@ func partialRetryResult(t *testing.T, req llm.Request, callID string, ok bool, c
 func partialRetryRunActor(t *testing.T, r *Runtime, actor string, stdout io.Writer) error {
 	t.Helper()
 	if actor == "main" {
-		return r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Recover this task"})
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Recover this task"})
+		return err
 	}
 	seedRuntime(t, r, "Private main context")
 	turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.CurrentSelection())
@@ -167,7 +168,7 @@ func TestPartialRetryMainPreservesExecutedToolsAndInterruptsLaterCalls(t *testin
 			return errors.New("unexpected extra request")
 		}
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Execute once, then recover"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Execute once, then recover"}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 3 || executions.Load() != 1 {
@@ -417,7 +418,10 @@ func TestPartialRetryCancellationDuringWaitStopsNewRequest(t *testing.T) {
 		return failure
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Cancel recovery wait"}) }()
+	go func() {
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Cancel recovery wait"})
+		done <- err
+	}()
 	receive(t, waiting)
 	r.Interrupt()
 	if err := receive(t, done); !errors.Is(err, context.Canceled) {
@@ -529,7 +533,7 @@ func TestPartialRetryMalformedMetadataIsFinal(t *testing.T) {
 				failure.Retry = retry
 				return failure
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Reject malformed retry"}); err == nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Reject malformed retry"}); err == nil {
 				t.Fatal("malformed retry succeeded")
 			}
 			if requests != 1 {

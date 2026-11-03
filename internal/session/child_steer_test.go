@@ -330,7 +330,7 @@ func TestChildSteerDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	}
 	assignment := &childAssignment{accepting: true, turn: turn, job: "job_fixture", queueTokenLimit: 1024}
 	child := &codingChild{id: actor, turn: turn, job: assignment.job, assignment: assignment, state: "running", selection: r.selection, tools: r.Tools}
-	r.children[actor] = child
+	r.coordinator.children[actor] = child
 	invalid := sendChildSteer(t, r, "main", "parent_call", map[string]any{"job_id": child.job, "message": "invalid", "job_read_grants": []string{grant, "missing"}})
 	if invalid["ok"] == true || len(assignment.queued) != 0 {
 		t.Fatal("invalid mixed grant was queued", invalid)
@@ -428,7 +428,7 @@ func TestChildSteerCumulativeQueueCapacity(t *testing.T) {
 	seedRuntime(t, r, "parent")
 	assignment := &childAssignment{accepting: true, turn: "turn_fixture", job: "job_fixture", queueTokenLimit: 150}
 	child := &codingChild{id: "main/child_capacity", turn: assignment.turn, job: assignment.job, assignment: assignment, state: "running", selection: r.selection}
-	r.children[child.id] = child
+	r.coordinator.children[child.id] = child
 	first := sendChildSteer(t, r, "main", "call", map[string]any{"job_id": child.job, "message": strings.Repeat("a", 180)})
 	if first["state"] != "queued" {
 		t.Fatal(first)

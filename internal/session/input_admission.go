@@ -47,12 +47,13 @@ func (p *InputAdmission) clearLocked() {
 }
 
 // RunInput executes a prepared human turn. Cancellation before admission returns
-// nil and writes no input, turn, or model request. Admission and Cancel arbitrate
-// under the ticket lock inside the workspace gate; cancellation never interrupts
-// a turn that has already been admitted.
-func (r *Runtime) RunInput(p *InputAdmission) error {
+// nil completion and error, and writes no input, turn, or model request. Admission
+// and Cancel arbitrate under the ticket lock inside the workspace gate;
+// cancellation never interrupts a turn that has already been admitted. As with
+// Run, completion is returned only after cleanup and is nil before admission.
+func (r *Runtime) RunInput(p *InputAdmission) (*TurnCompletion, error) {
 	if p == nil || p.runtime != r {
-		return errors.New("input admission belongs to a different runtime")
+		return nil, errors.New("input admission belongs to a different runtime")
 	}
 	defer func() {
 		p.mu.Lock()
@@ -63,11 +64,11 @@ func (r *Runtime) RunInput(p *InputAdmission) error {
 	pending := p.pending && p.generation == r.Generation()
 	p.mu.Unlock()
 	if !pending {
-		return nil
+		return nil, nil
 	}
-	err := r.run(nil, p)
+	completion, err := r.run(nil, p)
 	if errors.Is(err, errInputCancelled) {
-		return nil
+		return nil, nil
 	}
-	return err
+	return completion, err
 }

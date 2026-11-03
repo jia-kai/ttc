@@ -44,6 +44,21 @@ func seedCompactionHistory(t *testing.T, r *Runtime, content string) {
 
 func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
+	emit := r.Emit
+	r.Emit = func(event Event) {
+		if event.Kind == "continuation" {
+			if !r.routeMu.TryRLock() {
+				t.Error("observer ran under routing instead of after ordered enqueue")
+			} else {
+				r.routeMu.RUnlock()
+			}
+			saved, err := r.CurrentSession()
+			if err != nil || event.Continuation == nil || event.Continuation.EntryTip != saved.EntryTip {
+				t.Errorf("handoff event did not freeze the committed continuation: event=%+v saved=%+v err=%v", event, saved, err)
+			}
+		}
+		emit(event)
+	}
 	compactionBudget(t, r)
 	seedCompactionHistory(t, r, strings.Repeat("Previous research notes. ", 400))
 	before, generation := r.Current(), r.Generation()
@@ -82,7 +97,7 @@ func TestAutomaticCompactionPreservesLiveStateAndContinuesBeforeRequest(t *testi
 		}
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."}); err != nil {
 		t.Fatal(err)
 	}
 	if summaries != 1 || coding != 1 || r.Generation() != generation {
@@ -207,7 +222,7 @@ func TestAutomaticCompactionAtToolBoundaryKeepsRecentModelsAndUndoBaseline(t *te
 		}
 		return nil
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 		t.Fatal(err)
 	}
 	if step != 5 || summaries != 1 {
@@ -289,7 +304,7 @@ func TestCompactionRetainsFittingRecentCyclesAndSummarizesEarlierHistory(t *test
 				}}
 				var err error
 				if automatic {
-					err = r.Run(nil)
+					_, err = r.Run(nil)
 				} else {
 					_, err = r.Command("/compact")
 				}
@@ -364,7 +379,7 @@ func TestAutomaticCompactionFailuresPreserveWritablePredecessor(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Short valid summary."})
 			}}
-			err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."})
+			_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue the research."})
 			if err == nil || attempts != 1 || r.Current() != before {
 				t.Fatal("failed compaction changed session or retried indefinitely", err, attempts)
 			}

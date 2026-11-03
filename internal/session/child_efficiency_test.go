@@ -25,7 +25,7 @@ func TestDisposableChildDeliversBoundedFinalAnswerAndStopsOwnedJobs(t *testing.T
 	})
 	r.Emit = nil
 	m := llm.Message{Type: llm.TypeUserInput, Content: "Run a disposable audit"}
-	if err := r.Run(&m); err != nil {
+	if _, err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.ChildViews("main")) != 0 || len(r.Jobs.Live()) != 0 || r.HasNotifications() {
@@ -131,7 +131,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 				return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}})
 			}}
 			m := llm.Message{Type: llm.TypeUserInput, Content: "Launch an audit"}
-			if err := r.Run(&m); err != nil {
+			if _, err := r.Run(&m); err != nil {
 				t.Fatal(err)
 			}
 			receive(t, started)
@@ -155,7 +155,7 @@ func TestBackgroundChildAnswerDeliveredOnceAcrossCompaction(t *testing.T) {
 			if !r.HasNotifications() {
 				t.Fatal("missing background completion")
 			}
-			if err := r.Run(nil); err != nil {
+			if _, err := r.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			if delivered != 1 || mainCalls != 3 || r.HasNotifications() || len(r.ChildViews("main")) != 0 {
@@ -202,7 +202,7 @@ BEGIN SELECT RAISE(ABORT,'injected child commit failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	m := llm.Message{Type: llm.TypeUserInput, Content: "Audit"}
-	err := r.Run(&m)
+	_, err := r.Run(&m)
 	if err == nil || !strings.Contains(err.Error(), "injected child commit failure") {
 		t.Fatal("commit failure was not reported", err)
 	}

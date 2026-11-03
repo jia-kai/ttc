@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"ttc/internal/session"
 
 	"github.com/gdamore/tcell/v3"
 )
@@ -44,6 +45,14 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 		}
 	}
 	ev = normalizeFrontendKey(ev)
+	if ev.Key() == tcell.KeyEscape && c.questionReopenRequest != 0 {
+		// Escape supersedes a requested dialog even when its asynchronous
+		// acknowledgment has not arrived. Keep the runtime form dismissed too.
+		c.questionReopenRequest = 0
+		if form := c.frontend.Runtime.PendingQuestion(); form != nil && c.modal.question == nil {
+			c.control(session.Request{Kind: session.RequestDismissQuestion, ID: form.ID})
+		}
+	}
 	if isCtrl(ev, "c") {
 		if c.draft.text != "" {
 			c.draft.set("")
@@ -147,7 +156,7 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 		} else if !c.view.followTail {
 			c.view.followTail = true
 		} else if c.esc {
-			c.frontend.Runtime.Interrupt()
+			c.control(session.Request{Kind: session.RequestInterrupt})
 			c.esc = false
 		} else {
 			c.esc = true
@@ -199,11 +208,7 @@ func (c *frontendController) handlePickerKey(ev *tcell.EventKey) (next frontendS
 			model := m.models[m.modelIndex]
 			variant := model.Variants[m.variantIndex]
 			if m.easy != nil && m.easy.Model.ID == model.ID && m.easy.Variant == variant {
-				if err := c.frontend.Runtime.RequestEasyModel(nil); err != nil {
-					c.add("Easy model selection failed: "+err.Error(), 0)
-				} else {
-					c.add("Easy model cleared · using main model", 0)
-				}
+				c.control(session.Request{Kind: session.RequestEasyModel})
 			} else {
 				c.selectEasyModel(model.ID, variant)
 			}
@@ -227,9 +232,7 @@ func (c *frontendController) handlePickerKey(ev *tcell.EventKey) (next frontendS
 		if closed {
 			c.modal.clear()
 			if id != "" {
-				if _, err := c.frontend.Runtime.Jobs.Promote("main", id); err != nil {
-					c.add("Background failed: "+err.Error(), 0)
-				}
+				c.control(session.Request{Kind: session.RequestBackground, ID: id})
 			}
 		}
 		return next, true
@@ -315,11 +318,7 @@ func (c *frontendController) handleComposerKey(ev *tcell.EventKey) (next fronten
 	if isCtrl(ev, "b") && c.modal.empty() && !c.commandBusy {
 		foreground := c.frontend.Runtime.Jobs.Foreground("main")
 		if len(foreground) > 0 {
-			for _, job := range foreground {
-				if _, err := c.frontend.Runtime.Jobs.Promote("main", job.ID); err != nil {
-					c.add("Background failed: "+err.Error(), 0)
-				}
-			}
+			c.control(session.Request{Kind: session.RequestBackground})
 			return next
 		}
 	}
@@ -381,7 +380,8 @@ func (c *frontendController) handleComposerKey(ev *tcell.EventKey) (next fronten
 			c.openRow(c.displayView().lines[target])
 		} else {
 			next.text = c.draft.text
-			next.steering = c.busy && !c.commandBusy && ev.Modifiers()&tcell.ModAlt == 0
+			next.generation, next.operationID = c.observedGeneration, c.observedOperationID
+			next.steering = c.observedOperationID != 0 && !c.observedCommandBusy && ev.Modifiers()&tcell.ModAlt == 0
 			c.setFullscreen(false)
 			c.draft.set("")
 			next.ready = true
@@ -434,7 +434,7 @@ func (c *frontendController) handleQuestionKey(ev *tcell.EventKey) {
 	c.modal.question.Window.currentLines(geometry.bodyWidth)
 	answers, dismissed := c.modal.question.key(ev, geometry.bodyHeight)
 	if dismissed {
-		if err := c.frontend.Runtime.DismissQuestion(c.modal.question.form.ID); err != nil {
+		if err := c.request(session.Request{Kind: session.RequestDismissQuestion, ID: c.modal.question.form.ID}); err != nil {
 			c.modal.question.errorText = err.Error()
 			c.modal.question.update()
 		} else {
@@ -444,7 +444,7 @@ func (c *frontendController) handleQuestionKey(ev *tcell.EventKey) {
 		}
 	}
 	if answers != nil {
-		if err := c.frontend.Runtime.AnswerQuestion(c.modal.question.form.ID, answers); err != nil {
+		if err := c.request(session.Request{Kind: session.RequestAnswer, ID: c.modal.question.form.ID, Answers: answers}); err != nil {
 			c.modal.question.errorText = err.Error()
 			c.modal.question.update()
 		} else {

@@ -168,6 +168,20 @@ func (c *frontendController) drawFrame() error {
 				return err
 			}
 		}
+		if c.syncFrame {
+			c.screen.Sync()
+			c.syncFrame = false
+		}
+		if !c.fullscreen {
+			c.observedOperationID = c.operationID
+			c.observedGeneration = c.queueGeneration
+			c.observedCommandBusy = c.commandBusy
+		}
+	}
+	if c.screen == nil {
+		c.observedOperationID = c.operationID
+		c.observedGeneration = c.queueGeneration
+		c.observedCommandBusy = c.commandBusy
 	}
 	c.dirty = false
 	return nil

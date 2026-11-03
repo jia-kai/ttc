@@ -140,10 +140,10 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 			var result []llm.Message
 			var err error
 			if actor == "main" {
-				var displayed string
+				var displayed *Continuation
 				displayed, err = r.compactContext(context.Background(), focus, selection, nil, tc.force)
 				if err == nil {
-					if !strings.HasPrefix(displayed, "## Compacted · ") || !strings.HasSuffix(displayed, "\n\n"+rawSummary) || strings.Contains(displayed, "<compaction_context>") {
+					if !strings.HasPrefix(displayed.Text, "## Compacted · ") || !strings.HasSuffix(displayed.Text, "\n\n"+rawSummary) || strings.Contains(displayed.Text, "<compaction_context>") || displayed.EntryTip <= 0 {
 						t.Fatal("human-facing compaction result did not preserve the raw generated summary beneath its UI heading", displayed)
 					}
 					result, err = r.Store.Messages(r.Current())

@@ -64,7 +64,7 @@ func TestInitialRequestDescribesSubagentCapacity(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "text", Text: "done"})
 	}}
 	m := llm.Message{Type: llm.TypeUserInput, Content: "hello"}
-	if err := r.Run(&m); err != nil {
+	if _, err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
 	if !seen {
@@ -79,7 +79,7 @@ func TestForegroundChildSharedUndoAndInspectableTools(t *testing.T) {
 		{Text: "Child finished."}, {Text: "Parent finished."},
 	})
 	m := llm.Message{Type: llm.TypeUserInput, Content: "Private parent context"}
-	if err := r.Run(&m); err != nil {
+	if _, err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
 	if totals := r.UsageSnapshot().Totals; totals.Requests != 4 || totals.ReportedRequests != 0 {
@@ -182,7 +182,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 	r.Provider = p
 	// Keep compaction pressure independent of generated identifier lengths.
 	m := llm.Message{Type: llm.TypeUserInput, Content: "Private parent starts a child\n" + strings.Repeat("research context ", 128)}
-	if err := r.Run(&m); err != nil {
+	if _, err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -196,7 +196,7 @@ func TestBackgroundChildFrozenSelectionAcrossCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Content = "Next parent turn"
-	if err := r.Run(&m); err != nil {
+	if _, err := r.Run(&m); err != nil {
 		t.Fatal(err)
 	}
 	before := r.Current()

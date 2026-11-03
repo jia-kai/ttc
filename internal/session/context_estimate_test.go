@@ -146,7 +146,7 @@ func TestMainRequestFeedbackUpdatesSharedEstimate(t *testing.T) {
 	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234, OutputTokens: 0}})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Measure this request."}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Measure this request."}); err != nil {
 		t.Fatal(err)
 	}
 	u := r.UsageSnapshot()
@@ -171,10 +171,10 @@ func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchIsolatesIt(t *testi
 		}
 		return interrupted
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "First request."}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "First request."}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Interrupted request."}); !errors.Is(err, interrupted) {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Interrupted request."}); !errors.Is(err, interrupted) {
 		t.Fatal(err)
 	}
 	if result := r.estimator.Estimate(baseline); result.Input != 1234 || result.Estimated {

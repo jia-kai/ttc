@@ -32,6 +32,7 @@ integration: build
 	python3 tests/pty_partial_retry.py
 	python3 tests/pty_await.py
 	python3 tests/pty_subagent.py --offline
+	python3 tests/pty_child_inspection.py
 	python3 tests/pty_subagent.py
 	python3 tests/pty_subagent.py --failure
 	python3 tests/demo.py

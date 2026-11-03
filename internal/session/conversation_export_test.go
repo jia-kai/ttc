@@ -298,7 +298,8 @@ func TestConversationExportAsideFreezesMainPrefix(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		message := llm.Message{Type: llm.TypeUserInput, Content: "frozen-main-prefix-marker"}
-		done <- r.Run(&message)
+		_, err := r.Run(&message)
+		done <- err
 	}()
 	t.Cleanup(func() {
 		r.Interrupt()

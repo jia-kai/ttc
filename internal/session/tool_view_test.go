@@ -52,7 +52,7 @@ func TestJobReadInspectionPreservesRequestedPageWithoutLiveTails(t *testing.T) {
 				{Calls: []llm.ToolCall{{ID: "read-page", Name: "job_read", Arguments: encoded}}},
 				{Text: "Page read."},
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect a captured page"}); err != nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect a captured page"}); err != nil {
 				t.Fatal(err)
 			}
 			var entryID int64

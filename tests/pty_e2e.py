@@ -229,12 +229,15 @@ def main():
         expect('model_retry')
         prompt = db.execute("SELECT id FROM entries WHERE json_extract(content_json,'$.type')='system_prompt' LIMIT 1").fetchone()[0]
         send(f'/inspect {prompt}')
-        expect('You are TTC')
+        instructions = requests[0]['instructions']
+        assert instructions
+        expect(instructions.splitlines()[0])
         export = root / 'export.md'
         send(f'/export {export}')
         expect('Exported')
-        assert 'You are TTC' not in export.read_text()
-        assert 'You are TTC' in pathlib.Path(str(export) + '.jsonl').read_text()
+        assert instructions not in export.read_text()
+        exact_records = [json.loads(line) for line in pathlib.Path(str(export) + '.jsonl').read_text().splitlines()]
+        assert any(record.get('instructions') == instructions for record in exact_records)
         assert pathlib.Path(str(export) + '.assets').is_dir()
         send('Parallel independent shell and file tools')
         expect('Running independent tools.')

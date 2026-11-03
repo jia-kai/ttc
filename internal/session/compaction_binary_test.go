@@ -110,7 +110,7 @@ func TestCompactionPreservesUnreadBinaryCycle(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-						err = r.Run(nil)
+						_, err = r.Run(nil)
 						if err == nil {
 							result, err = r.Store.Messages(r.Current())
 						}

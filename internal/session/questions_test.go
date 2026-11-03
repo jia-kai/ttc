@@ -139,7 +139,11 @@ func TestQuestionAnswerRejectsDuplicateAfterChannelConsumed(t *testing.T) {
 func TestTypedQuestionLifecycleAndCancellation(t *testing.T) {
 	r, events := runtimeFixture(t, []llm.ScriptResponse{{Calls: []llm.ToolCall{{ID: "q", Name: "question", Arguments: []byte(`{"questions":[{"id":"q","prompt":"Pick?","recommended_option_id":"b","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]}`)}}}})
 	done := make(chan error, 1)
-	go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "ask"}; done <- r.Run(&m) }()
+	go func() {
+		m := llm.Message{Type: llm.TypeUserInput, Content: "ask"}
+		_, err := r.Run(&m)
+		done <- err
+	}()
 	var view *QuestionForm
 	deadline := time.After(3 * time.Second)
 	for view == nil {
@@ -197,7 +201,10 @@ func TestDismissedQuestionRedirectIncludesResultAndHumanInputAtNextRequest(t *te
 		return emit(llm.StreamEvent{Kind: "text", Text: "Redirect received"})
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "ask"}) }()
+	go func() {
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "ask"})
+		done <- err
+	}()
 	<-requests
 	var form QuestionForm
 	for form.ID == "" {
@@ -264,6 +271,7 @@ func TestQuestionDismissReopenAndResolution(t *testing.T) {
 		t.Run(resolution, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			seedRuntime(t, r, "ask")
+			r.openMainAdmission(context.Background())
 			message := contextbuild.Input{Text: "redirect"}
 			if r.PendingQuestion() != nil {
 				t.Fatal("new runtime has a pending question")

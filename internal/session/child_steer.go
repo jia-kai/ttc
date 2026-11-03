@@ -79,11 +79,11 @@ func (r *Runtime) addChildSteerTool() {
 		if err := r.Jobs.ValidateReadGrants(x.Actor, a.JobReadGrants); err != nil {
 			return nil, tool.Fail("not_found", err.Error())
 		}
-		r.childStartMu.Lock()
-		defer r.childStartMu.Unlock()
-		child := r.children[a.ChildID]
+		r.coordinator.childMu.Lock()
+		defer r.coordinator.childMu.Unlock()
+		child := r.coordinator.children[a.ChildID]
 		if a.JobID != "" {
-			for _, candidate := range r.children {
+			for _, candidate := range r.coordinator.children {
 				if candidate.job == a.JobID {
 					child = candidate
 					break
@@ -130,6 +130,7 @@ func (r *Runtime) addChildSteerTool() {
 			assignment.queuedReadGrants[id] = a.JobReadGrants
 		}
 		assignment.queuedTokens += tokens
+		assignment.inspection.appendSteer(a.Message)
 		r.signalActorLocked(child.id)
 		return map[string]any{"state": "queued", "delivered": false, "message_event_seq": id, "child_id": child.id, "child_turn_id": child.turn, "job_id": child.job}, nil
 	})

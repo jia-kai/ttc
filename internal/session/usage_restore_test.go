@@ -51,7 +51,7 @@ func TestLoadRestoresMeasuredCalibrationForNextAdmission(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: measured, OutputTokens: 5}})
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save this measurement."}); err != nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save this measurement."}); err != nil {
 				t.Fatal(err)
 			}
 			saved := r.Current()
@@ -102,7 +102,7 @@ func TestLoadRestoresMeasuredCalibrationForNextAdmission(t *testing.T) {
 			if check.Input != measured || check.Estimated != (mode == "legacy-load") {
 				t.Fatal("restored anchor identity", check)
 			}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 				t.Fatal(err)
 			}
 			if calls != 2 {
@@ -154,7 +154,7 @@ func TestSameVersionModelSwitchPreservesMeasuredCalibration(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "completed", Usage: usage})
 	}}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Measure."}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Measure."}); err != nil {
 		t.Fatal(err)
 	}
 	for _, model := range []string{"gpt-6-luna", "gpt-6.1-sol"} {
@@ -172,7 +172,7 @@ func TestSameVersionModelSwitchPreservesMeasuredCalibration(t *testing.T) {
 				t.Fatal("switch discarded tokenizer-compatible anchor", got)
 			}
 		}
-		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
+		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -183,7 +183,7 @@ func TestLoadInvalidCheckpointPreservesActiveRuntime(t *testing.T) {
 	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save"}); err != nil {
 		t.Fatal(err)
 	}
 	saved, generation, tools, before := r.Current(), r.Generation(), r.Tools, r.UsageSnapshot()
@@ -203,7 +203,7 @@ func TestLoadInvalidProjectionPreservesActiveRuntime(t *testing.T) {
 	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save"}); err != nil {
 		t.Fatal(err)
 	}
 	saved, generation, tools, before := r.Current(), r.Generation(), r.Tools, r.UsageSnapshot()
@@ -283,7 +283,7 @@ func TestUnusableFeedbackMatchesLiveAndReloadedAccounting(t *testing.T) {
 				return emit(llm.StreamEvent{Kind: "completed", Usage: &usage})
 			}}
 			for _, prompt := range []string{"Measure.", "Continue."} {
-				if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
+				if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -71,6 +70,7 @@ type resolvedChildNotice struct {
 	SourceID     int64
 	ResultEntry  int64
 	Presentation ChildCompletionPresentation
+	Metadata     childCompletionMetadata
 }
 
 // resolveOmittedChildNotice is the shared authorization boundary for display,
@@ -90,57 +90,45 @@ func resolveChildNoticeMessage(q historyReader, entry Entry, message llm.Message
 	if message.Type != llm.TypeRuntimeNotification {
 		return nil, nil
 	}
-	var notice struct {
-		Type        string `json:"type"`
-		ChildID     string `json:"child_id"`
-		TurnID      string `json:"child_turn_id"`
-		JobID       string `json:"job_id"`
-		ResultEntry int64  `json:"result_entry_id"`
-		Omitted     bool   `json:"output_omitted"`
-	}
+	var notice childCompletionMetadata
 	if err := json.Unmarshal([]byte(message.Content), &notice); err != nil {
 		return nil, err
 	}
 	if notice.Type != "child_turn_finished" || !notice.Omitted {
 		return nil, nil
 	}
-	invalid := func() error { return fmt.Errorf(prompts.HistoryInvalidChildNotificationSource, message.EventSeq) }
-	if message.EventSeq <= 0 || message.EventSeq >= entry.EventSeq() || notice.ChildID == "" ||
+	return resolveChildNoticeSource(q, entry, message.EventSeq, notice)
+}
+
+// resolveChildNoticeSource validates the exact immutable semantic source for
+// omitted and full notifications and foreground completion references alike.
+func resolveChildNoticeSource(q historyReader, entry Entry, sourceID int64, notice childCompletionMetadata) (*resolvedChildNotice, error) {
+	invalid := func() error { return fmt.Errorf(prompts.HistoryInvalidChildNotificationSource, sourceID) }
+	if sourceID <= 0 || sourceID >= entry.EventSeq() || notice.ChildID == "" ||
 		!strings.HasPrefix(notice.ChildID, entry.Actor+"/child_") || strings.Contains(strings.TrimPrefix(notice.ChildID, entry.Actor+"/"), "/") {
 		return nil, invalid()
 	}
-	var sourceActor, kind, child, turn, job, answer string
-	var wrapped, sameLineage bool
-	var resultEntry int64
-	// Never transfer a whole source record or unbounded answer for replay. The
-	// extra byte detects oversized answers rather than silently clipping them.
-	err := q.QueryRow(`WITH source AS (
-		SELECT session_id,actor_id,json_extract(content_json,'$.type')='runtime_event' AS wrapped,
-		CASE WHEN json_extract(content_json,'$.type')='runtime_event'
-		THEN json_extract(content_json,'$.body') ELSE content_json END AS body
-		FROM entries WHERE id=? AND kind='status' AND source_id IS NULL
-	) SELECT actor_id,wrapped,coalesce(json_extract(body,'$.type'),''),
-		coalesce(json_extract(body,'$.child_id'),''),coalesce(json_extract(body,'$.child_turn_id'),''),
-		coalesce(json_extract(body,'$.job_id'),''),coalesce(json_extract(body,'$.result_entry_id'),0),
-		CAST(substr(CAST(coalesce(json_extract(body,'$.answer'),'') AS BLOB),1,?) AS TEXT),
-		a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id
-		FROM source JOIN sessions a ON a.id=source.session_id JOIN sessions b ON b.id=?`, message.EventSeq, MaxChildAnswerBytes+1, entry.SessionID).Scan(
-		&sourceActor, &wrapped, &kind, &child, &turn, &job, &resultEntry, &answer, &sameLineage)
+	source, metadata, wrapped, err := readChildCompletionSource(q, sourceID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve child notification source %d: %w", message.EventSeq, err)
+		return nil, fmt.Errorf("resolve child notification source %d: %w", sourceID, err)
 	}
-	owner := child
+	var sameLineage bool
+	if err := q.QueryRow(`SELECT a.lineage_id=b.lineage_id AND a.workspace_id=b.workspace_id
+	 FROM sessions a JOIN sessions b ON b.id=? WHERE a.id=?`, entry.SessionID, source.SessionID).Scan(&sameLineage); err != nil {
+		return nil, err
+	}
+	owner := metadata.ChildID
 	if wrapped {
 		owner = entry.Actor
 	}
-	if kind != "child_turn_finished" || child != notice.ChildID || sourceActor != owner || !sameLineage ||
-		len(answer) > MaxChildAnswerBytes || !utf8.ValidString(answer) || resultEntry < 0 || resultEntry >= message.EventSeq ||
-		notice.TurnID != "" && turn != notice.TurnID || notice.JobID != "" && job != notice.JobID ||
-		notice.ResultEntry != 0 && resultEntry != notice.ResultEntry {
+	if source.Kind != "status" || source.Source != 0 || metadata.Type != "child_turn_finished" || metadata.ChildID != notice.ChildID || source.Actor != owner || !sameLineage ||
+		metadata.ResultEntry < 0 || metadata.ResultEntry >= sourceID ||
+		notice.TurnID != "" && metadata.TurnID != notice.TurnID || notice.JobID != "" && metadata.JobID != notice.JobID ||
+		notice.ResultEntry != 0 && metadata.ResultEntry != notice.ResultEntry {
 		return nil, invalid()
 	}
-	return &resolvedChildNotice{SourceID: message.EventSeq, ResultEntry: resultEntry,
-		Presentation: ChildCompletionPresentation{ChildID: child, Answer: answer}}, nil
+	return &resolvedChildNotice{SourceID: sourceID, ResultEntry: metadata.ResultEntry, Metadata: metadata,
+		Presentation: ChildCompletionPresentation{ChildID: metadata.ChildID, Answer: metadata.Answer}}, nil
 }
 
 func childNoticeSourceBody(source Entry) (json.RawMessage, error) {

@@ -58,7 +58,10 @@ func runUserInterruptedTurn(t *testing.T, r *Runtime) history.Entry {
 		return ctx.Err()
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start the work"}) }()
+	go func() {
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start the work"})
+		done <- err
+	}()
 	receive(t, started)
 	r.Interrupt()
 	r.Interrupt()
@@ -182,7 +185,7 @@ func TestUserInterruptNoticePrecedesNextNotificationRun(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Observed independent completion."})
 			}}
-			if err := r.Run(nil); err != nil {
+			if _, err := r.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			if requests != 1 || r.HasNotifications() {
@@ -221,7 +224,7 @@ func TestUserInterruptNoticePrecedesLaterUserInput(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Handling the new task."})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "A different task"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "A different task"}); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 1 || userInterruptNotice(t, r, 1).ID != notice.ID {
@@ -242,7 +245,10 @@ func TestUserInterruptNoticeWaitsForToolSettlement(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Read before proceeding"}) }()
+	go func() {
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Read before proceeding"})
+		done <- err
+	}()
 	receive(t, started)
 	r.Interrupt()
 	r.Interrupt()
@@ -290,7 +296,7 @@ func TestUserInterruptNoticeWaitsForToolSettlement(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Observed the queued completion."})
 	}}
-	if err := r.Run(nil); err != nil {
+	if _, err := r.Run(nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -310,7 +316,7 @@ func TestUserInterruptNoticeDoesNotFollowOtherCancellation(t *testing.T) {
 				}
 				return context.Canceled
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start work"}); !errors.Is(err, context.Canceled) {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start work"}); !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
 			userInterruptNotice(t, r, 0)

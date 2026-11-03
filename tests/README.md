@@ -131,6 +131,7 @@ python3 tests/pty_partial_retry.py # mock SSE: partial recovery after one edit, 
 python3 tests/pty_subagent.py       # mock HTTP: disposable easy child fallback, direct answer
 python3 tests/pty_subagent.py --failure # bounded retry exhaustion, partial answer, warning and transcripts
 python3 tests/pty_subagent.py --offline # socket-free foreground disposal and UTF-8 answer limit
+python3 tests/pty_child_inspection.py # offline sidebar prompt, full Markdown answer and saved metadata
 python3 -m unittest discover -s tests -p test_scratch.py # scratch permissions
 make check                        # race tests and vet
 make rail-integration             # real filesystem sandbox and tmux lifecycle

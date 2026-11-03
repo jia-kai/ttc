@@ -78,8 +78,10 @@ its own projection. Neither changes model-facing results.
   bytes). Applied mutations add at most six diff lines, each at most 120
   characters. Shell rows show the final 64 UTF-8 bytes per stream, collapsed and
   labeled stdout/stderr; model shell results use a separate configurable byte
-  budget. Child assistant and final-answer rows use clipped response prefixes;
-  inspect the corresponding Request row for the captured full response.
+  budget. Child response rows use clipped prefixes. Final-answer rows open the
+  full saved Markdown answer with available assignment IDs, timing, easy flag
+  and model metadata; D opens saved completion details. Request rows retain
+  provider captures.
 - `detail`: paths and highlighted immutable snapshot diffs precede labeled
   supplied parameters/results. GNU diff has a shared 256 KiB capture and
   five-second deadline per call; disclose failures/truncation and show only
@@ -99,9 +101,12 @@ its own projection. Neither changes model-facing results.
   per stream; LSP exposes stderr only, and `/btw` keeps at most 64 KiB per
   stream with its answer rendered as Markdown. Job running time uses whole
   seconds as `1h2m3s`; watch time measures observation, not external workload
-  runtime. Historical inspection uses saved text, never live callbacks.
-  `job_read` inspectors show only the returned page with its
-  stream/cursor/filter, never additional current capture tails.
+  runtime. Historical inspection uses saved text, never live callbacks. Live
+  subagent-job inspectors also show the assignment's initial prompt (4 KiB) and
+  latest two accepted parent steering messages (2 KiB each), with
+  truncation/omission notices and no pagination. Reusing a child does not change
+  an older job's prompt snapshot. `job_read` inspectors show only the returned
+  page with its stream/cursor/filter, never additional current capture tails.
 - `Execution.Update` replaces the card identified by its committed call and
   refreshes open inspection. Shell/child waits sample bounded captures every 250
   ms with synchronous callbacks, no polling queue or separate polling goroutine.

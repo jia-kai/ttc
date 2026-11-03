@@ -149,8 +149,10 @@ func TestEasyChoiceWhileViewingOtherProviderArchive(t *testing.T) {
 	if _, err := historytest.DB(t, r.Store).Exec("UPDATE sessions SET read_only=1 WHERE id=?", id); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Load(id); err != nil || r.CurrentSelection().Provider != "archived" {
-		t.Fatal("archive load", err, r.CurrentSelection())
+	h.command("/load " + id)
+	h.wait(t, "user · archive")
+	if r.CurrentSelection().Provider != "archived" {
+		t.Fatal("archive load", r.CurrentSelection())
 	}
 	h.command("/model easy family-b high")
 	h.wait(t, "Easy model selected · family-b · high")
@@ -272,14 +274,8 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := make(chan session.Event, 64)
 	p := &gatedModelProvider{requests: make(chan llm.Request, 4), release: make(chan struct{})}
-	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, func(e session.Event) {
-		select {
-		case events <- e:
-		case <-ctx.Done():
-		}
-	})
+	r, err := session.New(ctx, store, w, p, selection, "", catalog, tool.WebSearchConfig{}, nil)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -287,7 +283,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 	r.AutoName = false
 	defer func() { cancel(); r.Close() }()
 	screen := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 64)}
-	f := Frontend{Runtime: r, Events: events, Screen: screen, Output: io.Discard, Models: models}
+	f := Frontend{Runtime: r, Screen: screen, Output: io.Discard, Models: models}
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx) }()
 	defer func() {
@@ -354,7 +350,7 @@ func TestModelMenuEntryPointsPreserveActiveTurnAndDraft(t *testing.T) {
 		t.Fatal("easy choice not switched", easy)
 	}
 	typeText("e")
-	waitFrame("high · Deeper reasoning (default)   ")
+	waitFrame(">   high · Deeper reasoning (default)")
 	if easy := r.EasyModelChoice(); easy != nil {
 		t.Fatal("easy choice not cleared", easy)
 	}

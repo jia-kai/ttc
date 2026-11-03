@@ -38,7 +38,7 @@ func TestUserInterruptPersistsDeveloperNoticeAfterSettledCalls(t *testing.T) {
 		r.Interrupt() // Repeated cancellation must not add repeated notices.
 		return ctx.Err()
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"}); !errors.Is(err, context.Canceled) {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(r.Workspace.Root, "must-not-exist")); !os.IsNotExist(err) {
@@ -93,7 +93,7 @@ func TestUserInterruptPersistsDeveloperNoticeAfterSettledCalls(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Resumed"})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil || requests != 1 {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue"}); err != nil || requests != 1 {
 		t.Fatal("resume failed", err, requests)
 	}
 }
@@ -128,7 +128,7 @@ func TestNonUserCancellationDoesNotClaimUserInterruption(t *testing.T) {
 					panic("unknown case")
 				}
 			}}
-			err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"})
+			_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Start"})
 			if (err == nil) != (kind == "completed despite interrupt") {
 				t.Fatal(err)
 			}
@@ -147,7 +147,7 @@ func TestUserInterruptAfterToolCommitPreservesSideEffects(t *testing.T) {
 			r.Interrupt()
 		}
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Write then stop"}); !errors.Is(err, context.Canceled) {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Write then stop"}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(filepath.Join(r.Workspace.Root, "completed.txt"))
@@ -174,7 +174,7 @@ func TestUserInterruptionPersistenceFailureIsReported(t *testing.T) {
 		r.Interrupt()
 		return ctx.Err()
 	}}
-	err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Interrupt"})
+	_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Interrupt"})
 	if !errors.Is(err, context.Canceled) || err == nil || !strings.Contains(err.Error(), "forced interruption failure") {
 		t.Fatal("notice persistence failure was hidden", err)
 	}
@@ -186,7 +186,7 @@ func TestUserInterruptionPersistenceFailureIsReported(t *testing.T) {
 		requests++
 		return nil
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Resume"}); err == nil || !strings.Contains(err.Error(), "forced interruption failure") || requests != 0 {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Resume"}); err == nil || !strings.Contains(err.Error(), "forced interruption failure") || requests != 0 {
 		t.Fatal("inference proceeded without the missing interruption notice", err, requests)
 	}
 }
@@ -216,7 +216,7 @@ func TestUserInterruptionDuringAutomaticCompaction(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Earlier research summarized."})
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue research"}); !errors.Is(err, context.Canceled) {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue research"}); !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
 			if summaries != 1 || coding != 0 || (r.Current() != before) != (phase == "handoff") {

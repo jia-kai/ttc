@@ -41,6 +41,8 @@ func (s *Store) RecordChildState(session string, snapshot ChildSnapshot) (int64,
 type ChildFinish struct {
 	Type                  string `json:"type"`
 	ChildID               string `json:"child_id"`
+	Label                 string `json:"label,omitempty"` // Bounded saved display label; absent in older completions.
+	Easy                  *bool  `json:"easy,omitempty"`  // Explicit creation-time routing; nil means historically unavailable.
 	TurnID                string `json:"child_turn_id"`
 	JobID                 string `json:"job_id"`
 	Outcome               string `json:"outcome"`
@@ -119,6 +121,9 @@ func validateChildFinishFields(finish ChildFinish) error {
 	}
 	if len(finish.Answer) > MaxChildAnswerBytes || !utf8.ValidString(finish.Answer) {
 		return errors.New(prompts.HistoryChildAnswer)
+	}
+	if len(finish.Label) > 1024 || !utf8.ValidString(finish.Label) {
+		return errors.New(prompts.HistoryChildLabel)
 	}
 	if (finish.TranscriptPath == "") != (finish.TranscriptJSONLPath == "") || (finish.TranscriptPath != "" && finish.TranscriptExportError != "") {
 		return errors.New(prompts.HistoryChildTranscript)

@@ -37,8 +37,7 @@ func TestDirectRowsDoNotOpenPayloadWindows(t *testing.T) {
 
 	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
 	catalog, _ := skills.Discover(context.Background(), w.Root, "")
-	events := make(chan session.Event, 64)
-	r, e := session.New(context.Background(), store, w, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Done."}}}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) { events <- v })
+	r, e := session.New(context.Background(), store, w, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Done."}}}, selection, "", catalog, tool.WebSearchConfig{}, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -46,11 +45,10 @@ func TestDirectRowsDoNotOpenPayloadWindows(t *testing.T) {
 	defer r.Close()
 	// Keep a startup notice ahead of the turn while exercising direct-row
 	// mouse and keyboard navigation without granting payload inspection.
-	events <- session.Event{Kind: "status", Text: "Ready for input", Generation: r.Generation()}
 	screen := &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	f := Frontend{Runtime: r, Events: events, Screen: screen, Output: io.Discard}
+	f := Frontend{Runtime: r, Notices: []string{"Ready for input"}, Screen: screen, Output: io.Discard}
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx) }()
 	defer func() {
@@ -129,13 +127,7 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	events := make(chan session.Event, 1)
-	r, err := session.New(ctx, store, w, &llm.Script{}, selection, "", catalog, tool.WebSearchConfig{}, func(v session.Event) {
-		select {
-		case events <- v:
-		case <-ctx.Done():
-		}
-	})
+	r, err := session.New(ctx, store, w, &llm.Script{}, selection, "", catalog, tool.WebSearchConfig{}, nil)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
@@ -163,7 +155,7 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 	defer input.Close()
 	defer writer.Close()
 	output := make(chan string, 16)
-	f := Frontend{Runtime: r, Events: events, Input: input, Output: eventWriter{output}, Plain: true}
+	f := Frontend{Runtime: r, Input: input, Output: eventWriter{output}, Plain: true}
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx) }()
 	defer func() {
@@ -182,8 +174,9 @@ func TestSessionSwitchDrainsBackgroundCompletionEvents(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("session switch did not cancel background job")
 	}
-	// The old synchronous frontend cannot drain this slot while joining the callback.
-	events <- session.Event{Kind: "status", Text: "queued event", Generation: r.Generation()}
+	// Lifecycle control must continue consuming ordered updates while joining
+	// the old session's callback, rather than fencing a separate event channel.
+	r.Publish(session.Event{Kind: "status", Text: "queued event", Generation: r.Generation()})
 	close(release)
 	deadline := time.After(3 * time.Second)
 	for {

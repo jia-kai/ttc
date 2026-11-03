@@ -80,9 +80,6 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 		} else if err := ctx.Err(); err != nil {
 			record = failedTool(call, "cancelled", err.Error())
 		} else {
-			if fileMutation(call.Name) {
-				r.routeMu.RLock()
-			}
 			update := func(value any) {
 				result, err := json.Marshal(value)
 				if err != nil {
@@ -99,6 +96,9 @@ func (r *Runtime) runToolBatch(ctx context.Context, turn, actor string, registry
 				r.emit(Event{Kind: "tool_update", Actor: actor, CallID: ids[i], PendingKey: pendingToolKey(requestIDs[i], call.ID), JobID: jobID, EntryID: entryIDs[i], Text: text, Detail: md.Detail})
 			}
 			update(map[string]string{"status": "running"})
+			if fileMutation(call.Name) {
+				r.routeMu.RLock()
+			}
 			record = registry.Invoke(ctx, tool.Execution{SessionID: r.Current(), CallID: ids[i], Actor: actor, Update: update, BinaryFiles: binaryFiles[i]}, call.Name, call.Arguments)
 			if fileMutation(call.Name) {
 				r.routeMu.RUnlock()

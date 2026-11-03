@@ -68,14 +68,17 @@ func TestBTWCalibrationAdmitsOversizedInheritedPrefix(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: btwCalibrationMeasured, OutputTokens: 5}})
 			}}
-			if err := r.Run(nil); err != nil {
+			if _, err := r.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			r.selection.Model.Budget.ContextLimit = 40000
 			var frozen []llm.Message
 			if active {
 				done := make(chan error, 1)
-				go func() { done <- r.Run(nil) }()
+				go func() {
+					_, err := r.Run(nil)
+					done <- err
+				}()
 				defer func() {
 					r.Interrupt()
 					select {
@@ -172,7 +175,7 @@ func TestBTWCalibrationFallbackIsConservative(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "completed", Usage: usage})
 			}}
-			if err := r.Run(nil); err != nil {
+			if _, err := r.Run(nil); err != nil {
 				t.Fatal(err)
 			}
 			r.selection.Model.Budget.ContextLimit = 40000
@@ -216,7 +219,7 @@ func TestBTWCalibrationForkSupportsCompactionPreflight(t *testing.T) {
 		original = requestSnapshot(r, req)
 		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: btwCalibrationMeasured, OutputTokens: 5}})
 	}}
-	if err := r.Run(nil); err != nil {
+	if _, err := r.Run(nil); err != nil {
 		t.Fatal(err)
 	}
 	r.selection.Model.Budget.ContextLimit = 40000

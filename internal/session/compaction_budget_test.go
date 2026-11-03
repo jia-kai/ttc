@@ -269,7 +269,7 @@ func TestSummaryBudgetCompactsBeforeCodingConsumesFreshResults(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Fresh results consumed after compaction."})
 	}}
-	if err := a.r.Run(nil); err != nil {
+	if _, err := a.r.Run(nil); err != nil {
 		t.Fatal(err)
 	}
 	if summaries != 1 || coding != 1 {

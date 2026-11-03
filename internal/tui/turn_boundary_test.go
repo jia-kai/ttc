@@ -49,12 +49,12 @@ func TestTurnBoundaryLiveReplay(t *testing.T) {
 	}
 	defer r.Close()
 	for _, source := range []string{"normal", "queue"} {
-		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: source, InputSource: source, InputTimeMS: 1}); err != nil {
+		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: source, InputSource: source, InputTimeMS: 1}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	c := &frontendController{frontend: &Frontend{Runtime: r, Output: io.Discard}, ctx: ctx, history: store, view: newTranscript(), sidebar: newSidebar()}
-	c.replay()
+	c.replay(0)
 	mu.Lock()
 	savedEvents := append([]session.Event(nil), events...)
 	mu.Unlock()

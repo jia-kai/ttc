@@ -118,11 +118,11 @@ func TestOpenAIConstruction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if components.Inference == nil || components.Catalog == nil || components.Authorize == nil || components.Notice == "" {
+	if components.Inference == nil || components.Catalog == nil || components.Authorize == nil || components.Connections == nil || components.Notice == "" {
 		t.Fatal(components)
 	}
 	adapter := components.Inference.(*Adapter)
-	if adapter.Client != client || adapter.BaseURL != "http://example.invalid" {
+	if adapter.Client == client || client.Transport != nil || adapter.BaseURL != "http://example.invalid" {
 		t.Fatal(adapter)
 	}
 	if components.Catalog.CachePath != filepath.Join(data, "openai-models.json") {

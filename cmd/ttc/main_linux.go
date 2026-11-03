@@ -157,7 +157,7 @@ func newRootCommand(modules []providers.Module) *cobra.Command {
 	return root
 }
 
-func runAgent(parent context.Context, opts launchOptions, factory providers.Factory, searchConfigFile string) error {
+func runAgent(parent context.Context, opts launchOptions, factory providers.Factory, searchConfigFile string) (runErr error) {
 	if err := applySSHAuthSockPolicy(); err != nil {
 		return err
 	}
@@ -208,6 +208,15 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 		components, e = factory(ctx, providers.Environment{DataDir: store.Root, ResolveBinary: binaryinput.Resolve})
 		if e != nil {
 			return fmt.Errorf("open provider %q: %w", providerID, e)
+		}
+		if components.Connections != nil {
+			// Register ownership before validation or startup operations. Later
+			// defers join runtime/catalog consumers before closing their network.
+			defer func() {
+				if err := components.Connections.Close(); err != nil {
+					runErr = errors.Join(runErr, err)
+				}
+			}()
 		}
 		if components.Inference == nil {
 			return fmt.Errorf("provider %q has no inference component", providerID)
@@ -311,13 +320,7 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 	if e != nil {
 		return e
 	}
-	events := make(chan session.Event, 256)
-	runtime, e := session.New(ctx, store, w, p, selection, "", catalog, searchConfig, func(event session.Event) {
-		select {
-		case events <- event:
-		case <-ctx.Done():
-		}
-	})
+	runtime, e := session.New(ctx, store, w, p, selection, "", catalog, searchConfig, nil)
 	if e != nil {
 		return e
 	}
@@ -344,9 +347,10 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 		}
 	}
 	runtime.AutoName = opts.script == ""
-	for _, notice := range notices {
-		events <- session.Event{Kind: "status", Text: notice, Generation: runtime.Generation(), SessionID: runtime.Current()}
+	var reconnect func() error
+	if components.Connections != nil {
+		reconnect = components.Connections.Reset
 	}
-	ui := &tui.Frontend{Runtime: runtime, Events: events, Input: os.Stdin, Output: os.Stdout, Plain: opts.plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginCurrent, Models: models, ModelUpdates: modelUpdates}
+	ui := &tui.Frontend{Runtime: runtime, Notices: notices, Input: os.Stdin, Output: os.Stdout, Plain: opts.plain || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())), Login: loginCurrent, Reconnect: reconnect, Models: models, ModelUpdates: modelUpdates}
 	return ui.Run(ctx)
 }

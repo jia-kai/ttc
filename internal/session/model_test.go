@@ -147,7 +147,10 @@ func TestModelSwitchAtToolBoundaryPreservesPerRequestState(t *testing.T) {
 		return emit(llm.StreamEvent{Kind: "call", Call: &call})
 	}}
 	done := make(chan error, 1)
-	go func() { done <- r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "switch at tools"}) }()
+	go func() {
+		_, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "switch at tools"})
+		done <- err
+	}()
 	waitEntered := func() {
 		t.Helper()
 		select {
@@ -335,7 +338,7 @@ func TestStandardFastOpaqueCompatibilityAndLoadSelection(t *testing.T) {
 		if err := r.RequestModel(choice); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "same base"}); err != nil {
+		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "same base"}); err != nil {
 			t.Fatal(err)
 		}
 		req := <-requests
@@ -398,7 +401,7 @@ func TestLoadModelFailurePreservesRuntimeTools(t *testing.T) {
 	if r.Current() != old {
 		t.Fatal("failed load changed session")
 	}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "continue after failed load"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "continue after failed load"}); err != nil {
 		t.Fatal(err)
 	}
 	var result string

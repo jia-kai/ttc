@@ -22,8 +22,8 @@ const startupStatus = "Startup status ready"
 
 func TestPrequeuedStartupStatusVisibleInTUIWithoutInferenceOrPersistence(t *testing.T) {
 	p := &helpTestProvider{Script: llm.Script{Responses: []llm.ScriptResponse{{Text: "First answer."}}}, requests: make(chan llm.Request, 8), release: make(chan struct{})}
-	u := newQuestionTestUIWithSetup(t, p, nil, func(r *session.Runtime) {
-		r.Emit(session.Event{Kind: "status", Text: startupStatus, Generation: r.Generation()})
+	u := newQuestionTestUIWithFrontend(t, p, nil, nil, func(f *Frontend) {
+		f.Notices = []string{startupStatus}
 	})
 	u.wait(t, startupStatus)
 	select {
@@ -70,23 +70,16 @@ func TestPrequeuedStartupStatusVisibleAfterPlainReplay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	selection := llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
-	events := make(chan session.Event, 8)
-	r, err := session.New(ctx, store, w, &llm.Script{}, selection, "", catalog, tool.WebSearchConfig{}, func(event session.Event) {
-		select {
-		case events <- event:
-		case <-ctx.Done():
-		}
-	})
+	r, err := session.New(ctx, store, w, &llm.Script{}, selection, "", catalog, tool.WebSearchConfig{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	events <- session.Event{Kind: "status", Text: startupStatus, Generation: r.Generation()}
 	input, writer := io.Pipe()
 	defer input.Close()
 	defer writer.Close()
 	output := make(chan string, 32)
-	frontend := Frontend{Runtime: r, Events: events, Input: input, Output: eventWriter{output}, Plain: true}
+	frontend := Frontend{Runtime: r, Notices: []string{startupStatus}, Input: input, Output: eventWriter{output}, Plain: true}
 	done := make(chan error, 1)
 	go func() { done <- frontend.Run(ctx) }()
 	defer func() {

@@ -17,7 +17,7 @@ import (
 	"ttc/internal/tool"
 )
 
-// codingChild retains one isolated context. childStartMu protects its fields;
+// codingChild retains one isolated context. coordinator.childMu protects its fields;
 // assignment's admission queue has its own orderMu discipline. Only the running
 // worker owns messages/cursor until publishing an idle state.
 type codingChild struct {
@@ -36,6 +36,8 @@ type codingChild struct {
 }
 
 type childAssignment struct {
+	executionID uint64                 // Coordinator lifecycle; retained context never reuses an execution identity.
+	inspection  *childPromptInspection // Assignment-local atomic UI snapshot; never used for admission or model input.
 	// orderMu protects the admission queue and terminal admission gate.
 	accepting         bool
 	queued            []llm.Message
@@ -45,7 +47,7 @@ type childAssignment struct {
 	queuedTokens      int                  // Conservative wire-token estimate, including event envelopes.
 	queueTokenLimit   int                  // Bounded by the model's reserved next-turn input headroom.
 	turn, job         string
-	finish, result    int64 // childStartMu guards updates; each assignment retains distinct output refs.
+	finish, result    int64 // coordinator.childMu guards updates; each assignment retains distinct output refs.
 	answer            string
 	truncated         bool
 	persistent        bool                // Retain context after this assignment, independent of foreground/background execution.
@@ -68,12 +70,12 @@ func childAnswer(text string) (string, bool) {
 }
 
 func (r *Runtime) resetChildren() {
-	r.childStartMu.Lock()
-	r.children = map[string]*codingChild{}
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Lock()
+	r.coordinator.children = map[string]*codingChild{}
+	r.coordinator.childMu.Unlock()
 }
 
-// view snapshots the context and its latest assignment under childStartMu.
+// view snapshots the context and its latest assignment under coordinator.childMu.
 func (child *codingChild) view() tool.ChildView {
 	status := "running"
 	if child.assignment != nil && child.assignment.completion.Outcome != "" {
@@ -85,10 +87,10 @@ func (child *codingChild) view() tool.ChildView {
 // ChildViews returns current coding contexts, including idle contexts. Children
 // cannot inspect sibling contexts; the main actor sees all of them.
 func (r *Runtime) ChildViews(actor string) []tool.ChildView {
-	r.childStartMu.Lock()
-	defer r.childStartMu.Unlock()
+	r.coordinator.childMu.Lock()
+	defer r.coordinator.childMu.Unlock()
 	out := []tool.ChildView{}
-	for _, child := range r.children {
+	for _, child := range r.coordinator.children {
 		if actor == "main" || actor == child.id {
 			out = append(out, child.view())
 		}
@@ -103,54 +105,55 @@ func (r *Runtime) StopChild(ctx context.Context, actor, id string) (any, error) 
 	if actor != "main" {
 		return nil, tool.Fail("ownership", prompts.ChildStopOwnership)
 	}
-	r.childStartMu.Lock()
-	child := r.children[id]
+	r.coordinator.childMu.Lock()
+	child := r.coordinator.children[id]
 	if child == nil {
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		return nil, tool.Fail("not_found", prompts.ChildStopUnknown)
 	}
 	if child.closing {
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		return nil, tool.Fail("child_busy", prompts.ChildAlreadyClosing)
 	}
 	job := child.job
 	if child.state == "idle" {
 		child.closing = true
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		r.Jobs.StopOwned(id)
-		r.childStartMu.Lock()
+		r.coordinator.childMu.Lock()
 		child.state = "closed"
 		view := child.view()
 		if err := r.publishChild(view); err != nil {
-			r.childStartMu.Unlock()
+			r.coordinator.childMu.Unlock()
 			return nil, err
 		}
-		delete(r.children, id)
+		delete(r.coordinator.children, id)
 		r.Jobs.ClearReadGrants(id)
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		return view, nil
 	}
 	if job == "" {
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		return nil, tool.Fail("child_busy", prompts.ChildLaunchPending)
 	}
 	child.closing = true
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Unlock()
 	if _, err := r.Jobs.Stop("main", job); err != nil {
 		return nil, err
 	}
 	// Completion may have passed its cleanup decision before closing was set.
 	// Join the assignment first so it cannot launch more owned jobs, then sweep.
 	r.Jobs.StopOwned(id)
-	r.childStartMu.Lock()
-	delete(r.children, id)
+	r.coordinator.childMu.Lock()
+	delete(r.coordinator.children, id)
 	r.Jobs.ClearReadGrants(id)
 	view := child.view()
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Unlock()
 	return view, nil
 }
 
 func (r *Runtime) finishChild(child *codingChild, task childTask, err error) error {
+	defer r.coordinator.executions.finish(task.assignment.executionID)
 	r.orderMu.Lock()
 	task.assignment.accepting = false
 	for _, message := range task.assignment.queued {
@@ -189,7 +192,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		transcript, exportErr = r.Store.ArchiveActorTranscript(r.Current(), child.id, task.assignment.pending)
 		r.routeMu.RUnlock()
 	}
-	r.childStartMu.Lock()
+	r.coordinator.childMu.Lock()
 	r.routeMu.RLock()
 	r.orderMu.Lock()
 	state := "closed"
@@ -197,6 +200,8 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		state = "idle"
 	}
 	finish := history.ChildFinish{Type: "child_turn_finished", ChildID: child.id, TurnID: task.assignment.turn, JobID: task.assignment.job, Outcome: status, ContextState: state, Persistent: task.assignment.persistent, ResultEntry: task.assignment.result}
+	easy := child.easy
+	finish.Label, finish.Easy = render.ResponsePrefix(child.label), &easy
 	finish.Answer, finish.Truncated = task.assignment.answer, task.assignment.truncated
 	if status != "completed" {
 		childFailureMetadata(&finish, task.assignment.inheritedAnswer, transcript, exportErr)
@@ -213,7 +218,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		if child.state == "idle" {
 			child.lastAnswer, child.lastTruncated, child.lastResult = finish.Answer, finish.Truncated, finish.ResultEntry
 		} else {
-			delete(r.children, child.id)
+			delete(r.coordinator.children, child.id)
 		}
 		commitErr = r.publishChildLocked(child.view())
 		if commitErr == nil && task.assignment.background {
@@ -222,7 +227,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	}
 	if commitErr != nil {
 		child.state = "closed"
-		delete(r.children, child.id)
+		delete(r.coordinator.children, child.id)
 		r.orderError = errors.Join(r.orderError, commitErr)
 	}
 	if child.state == "closed" {
@@ -230,7 +235,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 	}
 	r.orderMu.Unlock()
 	r.routeMu.RUnlock()
-	r.childStartMu.Unlock()
+	r.coordinator.childMu.Unlock()
 	if commitErr != nil {
 		r.Jobs.StopOwned(child.id)
 		completionErr := fmt.Errorf(prompts.ChildCompletionCommitFailure, commitErr)
@@ -247,10 +252,10 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		handoffErr := fmt.Errorf("%w; %s", completionErr, finish.Warning)
 		// Storage failures still abort the runtime, but the foreground caller
 		// must not receive concatenated stdout or lose its investigation paths.
-		r.childStartMu.Lock()
+		r.coordinator.childMu.Lock()
 		task.assignment.completion = finish
 		task.assignment.pending = nil
-		r.childStartMu.Unlock()
+		r.coordinator.childMu.Unlock()
 		r.orderMu.Lock()
 		r.orderError = errors.Join(r.orderError, handoffErr)
 		r.orderMu.Unlock()

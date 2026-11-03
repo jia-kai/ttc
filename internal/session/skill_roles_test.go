@@ -122,7 +122,7 @@ func TestSkillRolesAtActualReceivingAndToolBoundaries(t *testing.T) {
 			switch role {
 			case "main":
 				message := llm.Message{Type: llm.TypeUserInput, Content: "Review role skills"}
-				if err := r.Run(&message); err != nil {
+				if _, err := r.Run(&message); err != nil {
 					t.Fatal(err)
 				}
 			case "child":
@@ -197,7 +197,8 @@ func TestSkillRolesAsideInheritsRealMainAdmission(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				message := llm.Message{Type: llm.TypeUserInput, Content: "Main question evidence"}
-				done <- r.Run(&message)
+				_, err := r.Run(&message)
+				done <- err
 			}()
 			select {
 			case <-ready:

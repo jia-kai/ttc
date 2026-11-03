@@ -54,7 +54,7 @@ func TestSteeringBoundaryOwnsSeparateUndoCheckpoint(t *testing.T) {
 		arguments, _ := json.Marshal(map[string]string{"path": "result.txt", "content": content})
 		return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: content, Name: "write", Arguments: arguments}})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Write the result"}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Write the result"}); err != nil {
 		t.Fatal(err)
 	}
 	if count, _ := r.SteeringPreview(0); requests != 3 || count != 0 {
@@ -111,6 +111,7 @@ func TestSteeringRejectedAdmissionRetainsInputAndCheckpoint(t *testing.T) {
 	r.activeTurn = "test-running"
 	_, r.activeCancel = context.WithCancelCause(r.ctx)
 	r.mu.Unlock()
+	r.openMainAdmission(context.Background())
 	if err := r.Steer(contextbuild.Input{Text: "Queued human steer"}); err != nil {
 		t.Fatal(err)
 	}

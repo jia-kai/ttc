@@ -50,7 +50,11 @@ func TestNamingStartsAtFirstToolBoundaryAndFailureIsVisible(t *testing.T) {
 				return ctx.Err()
 			}}
 			done := make(chan error, 1)
-			go func() { m := llm.Message{Type: llm.TypeUserInput, Content: "Study local source"}; done <- r.Run(&m) }()
+			go func() {
+				m := llm.Message{Type: llm.TypeUserInput, Content: "Study local source"}
+				_, err := r.Run(&m)
+				done <- err
+			}()
 			select {
 			case <-ready:
 			case <-time.After(3 * time.Second):
@@ -113,7 +117,7 @@ func TestCompactionCancellationDoesNotWaitForBackgroundNaming(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "completed"})
 	}}
-	if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Check the project."}); err != nil {
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Check the project."}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -178,7 +182,7 @@ func TestNamingUsesEasySelectionOrFallsBack(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "I will inspect the project."})
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect the project"}); err != nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect the project"}); err != nil {
 				t.Fatal(err)
 			}
 			<-r.namingDone

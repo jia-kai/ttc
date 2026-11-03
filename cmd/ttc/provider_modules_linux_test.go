@@ -31,9 +31,19 @@ type moduleCLISource func(context.Context) ([]llm.ModelInfo, error)
 
 func (s moduleCLISource) Models(ctx context.Context) ([]llm.ModelInfo, error) { return s(ctx) }
 
+type moduleCLIConnections struct {
+	reset func() error
+	close func() error
+}
+
+func (c moduleCLIConnections) Reset() error { return c.reset() }
+func (c moduleCLIConnections) Close() error { return c.close() }
+
 func runModuleCLIFixture(t *testing.T, f moduleCLIFixture) {
 	t.Helper()
 	var calls [4]int
+	reconnects := 0
+	closed := 0
 	authorized := false
 	module := func(id string) providers.Module {
 		return providers.Module{ID: id, Configure: func(fs *flag.FlagSet) (providers.Factory, error) {
@@ -52,6 +62,16 @@ func runModuleCLIFixture(t *testing.T, f moduleCLIFixture) {
 					t.Fatalf("parsed module flags did not reach factory: %q %d %v", *value, *count, *enabled)
 				}
 				components := providers.Components{Inference: &llm.Script{}}
+				components.Connections = moduleCLIConnections{
+					reset: func() error { reconnects++; return nil },
+					close: func() error {
+						closed++
+						if f.Mode == "close-error" {
+							return errors.New("fixture network close failed")
+						}
+						return nil
+					},
+				}
 				components.Catalog = &providers.Catalog{CachePath: filepath.Join(env.DataDir, id+"-models.json"), Bind: func(ctx context.Context) (catalog.Binding, error) {
 					calls[1]++
 					if f.Mode == "login" {
@@ -152,6 +172,16 @@ func runModuleCLIFixture(t *testing.T, f moduleCLIFixture) {
 	if calls != f.WantCalls {
 		t.Fatalf("component calls=%v; want %v", calls, f.WantCalls)
 	}
+	wantReconnects := 0
+	if f.Mode == "reconnect" {
+		wantReconnects = 1
+	}
+	if reconnects != wantReconnects {
+		t.Fatalf("provider reconnects=%d; want %d", reconnects, wantReconnects)
+	}
+	if want := min(calls[0], 1); closed != want {
+		t.Fatalf("provider connection owner closed %d times; want %d", closed, want)
+	}
 }
 
 func assertModuleCLISelection(t *testing.T, data, id, model string) {
@@ -184,6 +214,8 @@ func TestProviderModulesCLI(t *testing.T) {
 		{Mode: "login-bad-preference", Args: []string{"--provider", "second", "--login"}, WantProvider: "second", WantError: "clear easy model before login", WantCalls: [4]int{1, 0, 0, 0}},
 		{Mode: "interactive-login", Input: "/login\n/model\n/quit\n", WantProvider: "first", WantModel: "old", WantCalls: [4]int{1, 2, 2, 1}},
 		{Mode: "interactive-reselect", Input: "/login\n/model fresh none\n/quit\n", WantProvider: "first", WantModel: "fresh", WantCalls: [4]int{1, 2, 2, 1}},
+		{Mode: "reconnect", Input: "/force-reconnect\n/quit\n", WantProvider: "first", WantModel: "old", WantCalls: [4]int{1, 1, 1, 0}},
+		{Mode: "close-error", WantProvider: "first", WantError: "fixture network close failed", WantCalls: [4]int{1, 1, 1, 0}},
 		{Mode: "nil-inference", WantProvider: "first", WantError: `provider "first" has no inference component`, WantCalls: [4]int{1, 0, 0, 0}},
 		{Mode: "nil-catalog", WantProvider: "first", WantError: `provider "first" has no model catalog`, WantCalls: [4]int{1, 0, 0, 0}},
 		{Mode: "nil-bind", WantProvider: "first", WantError: `provider "first" has no model catalog`, WantCalls: [4]int{1, 0, 0, 0}},

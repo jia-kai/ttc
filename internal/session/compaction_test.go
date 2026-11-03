@@ -323,7 +323,7 @@ func TestCompactionFatalAndRecoverableReload(t *testing.T) {
 				t.Fatal("runtime guard", got)
 			}
 			if fatal {
-				if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "continue"}); err == nil {
+				if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "continue"}); err == nil {
 					t.Fatal("fatal context admitted inference")
 				}
 				if requests != 1 {

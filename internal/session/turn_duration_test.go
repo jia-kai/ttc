@@ -8,6 +8,7 @@ import (
 	"time"
 	"ttc/internal/historytest"
 
+	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 )
 
@@ -39,6 +40,32 @@ func TestTurnDuration(t *testing.T) {
 	}
 }
 
+func TestTurnCompletionRequiresAdmissionAndReleasesInput(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	if completion, err := r.Run(nil); completion != nil || err == nil {
+		t.Fatalf("empty run reported an admitted turn: completion=%+v err=%v", completion, err)
+	}
+	input := r.PrepareInput(contextbuild.Input{Text: "Cancelled input"})
+	if _, err := input.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if completion, err := r.RunInput(input); completion != nil || err != nil {
+		t.Fatalf("cancelled admission reported a turn: completion=%+v err=%v", completion, err)
+	}
+	r.Provider = &llm.Script{Responses: []llm.ScriptResponse{{Text: "Done."}}}
+	input = r.PrepareInput(contextbuild.Input{Text: "Admitted input"})
+	completion, err := r.RunInput(input)
+	if err != nil || completion == nil {
+		t.Fatalf("admitted turn did not return completion: %+v %v", completion, err)
+	}
+	input.mu.Lock()
+	retained := input.pending || input.input.Text != "" || len(input.input.Attachments) != 0
+	input.mu.Unlock()
+	if retained {
+		t.Fatal("completion preceded input ticket cleanup")
+	}
+}
+
 func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "interrupted"} {
 		t.Run(status, func(t *testing.T) {
@@ -51,7 +78,7 @@ func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 				}}
 			}
 			message := llm.Message{Type: llm.TypeUserInput, Content: "A short request"}
-			err := r.Run(&message)
+			completion, err := r.Run(&message)
 			if (err == nil) != (status == "completed") {
 				t.Fatalf("unexpected turn error: %v", err)
 			}
@@ -75,14 +102,23 @@ func TestTurnEndDisplaysElapsedAndPreservesStatus(t *testing.T) {
 			if end.Status != status || end.WallMS < 0 || !strings.HasPrefix(end.Text, prefix) {
 				t.Fatalf("wrong terminal status or timing: %+v", end)
 			}
-			var emitted string
+			if completion == nil || completion.Text != end.Text || completion.TurnID == "" || completion.EntryID <= 0 || completion.Generation != r.Generation() || completion.SessionID != r.Current() {
+				t.Fatalf("returned completion differs from saved status: %+v", completion)
+			}
+			if !r.runMu.TryLock() {
+				t.Fatal("completion returned before releasing the foreground lock")
+			}
+			r.runMu.Unlock()
+			r.mu.Lock()
+			active := r.activeCancel != nil || r.activeTurn != ""
+			r.mu.Unlock()
+			if active {
+				t.Fatal("completion returned before clearing foreground ownership")
+			}
 			for len(events) > 0 {
 				if event := <-events; event.Kind == "status" && strings.HasPrefix(event.Text, "Turn ") {
-					emitted = event.Text
+					t.Fatalf("terminal status bypassed the settled result: %+v", event)
 				}
-			}
-			if emitted != end.Text {
-				t.Fatalf("emitted status %q differs from persisted status %q", emitted, end.Text)
 			}
 			var storedStatus string
 			if err := historytest.DB(t, r.Store).QueryRow("SELECT status FROM turns WHERE actor_id='main'").Scan(&storedStatus); err != nil || storedStatus != status {

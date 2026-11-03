@@ -61,13 +61,7 @@ func TestLoginDiscardsStartupRefreshAndDiscoversCurrentAccount(t *testing.T) {
 			if failed {
 				p.err = errors.New("discovery unavailable")
 			}
-			events := make(chan session.Event, 64)
-			r, err := session.New(ctx, store, w, p, initial, "", &skills.Catalog{}, tool.WebSearchConfig{}, func(e session.Event) {
-				select {
-				case events <- e:
-				case <-ctx.Done():
-				}
-			})
+			r, err := session.New(ctx, store, w, p, initial, "", &skills.Catalog{}, tool.WebSearchConfig{}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,7 +83,7 @@ func TestLoginDiscardsStartupRefreshAndDiscoversCurrentAccount(t *testing.T) {
 			defer writer.Close()
 			output := make(chan string, 128)
 			updates := make(chan catalog.Update, 1)
-			f := Frontend{Runtime: r, Events: events, Plain: true, Input: input, Output: eventWriter{output}, Models: menuModels(), ModelUpdates: updates, Login: func(ctx context.Context) ([]llm.ModelSpec, error) {
+			f := Frontend{Runtime: r, Plain: true, Input: input, Output: eventWriter{output}, Models: menuModels(), ModelUpdates: updates, Login: func(ctx context.Context) ([]llm.ModelSpec, error) {
 				models, err := p.authorize(ctx)
 				// The injected owner, not the UI, invalidates old deliveries.
 				for range updates {
@@ -151,7 +145,7 @@ func TestLoginDiscardsStartupRefreshAndDiscoversCurrentAccount(t *testing.T) {
 			close(updates)
 			close(p.release)
 			if failed {
-				wait("authorization or model discovery failed")
+				wait(p.err.Error())
 				command("/model")
 				wait("model catalog unavailable")
 			} else {

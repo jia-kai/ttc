@@ -59,6 +59,9 @@ func (r *Runtime) queueNotificationLocked(content string) error {
 	return r.queueActorNotificationLocked("main", content)
 }
 func (r *Runtime) publishJob(v jobs.Snapshot) {
+	if r.coordinator != nil {
+		r.coordinator.executions.observeJob(v)
+	}
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
 	v.Stdout, v.Stderr = "", "" // Captures are inspected separately, never copied into context.
@@ -194,7 +197,7 @@ func (r *Runtime) committedTimers() []wakeup {
 
 // queueCommittedNotification makes an existing semantic event eligible for
 // parent delivery. Finish publication and the child's idle transition serialize
-// under childStartMu; this gate prevents a request from consuming a partial event.
+// under coordinator.childMu; this gate prevents a request from consuming a partial event.
 // The durable source body is projected and validated at admission, not enqueue.
 func (r *Runtime) queueCommittedNotification(eventID int64) error {
 	r.orderMu.Lock()

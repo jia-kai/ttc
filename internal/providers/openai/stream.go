@@ -19,6 +19,7 @@ import (
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
+	"ttc/internal/providerhttp"
 )
 
 func headers(req *http.Request, t AccessTokens) {
@@ -489,6 +490,9 @@ var errConflictingToolArguments = errors.New(prompts.OpenAICompletedArgumentsCon
 // finalSubscriptionFailure preserves final categories without exposing arbitrary
 // transport or reader error values. The outer request context may still be live.
 func finalSubscriptionFailure(err error) error {
+	if errors.Is(err, providerhttp.ErrClosed) {
+		return providerhttp.ErrClosed
+	}
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}

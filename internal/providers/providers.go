@@ -21,8 +21,8 @@ type Module struct {
 	Configure func(*pflag.FlagSet) (Factory, error)
 }
 
-// Factory constructs components using parsed configuration. Constructors own no
-// workers or resources requiring closure; callers own subsequent operations.
+// Factory constructs components using parsed configuration. Constructors start
+// no workers; callers own operations and must close returned Connections.
 type Factory func(context.Context, Environment) (Components, error)
 
 // Environment supplies application-owned dependencies for construction.
@@ -40,7 +40,23 @@ type Components struct {
 	Inference Inference
 	Catalog   *Catalog
 	Authorize func(context.Context, auth.UI) error
-	Notice    string
+	// Connections owns the provider-wide transport lifetime across inference,
+	// authorization and catalog requests. Nil means no managed connections.
+	// The application must Close it after stopping provider operations.
+	Connections Connections
+	Notice      string
+}
+
+// Connections separates provider-wide connection ownership from per-request
+// contexts and retries. Methods are concurrent-safe and do not probe connectivity
+// or wait for retry loops. Reset aborts current exchanges with retryable transport
+// failures, preserves parent contexts and credentials, and leaves future requests
+// usable. Unsupported resets return an error without disrupting requests. Close
+// is idempotent, permanently rejects future requests and retires owned sockets.
+// Custom transports may retain their own socket ownership and cleanup policy.
+type Connections interface {
+	Reset() error
+	Close() error
 }
 
 // Inference is the operational dependency returned by a module. Defining it

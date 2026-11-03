@@ -12,8 +12,10 @@ import (
 // persisted JSON envelopes. InspectPage must precede a full ReadInspection.
 type historyReader interface {
 	PromptHistory(context.Context) ([]string, error)
-	// StreamItems returns selected-branch boundary rows in increasing entry-ID order.
-	StreamItems(context.Context, string) ([]messagestream.Item, error)
+	Branch(string, int64) ([]history.Entry, error)
+	// StreamItems returns boundary rows and revisions on ancestry ending at the
+	// supplied immutable entry tip, in increasing header entry-ID order.
+	StreamItems(context.Context, int64) ([]messagestream.Item, error)
 	BoundaryRawPage(context.Context, int64, int, int) (history.InspectionPage, error)
 	BoundaryCaptures(context.Context, int64) ([]history.BoundaryCapture, error)
 	BoundaryExpandedPage(context.Context, int64, int, int) (history.InspectionPage, error)
@@ -22,7 +24,7 @@ type historyReader interface {
 	ExportText(history.Entry) (string, error)
 	ReadInspection(context.Context, int64) (history.Inspection, error)
 	InspectPage(context.Context, int64, int, int) (history.InspectionPage, error)
-	ChildResponse(int64) (int64, error)
+	ReadChildAnswer(context.Context, int64) (history.ChildAnswer, error)
 	Sessions(string) ([]history.Session, error)
 }
 

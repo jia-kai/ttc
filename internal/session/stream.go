@@ -24,17 +24,19 @@ func (r *Runtime) stream(ctx context.Context, turn, actor string, request int64,
 				return fmt.Errorf("prepare provider boundary: %w", err)
 			}
 			err = func() error {
+				publications := r.reservePublications(1)
+				defer publications.release()
 				r.boundaryMu.Lock()
 				defer r.boundaryMu.Unlock()
 				r.routeMu.RLock()
+				defer r.routeMu.RUnlock()
 				session := r.Current()
 				items, err := r.Store.RecordPreparedBoundary(session, turn, actor, request, input.ConversationID, prepared)
-				r.routeMu.RUnlock()
 				if err != nil {
 					return err
 				}
 				for i := range items {
-					r.emit(Event{Kind: "stream_item", SessionID: session, Actor: actor, EntryID: items[i].ID, RequestID: request, StreamItem: &items[i]})
+					r.emitReserved(publications, Event{Kind: "stream_item", SessionID: session, Actor: actor, EntryID: items[i].ID, RequestID: request, StreamItem: &items[i]})
 				}
 				return nil
 			}()

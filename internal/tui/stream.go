@@ -26,7 +26,6 @@ func streamLine(item messagestream.Item) line {
 		switch action.Kind {
 		case messagestream.Inspect:
 			row.action, row.inspectID = actionInspect, action.Target
-			row.text += " · Inspect"
 		default:
 			continue
 		}
@@ -53,11 +52,12 @@ func (c *frontendController) publishStream(item messagestream.Item) {
 	c.addActor(row, item.Actor)
 }
 
-// directMessageLine preserves readable runtime text without offering payload
-// inspection, independently of whether boundary captures exist for the session.
+// directMessageLine preserves readable runtime text and offers inspection only
+// for persisted runtime notifications, independently of boundary captures.
 // A separately acquired child completion supplies human preview data; it never
 // replaces the canonical message or becomes model input.
 func directMessageLine(item line, message llm.Message, completion *history.ChildCompletionPresentation) line {
+	item.speaker, item.compactResponse = "", false
 	item = messageLine(item, message)
 	if message.Type == llm.TypeRuntimeNotification && completion != nil {
 		item.actor, item.text = completion.ChildID, completion.Answer
@@ -65,6 +65,12 @@ func directMessageLine(item line, message llm.Message, completion *history.Child
 		item.system, item.brief = false, false
 	}
 	item.action, item.inspectID = actionNone, 0
+	if message.Type == llm.TypeRuntimeNotification && item.id > 0 {
+		item.action, item.inspectID = actionInspect, item.id
+		if item.compactResponse {
+			item.action = actionAnswer
+		}
+	}
 	switch message.Type.Presentation() {
 	case llm.PresentationInstruction, llm.PresentationContext:
 		item.text = strings.TrimSuffix(item.text, " · inspect")

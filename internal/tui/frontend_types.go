@@ -7,6 +7,7 @@ type rowAction uint8
 const (
 	actionNone rowAction = iota
 	actionInspect
+	actionAnswer
 	actionExecution
 	actionQuestion
 )
@@ -40,8 +41,9 @@ type line struct {
 }
 type input struct{ text string }
 type operationResult struct {
-	text     string
-	command  string // Slash command name; empty for a model turn or editor result.
-	markdown bool
-	err      error
+	completion *session.TurnCompletion // Terminal row returned by a settled main turn; nil before admission.
+	text       string
+	command    string // Slash command name; empty for a model turn or editor result.
+	markdown   bool
+	err        error
 }

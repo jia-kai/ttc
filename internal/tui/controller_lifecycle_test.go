@@ -163,20 +163,25 @@ func TestControllerCleanupStillUnwindsAfterPanic(t *testing.T) {
 
 func TestControllerComposerSubmissionSnapshotsSteeringChoice(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		busy, command bool
-		modifiers     tcell.ModMask
-		steering      bool
+		name              string
+		busy, command     bool
+		observedOperation uint64
+		observedCommand   bool
+		modifiers         tcell.ModMask
+		steering          bool
 	}{
 		{name: "idle"},
-		{name: "steer", busy: true, steering: true},
-		{name: "queue", busy: true, modifiers: tcell.ModAlt},
-		{name: "history command", busy: true, command: true},
+		{name: "steer", busy: true, observedOperation: 1, steering: true},
+		{name: "queue", busy: true, observedOperation: 1, modifiers: tcell.ModAlt},
+		{name: "history command", busy: true, command: true, observedOperation: 1, observedCommand: true},
+		{name: "unrendered new turn", busy: true},
+		{name: "unrendered completion", observedOperation: 1, steering: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &frontendController{draft: newComposer("  preserved input  "), view: newTranscript(), busy: tc.busy, commandBusy: tc.command}
+			c.observedOperationID, c.observedCommandBusy, c.observedGeneration = tc.observedOperation, tc.observedCommand, 17
 			got := c.handleComposerKey(tcell.NewEventKey(tcell.KeyEnter, "", tc.modifiers))
-			if !got.ready || got.text != "  preserved input  " || got.steering != tc.steering {
+			if !got.ready || got.text != "  preserved input  " || got.steering != tc.steering || got.operationID != tc.observedOperation || got.generation != 17 {
 				t.Fatalf("submission snapshot = %+v", got)
 			}
 			c.draft.set("next draft")

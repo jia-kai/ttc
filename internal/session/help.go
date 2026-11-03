@@ -101,6 +101,7 @@ These commands require an idle turn.
 
 ## Model and login
 
+- **/force-reconnect** — Reset all connections to the current provider, busy or idle, after a network change. Active HTTP exchanges use normal retry/partial-response recovery within their remaining budgets; already failed turns are not replayed. Credentials, shell jobs and timers are preserved. This does not verify connectivity.
 - **Ctrl+X M** or **/model** — Pick a model and reasoning variant. Enter selects the main model; E on a variant toggles it as the easy model. E marks the easy choice and * the main choice.
 - **/model [main] ID [VARIANT]** — Select the main model directly; use **/model main easy** or **/model main main** for those reserved IDs.
 - **/model easy ID [VARIANT]** or **/model easy off** — Select or clear the optional easy model (also available in plain mode). Use **/model easy -- off** for a model named off.

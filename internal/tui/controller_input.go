@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -100,9 +99,7 @@ func (c *frontendController) finishPreview(confirm bool) {
 		if confirm {
 			point = c.modal.preview.point
 		}
-		if err := c.frontend.Runtime.ConfirmImage(c.modal.preview.source.id, point); err != nil {
-			c.add("Error: "+err.Error(), 0)
-		} else {
+		if c.control(session.Request{Kind: session.RequestConfirmImage, ID: c.modal.preview.source.id, Point: point}) {
 			// Confirmation resumes the requesting agent; reveal its incoming reply.
 			c.view.followTail = true
 		}
@@ -203,29 +200,24 @@ func (c *frontendController) selectModel(id, variant string) {
 		c.add("Error: "+err.Error(), 0)
 		return
 	}
-	if err := c.frontend.Runtime.RequestModel(selection); err != nil {
-		c.add("Model selection failed: "+err.Error(), 0)
-		return
-	}
-	c.notificationPaused = false
-	c.add("Model selected for next tool boundary · "+id+" · "+selection.Variant, 0)
+	c.control(session.Request{Kind: session.RequestModel, Selection: &selection})
 }
 
 func (c *frontendController) selectEasyModel(id, variant string) {
 	selection, err := llm.Resolve(c.frontend.Runtime.ProviderID(), c.frontend.Models, id, variant)
-	if err == nil {
-		err = c.frontend.Runtime.RequestEasyModel(&selection)
-	}
 	if err != nil {
 		c.add("Easy model selection failed: "+err.Error(), 0)
 		return
 	}
-	c.add("Easy model selected · "+id+" · "+selection.Variant, 0)
+	c.control(session.Request{Kind: session.RequestEasyModel, Selection: &selection})
 }
 
 func (c *frontendController) submit(next frontendSubmission) bool {
 	if !next.ready {
 		return false
+	}
+	if next.generation == 0 {
+		next.generation, next.operationID = c.observedGeneration, c.observedOperationID
 	}
 	text := strings.TrimSpace(next.text)
 	if text == "" {
@@ -235,15 +227,11 @@ func (c *frontendController) submit(next frontendSubmission) bool {
 		c.recall.add(next.text)
 	}
 	if text == "/quit" {
-		c.frontend.Runtime.Interrupt()
-		if c.busy {
-			waitForTurn(c.done, c.frontend.Events)
-			c.busy = false
-		}
+		c.control(session.Request{Kind: session.RequestInterrupt})
 		return true
 	}
 	if text == "/eof" {
-		c.eof = true
+		c.control(session.Request{Kind: session.RequestEOF})
 		return false
 	}
 	if strings.HasPrefix(text, "/") {
@@ -267,6 +255,17 @@ func (c *frontendController) submitCommand(text string) {
 		c.showHelp()
 		return
 	}
+	if text == "/force-reconnect" || strings.HasPrefix(text, "/force-reconnect ") {
+		switch {
+		case text != "/force-reconnect":
+			c.add("Usage: /force-reconnect", 0)
+		case c.frontend.Reconnect == nil:
+			c.add("Error: provider does not support reconnecting", 0)
+		default:
+			c.control(session.Request{Kind: session.RequestReconnect})
+		}
+		return
+	}
 	if text == "/jobs" || text == "/timers" {
 		c.showRuntimeSnapshot(text)
 		return
@@ -274,8 +273,8 @@ func (c *frontendController) submitCommand(text string) {
 	if text == "/btw" || strings.HasPrefix(text, "/btw ") {
 		if c.commandBusy {
 			c.add("Error: wait for the current history command before /btw", 0)
-		} else if _, err := c.frontend.Runtime.StartBTW(strings.TrimSpace(strings.TrimPrefix(text, "/btw"))); err != nil {
-			c.add("Error: "+err.Error(), 0)
+		} else {
+			c.control(session.Request{Kind: session.RequestBTW, Command: strings.TrimSpace(strings.TrimPrefix(text, "/btw"))})
 		}
 		return
 	}
@@ -329,86 +328,58 @@ func (c *frontendController) submitCommand(text string) {
 
 func (c *frontendController) submitPrompt(next frontendSubmission) {
 	pending := contextbuild.Input{Text: next.text, Attachments: c.attachments}
-	if redirected, err := c.frontend.Runtime.RedirectDismissedQuestion(pending); err != nil {
-		c.draft.set(next.text)
-		c.add("Redirect failed: "+err.Error(), 0)
-		return
-	} else if redirected {
-		c.attachments = nil
-		return
-	}
-	if c.frontend.Runtime.Awaiting("main") {
-		// A newly submitted input must not overtake FIFO input accepted before
-		// the awaiting transition. Publish the whole batch before waking inference.
-		if err := c.steerQueuedInputs(pending); err != nil {
-			c.draft.set(next.text)
-			c.add("Steering failed: "+err.Error(), 0)
-		} else {
-			c.attachments = nil
-		}
-		return
-	}
-	if next.steering {
-		if err := c.frontend.Runtime.Steer(pending); err != nil {
-			c.draft.set(next.text)
-			c.add("Steering failed: "+err.Error(), 0)
-		} else {
-			c.attachments = nil
-		}
+	request := session.Request{Kind: session.RequestInput, Generation: next.generation, OperationID: next.operationID, Input: pending, Steer: next.steering}
+	if _, err := c.coordinator.Submit(request); err != nil {
+		c.recallInput(next.text)
+		c.add("Input was not accepted: "+err.Error(), 0)
 		return
 	}
 	c.attachments = nil
-	pending.Source = "normal"
-	if c.busy || len(c.queue) > 0 {
-		pending.Source = "queue"
-	}
-	c.queue = append(c.queue, pending)
-	if c.busy {
-		c.add(fmt.Sprintf("Queued input · %d unsent", len(c.queue)), 0)
-	}
+	c.attachmentEpoch++
 }
 
-// steerQueuedInputs transfers queue ownership only after runtime acceptance.
-// It runs solely on the frontend event loop, never starts another Run, and
-// retains original input units rather than flattening text or attachments.
-func (c *frontendController) steerQueuedInputs(extra ...contextbuild.Input) error {
-	inputs := make([]contextbuild.Input, 0, len(c.queue)+len(extra))
-	inputs = append(inputs, c.queue...)
-	inputs = append(inputs, extra...)
-	if err := c.frontend.Runtime.SteerInputs(inputs); err != nil {
-		return err
+// request captures the last rendered execution, not an unseen runtime snapshot.
+// Submission is nonblocking; actual control mutation belongs to the coordinator.
+func (c *frontendController) request(request session.Request) error {
+	request.Generation = c.observedGeneration
+	request.OperationID = c.observedOperationID
+	cancellation := request.Kind == session.RequestCancelQueue || request.Kind == session.RequestCancelSteer
+	if cancellation && len(c.pendingRestores) >= 64 {
+		return session.ErrCoordinatorFull
 	}
-	clear(c.queue)
-	c.queue = nil
-	return nil
+	id, err := c.coordinator.Submit(request)
+	if err == nil && request.Kind == session.RequestReopenQuestion {
+		c.questionReopenRequest = id
+	}
+	if err == nil && cancellation {
+		if c.pendingRestores == nil {
+			c.pendingRestores = make(map[uint64]restoreBaseline)
+		}
+		c.pendingRestores[id] = restoreBaseline{draftRevision: c.draft.revision, attachmentEpoch: c.attachmentEpoch, attachmentCount: len(c.attachments)}
+	}
+	if err == nil && c.frontend.Plain {
+		switch request.Kind {
+		case session.RequestLogin, session.RequestModel, session.RequestEasyModel, session.RequestCommand, session.RequestReconnect:
+			c.plainGateRequest = id
+		}
+	}
+	return err
+}
+
+func (c *frontendController) control(request session.Request) bool {
+	if err := c.request(request); err != nil {
+		c.add("Control was not accepted: "+err.Error(), 0)
+		return false
+	}
+	return true
 }
 
 func (c *frontendController) cancelPendingInput(text string) {
-	var restored contextbuild.Input
-	var err error
-	if text == "/cancel-queue" {
-		if len(c.queue) == 0 {
-			if c.pendingInput == nil {
-				err = errors.New("no queued prompt to cancel")
-			} else {
-				restored, err = c.pendingInput.Cancel()
-			}
-		} else {
-			last := len(c.queue) - 1
-			restored = c.queue[last]
-			c.queue[last] = contextbuild.Input{}
-			c.queue = c.queue[:last]
-		}
-	} else {
-		restored, err = c.frontend.Runtime.CancelSteer()
+	kind := session.RequestCancelQueue
+	if text == "/cancel-steer" {
+		kind = session.RequestCancelSteer
 	}
-	if err != nil {
-		c.add("Error: "+err.Error(), 0)
-	} else {
-		c.recallInput(restored.Text)
-		c.attachments = restored.Attachments
-		c.add("Cancelled pending input · restored to composer", 0)
-	}
+	c.control(session.Request{Kind: kind})
 }
 
 func (c *frontendController) showHelp() {
@@ -449,12 +420,11 @@ func (c *frontendController) answerQuestion(text string) {
 	}
 	var answers []session.Answer
 	err := json.Unmarshal([]byte(fields[1]), &answers)
-	if err == nil {
-		err = c.frontend.Runtime.AnswerQuestion(fields[0], answers)
-	}
 	if err != nil {
 		c.add("Error: "+err.Error(), 0)
+		return
 	}
+	c.control(session.Request{Kind: session.RequestAnswer, ID: fields[0], Answers: answers})
 }
 
 func (c *frontendController) requestModel(text string) {
@@ -465,11 +435,7 @@ func (c *frontendController) requestModel(text string) {
 		args = args[1:]
 	}
 	if easy && len(args) == 1 && args[0] == "off" {
-		if err := c.frontend.Runtime.RequestEasyModel(nil); err != nil {
-			c.add("Easy model selection failed: "+err.Error(), 0)
-		} else {
-			c.add("Easy model disabled · using main model", 0)
-		}
+		c.control(session.Request{Kind: session.RequestEasyModel})
 		return
 	}
 	if easy && len(args) > 0 && args[0] == "--" {
@@ -505,21 +471,10 @@ func (c *frontendController) login() {
 		c.add("Login requires plain mode: ttc --login", 0)
 		return
 	}
-	// An easy choice belongs to the old catalog. Clear it before authorization,
-	// including when authorization or subsequent discovery fails.
-	if err := c.frontend.Runtime.ClearEasyModelForLogin(); err != nil {
-		c.add("Login failed to clear easy model: "+err.Error(), 0)
-		return
-	}
-	// Authorization and discovery belong to the injected lifecycle owner.
-	// Keep the frozen active selection, but never expose old-account choices.
-	c.frontend.Models = nil
-	models, err := c.frontend.Login(c.ctx)
-	if err != nil {
-		c.add("Error: authorization or model discovery failed: "+err.Error(), 0)
-	} else {
-		c.frontend.Models = models
-		c.add("Login complete; use /model to select from the current account's catalog", 0)
+	if c.control(session.Request{Kind: session.RequestLogin}) {
+		// Keep the active selection but hide old-account catalog choices while
+		// the application-owned authorization effect runs off the UI loop.
+		c.frontend.Models = nil
 	}
 }
 
@@ -529,34 +484,12 @@ func (c *frontendController) background() {
 		return
 	}
 	if c.frontend.Plain {
-		for _, job := range c.frontend.Runtime.Jobs.Foreground("main") {
-			if _, err := c.frontend.Runtime.Jobs.Promote("main", job.ID); err != nil {
-				c.add("Background failed: "+err.Error(), 0)
-			}
-		}
+		c.control(session.Request{Kind: session.RequestBackground})
 	} else {
 		c.openBackgroundMenu()
 	}
 }
 
 func (c *frontendController) startCommand(text string) {
-	if c.busy {
-		c.add("Command requires an idle turn; Esc twice interrupts work, Ctrl+C clears input or exits if empty", 0)
-		return
-	}
-	c.busy = true
-	c.commandBusy = true
-	c.started = time.Now()
-	// Lifecycle commands join callbacks; keep draining their UI events while they wait.
-	runtime, done := c.frontend.Runtime, c.done
-	go func() {
-		result, err := runtime.Command(text)
-		command := strings.Fields(text)[0]
-		markdown := command == "/compact" || command == "/force-compact"
-		if json.Valid([]byte(result)) {
-			result = render.Fence(result, "json")
-			markdown = true
-		}
-		done <- operationResult{text: result, command: command, markdown: markdown, err: err}
-	}()
+	c.control(session.Request{Kind: session.RequestCommand, Command: text})
 }

@@ -7,6 +7,8 @@ import (
 	"unicode/utf8"
 )
 
+var errMainNotSteerable = errors.New("main turn is not ready for steering; send or queue an ordinary message")
+
 // Steer queues a human instruction for the next settled main request boundary.
 // It creates no durable position or undo checkpoint until request admission.
 func (r *Runtime) Steer(input contextbuild.Input) error {
@@ -31,11 +33,14 @@ func (r *Runtime) SteerInputs(inputs []contextbuild.Input) error {
 	active := r.activeTurn != "" && r.activeCancel != nil
 	fatal := r.fatalCompaction
 	r.mu.Unlock()
-	if !active {
-		return errors.New("main turn is not ready for steering; send or queue an ordinary message")
+	if !active || !r.coordinator.mainAccepting {
+		return errMainNotSteerable
 	}
 	if fatal != "" {
 		return errors.New("session unusable after compaction; start or load another session")
+	}
+	if err := r.checkMainSteeringCapacityLocked(inputs); err != nil {
+		return err
 	}
 	r.steers = append(r.steers, inputs...)
 	r.signalActorLocked("main")

@@ -59,7 +59,7 @@ func TestInitialRuntimeEnvironmentIncludesCwdRepositoryAndBranch(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Done"})
 			}}
-			if err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect environment"}); err != nil {
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Inspect environment"}); err != nil {
 				t.Fatal(err)
 			}
 		})

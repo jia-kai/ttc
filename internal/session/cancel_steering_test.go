@@ -17,6 +17,7 @@ func enableCancelTestSteering(r *Runtime) {
 	r.activeTurn = "cancel-test"
 	_, r.activeCancel = context.WithCancelCause(r.ctx)
 	r.mu.Unlock()
+	r.openMainAdmission(context.Background())
 }
 
 func TestSteeringPreviewIsBoundedAndOwnsTexts(t *testing.T) {

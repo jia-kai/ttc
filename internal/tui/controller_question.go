@@ -78,13 +78,5 @@ func (c *frontendController) openQuestions(id string) {
 		c.add("Error: pending question not found · "+id, 0)
 		return
 	}
-	if err := c.frontend.Runtime.ReopenQuestion(form.ID); err != nil {
-		c.add("Reopen failed: "+err.Error(), 0)
-		return
-	}
-	form = c.frontend.Runtime.PendingQuestion()
-	c.syncQuestionState(form)
-	if form != nil {
-		c.showQuestion(form)
-	}
+	c.control(session.Request{Kind: session.RequestReopenQuestion, ID: form.ID})
 }
