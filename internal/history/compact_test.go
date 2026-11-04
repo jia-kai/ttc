@@ -56,7 +56,7 @@ func TestContinuationPersistsExactCompactionContextAcrossLoadsAndHandoffs(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
-		continued, err := s.Continue(current.ID, handoff, cut, cut+1, nil, time.Now(), nil)
+		continued, err := s.continueFixture(current.ID, handoff, cut, cut+1, nil, time.Now(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,7 +150,7 @@ func TestContinuationRejectsInvalidHandoffBeforeMutation(t *testing.T) {
 			case "retention time":
 				handoff.RetainedAtMS = 1
 			}
-			if _, err := s.Continue(session.ID, handoff, before.EntryTip, before.EntryTip+1, nil, time.Now(), nil); err == nil {
+			if _, err := s.continueFixture(session.ID, handoff, before.EntryTip, before.EntryTip+1, nil, time.Now(), nil); err == nil {
 				t.Fatal("accepted invalid handoff", handoff)
 			}
 			if after, err := s.Session(session.ID); err != nil || !reflect.DeepEqual(after, before) {
@@ -198,8 +198,11 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := append([]int64{original.EntryTip, queued}, admitted.SteerEntries...)
-	source, err := s.Continue(original.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, ids, time.Now(), nil)
+	ids := []int64{original.EntryTip, queued}
+	for _, steer := range admitted.SteerEntries {
+		ids = append(ids, steer.EntryID)
+	}
+	source, err := s.continueFixture(original.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, ids, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,11 +254,11 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 		if iteration == 2 {
 			boundary = loaded.EntryTip + 1 // Summarize the exact imported floor too.
 		}
-		loaded, err = s.Continue(loaded.ID, llm.NewCompactionContext("copy summary"), cut.EntryTip, boundary, ids, time.Now(), nil)
+		loaded, err = s.continueFixture(loaded.ID, llm.NewCompactionContext("copy summary"), cut.EntryTip, boundary, ids, time.Now(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.UndoTarget(loaded.ID); err == nil {
+		if _, err := s.PlanUndo(loaded.ID); err == nil {
 			t.Fatal("compaction made imported history undoable")
 		}
 		messages, err := s.Messages(loaded.ID)
@@ -290,7 +293,7 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 					t.Fatal("lost original input identity, timestamp or snapshot", message)
 				}
 				if entry.ID < loaded.UndoFloor {
-					if _, err := s.BranchTarget(loaded.ID, entry.ID); err == nil {
+					if _, err := s.PlanBranch(loaded.ID, entry.ID); err == nil {
 						t.Fatal("compaction made imported checkpoint restorable", entry)
 					}
 				} else if entry.ID != loaded.UndoFloor {
@@ -327,10 +330,10 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Continue(source.ID, llm.NewCompactionContext("independent source summary"), cut.EntryTip, source.EntryTip+1, ids, time.Now(), nil); err != nil {
+	if _, err := s.continueFixture(source.ID, llm.NewCompactionContext("independent source summary"), cut.EntryTip, source.EntryTip+1, ids, time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UndoTarget(loaded.ID); err == nil {
+	if _, err := s.PlanUndo(loaded.ID); err == nil {
 		t.Fatal("source compaction made imported work undoable")
 	}
 	entries, err = s.Branch(loaded.ID, 0)
@@ -339,11 +342,11 @@ func TestLoadedRetainedInputsSurviveRepeatedCompactionWithoutSourceMutation(t *t
 	}
 	for _, entry := range entries {
 		if isVisibleHumanEntry(t, entry) {
-			target, err := s.BranchSelectionTarget(loaded.ID, entry.ID)
+			target, err := s.PlanBranch(loaded.ID, entry.ID)
 			if entry.ID < loaded.UndoFloor && err == nil {
 				t.Fatal("source compaction made imported input selectable", entry)
 			}
-			if entry.ID == loaded.UndoFloor && (err != nil || target.EntryTip != loaded.UndoFloor || target.FileTip != loaded.FileTip) {
+			if entry.ID == loaded.UndoFloor && (err != nil || target.after.entry != loaded.UndoFloor || target.after.file != loaded.FileTip) {
 				t.Fatal("inclusive imported baseline is no longer selectable", target, err)
 			}
 		}
@@ -367,7 +370,7 @@ func TestUndoRejectsForeignOrUnselectedCheckpoint(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := s.UndoTarget(source.ID); err == nil {
+			if _, err := s.PlanUndo(source.ID); err == nil {
 				t.Fatal("invalid checkpoint accepted", fault)
 			}
 		})
@@ -399,7 +402,7 @@ func TestMessagesUsesOriginalHumanInputMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steer, err := s.Entry(admitted.SteerEntries[0])
+	steer, err := s.Entry(admitted.SteerEntries[0].EntryID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +444,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids = append(ids, steer.SteerEntries[0])
+	ids = append(ids, steer.SteerEntries[0].EntryID)
 	if err := s.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +459,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids = append(ids, steer.SteerEntries[0])
+	ids = append(ids, steer.SteerEntries[0].EntryID)
 	originalIDs := append([]int64(nil), ids...)
 	tail, err := s.Append(session.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "retained model tail"})
 	if err != nil {
@@ -473,7 +476,7 @@ func TestContinuationRetainsChronologicalInputPairsAcrossCompactions(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		session, err = s.Continue(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, ids, at, nil)
+		session, err = s.continueFixture(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, ids, at, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -541,7 +544,7 @@ func TestContinuationValidatesRetainedInputsBeforeFreezing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, selected := range [][]int64{{ids[0], ids[0]}, {ids[1], ids[0]}, {tail}, {runtime}, {child}, {ids[0], ids[1], ids[2]}, ids, {ids[0] + 1}} {
-		if _, err := s.Continue(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, selected, time.Now(), nil); err == nil {
+		if _, err := s.continueFixture(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, selected, time.Now(), nil); err == nil {
 			t.Fatal("accepted invalid selection", selected)
 		}
 		old, err := s.Session(session.ID)
@@ -561,7 +564,7 @@ func TestContinuationAllowsEmptyModelSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, old.EntryTip+1, []int64{session.EntryTip}, time.Now(), nil)
+	continued, err := s.continueFixture(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, old.EntryTip+1, []int64{session.EntryTip}, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,7 +631,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steer, err := s.Entry(admitted.SteerEntries[0])
+	steer, err := s.Entry(admitted.SteerEntries[0].EntryID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +658,7 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, []int64{first, second, steer.ID}, time.Now(), nil)
+	continued, err := s.continueFixture(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, tail, []int64{first, second, steer.ID}, time.Now(), nil)
 	if err != nil || continued.FileTip != suffixTip {
 		t.Fatal(continued, err)
 	}
@@ -679,22 +682,22 @@ func TestContinuationRebasesMultipleInputAndSteerCheckpoints(t *testing.T) {
 			t.Fatal("checkpoint not rebased to copied input baseline", checkpoint, start, tip, baseline, err)
 		}
 	}
-	target, err := s.UndoTarget(continued.ID)
-	if err != nil || target.FileTip != finalTip || target.EntryTip != copied[beforeSuffix.EntryTip] {
+	target, err := s.PlanUndo(continued.ID)
+	if err != nil || target.after.file != finalTip || target.after.entry != copied[beforeSuffix.EntryTip] {
 		t.Fatal("suffix checkpoint lost its original file tip", target, err)
 	}
-	if err := s.CommitRestore(continued.ID, target); err != nil {
+	if err := s.CommitRestore(target); err != nil {
 		t.Fatal(err)
 	}
-	target, err = s.UndoTarget(continued.ID)
-	if err != nil || target.FileTip != baseline || target.EntryTip != copied[second] {
+	target, err = s.PlanUndo(continued.ID)
+	if err != nil || target.after.file != baseline || target.after.entry != copied[second] {
 		t.Fatal("steer undo crosses summarized file baseline", target, err)
 	}
-	if err := s.CommitRestore(continued.ID, target); err != nil {
+	if err := s.CommitRestore(target); err != nil {
 		t.Fatal(err)
 	}
-	target, err = s.UndoTarget(continued.ID)
-	if err != nil || target.FileTip != baseline || target.EntryTip != continued.UndoFloor {
+	target, err = s.PlanUndo(continued.ID)
+	if err != nil || target.after.file != baseline || target.after.entry != continued.UndoFloor {
 		t.Fatal("queued prompt undo crosses summarized file baseline", target, err)
 	}
 }

@@ -9,12 +9,30 @@ import (
 	"testing"
 
 	"ttc/internal/history"
+	"ttc/internal/historytest"
 	"ttc/internal/llm"
 )
 
+// Select the recorded checkpoint for a fixture mutation, rather than forging a
+// restore cursor. Raw file IDs are used only to locate fixture evidence.
+func restorePlanForFileTip(t *testing.T, w *Manager, session string, tip int64) history.RestorePlan {
+	t.Helper()
+	var entry int64
+	if tip != 0 {
+		if err := historytest.DB(t, w.Store).QueryRow("SELECT id FROM entries WHERE session_id=? AND file_tip_id=? ORDER BY id DESC LIMIT 1", session, tip).Scan(&entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := w.Store.PlanBranch(session, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
 func restoreFileTip(t *testing.T, w *Manager, session string, tip int64) {
 	t.Helper()
-	if err := w.Restore(context.Background(), session, history.RestoreTarget{FileTip: tip}); err != nil {
+	if err := w.Restore(context.Background(), restorePlanForFileTip(t, w, session, tip)); err != nil {
 		t.Fatal(err)
 	}
 	assertFileTip(t, w, session, tip)
@@ -151,7 +169,7 @@ func TestFailedMutationDoesNotCleanEarlierOwnedParent(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(w.Root, "owned")); err != nil || !info.IsDir() {
 		t.Fatalf("failed attempt removed a directory it did not create: %v", err)
 	}
-	if err := w.Restore(context.Background(), saved.ID, history.RestoreTarget{FileTip: createdTip}); !errors.Is(err, failure) {
+	if err := w.Restore(context.Background(), restorePlanForFileTip(t, w, saved.ID, createdTip)); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(filepath.Join(w.Root, "owned")); err != nil || !info.IsDir() {
@@ -282,7 +300,7 @@ func TestRestoreAttemptSettlesDirectoryEffects(t *testing.T) {
 				}
 				return write(path, data, mode)
 			}
-			err = w.Restore(context.Background(), saved.ID, history.RestoreTarget{FileTip: result.ChangeID})
+			err = w.Restore(context.Background(), restorePlanForFileTip(t, w, saved.ID, result.ChangeID))
 			if !errors.Is(err, failure) {
 				t.Fatal(err)
 			}

@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -39,16 +38,9 @@ func (c *mainAgentContext) admit(ctx context.Context, recovery *llm.Message) (ag
 		if err != nil {
 			return agentRequest{}, err
 		}
-		for _, entry := range admitted.SteerEntries {
-			v, err := r.Store.Entry(entry)
-			if err != nil {
-				return agentRequest{}, err
-			}
-			var message llm.Message
-			if err := json.Unmarshal(v.Content, &message); err != nil {
-				return agentRequest{}, err
-			}
-			r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, MessageType: message.Type, InputSource: "steer", InputTimeMS: v.CreatedMS})
+		for _, committed := range admitted.SteerEntries {
+			message := committed.Message
+			r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: committed.EntryID, MessageType: message.Type, InputSource: message.InputSource, InputTimeMS: committed.CreatedMS})
 		}
 		if err := r.deliverNoticeEntries("main", admitted.NoticeEntries); err != nil {
 			return agentRequest{}, err

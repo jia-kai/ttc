@@ -125,8 +125,8 @@ func TestUsageLifetimeRestartRestoresParentButNotRunTotals(t *testing.T) {
 	if got := restarted.UsageSnapshot(); !reflect.DeepEqual(got.Totals, UsageTotals{}) || got.Reported == nil || !reflect.DeepEqual(got.Reported.Tokens, lifetimeUsage()) {
 		t.Fatal("restart did not separate parent and run counters", got)
 	}
-	if entries, err := restarted.Entries(); err != nil || len(entries) == 0 {
-		t.Fatal("restart lost history rather than ignoring its usage", entries, err)
+	if replay, err := restarted.Store.ReadReplay(context.Background(), restarted.Current(), 0); err != nil || len(replay.Rows) == 0 {
+		t.Fatal("restart lost history rather than ignoring its usage", replay, err)
 	}
 	if _, err := restarted.Command("/load " + saved); err != nil {
 		t.Fatal(err)

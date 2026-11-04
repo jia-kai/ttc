@@ -2,12 +2,10 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
@@ -49,32 +47,15 @@ func (r *Runtime) recoverPartial(ctx context.Context, turn, actor string, reques
 func (r *Runtime) ensureRecovery(turn, actor string, message llm.Message) (bool, error) {
 	r.routeMu.RLock()
 	session := r.Current()
-	entries, err := r.Store.Branch(session, 0)
-	if err != nil {
-		r.routeMu.RUnlock()
-		return false, fmt.Errorf(prompts.SessionReadRecoveryInstructions, err)
-	}
-	for _, entry := range entries {
-		if entry.Actor != actor || entry.Kind != "message" || entry.Role != message.Role() {
-			continue
-		}
-		var existing llm.Message
-		if err := json.Unmarshal(entry.Content, &existing); err != nil {
-			r.routeMu.RUnlock()
-			return false, fmt.Errorf(prompts.SessionReadRecoveryInstructions, err)
-		}
-		if _, added := contextbuild.AppendPendingMessage([]llm.Message{existing}, &message); !added {
-			r.routeMu.RUnlock()
-			return false, nil
-		}
-	}
-	id, err := r.Store.Append(session, turn, actor, "message", message.Role(), actor == "main", message)
+	committed, added, err := r.Store.EnsureRecoveryInstruction(session, turn, actor, message)
 	r.routeMu.RUnlock()
 	if err != nil {
 		return false, fmt.Errorf(prompts.SessionRecordRecoveryInstructions, err)
 	}
-	r.emit(Event{Kind: "message", Actor: actor, SessionID: session, EntryID: id, MessageType: message.Type})
-	return true, nil
+	if added {
+		r.emit(Event{Kind: "message", Actor: actor, SessionID: session, EntryID: committed.EntryID, MessageType: committed.Message.Type})
+	}
+	return added, nil
 }
 
 // retryNotice commits an inspectable system message without adding model input.

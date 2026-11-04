@@ -16,7 +16,11 @@ func TestHistoryTreeShowsSiblingBranchesAndBoundedLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CommitRestore(saved.ID, RestoreTarget{EntryTip: baseline}); err != nil {
+	plan, err := s.PlanBranch(saved.ID, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CommitRestore(plan); err != nil {
 		t.Fatal(err)
 	}
 	b, err := s.Append(saved.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: "\x1b[31mNew branch\n" + strings.Repeat("x", 1<<20)})
@@ -63,11 +67,11 @@ func TestBranchSelectionRequiresCompleteMainToolBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tip := range []int64{assistant, first} {
-		if _, err = s.BranchSelectionTarget(saved.ID, tip); err == nil || !strings.Contains(err.Error(), "pending main tool") {
+		if _, err = s.PlanBranch(saved.ID, tip); err == nil || !strings.Contains(err.Error(), "pending main tool") {
 			t.Fatal(tip, err)
 		}
 	}
-	if target, err := s.BranchSelectionTarget(saved.ID, second); err != nil || target.EntryTip != second {
+	if target, err := s.PlanBranch(saved.ID, second); err != nil || target.after.entry != second {
 		t.Fatal(target, err)
 	}
 	tree, err := s.HistoryTree(context.Background(), saved.ID)
@@ -88,7 +92,11 @@ func TestBranchSelectionHonorsFloorAncestryAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CommitRestore(saved.ID, RestoreTarget{EntryTip: baseline}); err != nil {
+	plan, err := s.PlanBranch(saved.ID, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CommitRestore(plan); err != nil {
 		t.Fatal(err)
 	}
 	b, err := s.Append(saved.ID, turn, "main", "status", "", false, map[string]string{"text": "Later sibling"})
@@ -98,10 +106,10 @@ func TestBranchSelectionHonorsFloorAncestryAndReadOnly(t *testing.T) {
 	if _, err = s.db.Exec("UPDATE sessions SET undo_floor_id=? WHERE id=?", a, saved.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.BranchSelectionTarget(saved.ID, b); err == nil || !strings.Contains(err.Error(), "undo boundary") {
+	if _, err = s.PlanBranch(saved.ID, b); err == nil || !strings.Contains(err.Error(), "undo boundary") {
 		t.Fatal("later sibling crossed the floor", err)
 	}
-	if _, err = s.BranchSelectionTarget(saved.ID, a); err != nil {
+	if _, err = s.PlanBranch(saved.ID, a); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := s.HistoryTree(context.Background(), saved.ID)
@@ -125,10 +133,10 @@ func TestBranchSelectionHonorsFloorAncestryAndReadOnly(t *testing.T) {
 			t.Fatal(node)
 		}
 	}
-	if _, err = s.BranchSelectionTarget(saved.ID, a); err == nil {
+	if _, err = s.PlanBranch(saved.ID, a); err == nil {
 		t.Fatal("restored read-only history")
 	}
-	if _, err = s.BranchSelectionTarget(saved.ID, -1); err == nil {
+	if _, err = s.PlanBranch(saved.ID, -1); err == nil {
 		t.Fatal("accepted negative entry ID")
 	}
 }

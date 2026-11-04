@@ -35,7 +35,7 @@ func recoverableCompaction(err error) bool {
 	if _, ok := err.(*llm.ContextLengthError); ok {
 		return true
 	}
-	if err == contextbuild.ErrNoCompactableHistory {
+	if err == contextbuild.ErrNoCompactableHistory || err == history.ErrCompactionPlanChanged {
 		return true
 	}
 	if _, ok := err.(*llm.TransientError); ok {
@@ -177,10 +177,7 @@ func (r *Runtime) compactInput(ctx context.Context, input compactionInput) (comp
 	if err != nil {
 		return result, err
 	}
-	messages := make([]llm.Message, 0, 1+len(prepared.inputs)+len(prepared.messages)-prepared.retention.Start)
-	messages = append(messages, llm.NewCompactionContext(summary))
-	messages = append(messages, prepared.inputs...)
-	messages = append(messages, prepared.messages[prepared.retention.Start:]...)
+	messages := contextbuild.CompactionReplacement(llm.NewCompactionContext(summary), prepared.inputs, prepared.messages[prepared.retention.Start:], nil)
 	return compactedInput{prepared: prepared, summary: summary, messages: messages}, nil
 }
 
@@ -244,7 +241,10 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 		if err != nil {
 			attempt.Error = err.Error()
 		}
-		if failure := r.Store.FinishRequest(request, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}}); failure != nil {
+		r.routeMu.RLock()
+		failure := r.Store.FinishRequest(request, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}})
+		r.routeMu.RUnlock()
+		if failure != nil {
 			err = errors.Join(err, fmt.Errorf(prompts.SessionRecordCompactionResult, failure))
 		}
 	}()

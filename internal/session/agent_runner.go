@@ -165,7 +165,12 @@ func (a *AgentRunner) run(ctx context.Context) (result agentResult, err error) {
 		if streamErr != nil {
 			attempt.Error = streamErr.Error()
 		}
-		if err := r.Store.FinishRequest(request.id, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}}); err != nil {
+		// Request completion appends chronology just like assistant/tool commits.
+		// Exclude it while main handoff resolves and capacity-checks its tail.
+		r.routeMu.RLock()
+		err = r.Store.FinishRequest(request.id, history.RequestCompletion{Status: status, Attempts: []history.RequestAttempt{attempt}})
+		r.routeMu.RUnlock()
+		if err != nil {
 			return result, err
 		}
 		a.context.observe(request.id, request.selection, usage, streamErr == nil)

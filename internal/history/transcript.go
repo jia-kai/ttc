@@ -8,40 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
-	"path/filepath"
 
 	"sort"
 	"strings"
-	"ttc/internal/filelock"
 
 	"ttc/internal/prompts"
 )
-
-// transcriptSnapshot owns a separate read-only WAL connection, so a slow output
-// writer cannot occupy the Store's serialized commit connection. Its independent
-// shared lifetime lock fences schema upgrades and VACUUM while the reader lives.
-// Runtime activity protection, not this lock, retains the loaded lineage's files.
-func (s *Store) transcriptSnapshot(ctx context.Context) (contextHistoryReader, func(), error) {
-	lock, err := filelock.AcquireShared(ctx, filepath.Join(s.Root, "history-use.lock"))
-	if err != nil {
-		return contextHistoryReader{}, nil, err
-	}
-	uri := url.URL{Scheme: "file", Path: filepath.Join(s.Root, "history.sqlite"), RawQuery: "mode=ro&_pragma=busy_timeout(5000)"}
-	db, err := sql.Open("sqlite", uri.String())
-	if err != nil {
-		lock.Close()
-		return contextHistoryReader{}, nil, err
-	}
-	db.SetMaxOpenConns(1)
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		db.Close()
-		lock.Close()
-		return contextHistoryReader{}, nil, err
-	}
-	return contextHistoryReader{ctx, tx}, func() { tx.Rollback(); db.Close(); lock.Close() }, nil
-}
 
 // validateTranscriptTip accepts zero only as an explicitly empty branch.
 func validateTranscriptTip(q historyReader, session string, tip int64) error {
@@ -222,7 +194,7 @@ func (s *Store) WriteActorTranscript(ctx context.Context, w io.Writer, session, 
 	if format != "markdown" && format != "jsonl" {
 		return fmt.Errorf(prompts.HistoryTranscriptFormat, format)
 	}
-	q, closeSnapshot, err := s.transcriptSnapshot(ctx)
+	q, closeSnapshot, err := s.readSnapshot(ctx)
 	if err != nil {
 		return err
 	}
@@ -245,7 +217,7 @@ func (s *Store) WriteActorTranscript(ctx context.Context, w io.Writer, session, 
 // ActorCompactionTip returns the latest selected compaction's frozen source cut.
 // It returns an error when the selected actor history has not been compacted.
 func (s *Store) ActorCompactionTip(ctx context.Context, session, actor string, tip int64) (string, int64, error) {
-	q, closeSnapshot, err := s.transcriptSnapshot(ctx)
+	q, closeSnapshot, err := s.readSnapshot(ctx)
 	if err != nil {
 		return "", 0, err
 	}

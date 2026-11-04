@@ -11,6 +11,7 @@ import (
 
 	"ttc/internal/history"
 	"ttc/internal/llm"
+	"ttc/internal/messagestream"
 	"ttc/internal/session"
 )
 
@@ -22,6 +23,54 @@ type inspectorHistory struct {
 	pageErr    error
 	inspection history.Inspection
 	reads      []string
+}
+
+type replayHistory struct {
+	historyReader
+	replay history.Replay
+	tip    int64
+}
+
+func (h *replayHistory) ReadReplay(_ context.Context, _ string, tip int64) (history.Replay, error) {
+	h.tip = tip
+	return h.replay, nil
+}
+
+func (*replayHistory) SubagentNames(context.Context, string) (map[string]string, error) {
+	return map[string]string{"main/child_fixture": "Fixture"}, nil
+}
+
+func TestReplayConsumesTypedRowsAndForwardsFrozenCut(t *testing.T) {
+	h := &replayHistory{replay: history.Replay{Name: "Typed replay", Rows: []history.ReplayRow{
+		{ID: 1, Actor: "main", Message: &llm.Message{Type: llm.TypeUserInput, Content: "Input", InputTimeMS: 123}},
+		{ID: 2, Actor: "main", Stream: &messagestream.Item{ID: 2, Actor: "main", Revision: 7, Title: "Saved request", Actions: []messagestream.Action{{Kind: messagestream.Inspect, Target: 7}}}},
+		{ID: 3, Actor: "main/child_fixture", Label: "Saved tool · inspect", Execution: true, ToolCallID: "call"},
+	}}}
+	c := inspectionController(h)
+	c.sidebar = newSidebar()
+	c.replay(8)
+	if h.tip != 8 || c.sidebar.sessionName != h.replay.Name || len(c.view.lines) != 3 {
+		t.Fatalf("typed replay boundary not used: tip=%d name=%s rows=%+v", h.tip, c.sidebar.sessionName, c.view.lines)
+	}
+	stream, tool := c.view.lines[1], c.view.lines[2]
+	if c.streamRows[2] != 1 || stream.revision != 7 || stream.inspectID != 7 || stream.action != actionInspect {
+		t.Fatalf("stream display metadata lost: %+v", stream)
+	}
+	if tool.text != "Saved tool" || tool.callID != "call" || tool.complete || tool.action != actionExecution || !tool.markdown || !tool.brief || tool.system || tool.subagentName != "Fixture" {
+		t.Fatalf("tool display metadata lost: %+v", tool)
+	}
+	c.replay(0)
+	if h.tip != 0 {
+		t.Fatalf("frontend resolved current tip outside history: %d", h.tip)
+	}
+}
+
+func TestReplayPreservesUnpersistedConversation(t *testing.T) {
+	c := newAsyncTestController(t, nil, nil)
+	c.replay(0)
+	if len(c.view.lines) != 0 || c.sidebar.sessionName != "New session" {
+		t.Fatalf("blank conversation replay changed: name=%s rows=%+v", c.sidebar.sessionName, c.view.lines)
+	}
 }
 
 func TestReplayRetainsPendingToolAndReplacesWithResult(t *testing.T) {
@@ -70,21 +119,6 @@ func TestReplayRetainsPendingToolAndReplacesWithResult(t *testing.T) {
 	}
 	if len(completed) != 1 || !completed[0].complete || completed[0].id == pending.id {
 		t.Fatalf("result did not replace pending call: %+v", completed)
-	}
-}
-
-func TestReplayToolResultsRespectsSelectedCut(t *testing.T) {
-	entries := []history.Entry{
-		{ID: 1, Kind: "tool_call", Content: []byte(`{"call_id":"call"}`)},
-		{ID: 2, Kind: "tool_result", Content: []byte(`{"call_id":"call"}`)},
-	}
-	ids, results, err := replayToolResults(entries[:1])
-	if err != nil || ids[1] != "call" || results["call"] != 0 {
-		t.Fatalf("result beyond replay cut affected pending intent: %v %v %v", ids, results, err)
-	}
-	_, results, err = replayToolResults(entries)
-	if err != nil || results["call"] != 2 {
-		t.Fatalf("result inside replay cut not selected: %v %v", results, err)
 	}
 }
 

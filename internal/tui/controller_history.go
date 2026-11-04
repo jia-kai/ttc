@@ -1,13 +1,11 @@
 package tui
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"ttc/internal/history"
-	"ttc/internal/llm"
-	"ttc/internal/messagestream"
 	"ttc/internal/render"
 )
 
@@ -417,28 +415,6 @@ func (c *frontendController) navigateBoundaryRaw(delta int) {
 	c.sourceWindow(c.modal.window, page.Actor)
 }
 
-// replayToolResults indexes only the entries in the selected replay chain.
-func replayToolResults(entries []history.Entry) (map[int64]string, map[string]int64, error) {
-	results := make(map[string]int64)
-	callIDs := make(map[int64]string)
-	for _, entry := range entries {
-		if entry.Kind != "tool_call" && entry.Kind != "tool_result" {
-			continue
-		}
-		var ref struct {
-			CallID string `json:"call_id"`
-		}
-		if err := json.Unmarshal(entry.Content, &ref); err != nil || ref.CallID == "" {
-			return nil, nil, fmt.Errorf("invalid tool reference in entry %d", entry.ID)
-		}
-		callIDs[entry.ID] = ref.CallID
-		if entry.Kind == "tool_result" {
-			results[ref.CallID] = entry.ID
-		}
-	}
-	return callIDs, results, nil
-}
-
 // replay rebuilds entries and grouped stream revisions through one immutable
 // tip. Zero snapshots the current selected tip; continuation supplies its saved
 // handoff tip so queued later publications remain live, not prematurely replayed.
@@ -451,116 +427,42 @@ func (c *frontendController) replay(tip int64) {
 		return
 	}
 	c.names = loaded
-	saved, err := c.frontend.Runtime.CurrentSession()
-	if err != nil {
-		c.add("Session metadata failed: "+err.Error(), 0)
-		return
-	}
-	c.sidebar.sessionName = saved.Name
-	if tip == 0 {
-		tip = saved.EntryTip
-	}
-	var entries []history.Entry
-	if tip != 0 {
-		entries, err = c.history.Branch(saved.ID, tip)
-		if err != nil {
-			c.add("Error: "+err.Error(), 0)
-			return
+	replay, err := c.history.ReadReplay(c.ctx, c.frontend.Runtime.Current(), tip)
+	if errors.Is(err, history.ErrNotFound) && tip == 0 {
+		// A blank runtime conversation has a stable identity but no history
+		// row until its first input. Runtime owns that lifecycle distinction.
+		if saved, metadataErr := c.frontend.Runtime.CurrentSession(); metadataErr == nil && saved.EntryTip == 0 {
+			replay, err = history.Replay{Name: saved.Name}, nil
 		}
 	}
-	// Only results in this replay's selected entry chain supersede an intent.
-	// Looking up the latest result in storage would cross the frozen replay cut.
-	callIDs, results, err := replayToolResults(entries)
 	if err != nil {
 		c.add("History presentation failed: "+err.Error(), 0)
 		return
 	}
-	var stream []messagestream.Item
-	if tip != 0 {
-		stream, err = c.history.StreamItems(c.ctx, tip)
-		if err != nil {
-			c.add("Stream presentation failed: "+err.Error(), 0)
-			return
-		}
-	}
-	for i, item := range stream {
-		if item.ID <= 0 || i > 0 && item.ID <= stream[i-1].ID {
-			c.add("Stream presentation failed: items must have increasing saved entry IDs", 0)
-			return
-		}
-	}
-	nextStream := 0
-	for _, v := range entries {
-		for nextStream < len(stream) && stream[nextStream].ID < v.ID {
-			item := stream[nextStream]
-			c.streamRows[item.ID] = len(c.view.lines)
-			c.view.append(c.attribute(streamLine(item), item.Actor))
-			nextStream++
-		}
-		if nextStream < len(stream) && stream[nextStream].ID == v.ID {
-			item := stream[nextStream]
-			c.streamRows[item.ID] = len(c.view.lines)
-			c.view.append(c.attribute(streamLine(item), item.Actor))
-			nextStream++
+	c.sidebar.sessionName = replay.Name
+	for _, row := range replay.Rows {
+		if row.Stream != nil {
+			c.streamRows[row.ID] = len(c.view.lines)
+			c.view.append(c.attribute(streamLine(*row.Stream), row.Actor))
 			continue
 		}
-		if v.InternalEvent() {
-			continue
-		}
-		callID := callIDs[v.ID]
-		if v.Kind == "tool_call" && results[callID] != 0 || v.Kind == "tool_result" && results[callID] != v.ID {
-			continue
-		}
-		entryView, err := c.history.ReadView(c.ctx, v)
-		if err != nil {
-			c.add("History presentation failed: "+err.Error(), 0)
-			return
-		}
-		if entryView.StatusType == "system_prompt" || entryView.StatusType == "request_message" || entryView.StatusType == "tool_stream" {
-			continue
-		}
-		if v.Kind == "tool_call" {
-			entryView.Label, err = c.history.ExportText(v)
-			if err != nil {
-				c.add("History presentation failed: "+err.Error(), 0)
-				return
-			}
-		}
-		item := c.attribute(line{text: strings.TrimSuffix(entryView.Label, " · inspect"), id: v.ID, system: v.Kind == "status" || v.Role == "system"}, v.Actor)
-		if v.Kind == "tool_call" || v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
-			item.action, item.inspectID = actionExecution, v.ID
-		}
-		if v.Kind == "tool_call" || v.Kind == "tool_result" || entryView.StatusType == "job_completion" {
+		item := c.attribute(line{text: strings.TrimSuffix(row.Label, " · inspect"), id: row.ID, system: row.System}, row.Actor)
+		if row.Execution {
+			item.action, item.inspectID = actionExecution, row.ID
 			item.markdown, item.brief, item.system = true, true, false
 		}
-		if v.Kind == "tool_call" || v.Kind == "tool_result" {
-			item.callID, item.complete = callID, v.Kind == "tool_result"
-		}
-		if (v.Kind == "message" || v.Kind == "summary") && entryView.Message != nil {
-			message := *entryView.Message
-			if message.Type == llm.TypeRuntimeContext || message.Type == llm.TypeCompactionContext || message.Type == llm.TypeSystemInstruction || message.Type == llm.TypeDeveloperInstruction {
-				continue // Synthetic model-input snapshots are visible at the boundary.
-			}
-			if v.Kind == "message" && message.Type == llm.TypeUserInput {
-				// Original inputs take their commit time from the entry, not
-				// caller-supplied message metadata.
-				message.InputTimeMS = v.CreatedMS
-			}
-			item = directMessageLine(item, message, entryView.ChildCompletion)
+		item.callID, item.complete = row.ToolCallID, row.ToolComplete
+		if row.Message != nil {
+			item = directMessageLine(item, *row.Message, row.ChildCompletion)
 			item = c.attribute(item, item.actor)
 		}
-		if v.Kind == "tool_result" && c.renderer != nil {
-			snapshot, err := c.frontend.Runtime.ImageForEntry(v.ID)
+		if row.ToolComplete && c.renderer != nil {
+			snapshot, err := c.frontend.Runtime.ImageForEntry(row.ID)
 			if err == nil {
 				item.image = snapshot
 			}
 		}
 		c.view.append(item)
-	}
-	for ; nextStream < len(stream); nextStream++ {
-		item := stream[nextStream]
-		c.streamRows[item.ID] = len(c.view.lines)
-		c.view.append(c.attribute(streamLine(item), item.Actor))
 	}
 	if c.renderer != nil {
 		cards, err := c.frontend.Runtime.PendingImages()

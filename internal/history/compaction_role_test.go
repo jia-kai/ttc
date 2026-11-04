@@ -20,7 +20,7 @@ func TestHistoricalCompactionRoleMigrationDoesNotElevateOrRewriteContent(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(original.ID, llm.NewCompactionContext("summary"), cut.EntryTip, cut.EntryTip+1, nil, time.Now(), nil)
+	continued, err := s.continueFixture(original.ID, llm.NewCompactionContext("summary"), cut.EntryTip, cut.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestHistoricalCompactionRoleMigrationDoesNotElevateOrRewriteContent(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(current.ID, llm.NewCompactionContext("new raw summary"), current.EntryTip, entries[0].ID, nil, time.Now(), nil)
+	next, err := s.continueFixture(current.ID, llm.NewCompactionContext("new raw summary"), current.EntryTip, entries[0].ID, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,8 @@ func TestCompactionContextCannotCreateHumanTurnOrUndoCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := s.UndoTarget(session.ID)
-	if err != nil || target.EntryTip != 0 {
+	target, err := s.PlanUndo(session.ID)
+	if err != nil || target.after.entry != 0 {
 		t.Fatal("summary became the newest human undo checkpoint", target, err)
 	}
 	tree, err := s.HistoryTree(context.Background(), session.ID)

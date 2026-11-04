@@ -40,11 +40,11 @@ func TestBranchRestoreMixedActorsSiblingFilesAndShellConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	restore := func(id int64) error {
-		target, err := w.Store.BranchSelectionTarget(saved.ID, id)
+		target, err := w.Store.PlanBranch(saved.ID, id)
 		if err != nil {
 			return err
 		}
-		return w.Restore(context.Background(), saved.ID, target)
+		return w.Restore(context.Background(), target)
 	}
 	if err = restore(saved.EntryTip); err != nil {
 		t.Fatal(err)

@@ -22,20 +22,12 @@ var errNeedsCompaction = errors.New("request requires compaction")
 // deliverNoticeEntries updates timer delivery state only after durable request
 // admission. It runs outside orderMu because timer publishers hold timers.mu
 // before entering the publication gate.
-func (r *Runtime) deliverNoticeEntries(actor string, entries []int64) error {
-	for _, id := range entries {
-		entry, err := r.Store.Entry(id)
-		if err != nil {
+func (r *Runtime) deliverNoticeEntries(actor string, entries []history.CommittedMessage) error {
+	for _, committed := range entries {
+		if err := r.ctx.Err(); err != nil {
 			return err
 		}
-		view, err := r.Store.ReadView(r.ctx, entry)
-		if err != nil {
-			return err
-		}
-		if view.Message == nil {
-			return fmt.Errorf("notification entry %d has no message", id)
-		}
-		message := *view.Message
+		message := committed.Message
 		var wake struct {
 			ID    string `json:"wakeup_id"`
 			Fired int    `json:"fired_count"`
@@ -43,7 +35,7 @@ func (r *Runtime) deliverNoticeEntries(actor string, entries []int64) error {
 		if json.Unmarshal([]byte(message.Content), &wake) == nil && wake.ID != "" {
 			r.timers.deliveredThrough(wake.ID, wake.Fired)
 		}
-		r.emit(Event{Kind: "message", Actor: actor, Text: message.Content, EntryID: id, MessageType: message.Type, ChildCompletion: view.ChildCompletion})
+		r.emit(Event{Kind: "message", Actor: actor, Text: message.Content, EntryID: committed.EntryID, MessageType: message.Type, ChildCompletion: committed.ChildCompletion})
 	}
 	return nil
 }
@@ -205,14 +197,11 @@ func (r *Runtime) queueCommittedNotification(eventID int64) error {
 	return r.queueCommittedNotificationLocked(eventID)
 }
 func (r *Runtime) queueCommittedNotificationLocked(eventID int64) error {
-	entry, err := r.Store.Entry(eventID)
+	source, err := r.Store.ReadNotificationSource(eventID)
 	if err != nil {
 		return err
 	}
-	if entry.EventSeq() != eventID {
-		return errors.New(prompts.SessionNotificationSource)
-	}
-	return r.enqueueMainNotificationLocked(eventID, "")
+	return r.enqueueMainNotificationLocked(source.EventSeq, "")
 }
 
 // enqueueMainNotificationLocked publishes an already committed reference and

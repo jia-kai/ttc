@@ -93,26 +93,26 @@ func TestSerializedEditsUndoRedoAndExternalConflict(t *testing.T) {
 	}
 	w.Store.FinishTurn(turn, "completed")
 	w.Store.Append(v.ID, turn, "main", "status", "", false, map[string]string{"text": "done"})
-	target, e := w.Store.UndoTarget(v.ID)
+	target, e := w.Store.PlanUndo(v.ID)
 	if e != nil {
 		t.Fatal(e)
 	}
 	os.WriteFile(filepath.Join(w.Root, "x"), []byte("external"), 0644)
-	if e = w.Restore(ctx, v.ID, target); e == nil {
+	if e = w.Restore(ctx, target); e == nil {
 		t.Fatal("overwrote external change")
 	}
 	os.WriteFile(filepath.Join(w.Root, "x"), data, 0644)
-	if e = w.Restore(ctx, v.ID, target); e != nil {
+	if e = w.Restore(ctx, target); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = os.Stat(filepath.Join(w.Root, "x")); !os.IsNotExist(e) {
 		t.Fatal("undo did not restore absence")
 	}
-	redo, e := w.Store.BranchTarget(v.ID, target.RedoTip)
+	redo, e := w.Store.PlanRedo(v.ID)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = w.Restore(ctx, v.ID, redo); e != nil {
+	if e = w.Restore(ctx, redo); e != nil {
 		t.Fatal(e)
 	}
 	after, _ := os.ReadFile(filepath.Join(w.Root, "x"))
@@ -147,11 +147,11 @@ func TestOutsideWorkspaceEditIsExplicitlyNonUndoable(t *testing.T) {
 	}
 	w.Store.Append(v.ID, turn, "main", "status", "", false, map[string]string{"text": "changed"})
 	w.Store.FinishTurn(turn, "completed")
-	target, e := w.Store.UndoTarget(v.ID)
+	target, e := w.Store.PlanUndo(v.ID)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = w.Restore(context.Background(), v.ID, target); e == nil {
+	if e = w.Restore(context.Background(), target); e == nil {
 		t.Fatal("outside edit was undoable")
 	}
 	data, e := os.ReadFile(outside)

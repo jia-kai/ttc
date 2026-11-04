@@ -136,7 +136,7 @@ func TestLoadPreparationFailureLeavesLiveWorkRunning(t *testing.T) {
 func TestPreparedActivationDoesNotReadStorage(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Frozen target")
-	target, err := r.prepareSession(r.Current(), true)
+	target, err := r.prepareSession(r.Current(), forkSession)
 	if err != nil {
 		t.Fatal(err)
 	}

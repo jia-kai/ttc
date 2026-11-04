@@ -228,7 +228,7 @@ func TestHistoryModelFacingDiagnosticsUsePromptAssets(t *testing.T) {
 		"archive.go":    {"writeArchive", "filepathHash"},
 		"artifact.go":   {"readArtifact", "openArtifact"},
 		"children.go":   {"FinishChildTurn", "validateChildFinish", "validateChildFinishFields", "validateChildFinishState", "readChildFinish"},
-		"compact.go":    {"Continue"},
+		"compact.go":    {"continueAt"},
 		"events.go":     {"AdmitRequest", "BeginChildTurn", "InvalidateContext"},
 		"export.go":     {"writeTranscriptEntries", "exportTextWith", "ArchiveActorTranscript", "writeTranscriptJSONLEntries"},
 		"transcript.go": {"validateTranscriptTip", "recordActorBoundary", "selectedActorEntries", "WriteActorTranscript", "ActorCompactionTip"},

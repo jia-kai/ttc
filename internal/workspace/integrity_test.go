@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"ttc/internal/history"
 	"ttc/internal/historytest"
 )
 
@@ -218,7 +217,7 @@ func TestMutationFailureCleanupAndAppliedSnapshots(t *testing.T) {
 		t.Fatalf("failed attempt retained directory authority: %+v", w.directories.owned)
 	}
 	assertFileTip(t, w, saved.ID, result.ChangeID)
-	changes, err := w.Store.Changes(result.ChangeID)
+	changes, err := w.Store.RestoreChanges(restorePlanForFileTip(t, w, saved.ID, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +298,7 @@ func TestRestorePreflightsAllSnapshotIntegrity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := w.Restore(context.Background(), saved.ID, history.RestoreTarget{}); err == nil || !strings.Contains(err.Error(), filepath.Join(w.Root, "b")) {
+			if err := w.Restore(context.Background(), restorePlanForFileTip(t, w, saved.ID, 0)); err == nil || !strings.Contains(err.Error(), filepath.Join(w.Root, "b")) {
 				t.Fatalf("missing precise preflight error: %v", err)
 			}
 			assertContents(t, filepath.Join(w.Root, "a"), "after-a")
@@ -348,7 +347,7 @@ func TestRestoreUnexpectedFailuresReportAppliedPaths(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			err = w.Restore(ctx, saved.ID, history.RestoreTarget{})
+			err = w.Restore(ctx, restorePlanForFileTip(t, w, saved.ID, 0))
 			var partial *RestoreError
 			if !errors.As(err, &partial) {
 				t.Fatalf("no recovery manifest: %v", err)

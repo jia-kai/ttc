@@ -149,7 +149,7 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(messages, want) {
 			t.Fatal(messages, want, err)
 		}
-		if _, err := s.UndoTarget(loaded.ID); err == nil {
+		if _, err := s.PlanUndo(loaded.ID); err == nil {
 			t.Fatal("imported work is undoable")
 		}
 		entries, err := s.Branch(loaded.ID, 0)
@@ -176,11 +176,11 @@ func TestManualLoadsSnapshotBalancedHistoryAndRemainIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(a.ID, llm.NewCompactionContext("copy handoff"), cut.EntryTip, a.UndoFloor, nil, time.Now(), nil)
+	next, err := s.continueFixture(a.ID, llm.NewCompactionContext("copy handoff"), cut.EntryTip, a.UndoFloor, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UndoTarget(next.ID); err != nil {
+	if _, err := s.PlanUndo(next.ID); err != nil {
 		t.Fatal("copy compaction lost new undo", err)
 	}
 	after, err := s.Session(source.ID)

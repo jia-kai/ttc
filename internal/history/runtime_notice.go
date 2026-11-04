@@ -17,6 +17,20 @@ type NotificationSourceRef struct {
 	RecoveredFrom int64
 }
 
+// ReadNotificationSource validates an original committed notification event and
+// returns its immutable identity without loading its body. Copied message rows
+// and non-event entries are not notification sources and return ErrNotFound.
+// Delivery projection and acknowledgment remain separate admission operations.
+func (s *Store) ReadNotificationSource(id int64) (source NotificationSourceRef, err error) {
+	defer func() { err = intentError(fmt.Sprintf("read notification source #%d", id), err) }()
+	err = s.db.QueryRow(`SELECT id,coalesce(json_extract(content_json,'$.recovered_from_event_seq'),0)
+		FROM entries WHERE id=? AND kind='status' AND source_id IS NULL`, id).Scan(&source.EventSeq, &source.RecoveredFrom)
+	if err != nil {
+		return NotificationSourceRef{}, err
+	}
+	return source, nil
+}
+
 // NotificationDelivery contains source data selected for model delivery, not a
 // human presentation or the final admitted llm.Message. Body is owned by the
 // caller. OutputOmitted requires explicit disclosure in the model projection.

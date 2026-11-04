@@ -132,31 +132,29 @@ func (s *Store) HistoryTree(ctx context.Context, session string) (BranchTree, er
 	return tree, tx.Commit()
 }
 
-// BranchSelectionTarget resolves an explicit entry ID and rejects cuts inside
-// unresolved main tool calls. It never changes history, files or live runtime state.
-func (s *Store) BranchSelectionTarget(session string, id int64) (RestoreTarget, error) {
+// PlanBranch selects a complete main-tool boundary owned by the session. It
+// saves the current branch for redo, or preserves redo when reselecting the active
+// node. It never changes history, files or live runtime state.
+func (s *Store) PlanBranch(session string, id int64) (RestorePlan, error) {
 	if id < 0 {
-		return RestoreTarget{}, errors.New("branch entry ID must be nonnegative")
+		return RestorePlan{}, errors.New("branch entry ID must be nonnegative")
 	}
 	saved, err := s.Session(session)
 	if err != nil {
-		return RestoreTarget{}, err
+		return RestorePlan{}, err
 	}
 	if saved.CompactionError != "" {
-		return RestoreTarget{}, fmt.Errorf("context invalid after compaction failure: %s; select another session", saved.CompactionError)
+		return RestorePlan{}, fmt.Errorf("context invalid after compaction failure: %s; select another session", saved.CompactionError)
 	}
-	target, err := s.BranchTarget(session, id)
+	target, err := s.branchPlan(saved, id)
 	if err != nil || id == 0 {
 		return target, err
 	}
 	entries, err := s.Branch(session, id)
 	if err != nil {
-		return RestoreTarget{}, err
+		return RestorePlan{}, err
 	}
-	var floor int64
-	if err = s.db.QueryRow("SELECT coalesce(undo_floor_id,0) FROM sessions WHERE id=?", session).Scan(&floor); err != nil {
-		return RestoreTarget{}, err
-	}
+	floor := saved.UndoFloor
 	floorFound := floor == 0
 	pending := map[string]bool{}
 	for _, entry := range entries {
@@ -169,14 +167,14 @@ func (s *Store) BranchSelectionTarget(session string, id int64) (RestoreTarget, 
 				CallID string `json:"call_id"`
 			}
 			if err = json.Unmarshal(entry.Content, &ref); err != nil {
-				return RestoreTarget{}, err
+				return RestorePlan{}, err
 			}
 			var providerID string
 			if err = s.db.QueryRow("SELECT provider_call_id FROM tool_calls WHERE id=?", ref.CallID).Scan(&providerID); err != nil {
-				return RestoreTarget{}, err
+				return RestorePlan{}, err
 			}
 			if !pending[providerID] {
-				return RestoreTarget{}, fmt.Errorf("branch #%d has an unpaired tool result", id)
+				return RestorePlan{}, fmt.Errorf("branch #%d has an unpaired tool result", id)
 			}
 			delete(pending, providerID)
 			continue
@@ -186,20 +184,20 @@ func (s *Store) BranchSelectionTarget(session string, id int64) (RestoreTarget, 
 		}
 		var message llm.Message
 		if err = json.Unmarshal(entry.Content, &message); err != nil {
-			return RestoreTarget{}, err
+			return RestorePlan{}, err
 		}
 		for _, call := range message.Calls {
 			if call.ID == "" || pending[call.ID] {
-				return RestoreTarget{}, fmt.Errorf("branch #%d has invalid tool calls", id)
+				return RestorePlan{}, fmt.Errorf("branch #%d has invalid tool calls", id)
 			}
 			pending[call.ID] = true
 		}
 	}
 	if !floorFound {
-		return RestoreTarget{}, errors.New("branch crosses undo boundary; select an entry descended from the current boundary")
+		return RestorePlan{}, errors.New("branch crosses undo boundary; select an entry descended from the current boundary")
 	}
 	if len(pending) != 0 {
-		return RestoreTarget{}, fmt.Errorf("branch #%d has pending main tool results; select an entry after the complete tool batch", id)
+		return RestorePlan{}, fmt.Errorf("branch #%d has pending main tool results; select an entry after the complete tool batch", id)
 	}
 	return target, nil
 }

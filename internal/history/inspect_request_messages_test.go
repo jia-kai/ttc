@@ -201,7 +201,7 @@ func TestRequestMessagesFollowCompactionContinuation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		current, err = s.Continue(current.ID, llm.NewCompactionContext("handoff"), cut.EntryTip, cut.EntryTip, nil, time.Now(), nil)
+		current, err = s.continueFixture(current.ID, llm.NewCompactionContext("handoff"), cut.EntryTip, cut.EntryTip, nil, time.Now(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

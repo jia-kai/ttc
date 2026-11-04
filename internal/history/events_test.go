@@ -53,7 +53,7 @@ func TestRequestAdmissionCutoffInputAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if admitted.Cutoff != source || admitted.ContextEntry <= admitted.Cutoff || len(admitted.NoticeEntries) != 1 || admitted.NoticeEntries[0] <= admitted.Cutoff {
+	if admitted.Cutoff != source || admitted.ContextEntry <= admitted.Cutoff || len(admitted.NoticeEntries) != 1 || admitted.NoticeEntries[0].EntryID <= admitted.Cutoff {
 		t.Fatal(admitted)
 	}
 	var input, ack string
@@ -294,7 +294,7 @@ func TestLoadedContextDoesNotAcknowledgeSourceEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(source.ID, llm.NewCompactionContext("handoff"), cut.EntryTip, finish, nil, time.Now(), nil)
+	next, err := s.continueFixture(source.ID, llm.NewCompactionContext("handoff"), cut.EntryTip, finish, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

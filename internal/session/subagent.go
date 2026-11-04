@@ -232,29 +232,27 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 	r.routeMu.RLock()
 	if task.aside {
 		instruction := llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction}
-		id, err := r.Store.Append(r.Current(), turn, actor, "message", "developer", false, instruction)
+		committed, err := r.Store.AppendMessage(r.Current(), turn, actor, instruction)
 		if err != nil {
 			r.routeMu.RUnlock()
 			return err
 		}
-		r.emitReserved(publications, Event{Kind: "message", Actor: actor, MessageType: instruction.Type, EntryID: id})
+		r.emitReserved(publications, Event{Kind: "message", Actor: actor, MessageType: instruction.Type, EntryID: committed.EntryID})
 		messages = append(messages, instruction)
 	}
 	question := llm.Message{Type: llm.TypeUserInput, Content: prompt, InputSource: "task"}
 	if task.aside {
 		question.InputSource = "btw"
 	}
-	entry, err := r.Store.Append(r.Current(), turn, actor, "message", "user", false, question)
+	committed, err := r.Store.AppendMessage(r.Current(), turn, actor, question)
 	if err == nil {
-		var committed history.Entry
-		committed, err = r.Store.Entry(entry)
 		question.InputTimeMS = committed.CreatedMS
 	}
-	var grantEntry int64
+	var grant history.CommittedMessage
 	if err == nil && grantNotice != nil {
 		// Assignment metadata has no source event to acknowledge. Persist it
 		// beside the task, once, rather than queueing it for request retries.
-		grantEntry, err = r.Store.Append(r.Current(), turn, actor, "message", "user", false, *grantNotice)
+		grant, err = r.Store.AppendMessage(r.Current(), turn, actor, *grantNotice)
 	}
 	r.routeMu.RUnlock()
 	if publications != nil {
@@ -264,10 +262,10 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		return err
 	}
 	messages = append(messages, question)
-	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: entry, MessageType: question.Type})
+	r.emit(Event{Kind: "message", Actor: actor, Text: prompt, EntryID: committed.EntryID, MessageType: question.Type})
 	if grantNotice != nil {
 		messages = append(messages, *grantNotice)
-		r.emit(Event{Kind: "message", Actor: actor, Text: grantNotice.Content, EntryID: grantEntry, MessageType: grantNotice.Type})
+		r.emit(Event{Kind: "message", Actor: actor, Text: grantNotice.Content, EntryID: grant.EntryID, MessageType: grantNotice.Type})
 	}
 	actorContext := &assignmentAgentContext{
 		runtime: r, task: task, messages: messages, cursor: task.cursor, system: childSystemTemplate,

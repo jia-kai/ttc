@@ -32,7 +32,7 @@ func retainedContinuation(t *testing.T, s *Store, v Session) Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := s.Continue(v.ID, llm.NewCompactionContext("Saved research handoff."), cut.EntryTip, saved.EntryTip, nil, time.Now(), nil)
+	next, err := s.continueFixture(v.ID, llm.NewCompactionContext("Saved research handoff."), cut.EntryTip, saved.EntryTip, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

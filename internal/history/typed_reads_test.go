@@ -127,7 +127,7 @@ func TestTypedToolAndJobViewsAndFrozenExportReader(t *testing.T) {
 		t.Fatal("tool typed inspection", inspection.Title, len(inspection.Text), err)
 	}
 
-	q, close, err := s.transcriptSnapshot(ctx)
+	q, close, err := s.readSnapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

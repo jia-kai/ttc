@@ -400,42 +400,20 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 
 // Restore checks affected paths and applies saved bytes without executing tools.
 // A partial failure leaves the cursor unchanged; no automatic repair is attempted.
-func (m *Manager) Restore(ctx context.Context, session string, target history.RestoreTarget) error {
+func (m *Manager) Restore(ctx context.Context, plan history.RestorePlan) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	v, e := m.Store.Session(session)
+	steps, e := m.Store.RestoreChanges(plan)
 	if e != nil {
 		return e
-	}
-	old, e := m.Store.Changes(v.FileTip)
-	if e != nil {
-		return e
-	}
-	newc, e := m.Store.Changes(target.FileTip)
-	if e != nil {
-		return e
-	}
-	anc := map[int64]bool{0: true}
-	for _, c := range newc {
-		anc[c.ID] = true
-	}
-	common := int64(0)
-	for _, c := range old {
-		if anc[c.ID] {
-			common = c.ID
-			break
-		}
 	}
 	changes := map[string]*PathChange{}
-	add := func(c history.Change, reverse bool) error {
-		if !c.Reversible {
-			return errors.New("restoration crosses a non-undoable outside-workspace edit")
-		}
+	add := func(step history.RestoreChange) error {
 		var paths []PathChange
-		if e := json.Unmarshal(c.Paths, &paths); e != nil {
+		if e := json.Unmarshal(step.Paths, &paths); e != nil {
 			return e
 		}
-		if reverse {
+		if step.Reverse {
 			for i, j := 0, len(paths)-1; i < j; i, j = i+1, j-1 {
 				paths[i], paths[j] = paths[j], paths[i]
 			}
@@ -445,7 +423,7 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 				continue
 			}
 			from, to := p.Before, p.After
-			if reverse {
+			if step.Reverse {
 				from, to = to, from
 			}
 			if existing := changes[p.Path]; existing != nil {
@@ -459,23 +437,8 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 		}
 		return nil
 	}
-	for _, c := range old {
-		if c.ID == common {
-			break
-		}
-		if e = add(c, true); e != nil {
-			return e
-		}
-	}
-	var suffix []history.Change
-	for _, c := range newc {
-		if c.ID == common {
-			break
-		}
-		suffix = append(suffix, c)
-	}
-	for i := len(suffix) - 1; i >= 0; i-- {
-		if e = add(suffix[i], false); e != nil {
+	for _, step := range steps {
+		if e = add(step); e != nil {
 			return e
 		}
 	}
@@ -521,7 +484,7 @@ func (m *Manager) Restore(ctx context.Context, session string, target history.Re
 		}
 	}
 	m.directories.removedFiles(removed)
-	if e = m.Store.CommitRestore(session, target); e != nil {
+	if e = m.Store.CommitRestore(plan); e != nil {
 		return restoreFailure(paths, e)
 	}
 	return nil

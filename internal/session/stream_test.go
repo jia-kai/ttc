@@ -127,15 +127,14 @@ func TestProviderBoundaryObservationFollowsWritableContinuation(t *testing.T) {
 	}()
 	<-started
 	r.routeMu.Lock()
-	before, err := r.Store.Branch(r.Current(), 0)
+	view, err := r.Store.ReadCompaction(context.Background(), r.Current())
 	if err != nil {
 		r.routeMu.Unlock()
 		close(resume)
 		<-done
 		t.Fatal(err)
 	}
-	cut := before[len(before)-1].ID
-	continued, err := r.Store.Continue(r.Current(), llm.NewCompactionContext("Earlier work"), cut, cut+1, nil, time.Now(), nil)
+	continued, err := commitCompactionFixture(r.Store, view, llm.NewCompactionContext("Earlier work"), len(view.Messages()))
 	if err == nil {
 		r.mu.Lock()
 		r.current = continued.ID

@@ -20,7 +20,7 @@ func TestRetainedInputPreInputBranchReplacementAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(original.ID, llm.NewCompactionContext("Summary before retained input."), cut.EntryTip, tail, []int64{original.EntryTip}, time.Now().Add(time.Second), nil)
+	continued, err := s.continueFixture(original.ID, llm.NewCompactionContext("Summary before retained input."), cut.EntryTip, tail, []int64{original.EntryTip}, time.Now().Add(time.Second), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +42,11 @@ func TestRetainedInputPreInputBranchReplacementAndLoad(t *testing.T) {
 	if !found {
 		t.Fatal("retained input has no direct pre-input baseline", tree)
 	}
-	target, err := s.BranchSelectionTarget(continued.ID, input.Parent)
-	if err != nil || target.EntryTip != input.Parent {
+	target, err := s.PlanBranch(continued.ID, input.Parent)
+	if err != nil || target.after.entry != input.Parent {
 		t.Fatal(target, err)
 	}
-	if err := s.CommitRestore(continued.ID, target); err != nil {
+	if err := s.CommitRestore(target); err != nil {
 		t.Fatal(err)
 	}
 	messages, err := s.Messages(continued.ID)
@@ -72,11 +72,11 @@ func TestRetainedInputPreInputBranchReplacementAndLoad(t *testing.T) {
 	if err := s.FinishTurn(turn, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	undo, err := s.UndoTarget(continued.ID)
-	if err != nil || undo.EntryTip != input.Parent {
+	undo, err := s.PlanUndo(continued.ID)
+	if err != nil || undo.after.entry != input.Parent {
 		t.Fatal(undo, err)
 	}
-	if err := s.CommitRestore(continued.ID, undo); err != nil {
+	if err := s.CommitRestore(undo); err != nil {
 		t.Fatal(err)
 	}
 	if messages, err := s.Messages(continued.ID); err != nil || len(messages) != 1 {

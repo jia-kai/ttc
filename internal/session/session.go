@@ -136,7 +136,7 @@ func New(ctx context.Context, store *history.Store, w *workspace.Manager, p Infe
 	r.replaceAccounting(preparedAccounting{})
 	r.resetLiveWork()
 	if session != "" {
-		target, err := r.prepareSession(session, false)
+		target, err := r.prepareSession(session, attachSession)
 		if err != nil {
 			r.Close()
 			return nil, err
@@ -240,17 +240,6 @@ func (r *Runtime) CurrentSession() (history.Session, error) {
 		return history.Session{ID: id, LineageID: id, Name: "New session", Model: selection}, nil
 	}
 	return r.Store.Session(id)
-}
-
-// Entries returns current selected history; a blank conversation has no entries.
-func (r *Runtime) Entries() ([]history.Entry, error) {
-	r.mu.Lock()
-	id, persisted := r.current, r.persisted
-	r.mu.Unlock()
-	if !persisted {
-		return nil, nil
-	}
-	return r.Store.Branch(id, 0)
 }
 
 // Generation identifies live-state ownership across explicit session changes.
@@ -435,7 +424,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (completion *
 			// Run and Command are serialized. Commit after tool settlement so
 			// the next input or wakeup follows a balanced exchange and this notice.
 			message := llm.Message{Type: llm.TypeRuntimeInstruction, Content: prompts.SessionUserInterrupted}
-			id, e := r.Store.Append(r.Current(), turn, "main", "message", message.Role(), true, message)
+			committed, e := r.Store.AppendMessage(r.Current(), turn, "main", message)
 			if e != nil {
 				failure := fmt.Errorf("record user interruption: %w", e)
 				r.orderMu.Lock()
@@ -443,7 +432,7 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (completion *
 				r.orderMu.Unlock()
 				err = errors.Join(err, failure)
 			} else {
-				r.emit(Event{Kind: "message", Text: message.DisplayText(), EntryID: id, MessageType: message.Type})
+				r.emit(Event{Kind: "message", Text: committed.Message.DisplayText(), EntryID: committed.EntryID, MessageType: committed.Message.Type})
 			}
 		}
 		if e := r.Store.FinishTurn(turn, status); err == nil && e != nil {
@@ -470,20 +459,18 @@ func (r *Runtime) run(message *llm.Message, input *InputAdmission) (completion *
 		completion = &TurnCompletion{Generation: r.Generation(), SessionID: r.Current(), TurnID: turn, Text: text, EntryID: id}
 	}()
 	if message != nil {
-		entry := firstEntry
-		if entry == 0 {
-			entry, e = r.Store.Append(r.Current(), turn, "main", "message", "user", true, *message)
-			if e != nil {
-				return nil, e
-			}
+		var committed history.CommittedMessage
+		if firstEntry == 0 {
+			committed, e = r.Store.AppendMessage(r.Current(), turn, "main", *message)
+		} else {
+			committed, e = r.Store.ReadCommittedMessage(ctx, firstEntry)
 		}
-		event := Event{Kind: "message", Text: message.DisplayText(), EntryID: entry, MessageType: message.Type}
-		if message.Type == llm.TypeUserInput {
-			committed, err := r.Store.Entry(entry)
-			if err != nil {
-				return nil, err
-			}
-			event.InputSource = message.InputSource
+		if e != nil {
+			return nil, e
+		}
+		event := Event{Kind: "message", Text: committed.Message.DisplayText(), EntryID: committed.EntryID, MessageType: committed.Message.Type}
+		if committed.Message.Type == llm.TypeUserInput {
+			event.InputSource = committed.Message.InputSource
 			if event.InputSource == "" {
 				event.InputSource = "normal"
 			}
@@ -586,24 +573,17 @@ func (r *Runtime) Command(text string) (string, error) {
 		r.stopLiveWork()
 		r.resetLiveWork()
 		r.replaceAccounting(preparedAccounting{})
-		var target history.RestoreTarget
+		var target history.RestorePlan
 		var e error
 		if parts[0] == "/undo" {
-			target, e = r.Store.UndoTarget(r.Current())
+			target, e = r.Store.PlanUndo(r.Current())
 		} else {
-			v, err := r.Store.Session(r.Current())
-			if err != nil {
-				return "", err
-			}
-			if v.RedoTip == 0 {
-				return "", errors.New("nothing to redo")
-			}
-			target, e = r.Store.BranchTarget(r.Current(), v.RedoTip)
+			target, e = r.Store.PlanRedo(r.Current())
 		}
 		if e != nil {
 			return "", e
 		}
-		e = r.Workspace.Restore(r.ctx, r.Current(), target)
+		e = r.Workspace.Restore(r.ctx, target)
 		return strings.TrimPrefix(parts[0], "/") + " completed", e
 	case "/branch":
 		id, err := strconv.ParseInt(arg, 10, 64)

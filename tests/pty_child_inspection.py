@@ -218,8 +218,10 @@ def main():
             save(f'keyboard-step-{step}')
             if 'Final answer' in screen.text and 'Agent details' in screen.text:
                 break
-            if 'Esc closes' in screen.text:
-                key_frames(b'\x1b', 1)
+            # Long execution titles can clip the "Esc closes" hint. Escape
+            # safely closes an inspector (or leaves the idle composer alone),
+            # so never infer modal state from that optional visible suffix.
+            key_frames(b'\x1b', 1)
         else:
             raise AssertionError('Alt+Up/Tab could not activate the saved final-answer row')
         expect('Final answer', 'D completion details', 'Agent details', 'Easy: true')

@@ -19,13 +19,14 @@ type historyReader interface {
 
 // Admission contains one immutable committed coding request and its input.
 // Cutoff bounds source events; ContextEntry is zero when no snapshot was added.
-// NoticeEntries are presentation-only delivery rows.
+// NoticeEntries and SteerEntries are typed delivery receipts ready for runtime
+// publication without refetching history or decoding persisted entry envelopes.
 type Admission struct {
 	RequestID, ContextEntry, Cutoff int64
 	// EntryTip is the selected physical branch tip frozen at admission commit.
 	EntryTip      int64
-	NoticeEntries []int64
-	SteerEntries  []int64
+	NoticeEntries []CommittedMessage
+	SteerEntries  []CommittedMessage
 	Messages      []llm.Message
 	// Notifications are committed parent delivery reports, ready for in-memory
 	// publication after admission succeeds. Failure returns no committed reports.
@@ -126,15 +127,11 @@ func (s *Store) AdmitRequest(input RequestAdmission) (v Admission, err error) {
 			if m.Type != llm.TypeRuntimeNotification && m.Type != llm.TypeChildGuidance {
 				return fmt.Errorf(prompts.HistoryNotificationMessageType, m.Type)
 			}
-			b, err := json.Marshal(m)
+			committed, err := appendMessageTx(tx, session, turn, actor, m)
 			if err != nil {
 				return err
 			}
-			id, err := appendTx(tx, session, turn, actor, "message", "user", actor == "main", b, 0)
-			if err != nil {
-				return err
-			}
-			v.NoticeEntries = append(v.NoticeEntries, id)
+			v.NoticeEntries = append(v.NoticeEntries, committed)
 		}
 		if actor != "main" && len(steers) > 0 {
 			return errors.New(prompts.HistorySteeringActor)
@@ -153,15 +150,11 @@ func (s *Store) AdmitRequest(input RequestAdmission) (v Admission, err error) {
 			if _, err = tx.Exec("UPDATE sessions SET metadata_json=json_set(metadata_json,'$.undo_owner_turn_id',?) WHERE id=?", checkpoint, session); err != nil {
 				return err
 			}
-			b, err := json.Marshal(m)
+			committed, err := appendMessageTx(tx, session, checkpoint, "main", m)
 			if err != nil {
 				return err
 			}
-			id, err := appendTx(tx, session, checkpoint, "main", "message", "user", true, b, 0)
-			if err != nil {
-				return err
-			}
-			v.SteerEntries = append(v.SteerEntries, id)
+			v.SteerEntries = append(v.SteerEntries, committed)
 		}
 		ack, err := json.Marshal(delivered)
 		if err != nil {

@@ -11,7 +11,8 @@ import (
 	"ttc/internal/prompts"
 )
 
-// Continue atomically freezes a predecessor and copies a retained visible suffix.
+// continueAt atomically freezes a predecessor and copies a retained visible suffix.
+// expectedTip must be positive and match the entry/file snapshot and transaction.
 // handoff is the exact checked compaction context, persisted without reframing.
 // sourceTip is the original selected cut summarized before inference, not the
 // predecessor tip at handoff; actor commits after that cut remain copied tails.
@@ -25,7 +26,10 @@ import (
 // identify an active-branch entry, or the final entry ID plus one for an empty suffix.
 // pending preserves an already-persisted runtime recovery warning, with its
 // original request/source identity, if it is not in the copied visible suffix.
-func (s *Store) Continue(session string, handoff llm.Message, sourceTip, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message) (Session, error) {
+func (s *Store) continueAt(session string, handoff llm.Message, sourceTip, retainFrom int64, inputIDs []int64, compactedAt time.Time, pending *llm.Message, expectedTip int64) (Session, error) {
+	if expectedTip <= 0 {
+		return Session{}, errors.New(prompts.HistoryContinuationBoundary)
+	}
 	if handoff.Type != llm.TypeCompactionContext || handoff.Content == "" {
 		return Session{}, errors.New(prompts.HistoryContinuation)
 	}
@@ -46,6 +50,9 @@ func (s *Store) Continue(session string, handoff llm.Message, sourceTip, retainF
 	}
 	if old.ReadOnly || len(entries) == 0 {
 		return Session{}, errors.New(prompts.HistoryContinuation)
+	}
+	if old.EntryTip != expectedTip || entries[len(entries)-1].ID != expectedTip {
+		return Session{}, ErrCompactionPlanChanged
 	}
 	if retainFrom <= 0 || compactedAt.IsZero() || len(inputIDs) > 4 {
 		return Session{}, errors.New(prompts.HistoryContinuationBoundary)
@@ -91,6 +98,13 @@ func (s *Store) Continue(session string, handoff llm.Message, sourceTip, retainF
 	}
 	id := NewID("session")
 	e = s.transact(func(tx *sql.Tx) error {
+		var current int64
+		if err := tx.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&current); err != nil {
+			return err
+		}
+		if current != expectedTip {
+			return ErrCompactionPlanChanged
+		}
 		metadata, e := inputMetadataWith(tx, entries)
 		if e != nil {
 			return e

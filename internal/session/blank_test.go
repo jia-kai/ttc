@@ -53,8 +53,8 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 	if err != nil || metadata.Model.Model.ID != next.Model.ID || metadata.Name != "New session" {
 		t.Fatal(metadata, err)
 	}
-	if entries, err := r.Entries(); err != nil || len(entries) != 0 {
-		t.Fatal(entries, err)
+	if tree, err := r.History(); err != nil || len(tree.Nodes) != 1 || tree.Nodes[0].Reason != "empty session" {
+		t.Fatal(tree, err)
 	}
 	choice, err := r.Store.LastSelection(next.Provider)
 	if err != nil || choice == nil || choice.Model.ID != next.Model.ID {

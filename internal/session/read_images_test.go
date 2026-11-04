@@ -104,18 +104,18 @@ func TestImageReadReferencesSurviveHistoryLoadAndContinuation(t *testing.T) {
 			t.Fatalf("history must retain references, not pixels: %v", err)
 		}
 	}
-	entries, err := r.Store.Branch(original, 0)
+	view, err := r.Store.ReadCompaction(context.Background(), original)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var retainFrom int64
-	for _, entry := range entries {
-		if entry.Visible && entry.Role == "assistant" {
-			retainFrom = entry.ID
+	retained := -1
+	for i, message := range view.Messages() {
+		if message.Type == llm.TypeAssistant {
+			retained = i
 			break
 		}
 	}
-	continued, err := r.Store.Continue(original, llm.NewCompactionContext("Image inspected."), entries[len(entries)-1].ID, retainFrom, nil, time.Now(), nil)
+	continued, err := commitCompactionFixture(r.Store, view, llm.NewCompactionContext("Image inspected."), retained)
 	if err != nil {
 		t.Fatal(err)
 	}

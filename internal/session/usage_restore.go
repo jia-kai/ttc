@@ -16,14 +16,11 @@ type preparedAccounting struct {
 }
 
 func (r *Runtime) prepareAccounting(session string, selection llm.Selection) (preparedAccounting, error) {
-	saved, err := r.Store.MainUsage(r.ctx, session)
-	if err != nil {
-		return preparedAccounting{}, fmt.Errorf("read saved token usage: %w", err)
-	}
-	messages, err := r.Store.Messages(session)
+	state, err := r.Store.ReadContextState(r.ctx, session)
 	if err != nil {
 		return preparedAccounting{}, fmt.Errorf("read saved context: %w", err)
 	}
+	saved, messages := state.Usage, state.Messages
 	// Reset rebuilds the same configured defaults. Their private schema snapshot
 	// stays independent of active-registry extensions, replacements and mutation.
 	definitions := r.defaultTools

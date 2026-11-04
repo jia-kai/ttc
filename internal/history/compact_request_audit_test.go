@@ -108,7 +108,7 @@ func TestContinueLeavesMainCompactionMessageAuditInPredecessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(original.ID, llm.NewCompactionContext("compact summary"), sourceTip, sourceTip+1, []int64{original.EntryTip}, time.Now(), nil)
+	continued, err := s.continueFixture(original.ID, llm.NewCompactionContext("compact summary"), sourceTip, sourceTip+1, []int64{original.EntryTip}, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestContinueDropsInheritedMainCompactionMessageAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := s.Continue(original.ID, llm.NewCompactionContext("first summary"), cut.EntryTip, cut.EntryTip+1, nil, time.Now(), nil)
+	current, err := s.continueFixture(original.ID, llm.NewCompactionContext("first summary"), cut.EntryTip, cut.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestContinueDropsInheritedMainCompactionMessageAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(current.ID, llm.NewCompactionContext("second summary"), before[0].ID, before[1].ID, nil, time.Now(), nil)
+	continued, err := s.continueFixture(current.ID, llm.NewCompactionContext("second summary"), before[0].ID, before[1].ID, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

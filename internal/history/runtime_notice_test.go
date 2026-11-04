@@ -69,6 +69,14 @@ func TestOmittedChildNoticeViewRestoresOnlyPresentation(t *testing.T) {
 			if err != nil || view.Message == nil || view.Message.Content != message.Content || view.ChildCompletion == nil || view.ChildCompletion.Answer != answer || view.ChildCompletion.ChildID != finish.ChildID {
 				t.Fatal("canonical delivery or separate source-backed preview changed", view, err)
 			}
+			replay, err := s.ReadReplay(context.Background(), v.ID, id)
+			if err != nil || len(replay.Rows) == 0 {
+				t.Fatal("child completion replay failed", err)
+			}
+			row := replay.Rows[len(replay.Rows)-1]
+			if row.ID != id || row.Label != "" || row.Message == nil || row.Message.Content != message.Content || row.ChildCompletion == nil || row.ChildCompletion.Answer != answer || row.ChildCompletion.ChildID != finish.ChildID {
+				t.Fatal("replay changed canonical delivery or separate source-backed preview", row)
+			}
 			entry, err := s.Entry(id)
 			if err != nil {
 				t.Fatal(err)

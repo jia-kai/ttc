@@ -249,7 +249,7 @@ func TestBoundaryAuditSurvivesCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := s.Continue(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, cut.EntryTip+1, nil, time.Now(), nil)
+	continued, err := s.continueFixture(session.ID, llm.NewCompactionContext("summary"), cut.EntryTip, cut.EntryTip+1, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

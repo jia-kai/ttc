@@ -29,11 +29,15 @@ func TestFailedHistoryLoadPreservesActiveRuntimeAndTargetMetadata(t *testing.T) 
 			if err := r.Store.FinishTurn(turn, "completed"); err != nil {
 				t.Fatal(err)
 			}
-			retained, err := r.Store.Append(targetID, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue research"})
+			_, err = r.Store.Append(targetID, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue research"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			target, err := r.Store.Continue(targetID, llm.NewCompactionContext("Research handoff"), retained, retained, nil, time.Now(), nil)
+			view, err := r.Store.ReadCompaction(context.Background(), targetID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := commitCompactionFixture(r.Store, view, llm.NewCompactionContext("Research handoff"), len(view.Messages())-1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,11 +98,14 @@ func TestLoadContinuationWithoutArchiveFiles(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Earlier research evidence")
 	before := r.Current()
-	retained, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue research"})
+	if _, err := r.Store.Append(before, "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue research"}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := r.Store.ReadCompaction(context.Background(), before)
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := r.Store.Continue(before, llm.NewCompactionContext("Research handoff"), retained, retained, nil, time.Now(), nil)
+	continued, err := commitCompactionFixture(r.Store, view, llm.NewCompactionContext("Research handoff"), len(view.Messages())-1)
 	if err != nil {
 		t.Fatal(err)
 	}

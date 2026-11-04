@@ -218,46 +218,19 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Freeze the durable tip before projection. Later visible arrivals must be
-	// checked as committed tail, not silently included only in persistence.
-	entries, e := r.Store.Branch(session, 0)
+	// History freezes model input and owns its mapping to durable entries.
+	view, e := r.Store.ReadCompaction(ctx, session)
 	if e != nil {
 		return nil, e
 	}
-	if len(entries) == 0 {
-		return nil, errors.New("nothing to compact")
-	}
-	sourceTip := entries[len(entries)-1].ID
-	messages, e := r.Store.MessagesAt(session, sourceTip)
-	if e != nil {
-		return nil, e
-	}
-	var retainFrom int64 // Zero until an actual retained branch entry is known.
-	var inputIDs []int64
-	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: messages, Lineage: session}
+	var plan history.CompactionPlan
+	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: view.Messages(), Lineage: session}
 	compacted, e := r.compactInput(ctx, compactionInput{
 		actor: "main", snapshot: snapshot, estimator: r.estimator, focus: focus, force: force,
 		freeze: func(prepared preparedCompaction) error {
-			retention := prepared.retention
-			inputIDs = make([]int64, 0, len(retention.Inputs))
-			visible := 0
-			for _, entry := range entries {
-				if !entry.Visible {
-					continue
-				}
-				if len(inputIDs) < len(retention.Inputs) && visible == retention.Inputs[len(inputIDs)] {
-					inputIDs = append(inputIDs, entry.ID)
-				}
-				if visible == retention.Start {
-					retainFrom = entry.ID
-					break
-				}
-				visible++
-			}
-			if visible < retention.Start || len(inputIDs) != len(retention.Inputs) {
-				return errors.New("no safe compaction cut")
-			}
-			return nil
+			var err error
+			plan, err = view.Retain(prepared.retention.Start, prepared.retention.Inputs, prepared.at)
+			return err
 		},
 	})
 	if e != nil {
@@ -270,55 +243,19 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Re-read the frozen suffix and any committed child tail under the same lock
-	// as handoff. A tail which no longer fits aborts without changing sessions.
-	currentEntries, e := r.Store.Branch(r.Current(), 0)
-	if e != nil {
-		return nil, e
-	}
-	if retainFrom == 0 {
-		if len(currentEntries) == 0 {
-			return nil, errors.New("compaction history changed during projection")
-		}
-		// IDs are global across sessions. An empty frozen suffix starts at
-		// this branch's first post-cut entry, not necessarily sourceTip+1.
-		retainFrom = currentEntries[len(currentEntries)-1].ID + 1
-		for _, entry := range currentEntries {
-			if entry.ID > sourceTip {
-				retainFrom = entry.ID
-				break
-			}
-		}
-	}
-	currentMessages, e := r.Store.Messages(r.Current())
-	if e != nil {
-		return nil, e
-	}
-	assembled := append([]llm.Message(nil), compacted.messages...)
-	visible := 0
-	for _, entry := range currentEntries {
-		if !entry.Visible {
-			continue
-		}
-		if visible >= len(currentMessages) {
-			return nil, errors.New("compaction history changed during projection")
-		}
-		message := currentMessages[visible]
-		message.State = nil
-		visible++
-		if entry.ID > sourceTip {
-			assembled = append(assembled, message)
-		}
-	}
-	if visible != len(currentMessages) {
-		return nil, errors.New("invalid compaction projection")
-	}
-	assembled, _ = contextbuild.AppendPendingMessage(assembled, pending)
 	result = &Continuation{}
 	var automatic bool
 	e = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
+		// Job/timer publishers use orderMu without routeMu. Resolve only after
+		// owning both publication and workspace gates so their arrivals join the
+		// capacity-checked tail rather than invalidating a sound handoff.
+		resolved, e := r.Store.ResolveCompaction(ctx, plan, compacted.messages[0], pending)
+		if e != nil {
+			return e
+		}
+		assembled := resolved.Messages()
 		cursor := contextCursor{}
 		contextMessage, _, e := r.runtimeContextLocked(ctx, "main", selection, cursor)
 		if e != nil {
@@ -334,7 +271,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		v, e := r.Store.Continue(r.current, compacted.messages[0], sourceTip, retainFrom, inputIDs, compacted.prepared.at, pending)
+		v, e := r.Store.CommitCompaction(ctx, resolved)
 		if e != nil {
 			return e
 		}
@@ -347,7 +284,7 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			input = append(input, *contextMessage)
 		}
 		r.usage = estimateUsage(selection, systemTemplate, r.Tools.Definitions(), input)
-		// Continue returns the committed tip while routing remains locked. No
+		// CommitCompaction returns the committed tip while routing remains locked. No
 		// later coding, child or stream revision may extend this replay cut.
 		result.EntryTip = v.EntryTip
 		result.Text = "## Compacted · " + v.Name + "\n\n" + compacted.summary

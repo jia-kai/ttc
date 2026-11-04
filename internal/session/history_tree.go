@@ -29,25 +29,16 @@ func (r *Runtime) RestoreBranch(entryID int64) error {
 	if !persisted {
 		return errors.New("session is empty; send a message first")
 	}
-	if _, err := r.Store.BranchSelectionTarget(id, entryID); err != nil {
+	if _, err := r.Store.PlanBranch(id, entryID); err != nil {
 		return err
 	}
 	r.stopLiveWork()
 	r.resetLiveWork()
 	r.replaceAccounting(preparedAccounting{})
 	// Joined completions may append history, so resolve against the final state.
-	target, err := r.Store.BranchSelectionTarget(id, entryID)
+	target, err := r.Store.PlanBranch(id, entryID)
 	if err != nil {
 		return err
 	}
-	saved, err := r.Store.Session(id)
-	if err != nil {
-		return err
-	}
-	if target.EntryTip != saved.EntryTip {
-		target.RedoTip = saved.EntryTip
-	} else {
-		target.RedoTip = saved.RedoTip
-	}
-	return r.Workspace.Restore(r.ctx, id, target)
+	return r.Workspace.Restore(r.ctx, target)
 }

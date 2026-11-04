@@ -202,7 +202,11 @@ func TestConversationExportAcrossMainContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	continued, err := r.Store.Continue(original.ID, llm.NewCompactionContext("compaction-summary-marker"), original.EntryTip, original.EntryTip+1, nil, time.Now(), nil)
+	view, err := r.Store.ReadCompaction(context.Background(), r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	continued, err := commitCompactionFixture(r.Store, view, llm.NewCompactionContext("compaction-summary-marker"), len(view.Messages()))
 	if err != nil {
 		t.Fatal(err)
 	}

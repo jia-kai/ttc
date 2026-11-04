@@ -307,7 +307,7 @@ func TestMainUsageCompactionResetUsesAdmissionSource(t *testing.T) {
 	cut := entries[len(entries)-1].ID
 	// Copy both admission and completion after the new physical summary. Their
 	// original source admission is still pre-compaction and cannot calibrate it.
-	continued, err := s.Continue(original.ID, llm.NewCompactionContext("summary"), cut, entries[0].ID, nil, time.Now(), nil)
+	continued, err := s.continueFixture(original.ID, llm.NewCompactionContext("summary"), cut, entries[0].ID, nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

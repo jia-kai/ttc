@@ -186,38 +186,48 @@ func entryWith(q historyReader, id int64) (Entry, error) {
 // completion. It never loads tool details or instruction files.
 func (s *Store) ReadView(ctx context.Context, entry Entry) (view EntryView, err error) {
 	defer func() { err = intentError(fmt.Sprintf("read entry #%d view", entry.ID), err) }()
-	if err := ctx.Err(); err != nil {
-		return EntryView{}, err
-	}
-	data, err := decodePresentation(entry)
+	data, completion, err := loadViewPresentation(ctx, contextHistoryReader{ctx, s.db}, entry)
 	if err != nil {
 		return EntryView{}, err
 	}
-	q := contextHistoryReader{ctx, s.db}
+	view = projectView(data)
+	view.ChildCompletion = completion
+	return view, ctx.Err()
+}
+
+// loadViewPresentation acquires canonical content and bounded presentation
+// metadata without constructing a label from a potentially large message body.
+func loadViewPresentation(ctx context.Context, q historyReader, entry Entry) (entryPresentation, *ChildCompletionPresentation, error) {
+	if err := ctx.Err(); err != nil {
+		return entryPresentation{}, nil, err
+	}
+	data, err := decodePresentation(entry)
+	if err != nil {
+		return entryPresentation{}, nil, err
+	}
 	var notice *resolvedChildNotice
 	if entry.Kind == "message" && data.Message != nil {
 		notice, err = resolveChildNoticeMessage(q, entry, *data.Message)
 		if err != nil {
-			return EntryView{}, err
+			return entryPresentation{}, nil, err
 		}
 	}
 	if entry.Kind == "tool_result" {
 		var summary string
 		if err := q.QueryRow("SELECT coalesce(json_extract(markdown_json,'$.summary'),'') FROM tool_records WHERE entry_id=?", entry.ID).Scan(&summary); err != nil {
-			return EntryView{}, err
+			return entryPresentation{}, nil, err
 		}
 		data.ToolSummary = &summary
 	}
 	if data.Prompt != nil && data.Prompt.RequestID > 0 {
 		if err := q.QueryRow("SELECT purpose FROM model_requests WHERE id=?", data.Prompt.RequestID).Scan(&data.Prompt.Purpose); err != nil {
-			return EntryView{}, err
+			return entryPresentation{}, nil, err
 		}
 	}
-	view = projectView(data)
 	if notice != nil {
-		view.ChildCompletion = &notice.Presentation
+		return data, &notice.Presentation, ctx.Err()
 	}
-	return view, ctx.Err()
+	return data, nil, ctx.Err()
 }
 
 // ReadEntryView loads an entry by ID and decodes its small replay view with

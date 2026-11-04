@@ -23,9 +23,18 @@ type preparedSession struct {
 	switchText  string
 }
 
+// sessionOpenMode distinguishes runtime attachment from an explicit independent
+// continuation. It describes ownership, not how history is physically stored.
+type sessionOpenMode uint8
+
+const (
+	attachSession sessionOpenMode = iota
+	forkSession
+)
+
 // prepareSession either attaches an already persisted target (New's contract),
-// or snapshots an explicit load. All fallible operations precede live teardown.
-func (r *Runtime) prepareSession(id string, copySource bool) (preparedSession, error) {
+// or forks an explicit load. All fallible operations precede live teardown.
+func (r *Runtime) prepareSession(id string, mode sessionOpenMode) (preparedSession, error) {
 	v, err := r.Store.Session(id)
 	if err != nil {
 		return preparedSession{}, err
@@ -39,7 +48,7 @@ func (r *Runtime) prepareSession(id string, copySource bool) (preparedSession, e
 			return preparedSession{}, errors.New("session belongs to another workspace")
 		}
 	}
-	if copySource {
+	if mode == forkSession {
 		v, err = r.Store.Load(id)
 		if err != nil {
 			return preparedSession{}, err
@@ -68,7 +77,7 @@ func (r *Runtime) prepareSession(id string, copySource bool) (preparedSession, e
 	if err != nil {
 		return preparedSession{}, err
 	}
-	if copySource && !v.ReadOnly && (v.Model.Provider != target.selection.Provider || v.Model.Model.ID != target.selection.Model.ID || v.Model.Variant != target.selection.Variant) {
+	if mode == forkSession && !v.ReadOnly && (v.Model.Provider != target.selection.Provider || v.Model.Model.ID != target.selection.Model.ID || v.Model.Variant != target.selection.Variant) {
 		target.switchText = fmt.Sprintf("Model switched · %s · %s", target.selection.Model.ID, target.selection.Variant)
 		target.switchEntry, err = r.Store.SwitchModel(v.ID, "", v.Model, target.selection, target.switchText)
 		if err != nil {
@@ -122,7 +131,7 @@ func (r *Runtime) Load(id string) error {
 }
 
 func (r *Runtime) load(id string) (history.Session, error) {
-	target, err := r.prepareSession(id, true)
+	target, err := r.prepareSession(id, forkSession)
 	if err != nil {
 		return history.Session{}, err
 	}

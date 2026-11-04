@@ -58,10 +58,22 @@ func (s *Store) MainUsage(ctx context.Context, session string) (MainUsage, error
 		return MainUsage{}, err
 	}
 	defer tx.Rollback()
-	var tip, summary int64
+	var tip int64
 	if err := tx.QueryRowContext(ctx, "SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); err != nil {
 		return MainUsage{}, err
 	}
+	result, err := mainUsageAt(ctx, tx, tip)
+	if err != nil {
+		return MainUsage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MainUsage{}, err
+	}
+	return result, nil
+}
+
+func mainUsageAt(ctx context.Context, tx contextSQLReader, tip int64) (MainUsage, error) {
+	var summary int64
 	if err := tx.QueryRowContext(ctx, usageAncestry+`SELECT coalesce(max(coalesce(e.source_id,e.id)),0)
 		FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND e.kind='summary' AND e.actor_id='main'`, tip).Scan(&summary); err != nil {
 		return MainUsage{}, err
@@ -87,13 +99,10 @@ func (s *Store) MainUsage(ctx context.Context, session string) (MainUsage, error
 			return MainUsage{}, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return MainUsage{}, err
-	}
 	return result, nil
 }
 
-func mainObservation(ctx context.Context, tx *sql.Tx, tip int64, measuredOnly bool) (*requestObservation, error) {
+func mainObservation(ctx context.Context, tx contextSQLReader, tip int64, measuredOnly bool) (*requestObservation, error) {
 	var value requestObservation
 	var model string
 	var usage, checkpoint sql.NullString
@@ -147,7 +156,7 @@ func (o requestObservation) measured() *MeasuredRequest {
 	return &MeasuredRequest{RequestID: o.request, Selection: o.selection, Tokens: *o.usage, Checkpoint: o.checkpoint}
 }
 
-func (o requestObservation) input(ctx context.Context, tx *sql.Tx, tip int64) (*MeasuredRequest, error) {
+func (o requestObservation) input(ctx context.Context, tx contextSQLReader, tip int64) (*MeasuredRequest, error) {
 	var selected bool
 	if err := tx.QueryRowContext(ctx, usageAncestry+`SELECT EXISTS(
 		SELECT 1 FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND coalesce(e.source_id,e.id)=?)`, tip, o.admission).Scan(&selected); err != nil {
@@ -180,7 +189,7 @@ func (o requestObservation) input(ctx context.Context, tx *sql.Tx, tip int64) (*
 	if err != nil {
 		return nil, fmt.Errorf("read observed system prompt: %w", err)
 	}
-	messages, err := messagesWith(tx, originalSession, o.admission)
+	messages, err := messagesWith(contextHistoryReader{ctx, tx}, originalSession, o.admission)
 	if err != nil {
 		return nil, fmt.Errorf("reconstruct observed input: %w", err)
 	}

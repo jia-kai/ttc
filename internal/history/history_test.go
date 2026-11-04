@@ -286,7 +286,7 @@ func TestContinuationRebasesRetainedUndoWithoutArchiveDependency(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	continuation, e := s.Continue(v.ID, llm.NewCompactionContext("summary"), cut.EntryTip, retained, nil, time.Now(), nil)
+	continuation, e := s.continueFixture(v.ID, llm.NewCompactionContext("summary"), cut.EntryTip, retained, nil, time.Now(), nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -301,8 +301,8 @@ func TestContinuationRebasesRetainedUndoWithoutArchiveDependency(t *testing.T) {
 	if e != nil || choice == nil || choice.Model.ID != v.Model.Model.ID {
 		t.Fatal("continuation lost its model", choice, e)
 	}
-	target, e := s.UndoTarget(continuation.ID)
-	if e != nil || target.EntryTip != continuation.UndoFloor {
+	target, e := s.PlanUndo(continuation.ID)
+	if e != nil || target.after.entry != continuation.UndoFloor {
 		t.Fatal(target, e)
 	}
 	messages, e := s.Messages(continuation.ID)

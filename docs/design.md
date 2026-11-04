@@ -162,11 +162,25 @@ One Go module uses direct construction and small interfaces at their consumers:
 - `history.Store` owns SQLite, schema knowledge and persistence transactions.
   Callers use typed operations rather than SQL or database handles. Request
   admission, compaction and file-tip changes remain atomic storage operations.
+- `ReadContextState` reads main input and usage from one selected cut.
+  `ReadReplay` supplies typed presentation rows and selected stream revisions;
+  the frontend does not decode storage envelopes or resolve tool supersession.
+  Compaction views/plans hide physical cuts and map retention by message index;
+  runtime owns token policy and checks capacity before the atomic handoff.
+  Context/compaction snapshots use separate read-only WAL connections so message
+  decoding does not occupy the store's commit connection.
+- Opaque restore plans own undo/redo selection and file-history divergence.
+  Workspace code interprets application-owned path effects and applies checked
+  filesystem changes before committing the plan. Plans reject stale selections;
+  filesystem effects and SQL publication are still separate operations.
 - `RequestAdmission` carries one admission's selection, input deliveries and
   optional accounting checkpoint. `RequestCompletion` carries typed attempts;
   completion atomically saves audit evidence and an immutable usage observation.
   Operational usage reads follow selected completion/source identities, not
-  mutable latest-request diagnostics or JSON status searches.
+  mutable latest-request diagnostics or JSON status searches. Committed-message
+  receipts carry timestamps and typed notice/steer content; runtime publication
+  does not refetch storage envelopes. Recovery-instruction lookup and insertion
+  are one history transaction.
 - Startup and `/load` share session preparation and activation. Preparation
   validates the target, recovers notices and builds accounting against the
   target tool schemas before stopping old work. Activation joins old workers and
