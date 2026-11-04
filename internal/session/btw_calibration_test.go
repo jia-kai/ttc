@@ -180,7 +180,7 @@ func TestBTWCalibrationFallbackIsConservative(t *testing.T) {
 			}
 			r.selection.Model.Budget.ContextLimit = 40000
 			if feedback == "incompatible" {
-				r.selection.Variant = "different-settings"
+				r.selection.Model.ID = "different-model"
 			}
 			before, err := r.Store.Messages(r.Current())
 			if err != nil {

@@ -171,15 +171,17 @@ admission and handoff inequalities, retention defaults and failure behavior.
   tool schemas; that calibration is always estimated. Missing historical
   instruction artifacts leave reported usage available but skip that
   reconstruction. Changed system instructions or schemas invalidate
-  checkpoint-backed calibration. TTC treats OpenAI `gpt-<numeric-version>-sol`,
-  `-luna`, `-terra` and `-astra` as tokenizer-compatible within the exact
-  version; other model IDs remain separate. Provider, service-tier and
-  reasoning-effort changes still invalidate it. Native replay remains specific
-  to its producing model, even when tokenizers match. Other explicit history
-  resets clear parent context usage. `/new` clears run totals; loads, `/clear`
-  and other session changes never rebuild them from history. Changed input still
-  uses measured input plus a local delta, not an exact count. `/force-compact`
-  can attempt summary inference despite that estimate.
+  checkpoint-backed calibration. Obsolete checkpoint fingerprints fall back to
+  local estimation until the next measured request. TTC treats OpenAI
+  `gpt-<numeric-version>-sol`, `-luna`, `-terra` and `-astra` as
+  tokenizer-compatible within the exact version; other model IDs remain
+  separate. Speed and reasoning-effort switches preserve calibration; provider
+  changes invalidate it. Native replay remains specific to its producing model,
+  even when tokenizers match. Other explicit history resets clear parent context
+  usage. `/new` clears run totals; loads, `/clear` and other session changes
+  never rebuild them from history. Changed input still uses measured input plus
+  a local delta, not an exact count. `/force-compact` can attempt summary
+  inference despite that estimate.
 - Cost needs each producing model/tier's rates: ordinary input × input rate +
   reads × cached-input rate + writes × cache-write rate + output × output rate.
   Mixed-model totals determine neither cost nor a subscription bill. See

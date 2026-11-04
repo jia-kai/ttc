@@ -100,6 +100,8 @@ Choose both models and their reasoning variants with `/model` or Ctrl+X M. If no
 easy model is configured, those tasks use the main model. The running jobs
 sidebar marks easy-requested agents as `agent*`. See
 [model selection](docs/models.md#switching-and-replay) for plain-mode commands.
+Switching speed or reasoning effort on the same model preserves context-estimate
+calibration.
 
 Instead of logging in, you can explicitly copy existing Codex subscription
 credentials into TTC's private store:

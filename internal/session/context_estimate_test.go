@@ -180,6 +180,28 @@ func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchIsolatesIt(t *testi
 	if result := r.estimator.Estimate(baseline); result.Input != 1234 || result.Estimated {
 		t.Fatal("failed stream replaced successful measurement", result)
 	}
+	standard := r.CurrentSelection()
+	for _, tier := range []string{"priority", ""} {
+		for _, effort := range []string{"low", "medium", "high"} {
+			selection := standard
+			selection.Variant = effort
+			if tier != "" {
+				selection.Model.BaseID = standard.Model.RequestID()
+				selection.Model.ID += "/fast"
+			}
+			selection.Model.ServiceTier = tier
+			if err := r.RequestModel(selection); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.ApplyModel(""); err != nil {
+				t.Fatal(err)
+			}
+			baseline.Selection = r.CurrentSelection()
+			if result := r.estimator.Estimate(baseline); result.Input != 1234 || result.Estimated {
+				t.Fatal("speed/reasoning switch lost successful measurement", selection, result)
+			}
+		}
+	}
 	selection := r.CurrentSelection()
 	selection.Model.ID += "-other"
 	if err := r.RequestModel(selection); err != nil {

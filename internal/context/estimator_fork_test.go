@@ -120,8 +120,6 @@ func TestEstimatorForkRequiresCompatibleCompletedSource(t *testing.T) {
 		"provider":       func(s *InputSnapshot) { s.Selection.Provider += "x" },
 		"model":          func(s *InputSnapshot) { s.Selection.Model.ID += "x" },
 		"request model":  func(s *InputSnapshot) { s.Selection.Model.BaseID = "underlying" },
-		"tier":           func(s *InputSnapshot) { s.Selection.Model.ServiceTier = "priority" },
-		"variant":        func(s *InputSnapshot) { s.Selection.Variant += "x" },
 		"system":         func(s *InputSnapshot) { s.System += "x" },
 		"tools":          func(s *InputSnapshot) { s.Tools = []llm.ToolDefinition{{Name: "new"}} },
 		"lineage":        func(s *InputSnapshot) { s.Lineage += "x" },
@@ -263,7 +261,7 @@ func TestEstimatorForkProjectsReplayOnce(t *testing.T) {
 }
 
 func TestEstimatorForkRejectsUnavailableCalibrationBeforeReplay(t *testing.T) {
-	for _, reason := range []string{"missing", "pending", "lineage", "settings", "schemas"} {
+	for _, reason := range []string{"missing", "pending", "lineage", "model", "schemas"} {
 		t.Run(reason, func(t *testing.T) {
 			s := estimatorSnapshot()
 			s.Messages = []llm.Message{{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "test", Model: "model"}}}
@@ -280,8 +278,8 @@ func TestEstimatorForkRejectsUnavailableCalibrationBeforeReplay(t *testing.T) {
 			switch reason {
 			case "lineage":
 				s.Lineage = "different"
-			case "settings":
-				s.Selection.Variant = "different"
+			case "model":
+				s.Selection.Model.ID = "different"
 			case "schemas":
 				s.Tools = []llm.ToolDefinition{{Name: "different"}}
 			}
@@ -323,13 +321,13 @@ func TestEstimatorForkCanonicalRetainedInputFromProjectedAnchor(t *testing.T) {
 	}
 }
 
-func TestEstimatorCheckpointFingerprintsUnchanged(t *testing.T) {
+func TestEstimatorCheckpointFingerprints(t *testing.T) {
 	var e Estimator
 	got := e.Prepare(estimatorSnapshot()).Checkpoint()
 	want := Checkpoint{
 		Version: 1, LocalInput: 22,
-		Compatible: "2bce482a4a20f32b7d25b1dd7a5f5adb82875b6b50bcb3fb599181c2900a2f98",
-		Exact:      "8aa961b7a2df7d302b10ea364e790e8ef513989aaba0d3db8e9f70eaec9f5632",
+		Compatible: "9b2da1433f788c9f9e7fc0a430d07d078fa27eaf54a34a61b23c9dc8a60f825d",
+		Exact:      "a19806db42bc31f4b4f733ec2f571557222c87149a935fdbe96187d5d8934f1f",
 	}
 	if got == nil || *got != want {
 		t.Fatalf("checkpoint contract changed: got %+v, want %+v", got, want)

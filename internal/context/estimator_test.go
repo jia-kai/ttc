@@ -102,8 +102,6 @@ func TestEstimatorCompatibilityAndZeroDelta(t *testing.T) {
 		"provider":      func(s *InputSnapshot) { s.Selection.Provider += "x" },
 		"model":         func(s *InputSnapshot) { s.Selection.Model.ID += "x" },
 		"request model": func(s *InputSnapshot) { s.Selection.Model.BaseID = "underlying" },
-		"tier":          func(s *InputSnapshot) { s.Selection.Model.ServiceTier = "priority" },
-		"variant":       func(s *InputSnapshot) { s.Selection.Variant += "x" },
 		"lineage":       func(s *InputSnapshot) { s.Lineage += "x" },
 		"system":        func(s *InputSnapshot) { s.System += "x" },
 		"tools":         func(s *InputSnapshot) { s.Tools = []llm.ToolDefinition{{Name: "new"}} },
@@ -127,6 +125,61 @@ func TestEstimatorCompatibilityAndZeroDelta(t *testing.T) {
 	s.Messages[0].Content = "world"
 	if r := e.Estimate(s); !r.Estimated || r.Input != 0 {
 		t.Fatalf("same count must not imply exact match: %+v", r)
+	}
+}
+
+func TestEstimatorSpeedAndReasoningSwitchesPreserveCalibration(t *testing.T) {
+	choices := []llm.Selection{}
+	for _, tier := range []string{"", "priority"} {
+		for _, effort := range []string{"high", "medium", "low"} {
+			choice := estimatorSnapshot().Selection
+			choice.Model.ID = "gpt-6.1-sol"
+			if tier != "" {
+				choice.Model.BaseID = choice.Model.ID
+				choice.Model.ID += "/fast"
+			}
+			choice.Model.ServiceTier, choice.Variant = tier, effort
+			choices = append(choices, choice)
+		}
+	}
+	for _, from := range choices {
+		for _, to := range choices {
+			t.Run(from.Model.ID+"/"+from.Variant+"->"+to.Model.ID+"/"+to.Variant, func(t *testing.T) {
+				s := estimatorSnapshot()
+				s.Selection = from
+				s.Messages = append(s.Messages, llm.Message{Type: llm.TypeAssistant, State: &llm.ReplayState{
+					Provider: from.Provider, Model: from.Model.RequestID(), Items: []json.RawMessage{json.RawMessage(`{"reasoning":"saved"}`)},
+				}})
+				parent := calibratedEstimator(t, s, 700)
+				checkpoint := parent.Prepare(s).Checkpoint()
+				before := EstimateInput(s).Input
+				s.Selection = to
+				var restored Estimator
+				if err := restored.Restore(*checkpoint, 700, s.Lineage); err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range []*Estimator{parent, &restored} {
+					if got := e.Estimate(s); got.Input != 700 || got.Estimated {
+						t.Fatal("settings switch lost exact calibration", got)
+					}
+				}
+				if child := parent.Fork(s, s.System, s.Tools, "child"); child == nil {
+					t.Fatal("settings switch prevented calibration fork")
+				} else {
+					target := s
+					target.Lineage = "child"
+					if got := child.Estimate(target); got.Input != 700 || !got.Estimated {
+						t.Fatal("fork lost calibration", got)
+					}
+				}
+				s.Messages = append(s.Messages, llm.Message{Type: llm.TypeUserInput, Content: "continued"})
+				for _, e := range []*Estimator{parent, &restored} {
+					if got := e.Estimate(s); got.Input != 700+got.LocalInput-before || !got.Estimated {
+						t.Fatal("settings switch lost calibrated growth", got)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -313,6 +366,29 @@ func TestEstimatorRejectsInvalidCheckpoint(t *testing.T) {
 	}
 	if (Observation{}).Checkpoint() != nil {
 		t.Fatal("zero observation persisted")
+	}
+}
+
+func TestEstimatorObsoleteSettingsFingerprintFallsBackToLocal(t *testing.T) {
+	var e Estimator
+	s := estimatorSnapshot()
+	// Version 1's payload format is unchanged, but these hashes included speed
+	// and reasoning effort. They must not calibrate the current input identity.
+	checkpoint := Checkpoint{Version: 1, LocalInput: 22,
+		Compatible: "2bce482a4a20f32b7d25b1dd7a5f5adb82875b6b50bcb3fb599181c2900a2f98",
+		Exact:      "8aa961b7a2df7d302b10ea364e790e8ef513989aaba0d3db8e9f70eaec9f5632"}
+	if err := e.Restore(checkpoint, 900, s.Lineage); err != nil {
+		t.Fatal("obsolete fingerprint prevented loading", err)
+	}
+	if got := e.Estimate(s); !got.Estimated || got.Input != got.LocalInput {
+		t.Fatal("obsolete fingerprint reused calibration", got)
+	}
+	e.ObserveRequest(1, e.Prepare(s))
+	if _, ok := e.ObserveUsage(1, 700); !ok {
+		t.Fatal("current feedback rejected")
+	}
+	if got := e.Estimate(s); got.Estimated || got.Input != 700 {
+		t.Fatal("current feedback did not replace obsolete calibration", got)
 	}
 }
 

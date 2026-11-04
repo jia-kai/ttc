@@ -100,10 +100,12 @@ type inputAnchor struct {
 // Checkpoint is a versioned, payload-free prepared-input observation. It stores
 // local tokens and SHA-256 fingerprints, not messages, schemas or usage. History
 // must bind it to a successful response before Restore can establish an anchor.
+// Fingerprints are opaque cache keys: accounting policy changes may invalidate
+// calibration without changing the checkpoint format or preventing history loads.
 type Checkpoint struct {
-	Version    int    `json:"version"`     // Fingerprint/estimation contract version, independent of history schema.
+	Version    int    `json:"version"`     // Checkpoint format version, independent of history schema.
 	LocalInput int    `json:"local_input"` // Local input estimate, in tokens, before endpoint calibration.
-	Compatible string `json:"compatible"`  // Hex SHA-256 of tokenizer, provider, settings, system and schemas.
+	Compatible string `json:"compatible"`  // Hex SHA-256 of tokenizer, provider, system and schemas.
 	Exact      string `json:"exact"`       // Hex SHA-256 additionally covering the projected message payloads.
 }
 
@@ -410,8 +412,10 @@ func compatibilityFingerprint(snapshot InputSnapshot) ([sha256.Size]byte, bool) 
 	if tokenizer == "" {
 		return [sha256.Size]byte{}, false
 	}
-	for _, field := range []string{snapshot.Selection.Provider, tokenizer, snapshot.Selection.Model.ServiceTier,
-		snapshot.Selection.Variant, snapshot.System} {
+	// Speed and reasoning effort do not change input tokenization. Checkpoints
+	// that included these fields remain readable but no longer match; they fall
+	// back to local estimation until new usage establishes a current anchor.
+	for _, field := range []string{snapshot.Selection.Provider, tokenizer, snapshot.System} {
 		compatible.string(field)
 	}
 	compatible.integer(int64(len(snapshot.Tools)))
