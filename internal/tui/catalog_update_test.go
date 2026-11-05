@@ -64,7 +64,10 @@ func newCatalogUpdateFixtureModels(t *testing.T, models []llm.ModelSpec) *catalo
 	}
 	r.AutoName = false
 	screen := &catalogUpdateScreen{observedScreen: &observedScreen{Screen: newTestScreen(t), frames: make(chan string, 256)}}
-	h := &catalogUpdateFixture{screen: screen, runtime: r, provider: p, updates: make(chan catalog.Update, 1), cancel: cancel, done: make(chan error, 1)}
+	// Rendezvous with the event loop before sending later keys. Once it receives
+	// an update, it finishes applying that update before handling another key;
+	// a buffered send would not establish this ordering across the two channels.
+	h := &catalogUpdateFixture{screen: screen, runtime: r, provider: p, updates: make(chan catalog.Update), cancel: cancel, done: make(chan error, 1)}
 	f := Frontend{Runtime: r, Screen: screen, Output: io.Discard, Models: models, ModelUpdates: h.updates}
 	go func() { h.done <- f.Run(ctx) }()
 	t.Cleanup(func() {
