@@ -16,17 +16,14 @@ import (
 
 const lineageRetention = 30 * 24 * time.Hour
 
-// cleanupLocked expires whole inactive lineages and requires s.mu. The loaded
-// conversation protects its whole family. SQL deletion is atomic and rechecks
+// cleanupLocked expires whole inactive lineages and requires s.mu. Callers must
+// refresh loaded activity before acquiring the maintenance gate to protect the
+// loaded family from concurrent sweeps. SQL deletion is atomic and rechecks
 // activity under the write transaction; asset deletion is best effort, without
 // deletion journals or restart repair. The result counts committed deletions.
-func (s *Store) cleanupLocked(ctx context.Context, now time.Time, protectedSession string, report func(MaintenanceProgress)) (result MaintenanceResult, err error) {
+func (s *Store) cleanupLocked(ctx context.Context, now time.Time, report func(MaintenanceProgress)) (result MaintenanceResult, err error) {
 	reportMaintenance(report, "discovery", 0, 0)
 	if err := ctx.Err(); err != nil {
-		return MaintenanceResult{}, err
-	}
-	// Refresh the loaded lineage so other instances' sweeps also retain it.
-	if err := s.refreshLoadedActivity(ctx, now, protectedSession); err != nil {
 		return MaintenanceResult{}, err
 	}
 	cutoff := now.Add(-lineageRetention).UnixMilli()

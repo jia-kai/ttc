@@ -140,6 +140,7 @@ func TestCleanupProtectsLoadedLineage(t *testing.T) {
 	if removed, err := s.maintain(context.Background(), now, v.ID, 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("loaded predecessor did not protect descendants", removed, err)
 	}
+	now = now.Add(historyMaintenanceInterval)
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	if removed, err := s.maintain(context.Background(), now, "unsaved-session", 1, nil); err != nil || removed.RemovedLineages != 1 {
 		t.Fatal(removed, err)
@@ -182,6 +183,7 @@ func TestCleanupSQLRollbackAndRecentActivityProtection(t *testing.T) {
 	if removed, err := s.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("cleanup deleted recently used history", removed, err)
 	}
+	now = now.Add(historyMaintenanceInterval)
 	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	if removed, err := s.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 1 {
 		t.Fatal(removed, err)

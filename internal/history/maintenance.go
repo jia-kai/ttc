@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"ttc/internal/filelock"
+	"ttc/internal/privatefile"
 
 	"golang.org/x/sys/unix"
 )
 
 const historyMaintenanceThreshold int64 = 2 * 1024 * 1024 * 1024
+const historyMaintenanceInterval = 7 * 24 * time.Hour
 const historyReclaimTimeout = 2 * time.Minute
 
 // MaintenanceResult reports the post-maintenance history footprint and the
@@ -38,11 +42,17 @@ func reportMaintenance(report func(MaintenanceProgress), phase string, completed
 	}
 }
 
-// Maintain refreshes the loaded session's activity and, only when the initial
-// database plus WAL lengths total at least 2 GiB, purges families inactive for
-// thirty days. The protected session's entire family survives. It performs one
-// sweep and never evicts newer families to reach a target size. Above the size
-// threshold it also attempts to reclaim SQLite free pages and WAL residue,
+// Maintain refreshes the loaded session's activity and returns storage statistics.
+// Maintenance runs only when the last successful check was at least seven days
+// ago or its timestamp is missing or malformed. The timestamp is persisted in
+// history-maintenance.time under Root, including successful checks below the size
+// threshold; failed or canceled checks do not advance it. A shared file lock
+// serializes the check and maintenance across Stores using the same Root.
+// Only when the initial database plus WAL lengths total at least 2 GiB does it
+// purge families inactive for thirty days. The protected session's entire family
+// survives. It performs one sweep and never evicts newer families to reach a
+// target size. Above the size threshold it also attempts to reclaim SQLite free
+// pages and WAL residue,
 // including space left by an earlier interrupted reclamation. Large databases
 // with no deletions or free pages need only a checkpoint, not another VACUUM.
 // Credentials, exports, and user workspace files are untouched. Reclamation has
@@ -78,12 +88,31 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var result MaintenanceResult
+	// Another instance may already be preparing a sweep. Protect the loaded
+	// family before waiting for its gate, so its activity recheck can retain it.
+	if err := s.refreshLoadedActivity(ctx, now, protectedSession); err != nil {
+		return result, err
+	}
+	lock, err := filelock.Acquire(ctx, filepath.Join(s.Root, "history-maintenance.lock"))
+	if err != nil {
+		return result, fmt.Errorf("coordinate history maintenance: %w", err)
+	}
+	defer lock.Close()
+	stampPath := filepath.Join(s.Root, "history-maintenance.time")
+	stamp, err := os.ReadFile(stampPath)
+	if err != nil && !os.IsNotExist(err) {
+		return result, fmt.Errorf("read history maintenance time: %w", err)
+	}
+	if last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(stamp))); err == nil && now.Sub(last) < historyMaintenanceInterval {
+		result.Stats, err = s.storageStatsLocked(ctx)
+		return result, err
+	}
 	size, err := s.storageBytes(ctx)
 	if err != nil {
 		return result, fmt.Errorf("measure history before maintenance: %w", err)
 	}
 	if size >= threshold {
-		result, err = s.cleanupLocked(ctx, now, protectedSession, report)
+		result, err = s.cleanupLocked(ctx, now, report)
 		if err != nil {
 			err = fmt.Errorf("purge inactive history: %w", err)
 		}
@@ -105,14 +134,26 @@ func (s *Store) maintain(ctx context.Context, now time.Time, protectedSession st
 		if err != nil {
 			return result, err
 		}
-	} else if err := s.refreshLoadedActivity(ctx, now, protectedSession); err != nil {
-		return result, err
 	}
 	if size >= threshold {
 		reportMaintenance(report, "statistics", 0, 0)
 	}
 	result.Stats, err = s.storageStatsLocked(ctx)
-	return result, err
+	if err != nil {
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if err := privatefile.AtomicFile(stampPath, []byte(now.UTC().Format(time.RFC3339Nano)+"\n"), 0600); err != nil {
+		// AtomicFile can fail syncing the directory after replacing the stamp.
+		// Invalidate it so a visible but unconfirmed write cannot delay retries.
+		if removeErr := os.Remove(stampPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			err = errors.Join(err, fmt.Errorf("invalidate history maintenance time: %w", removeErr))
+		}
+		return result, fmt.Errorf("record successful history maintenance: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Store) reclaimHistory(ctx context.Context, compact bool, report func(MaintenanceProgress)) error {

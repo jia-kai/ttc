@@ -118,6 +118,36 @@ func TestStartupMaintenanceReportsCommittedDeletionOnAssetFailure(t *testing.T) 
 	}
 }
 
+func TestStartupMaintenanceSkipsRecentSuccessfulCheck(t *testing.T) {
+	s, v, _ := startupHistoryFixture(t, true)
+	p, _, _ := testStartupProgress(false, 80)
+	var stdout bytes.Buffer
+	if _, err := maintainHistory(context.Background(), s, v.ID, p, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	// The first check protected this family. Make it eligible again so a second
+	// sweep would delete it if startup ignored the saved weekly timestamp.
+	db := historytest.DB(t, s)
+	if _, err := db.Exec("UPDATE sessions SET last_activity_ms=0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p, progress, _ := testStartupProgress(false, 80)
+	stdout.Reset()
+	notices, err := maintainHistory(context.Background(), s, "", p, &stdout)
+	if err != nil || len(notices) != 1 || !strings.Contains(notices[0], "History database:") {
+		t.Fatal(notices, err)
+	}
+	if stdout.Len() != 0 || progress.Len() != 0 {
+		t.Fatal("skipped maintenance reported a sweep", stdout.String(), progress.String())
+	}
+	if _, err := s.Session(v.ID); err != nil {
+		t.Fatal("recent successful check did not prevent deletion", err)
+	}
+}
+
 type failingMaintenanceWriter struct{ err error }
 
 func (w failingMaintenanceWriter) Write([]byte) (int, error) { return 0, w.err }

@@ -11,8 +11,140 @@ import (
 	"testing"
 	"time"
 
+	"ttc/internal/filelock"
 	"ttc/internal/llm"
 )
+
+func TestMaintainWeeklyGate(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name  string
+		stamp string
+		due   bool
+	}{
+		{name: "missing", due: true},
+		{name: "malformed", stamp: "not a timestamp\n", due: true},
+		{name: "empty", stamp: "\n", due: true},
+		{name: "recent", stamp: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+		{name: "just before seven days", stamp: now.Add(-historyMaintenanceInterval + time.Nanosecond).Format(time.RFC3339Nano)},
+		{name: "exactly seven days", stamp: now.Add(-historyMaintenanceInterval).Format(time.RFC3339Nano), due: true},
+		{name: "over seven days", stamp: now.Add(-historyMaintenanceInterval - time.Nanosecond).Format(time.RFC3339Nano), due: true},
+		{name: "future", stamp: now.Add(time.Hour).Format(time.RFC3339Nano)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, v, _, _ := historyFixture(t)
+			ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
+			path := filepath.Join(s.Root, "history-maintenance.time")
+			if tc.stamp != "" {
+				if err := os.WriteFile(path, []byte(tc.stamp), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reports := 0
+			result, err := s.maintain(context.Background(), now, "", 1, func(MaintenanceProgress) { reports++ })
+			if err != nil || (result.RemovedLineages == 1) != tc.due || (reports > 0) != tc.due {
+				t.Fatal("wrong weekly gate decision", result, reports, err)
+			}
+			if result.Stats.Bytes != physicalHistoryBytes(t, s) {
+				t.Fatal("missing storage statistics", result)
+			}
+			stamp, err := os.ReadFile(path)
+			want := tc.stamp
+			if tc.due {
+				want = now.Format(time.RFC3339Nano) + "\n"
+			}
+			if err != nil || string(stamp) != want {
+				t.Fatal("incorrect persisted maintenance time", string(stamp), want, err)
+			}
+		})
+	}
+}
+
+func TestMaintainWeeklyGatePersistsAcrossReopenAndRefreshesLoadedActivity(t *testing.T) {
+	s, v, _, _ := historyFixture(t)
+	now := time.Now().UTC()
+	if _, err := s.Maintain(context.Background(), now, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.Root, "history-maintenance.time")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal("below-threshold success did not record timestamp", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("timestamp is not private", info, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(s.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	ageLineage(t, reopened, v.LineageID, now.Add(-31*24*time.Hour))
+	later := now.Add(time.Hour)
+	result, err := reopened.maintain(context.Background(), later, v.ID, 1, func(p MaintenanceProgress) {
+		t.Errorf("skipped maintenance emitted progress: %+v", p)
+	})
+	if err != nil || result.RemovedLineages != 0 || result.Stats.Entries == 0 {
+		t.Fatal(result, err)
+	}
+	saved, err := reopened.Session(v.ID)
+	if err != nil || saved.LastActivityMS != later.UnixMilli() {
+		t.Fatal("skipped maintenance failed to refresh activity", saved, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("skipped maintenance advanced timestamp", string(after), err)
+	}
+}
+
+func TestMaintainTimestampIOErrors(t *testing.T) {
+	for _, phase := range []string{"read", "write"} {
+		t.Run(phase, func(t *testing.T) {
+			s, _, _, _ := historyFixture(t)
+			path := filepath.Join(s.Root, "history-maintenance.time")
+			// A directory is an I/O error, not an unavailable timestamp.
+			if phase == "read" {
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := s.maintain(context.Background(), time.Now(), "", 1, func(p MaintenanceProgress) {
+				if phase == "write" && p.Phase == "statistics" {
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+			want := "read history maintenance time"
+			if phase == "write" {
+				want = "record successful history maintenance"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatal("timestamp I/O error was hidden", err)
+			}
+		})
+	}
+}
+
+func TestMaintainWeeklyLockWaitIsCancelable(t *testing.T) {
+	s, _, _, _ := historyFixture(t)
+	lock, err := filelock.Acquire(context.Background(), filepath.Join(s.Root, "history-maintenance.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := s.Maintain(ctx, time.Now(), "", nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("maintenance ignored lock wait deadline", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, "history-maintenance.time")); !os.IsNotExist(err) {
+		t.Fatal("canceled lock wait recorded success", err)
+	}
+}
 
 func testSelection() llm.Selection {
 	return llm.Selection{Provider: "script", Model: llm.ScriptModel(), Variant: "none"}
@@ -71,8 +203,72 @@ func TestMaintainBelowProductionThresholdRefreshesLoadedFamily(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close()
-	if removed, err := other.maintain(context.Background(), now, "", 1, nil); err != nil || removed.RemovedLineages != 0 {
+	if removed, err := other.maintain(context.Background(), now.Add(historyMaintenanceInterval), "", 1, nil); err != nil || removed.RemovedLineages != 0 {
 		t.Fatal("another instance deleted the loaded family", removed, err)
+	}
+}
+
+func TestMaintainProtectsLoadedFamilyBeforeWaitingForOtherStore(t *testing.T) {
+	s, v, _, _ := historyFixture(t)
+	now := time.Now()
+	ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
+	other, err := Open(s.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	result, err := s.maintain(context.Background(), now, "", 1, func(p MaintenanceProgress) {
+		if p.Phase != "discovery" {
+			return
+		}
+		// While this Store holds the gate, a loading Store must refresh its
+		// session even though its own maintenance cannot acquire the gate yet.
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		if _, err := other.Maintain(ctx, now, v.ID, nil); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("overlapping maintenance did not wait for the gate: %v", err)
+		}
+	})
+	if err != nil || result.RemovedLineages != 0 {
+		t.Fatal("waiting loader's family was swept", result, err)
+	}
+	saved, err := other.Session(v.ID)
+	if err != nil || saved.LastActivityMS != now.UnixMilli() {
+		t.Fatal("waiting loader failed to refresh activity", saved, err)
+	}
+	if _, err := other.maintain(context.Background(), now.Add(time.Hour), v.ID, 1, func(p MaintenanceProgress) {
+		t.Errorf("second Store ignored successful shared check: %+v", p)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaintainInvalidatesTimestampAfterDirectorySyncFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires unprivileged directory permissions")
+	}
+	s, _, _, _ := historyFixture(t)
+	t.Cleanup(func() { os.Chmod(s.Root, 0700) })
+	_, err := s.maintain(context.Background(), time.Now(), "", 1, func(p MaintenanceProgress) {
+		if p.Phase == "statistics" {
+			// Allow temp-file creation and rename, but deny the directory read
+			// required by AtomicFile's final directory fsync.
+			if err := os.Chmod(s.Root, 0300); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "record successful history maintenance") {
+		t.Fatal("expected post-rename directory sync failure", err)
+	}
+	if err := os.Chmod(s.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, "history-maintenance.time")); !os.IsNotExist(err) {
+		t.Fatal("unconfirmed timestamp would suppress retries", err)
+	}
+	if _, err := s.Maintain(context.Background(), time.Now(), "", nil); err != nil {
+		t.Fatal("maintenance was not retryable", err)
 	}
 }
 
@@ -219,6 +415,11 @@ func TestMaintainSQLFailureRollsBackAllFamiliesAndIndexes(t *testing.T) {
 	for _, v := range []Session{first, second} {
 		ageLineage(t, s, v.LineageID, now.Add(-31*24*time.Hour))
 	}
+	stampPath := filepath.Join(s.Root, "history-maintenance.time")
+	previous := now.Add(-8*24*time.Hour).UTC().Format(time.RFC3339Nano) + "\n"
+	if err := os.WriteFile(stampPath, []byte(previous), 0600); err != nil {
+		t.Fatal(err)
+	}
 	later := first.ID
 	if second.ID > later {
 		later = second.ID
@@ -241,6 +442,9 @@ func TestMaintainSQLFailureRollsBackAllFamiliesAndIndexes(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "maintenance failure") || result.RemovedLineages != 0 || !attempted {
 		t.Fatal(result, err, "attempted earlier deletion", attempted)
+	}
+	if stamp, err := os.ReadFile(stampPath); err != nil || string(stamp) != previous {
+		t.Fatal("failed maintenance advanced previous success", string(stamp), err)
 	}
 	for _, v := range []Session{first, second} {
 		if _, err := s.Session(v.ID); err != nil {

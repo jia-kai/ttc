@@ -834,16 +834,22 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   job/timer/inbox table. Enforce the
   [retention policy](requirement.md#data-retention) with an atomic activity
   recheck before lineage deletion. The CLI runs maintenance synchronously before
-  runtime/frontend construction and gates the 30-day inactive-lineage sweep on
-  database-plus-WAL size of at least 2 GiB, without forcing the database below
-  the threshold. After deletions, attempt SQLite compaction and WAL truncation
-  with a two-minute limit. Compaction requires exclusive lifetime use,
-  coordinated under the initialization lock; other open stores defer it rather
-  than blocking their ordinary writes with VACUUM. Later startups above the
-  threshold retry SQLite free pages/WAL residue without another forced eviction.
-  An hourly activity-only heartbeat protects idle loaded sessions from other
-  instances' startup sweeps; lifecycle commands also refresh loaded activity.
-  Failures appear as UI-only warnings and may occur after history deletions have
+  runtime/frontend construction only when at least seven days have elapsed since
+  the last successful check, or its timestamp is missing or malformed. A shared
+  `history-maintenance.lock` serializes checks across instances;
+  `history-maintenance.time` atomically records the successful check time, even
+  below the size threshold. Failures and cancellation do not advance it. Loaded
+  activity and storage statistics still refresh on skipped startups. Maintenance
+  gates the 30-day inactive-lineage sweep on database-plus-WAL size of at least
+  2 GiB, without forcing the database below the threshold. After deletions,
+  attempt SQLite compaction and WAL truncation with a two-minute limit.
+  Compaction requires exclusive lifetime use, coordinated under the
+  initialization lock; other open stores defer it rather than blocking their
+  ordinary writes with VACUUM. Later startups above the threshold retry SQLite
+  free pages/WAL residue without another forced eviction. An hourly
+  activity-only heartbeat protects idle loaded sessions from other instances'
+  startup sweeps; lifecycle commands also refresh loaded activity. Failures
+  appear as UI-only warnings and may occur after history deletions have
   committed. Loaded forks protect their whole lineage's history and assets.
   Startup statistics (physical database plus WAL bytes, estimated entry count,
   oldest-entry age) are UI-only status, not model input or a new persisted
