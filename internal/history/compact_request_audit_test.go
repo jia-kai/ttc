@@ -287,7 +287,7 @@ func TestMessagesAcquireOnlyVisibleBodiesAcrossHiddenRequestAudit(t *testing.T) 
 		if err != nil || !reflect.DeepEqual(visible, wantVisible) {
 			t.Fatalf("visible acquisition changed entry metadata or stopped at hidden ancestor: %v", err)
 		}
-		if visible[0].Source != original.EntryTip || visible[0].EventSeq() != original.EntryTip {
+		if visible[0].ID != original.EntryTip || visible[0].Source != 0 || visible[0].EventSeq() != original.EntryTip {
 			t.Fatalf("visible acquisition lost imported source identity: %+v", visible[0])
 		}
 	}

@@ -92,8 +92,21 @@ func TestBlankLifecyclePersistsOnlyFirstMessageAndKeepsIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var users int
-	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND kind='message' AND role='user'", r.Current()).Scan(&users); err != nil || users != 2 {
-		t.Fatal("first message duplicated", users, err)
+	if err := historytest.DB(t, r.Store).QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND kind='message' AND role='user'", r.Current()).Scan(&users); err != nil || users != 1 {
+		t.Fatal("fork duplicated historical input or lost local input", users, err)
+	}
+	messages, err := r.Store.Messages(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inputs []string
+	for _, message := range messages {
+		if message.Type == llm.TypeUserInput {
+			inputs = append(inputs, message.Content)
+		}
+	}
+	if len(inputs) != 2 || inputs[0] != "First submission" || inputs[1] != "Second submission" {
+		t.Fatal("logical fork history lost or duplicated inputs", inputs)
 	}
 }
 

@@ -33,7 +33,7 @@ func transcriptEventIDs(t *testing.T, data []byte) []int64 {
 	return ids
 }
 
-func TestActorTranscriptMainAncestryFrozenCutAndLoadCopies(t *testing.T) {
+func TestActorTranscriptMainAncestryFrozenCutAndSharedForks(t *testing.T) {
 	s, v, turn, _ := historyFixture(t)
 	add := func(session, actor, text string) int64 {
 		t.Helper()
@@ -104,7 +104,7 @@ func TestActorTranscriptMainAncestryFrozenCutAndLoadCopies(t *testing.T) {
 	}
 }
 
-func TestActorTranscriptMultipleCompactionsAcrossLoadCopies(t *testing.T) {
+func TestActorTranscriptMultipleCompactionsAcrossSharedForks(t *testing.T) {
 	s, original, _, _ := historyFixture(t)
 	appendMessage := func(session, text string) int64 {
 		t.Helper()
@@ -150,7 +150,7 @@ func TestActorTranscriptMultipleCompactionsAcrossLoadCopies(t *testing.T) {
 	}
 	source, tip, err := s.ActorCompactionTip(context.Background(), loadedAgain.ID, "main", loadedAgain.EntryTip)
 	if err != nil || source != loaded.ID || tip != secondCut {
-		t.Fatal("latest cut lost across copied summaries", source, tip, err)
+		t.Fatal("latest cut lost across compactions and shared forks", source, tip, err)
 	}
 	data, err = s.ActorTranscriptJSONL(source, "main", tip)
 	if err != nil || bytes.Contains(data, []byte("After second frozen cut")) || !bytes.Contains(data, []byte("First original evidence")) {

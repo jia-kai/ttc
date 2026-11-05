@@ -200,6 +200,8 @@ var cleanupReferenceIndexes = [...]struct{ name, table, column string }{
 	{"cleanup_session_redo", "sessions", "redo_entry_id"},
 	{"cleanup_session_floor", "sessions", "undo_floor_id"},
 	{"cleanup_session_file", "sessions", "file_tip_id"},
+	{"cleanup_session_base_session", "sessions", "base_session_id"},
+	{"cleanup_session_base_entry", "sessions", "base_entry_id"},
 	{"cleanup_turn_entry", "turns", "start_entry_id"},
 	{"cleanup_turn_file", "turns", "start_file_tip_id"},
 	{"cleanup_entry_source", "entries", "source_id"},

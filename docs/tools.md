@@ -146,7 +146,7 @@ Input: `{path, format?, scope?}`.
   only selected main history; a child exports only its own selected history,
   including earlier compactions and assignments. An aside exports its admitted
   frozen main prefix plus its own history, not main messages arriving later.
-  Durable SQLite selection follows compaction and load-copy ancestry,
+  Durable SQLite selection follows compaction and frozen-fork ancestry,
   deduplicates source identities and excludes sibling branches and unrelated
   actors. An admitted omitted child completion also includes its exact source
   event, preserving answers, failure details and transcript paths without

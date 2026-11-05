@@ -13,14 +13,21 @@ import (
 // Filtering by JSON fields here would change encoding/json's case-insensitive
 // field matching and error behavior; decode only the matching envelope candidates.
 const recoveryInstructionQuery = `WITH RECURSIVE ancestry(id,parent_id) AS (
-	SELECT e.id,e.parent_id FROM sessions s JOIN entries e ON e.id=s.active_entry_id AND e.session_id=s.id WHERE s.id=?
-	UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id
+	SELECT e.id,e.parent_id FROM sessions s JOIN entries e ON e.id=s.active_entry_id WHERE s.id=?
+	UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id AND e.id<a.id
 ) SELECT e.id,e.created_ms,e.content_json
 	FROM ancestry a CROSS JOIN entries e
-	WHERE e.id=a.id AND e.actor_id=? AND e.kind='message' AND e.role=? ORDER BY e.id`
+	WHERE e.id=a.id AND e.actor_id=? AND e.kind='message' AND e.role=?
+	AND (e.actor_id<>'main' OR (e.model_visible=1 AND e.id>?)) ORDER BY e.id`
 
 func findRecoveryInstruction(q historyReader, session, actor string, message llm.Message) (CommittedMessage, bool, error) {
-	rows, err := q.Query(recoveryInstructionQuery, session, actor, message.Role())
+	base, err := forkBaseWith(q, session)
+	if err != nil {
+		return CommittedMessage{}, false, err
+	}
+	// Main runtime instructions inherited through a manual base are historical
+	// evidence, not effective model input. They cannot satisfy a live warning.
+	rows, err := q.Query(recoveryInstructionQuery, session, actor, message.Role(), base)
 	if err != nil {
 		return CommittedMessage{}, false, err
 	}

@@ -67,11 +67,22 @@ def static_directive():
 
 
 def visible_messages(db, session):
+    """Read this fixture's exact selected input, including a frozen shared prefix."""
     messages = []
-    for raw, created in db.execute(
-            'SELECT content_json,created_ms FROM entries WHERE session_id=? AND model_visible=1 ORDER BY id',
+    inherited_runtime = {'runtime_context', 'compaction_context', 'runtime_notification',
+                         'runtime_instruction', 'child_guidance'}
+    for owner, kind, raw, created in db.execute(
+            'WITH RECURSIVE ancestry(id,parent_id) AS ('
+            'SELECT e.id,e.parent_id FROM sessions s JOIN entries e ON e.id=s.active_entry_id WHERE s.id=? '
+            'UNION ALL SELECT e.id,e.parent_id FROM ancestry a JOIN entries e ON e.id=a.parent_id) '
+            'SELECT e.session_id,e.kind,e.content_json,e.created_ms FROM ancestry a JOIN entries e ON e.id=a.id '
+            'WHERE e.model_visible=1 ORDER BY e.id',
             (session,)):
         message = json.loads(raw)
+        # Manual forks mask inherited runtime messages for model input without
+        # changing their canonical rows. Local runtime input and summaries stay.
+        if owner != session and kind == 'message' and message['type'] in inherited_runtime:
+            continue
         if message['type'] == 'user_input':
             # Store.Messages projects the immutable original commit timestamp
             # rather than trusting any timestamp supplied in content_json.

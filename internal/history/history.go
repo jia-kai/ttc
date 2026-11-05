@@ -484,6 +484,8 @@ func (s *Store) Append(session, turn, actor, kind, role string, visible bool, da
 }
 
 // Branch returns selected ancestry through tip (zero means the session's tip).
+// Physical identity/content are unchanged; inherited entries have fork-local
+// model visibility and a zero restoration file baseline.
 func (s *Store) Branch(session string, tip int64) ([]Entry, error) {
 	return branchWith(s.db, session, tip, false)
 }
@@ -496,19 +498,24 @@ func branchWith(q historyReader, session string, tip int64, visibleOnly bool) ([
 		if e := q.QueryRow("SELECT coalesce(active_entry_id,0) FROM sessions WHERE id=?", session).Scan(&tip); e != nil {
 			return nil, e
 		}
+	} else if err := validateHistoryTip(q, session, tip); err != nil {
+		return nil, err
 	}
 	rows, e := q.Query(`WITH RECURSIVE ancestry(id,parent_id) AS (
-		SELECT id,parent_id FROM entries WHERE id=? AND session_id=?
-		UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id
+		SELECT id,parent_id FROM entries WHERE id=?
+		UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id WHERE e.id<a.id
 	) SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),coalesce(e.file_tip_id,0),
 		e.session_id,coalesce(e.turn_id,''),e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,
-		e.content_json,e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
-		FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND (?=0 OR e.model_visible=1) ORDER BY e.id`, tip, session, visibleOnly)
+		CASE WHEN ?=1 AND e.session_id<>? AND e.kind='message' THEN `+forkCanonicalJSON+` ELSE e.content_json END,
+		e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
+		FROM ancestry a CROSS JOIN entries e WHERE e.id=a.id AND (?=0 OR e.model_visible=1) ORDER BY e.id`, tip, visibleOnly, session, visibleOnly)
 	if e != nil {
 		return nil, e
 	}
 	defer rows.Close()
 	var out []Entry
+	var bodies []int64
+	indices := map[int64]int{}
 	for rows.Next() {
 		var v Entry
 		var content string
@@ -516,6 +523,21 @@ func branchWith(q historyReader, session string, tip int64, visibleOnly bool) ([
 			return nil, e
 		}
 		v.Content = json.RawMessage(content)
+		if v.Parent >= v.ID {
+			return nil, fmt.Errorf("invalid history parent #%d for #%d", v.Parent, v.ID)
+		}
+		if err := projectForkEntry(session, &v); err != nil {
+			return nil, err
+		}
+		if visibleOnly && !v.Visible {
+			continue
+		}
+		if visibleOnly && v.SessionID != session && v.Kind == "message" {
+			// Classification never transfers inherited runtime bodies. Only rows
+			// surviving the canonical decoder acquire their exact original bytes.
+			bodies = append(bodies, v.ID)
+			indices[v.ID] = len(out)
+		}
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -523,6 +545,33 @@ func branchWith(q historyReader, session string, tip int64, visibleOnly bool) ([
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
+	}
+	if len(bodies) != 0 {
+		encoded, err := json.Marshal(bodies)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := q.Query(`SELECT e.id,e.content_json FROM json_each(?) selected CROSS JOIN entries e ON e.id=selected.value`, string(encoded))
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			var id int64
+			var content string
+			if err := rows.Scan(&id, &content); err != nil {
+				return nil, err
+			}
+			out[indices[id]].Content = json.RawMessage(content)
+			count++
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if count != len(bodies) {
+			return nil, errors.New(prompts.HistoryTranscriptTip)
+		}
 	}
 	return out, nil
 }

@@ -9,6 +9,8 @@ import (
 // resetSchema9 restores the previous index boundary without changing evidence.
 func resetSchema9(t *testing.T, db *sql.DB) {
 	t.Helper()
+	exec(t, db, "ALTER TABLE sessions DROP COLUMN base_entry_id")
+	exec(t, db, "ALTER TABLE sessions DROP COLUMN base_session_id")
 	// Restore the table boundary too; changing user_version alone does not
 	// turn a current fixture into a valid historical database.
 	exec(t, db, "DROP TABLE request_observations")

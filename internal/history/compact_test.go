@@ -366,7 +366,13 @@ func TestUndoRejectsForeignOrUnselectedCheckpoint(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				if _, err := s.db.Exec("UPDATE turns SET start_entry_id=? WHERE id=?", loaded.EntryTip, turn); err != nil {
+				// The imported tip is selected in both histories. Create a
+				// fork-local row that is genuinely outside the source ancestry.
+				unselected, err := s.Append(loaded.ID, "", "main", "status", "", false, map[string]string{"text": "fork-only checkpoint"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.db.Exec("UPDATE turns SET start_entry_id=? WHERE id=?", unselected, turn); err != nil {
 					t.Fatal(err)
 				}
 			}

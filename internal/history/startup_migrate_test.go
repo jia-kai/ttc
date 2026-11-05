@@ -100,6 +100,8 @@ func testOpenWaitsForLifetimeReader(t *testing.T, oldVersion int) {
 	fixture := schema5Fixture
 	if oldVersion == 10 {
 		fixture = schema + `
+		ALTER TABLE sessions DROP COLUMN base_entry_id;
+		ALTER TABLE sessions DROP COLUMN base_session_id;
 		DROP TABLE request_observations;
 		ALTER TABLE model_requests DROP COLUMN admission_entry_id;
 		ALTER TABLE model_requests DROP COLUMN system_prompt_entry_id;

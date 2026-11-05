@@ -259,9 +259,12 @@ every exit path, full-column rendering, and keyboard questions.
 
 `python3 tests/pty_parallel.py` runs simultaneous instances against one data
 root and workspace, checks independent manual loads, and verifies that restart
-leaves unfinished source records unchanged. `pty_history.py` checks multi-term
-Ctrl-R recall. Search benchmarks use bounded synthetic prompts by default; set
-`TTC_PROMPT_BENCH_DATA` to a private JSON string array to use local prompts.
+leaves unfinished source records unchanged. `pty_fork.py` checks that loading
+adds no historical entry rows, concurrently live source/fork instances continue
+independently, and nested forks retain their frozen prefixes. `pty_history.py`
+checks multi-term Ctrl-R recall. Search benchmarks use bounded synthetic prompts
+by default; set `TTC_PROMPT_BENCH_DATA` to a private JSON string array to use
+local prompts.
 
 The offline `python3 tests/pty_input.py` regression also runs a reproducible
 file/shell fixture, launches `/btw explain result.py` while its foreground shell

@@ -49,7 +49,7 @@ func (s *Store) ReadReplay(ctx context.Context, session string, explicitTip int6
 	if tip == 0 {
 		tip = current
 	}
-	if err := validateTranscriptTip(q, session, tip); err != nil {
+	if err := validateHistoryTip(q, session, tip); err != nil {
 		return Replay{}, err
 	}
 	if tip == 0 {

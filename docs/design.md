@@ -665,7 +665,7 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   atomic exclusive creation with mode 0600. Contents stream into the created
   file and may be partially visible before success; there is no final-rename
   publication guarantee. Serialization streams, but selected entry payloads
-  remain buffered. SQLite selection follows compaction and load-copy ancestry
+  remain buffered. SQLite selection follows compaction and frozen-fork ancestry
   and deduplicates source identities, never traversing sibling branches or
   unrelated actors. Main selects main history, children their own history across
   assignments, and asides their recorded frozen main prefix plus their own
@@ -708,12 +708,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   while shared parents remain nonempty. Historical file records never grant
   cleanup authority. Removal checks identity through parent descriptors and is
   directory-only; external replacement can still race the identity check.
-- Loading writable history snapshots its selected ancestry through the last
-  balanced main tool exchange into an independent session, sharing immutable
-  lineage assets. It preserves source records and retained-input provenance,
-  hides old live runtime messages from model input, and establishes an undo
-  boundary at the imported tip. Archived predecessors remain read-only. No
-  files, tools or live handles are restored.
+- Loading writable history creates an independent session sharing the selected
+  ancestry through the last balanced main tool exchange. `base_session_id` and
+  `base_entry_id` store the logical source and frozen cut, not its mutable
+  cursor. Reads follow shared parent links; writes append session-owned entries.
+  The fork shares immutable lineage assets and preserves source records and
+  input provenance, hides old live runtime messages from model input, and
+  establishes an undo boundary at the imported tip. Archived predecessors remain
+  read-only. No files, tools or live handles are restored.
 - File writes use same-directory temporary files and atomic per-file renames.
   Multi-file edits/restores and their SQL commits are independent: partial edits
   record their applied subset when possible and report actual effects even if
@@ -730,10 +732,10 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 13;
-  startup supports schemas 5–13 and runs ordered, adjacent upgrades (5 → 6 → 7 →
-  8 → 9 → 10 → 11 → 12 → 13) in one transaction, validating before commit. Each
-  step reports its own progress; completion of a step is not a committed
+- Empty databases initialize in one immediate transaction. Current schema is 14;
+  startup supports schemas 5–14 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9 → 10 → 11 → 12 → 13 → 14) in one transaction, validating before commit.
+  Each step reports its own progress; completion of a step is not a committed
   upgrade. Rebuilding entries temporarily indexes all incoming foreign-key
   lookups to avoid per-entry table scans. Schemas below 5, nonempty unversioned
   databases and unknown newer versions fail explicitly; no automatic resets or
@@ -774,7 +776,11 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   The 12 → 13 step normalizes compaction-message role indexes from `developer`
   to `user`, preserving canonical content, source identities and original
   request/response evidence. Runtime role checks remain strict; no historical
-  role fallback is needed after migration.
+  role fallback is needed after migration. The 13 → 14 step adds nullable
+  session-base references without rewriting or deduplicating history. Existing
+  copied sessions retain their recorded evidence; new manual loads share frozen
+  prefixes. This step changes schema metadata only, independent of history
+  payload size.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting
@@ -812,9 +818,12 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   agreement. Compaction copies source IDs/shared change references without
   reapply. Resolve retained checkpoints through source IDs in the continuation;
   if removed, use its summary baseline. Freeze predecessor and insert
-  continuation in one transaction. Manual copies can have independent writable
+  continuation in one transaction. Manual forks can have independent writable
   siblings in the same lineage; active request completions follow their own
-  compaction successor chain.
+  compaction successor chain. Manual base links grant readable ancestry, never
+  source-runtime completion or notification acknowledgment rights. Logical
+  membership includes local branches and frozen base ancestors only, not later
+  source work or sibling branches.
 - Use keyset pagination, indexed tool lookup and recursive ancestry/change CTEs.
   Export the latest saved tool record at/before its cut. Persist compact final
   request metadata/usage/response IDs and linked retry notices. Save inspectable
@@ -835,18 +844,18 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   An hourly activity-only heartbeat protects idle loaded sessions from other
   instances' startup sweeps; lifecycle commands also refresh loaded activity.
   Failures appear as UI-only warnings and may occur after history deletions have
-  committed. Copies protect shared ancestry/assets. Startup statistics (physical
-  database plus WAL bytes, estimated entry count, oldest-entry age) are UI-only
-  status, not model input or a new persisted conversation entry. The estimate is
-  the surviving maximum entry ID minus minimum ID plus one (zero when empty), so
-  deletion gaps can inflate it. Separate indexed endpoint and timestamp lookups
-  avoid full-history aggregates. Prompt recall uses a partial authored-input
-  index; session lists seek by workspace and activity. Migration and maintenance
-  report progress on startup stderr; candidate counts are tentative until
-  commit, and phases without known work totals show no percentage. Final
-  warnings and statistics use ordinary frontend status events. Signals cancel
-  maintenance, but initialization and schema migration do not observe the signal
-  context.
+  committed. Loaded forks protect their whole lineage's history and assets.
+  Startup statistics (physical database plus WAL bytes, estimated entry count,
+  oldest-entry age) are UI-only status, not model input or a new persisted
+  conversation entry. The estimate is the surviving maximum entry ID minus
+  minimum ID plus one (zero when empty), so deletion gaps can inflate it.
+  Separate indexed endpoint and timestamp lookups avoid full-history aggregates.
+  Prompt recall uses a partial authored-input index; session lists seek by
+  workspace and activity. Migration and maintenance report progress on startup
+  stderr; candidate counts are tentative until commit, and phases without known
+  work totals show no percentage. Final warnings and statistics use ordinary
+  frontend status events. Signals cancel maintenance, but initialization and
+  schema migration do not observe the signal context.
 
 ## Validation
 
@@ -1034,7 +1043,7 @@ The concrete boundaries above are TTC decisions, informed by:
 - `/sessions`/Ctrl-X L queries at most 100 workspace-filtered metadata rows, not
   transcripts. Group local activity dates: Today, Yesterday, six prior weekdays,
   then ISO dates. Headers cannot select; click selects, Enter uses idle `/load`.
-- `/load` and `--session` copy writable SQLite history before activation,
+- `/load` and `--session` fork writable SQLite history before activation,
   without requiring compaction archives. Failed preparation leaves the prior
   runtime usable; read-only history stays immutable. Every coding request uses
   current system instructions.

@@ -198,10 +198,10 @@
   Undo must include async edits after the latest human checkpoint; redo restores
   snapshots, never tool execution. Restoration requires idle/stopped work and
   rejects file conflicts. Shell/outside-workspace effects are non-undoable.
-- Session loading must copy balanced history without restoring files/live work;
-  only new work is undoable. No crash repair or cross-instance workspace
-  locking. The complete branch, restore, load and compaction-baseline contract
-  is
+- Session loading must fork balanced history using a shared frozen prefix,
+  without restoring files/live work; only new work is undoable. No crash repair
+  or cross-instance workspace locking. The complete branch, restore, load and
+  compaction-baseline contract is
   [serialized edits and shared undo](design.md#serialized-edits-and-shared-undo).
 
 ## `@` attachments

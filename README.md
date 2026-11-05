@@ -253,11 +253,14 @@ cancels.
 
 Multiple TTC instances can share the default data directory and the same
 workspace. Each starts an independent conversation; workspace conflicts are your
-responsibility. `/load ID` or `--session ID` copies writable history into a new
-session at its last complete tool exchange, with only new work undoable.
-Archived predecessors open read-only. Loading never restores files or live jobs.
-TTC does not repair interrupted work; files can be ahead of saved history after
-a crash.
+responsibility. Session history is a tree: `/load ID` or `--session ID` forks
+writable history into a new session, sharing a frozen prefix through its last
+complete tool exchange. Later work diverges independently, and only new work is
+undoable.
+
+Archived predecessors remain read-only. Loading restores neither files nor live
+jobs and does not repair interrupted work; after a crash, files may be ahead of
+saved history.
 
 At a compaction boundary, loading also recovers saved, undelivered notifications
 (including completed subagent answers) and automatically resumes their delivery.

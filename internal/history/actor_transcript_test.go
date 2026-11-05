@@ -200,7 +200,7 @@ func TestArchiveActorTranscriptFollowsSelectedCutsOnly(t *testing.T) {
 		want    []int64
 	}{
 		{"continuation", continued.ID, []int64{first, second, third}},
-		// Copied summaries retain their selected frozen source ancestry.
+		// Shared summaries retain their selected frozen source ancestry.
 		{"manual_snapshot", snapshot.ID, []int64{first, second, third}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

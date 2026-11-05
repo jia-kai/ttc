@@ -33,7 +33,7 @@ func TestRecoveryInstructionQueryExcludesLargeUnrelatedBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.db.Query(recoveryInstructionQuery, saved.ID, "main", warning.Role())
+	rows, err := s.db.Query(recoveryInstructionQuery, saved.ID, "main", warning.Role(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRecoveryInstructionQueryExcludesLargeUnrelatedBodies(t *testing.T) {
 	if count != 1 {
 		t.Fatal("unexpected recovery candidates", count)
 	}
-	plan, err := s.db.Query("EXPLAIN QUERY PLAN "+recoveryInstructionQuery, saved.ID, "main", warning.Role())
+	plan, err := s.db.Query("EXPLAIN QUERY PLAN "+recoveryInstructionQuery, saved.ID, "main", warning.Role(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

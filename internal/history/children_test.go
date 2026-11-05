@@ -198,8 +198,8 @@ func TestChildRecoveryPreservesCanonicalBodyAndOriginalEvidence(t *testing.T) {
 					t.Fatal("changed canonical recovery body", string(notices[0].Body))
 				}
 				var copiedMessage string
-				if err := s.db.QueryRow("SELECT content_json FROM entries WHERE session_id=? AND source_id=?", loaded.ID, messageID).Scan(&copiedMessage); err != nil || !strings.Contains(copiedMessage, `\"status\":\"completed\"`) || strings.Contains(copiedMessage, "assignment_status") {
-					t.Fatal("rewrote copied message evidence", copiedMessage, err)
+				if err := s.db.QueryRow("SELECT content_json FROM entries WHERE id=?", messageID).Scan(&copiedMessage); err != nil || !strings.Contains(copiedMessage, `\"status\":\"completed\"`) || strings.Contains(copiedMessage, "assignment_status") {
+					t.Fatal("rewrote shared message evidence", copiedMessage, err)
 				}
 				current = loaded
 			}

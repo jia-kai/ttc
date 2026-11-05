@@ -12,7 +12,7 @@ import (
 	"ttc/internal/llm"
 )
 
-func TestLoadCopiesImmutableEntriesAndAdvancesCursorOnce(t *testing.T) {
+func TestLoadSharesFrozenEntriesWithoutHistoricalWrites(t *testing.T) {
 	s, source, turn, request := historyFixture(t)
 	call, err := s.CallIntent(source.ID, turn, "main", request, llm.ToolCall{ID: "synthetic", Name: "write", Arguments: json.RawMessage(`{}`)})
 	if err != nil {
@@ -39,10 +39,10 @@ func TestLoadCopiesImmutableEntriesAndAdvancesCursorOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A copy is append-only. Neither old nor newly copied entry timestamps need
-	// a follow-up UPDATE; the destination cursor should change once per prefix.
+	// Ordinary forks write only session metadata, never historical payload rows.
 	if _, err := s.db.Exec(`CREATE TABLE load_cursor_updates(id INTEGER);
  CREATE TRIGGER load_no_entry_updates BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT,'entry update during load'); END;
+ CREATE TRIGGER load_no_entry_inserts BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT,'historical entry insert during load'); END;
  CREATE TRIGGER load_cursor_update AFTER UPDATE OF active_entry_id ON sessions BEGIN INSERT INTO load_cursor_updates VALUES(new.active_entry_id); END;`); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,6 @@ func TestLoadCopiesImmutableEntriesAndAdvancesCursorOnce(t *testing.T) {
 		if len(after) != len(before) || loaded.UndoFloor != loaded.EntryTip || loaded.FileTip != 0 {
 			t.Fatal("invalid imported baseline", loaded, len(after), len(before))
 		}
-		var parent int64
 		for i, got := range after {
 			want := before[i]
 			visible := want.Visible
@@ -71,26 +70,22 @@ func TestLoadCopiesImmutableEntriesAndAdvancesCursorOnce(t *testing.T) {
 					visible = false
 				}
 			}
-			if got.Parent != parent || got.Source != want.EventSeq() || got.Visible != visible || got.CreatedMS != want.CreatedMS || string(got.Content) != string(want.Content) || got.TurnID != want.TurnID || got.MainTurnID != want.MainTurnID || got.UndoOwnerTurnID != want.UndoOwnerTurnID || got.FileTip != 0 || got.Actor != want.Actor || got.Kind != want.Kind || got.Role != want.Role {
-				t.Fatalf("copy changed historical evidence: got %+v, want %+v", got, want)
+			if got.ID != want.ID || got.Parent != want.Parent || got.Source != want.Source || got.SessionID != want.SessionID || got.Visible != visible || got.CreatedMS != want.CreatedMS || string(got.Content) != string(want.Content) || got.TurnID != want.TurnID || got.MainTurnID != want.MainTurnID || got.UndoOwnerTurnID != want.UndoOwnerTurnID || got.FileTip != 0 || got.Actor != want.Actor || got.Kind != want.Kind || got.Role != want.Role {
+				t.Fatalf("fork changed historical evidence: got %+v, want %+v", got, want)
 			}
-			parent = got.ID
 		}
 		var acknowledged int
 		if err := s.db.QueryRow("SELECT count(*) FROM entries WHERE session_id=? AND delivered_request_id IS NOT NULL", loaded.ID).Scan(&acknowledged); err != nil || acknowledged != 0 {
 			t.Fatal("copy retained delivery acknowledgments", acknowledged, err)
 		}
-		// The second load must resolve source identities and ownership from original
-		// rows, even when an intermediate copy has different indexed ownership.
-		if _, err := s.db.Exec(`DROP TRIGGER load_no_entry_updates;
-  UPDATE entries SET main_turn_id=NULL,undo_owner_turn_id=NULL WHERE session_id=?;
-  CREATE TRIGGER load_no_entry_updates BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT,'entry update during load'); END;`, loaded.ID); err != nil {
-			t.Fatal(err)
+		var owned int
+		if err := s.db.QueryRow("SELECT count(*) FROM entries WHERE session_id=?", loaded.ID).Scan(&owned); err != nil || owned != 0 {
+			t.Fatal("fork copied historical rows", owned, err)
 		}
 		source = loaded
 	}
 	var updates int
-	if err := s.db.QueryRow("SELECT count(*) FROM load_cursor_updates").Scan(&updates); err != nil || updates != 2 {
+	if err := s.db.QueryRow("SELECT count(*) FROM load_cursor_updates").Scan(&updates); err != nil || updates != 0 {
 		t.Fatal("cursor was updated per entry", updates, err)
 	}
 	unchanged, err := s.Branch(before[0].SessionID, 0)
@@ -102,7 +97,7 @@ func TestLoadCopiesImmutableEntriesAndAdvancesCursorOnce(t *testing.T) {
 	}
 }
 
-func TestLoadRollsBackMalformedCanonicalCopy(t *testing.T) {
+func TestLoadRejectsMalformedCanonicalMessage(t *testing.T) {
 	for _, body := range []string{`{"type":"assistant","content":123}`, `{"type":"user_input","content":"wrong indexed role"}`} {
 		t.Run(body, func(t *testing.T) {
 			s, source, turn, _ := historyFixture(t)

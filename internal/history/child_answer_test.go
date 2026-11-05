@@ -94,11 +94,10 @@ func TestReadChildAnswerUsesImmutableAssignmentMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var copied int64
-			if err := s.db.QueryRow("SELECT id FROM entries WHERE session_id=? AND source_id=?", loaded.ID, id).Scan(&copied); err != nil {
+			if err := validateHistoryTip(s.db, loaded.ID, id); err != nil {
 				t.Fatal(err)
 			}
-			check(copied)
+			check(id)
 		})
 	}
 }

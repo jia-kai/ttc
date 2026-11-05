@@ -50,10 +50,17 @@ func TestSchema12CompactionRoleMigrationPreservesCanonicalAndAuditEvidence(t *te
 			before := databaseEvidence(t, db)
 			tx := transaction(t, db)
 			var events []Progress
-			if err := Apply(tx, func(event Progress) { events = append(events, event) }); err != nil {
+			progress := &progressReporter{report: func(event Progress) { events = append(events, event) }, value: Progress{FromVersion: 12, ToVersion: 13}}
+			if err := upgrade12(tx, progress); err != nil {
 				t.Fatal(err)
 			}
-			checkProgress(t, events, 12)
+			if _, err := tx.Exec("PRAGMA user_version=13"); err != nil {
+				t.Fatal(err)
+			}
+			progress.finish()
+			if len(events) < 2 || events[len(events)-1].Phase != "complete" || events[len(events)-1].ToVersion != 13 {
+				t.Fatal("incomplete role migration progress", events)
+			}
 			if commit {
 				if err := tx.Commit(); err != nil {
 					t.Fatal(err)

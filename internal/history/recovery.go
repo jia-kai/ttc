@@ -9,82 +9,33 @@ import (
 	"sort"
 )
 
-// recoveryEvent is a new semantic event owned by a manual snapshot. Source
-// chronology remains copied history; only this original row can be acknowledged.
+// recoveryEvent is a new semantic event owned by a manual fork. Source chronology
+// remains immutable evidence; only the new original row can be acknowledged.
 type recoveryEvent struct {
 	Type          string          `json:"type"`
 	Body          json.RawMessage `json:"body"`
 	RecoveredFrom int64           `json:"recovered_from_event_seq,omitempty"`
 }
 
-// compactionBoundaryWith examines selected chronology, not the session's newest
-// request on an abandoned branch. A summary or prior recovery marks a handoff
-// even when the preceding compaction request was outside the retained suffix.
-func compactionBoundaryWith(q historyReader, entries []Entry) (bool, error) {
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		if e.Actor != "main" {
-			continue
-		}
-		if e.Kind == "summary" {
-			return true, nil
-		}
-		if e.Kind != "status" {
-			continue
-		}
-		var marker struct {
-			Type    string `json:"type"`
-			Request int64  `json:"request_id"`
-		}
-		if err := json.Unmarshal(e.Content, &marker); err != nil {
-			return false, err
-		}
-		if marker.Type == "compaction_recovery" || marker.Type == "compaction_started" {
-			return true, nil
-		}
-		if marker.Type != "request_admitted" {
-			continue
-		}
-		var actor, purpose string
-		if err := q.QueryRow("SELECT actor_id,purpose FROM model_requests WHERE id=?", marker.Request).Scan(&actor, &purpose); err != nil {
-			return false, fmt.Errorf("recovery request: %w", err)
-		}
-		if actor != "main" || purpose == "naming" {
-			continue
-		}
-		return purpose == "compaction", nil
-	}
-	return false, nil
-}
-
-// recoveryAncestryWith includes only the selected branch of each frozen
-// predecessor. Summarized pending events still belong to a continuation's live
-// runtime, but sibling branches and manual snapshot source sessions do not.
-func recoveryAncestryWith(q historyReader, session string, entries []Entry) ([]Entry, error) {
-	out := append([]Entry(nil), entries...)
-	seen := map[string]bool{session: true}
+// recoveryOwnersWith selects live delivery ownership, not readable payload
+// ancestry. A manual base is deliberately not an ancestor of the live runtime.
+func recoveryOwnersWith(q historyReader, session string) (map[string]bool, error) {
+	owners := map[string]bool{}
 	for {
-		var predecessor string
-		var tip int64
-		err := q.QueryRow("SELECT predecessor_id,source_tip_id FROM compactions WHERE continuation_id=?", session).Scan(&predecessor, &tip)
-		if errors.Is(err, sql.ErrNoRows) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		if seen[predecessor] {
+		if owners[session] {
 			return nil, errors.New("cyclic compaction ancestry")
 		}
-		seen[predecessor] = true
-		branch, err := branchWith(q, predecessor, tip, false)
+		owners[session] = true
+		var predecessor string
+		err := q.QueryRow("SELECT predecessor_id FROM compactions WHERE continuation_id=?", session).Scan(&predecessor)
+		if errors.Is(err, sql.ErrNoRows) {
+			return owners, nil
+		}
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, branch...)
 		session = predecessor
 	}
-	return out, nil
 }
 
 // recoveryBody rejects non-object payloads instead of turning damaged durable
@@ -113,7 +64,11 @@ func recoveryBody(body json.RawMessage) (map[string]json.RawMessage, error) {
 	return object, nil
 }
 
-func recoveryCandidatesWith(q historyReader, entries, visible []Entry) ([]recoveryEvent, error) {
+func recoveryCandidatesWith(q historyReader, session string, entries, visible []Entry) ([]recoveryEvent, error) {
+	owners, err := recoveryOwnersWith(q, session)
+	if err != nil {
+		return nil, err
+	}
 	carried := map[int64]bool{}
 	for _, e := range visible {
 		if !e.Visible || e.Kind != "tool_result" || e.Actor != "main" {
@@ -138,6 +93,7 @@ func recoveryCandidatesWith(q historyReader, entries, visible []Entry) ([]recove
 	}
 	unique := map[int64]Entry{}
 	superseded := map[int64]bool{}
+	originalOwners := map[int64]string{}
 	for _, e := range entries {
 		if e.Kind != "status" {
 			continue
@@ -147,6 +103,24 @@ func recoveryCandidatesWith(q historyReader, entries, visible []Entry) ([]recove
 			return nil, err
 		}
 		if event.Type != "runtime_event" && event.Type != "child_turn_finished" {
+			continue
+		}
+		owner := e.SessionID
+		if e.Source != 0 {
+			var ok bool
+			owner, ok = originalOwners[e.Source]
+			if !ok {
+				if err := q.QueryRow("SELECT session_id FROM entries WHERE id=?", e.Source).Scan(&owner); err != nil {
+					return nil, err
+				}
+				originalOwners[e.Source] = owner
+			}
+		}
+		// Shared originals and legacy copies are readable history, not live
+		// events, unless their semantic owner belongs to this runtime's actual
+		// compaction chain. Copies may be the only selected evidence of a live
+		// arrival after the predecessor's frozen summary cut.
+		if !owners[owner] {
 			continue
 		}
 		if event.RecoveredFrom < 0 || event.RecoveredFrom >= e.EventSeq() {
@@ -240,7 +214,7 @@ type PendingNotification struct {
 }
 
 // PendingRecoveryNotifications returns undelivered notifications created by a
-// boundary-recovery load. It never writes, projects, or acknowledges events.
+// boundary-recovery fork. It never writes, projects, or acknowledges events.
 // Ordinary sessions, read-only predecessors and fatal contexts return no notices.
 func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string) ([]PendingNotification, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -264,16 +238,19 @@ func (s *Store) PendingRecoveryNotifications(ctx context.Context, session string
 			return nil, errors.New("cyclic compaction ancestry")
 		}
 		seen[session] = true
+		if err := validateHistoryTip(tx, session, tip); err != nil {
+			return nil, err
+		}
 		// Traverse selected parent IDs without loading model/tool payloads. Only
-		// original undelivered recovery events belong to this runtime; copied
-		// originals are found in its frozen predecessor, not a manual-load source.
+		// original undelivered recovery events owned by this live compaction
+		// chain are eligible. Shared manual bases are only readable evidence.
 		// CROSS JOIN fixes lookup order: selected IDs drive primary-key probes
 		// rather than SQLite scanning the entire shared entries table.
 		rows, err := tx.QueryContext(ctx, `WITH RECURSIVE selected(id,parent_id) AS (
-			SELECT id,parent_id FROM entries WHERE id=? AND session_id=?
-			UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN selected a ON e.id=a.parent_id
+			SELECT id,parent_id FROM entries WHERE id=?
+			UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN selected a ON e.id=a.parent_id AND e.id<a.id
 		) SELECT e.id,e.content_json FROM selected a CROSS JOIN entries e ON e.id=a.id
-		WHERE e.source_id IS NULL AND e.delivered_request_id IS NULL AND e.kind='status'
+		WHERE e.session_id=? AND e.source_id IS NULL AND e.delivered_request_id IS NULL AND e.kind='status'
 		AND json_extract(e.content_json,'$.type')='runtime_event'
 		AND coalesce(json_extract(e.content_json,'$.recovered_from_event_seq'),0)<>0`, tip, session)
 		if err != nil {

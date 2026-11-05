@@ -282,7 +282,7 @@ func runAgent(parent context.Context, opts launchOptions, factory providers.Fact
 		fmt.Fprintln(os.Stderr, "ttc:", notice)
 	}
 	// Persist the startup choice before a writable load can record its switch.
-	// Loading itself (validation, copying and activation) is owned by the runtime.
+	// Loading itself (validation, forking and activation) is owned by the runtime.
 	var source history.Session
 	if opts.load != "" {
 		source, e = store.Session(opts.load)

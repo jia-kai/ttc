@@ -25,6 +25,7 @@ integration: build
 	python3 tests/pty_control_strings.py
 	python3 tests/pty_history.py
 	python3 tests/pty_parallel.py
+	python3 tests/pty_fork.py
 	python3 tests/pty_compaction.py
 	python3 tests/pty_compaction_reload.py
 	python3 tests/pty_force_compaction.py

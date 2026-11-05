@@ -150,13 +150,13 @@ func TestLoadCompactionBoundaryOwnsFreshPendingEvents(t *testing.T) {
 			for _, entry := range entries {
 				if entry.EventSeq() == child {
 					found = true
-					if entry.Source != child {
+					if entry.ID != child || entry.Source != 0 || entry.SessionID != source.ID {
 						t.Fatal(entry)
 					}
 				}
 			}
 			if !found {
-				t.Fatal("missing copied source chronology")
+				t.Fatal("missing shared source chronology")
 			}
 			if got := sourceRecoveryState(t, s, source.ID); got != before {
 				t.Fatal("load changed source", got, before)

@@ -123,7 +123,7 @@ func TestChildResponseLoadAndLoadOfLoadResolveExactOriginalSource(t *testing.T) 
 						t.Fatal("not an independent same-lineage load", loaded)
 					}
 					current = loaded
-					if err := s.db.QueryRow("SELECT id FROM entries WHERE session_id=? AND source_id=?", current.ID, envelope).Scan(&entryID); err != nil {
+					if err := validateHistoryTip(s.db, current.ID, envelope); err != nil {
 						t.Fatal(err)
 					}
 				}

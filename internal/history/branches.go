@@ -50,7 +50,18 @@ func (s *Store) HistoryTree(ctx context.Context, session string) (BranchTree, er
 		return BranchTree{}, err
 	}
 	tree.Nodes = []BranchNode{{Label: "Start of session", Restorable: !readOnly && invalid == "" && floor == 0}}
-	rows, err := tx.QueryContext(ctx, `SELECT e.id,coalesce(e.parent_id,0),e.actor_id,e.kind,coalesce(e.role,''),
+	base, err := forkBaseWith(tx, session)
+	if err != nil {
+		return BranchTree{}, err
+	}
+	// Local branches are indexed by owner. Inherited inspection is restricted to
+	// the frozen base ancestry, never the source's later or abandoned branches.
+	rows, err := tx.QueryContext(ctx, `WITH RECURSIVE inherited(id,parent_id) AS (
+		SELECT id,parent_id FROM entries WHERE id=?
+		UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN inherited a ON e.id=a.parent_id AND e.id<a.id
+	), tree_ids(id) AS (
+		SELECT id FROM entries WHERE session_id=? UNION SELECT id FROM inherited
+	) SELECT e.id,coalesce(e.parent_id,0),e.actor_id,e.kind,coalesce(e.role,''),
 		substr(coalesce(CASE WHEN e.kind='tool_result' THEN json_extract(r.markdown_json,'$.summary')
 		WHEN e.kind='tool_call' THEN c.name || ' · call'
 		WHEN e.kind='status' AND json_extract(e.content_json,'$.type')='system_prompt' THEN 'System prompt'
@@ -60,10 +71,10 @@ func (s *Store) HistoryTree(ctx context.Context, session string) (BranchTree, er
 		WHEN e.model_visible=1 AND e.kind='tool_result' THEN -1 ELSE 0 END,
 		(e.kind='message' AND e.role='user' AND e.actor_id='main' AND e.model_visible=1
 		AND json_extract(e.content_json,'$.type')='user_input' AND coalesce(t.trigger IN ('user','steer'),0))
-		FROM entries e LEFT JOIN tool_records r ON r.entry_id=e.id
+		FROM tree_ids ids CROSS JOIN entries e ON e.id=ids.id LEFT JOIN tool_records r ON r.entry_id=e.id
 		LEFT JOIN tool_calls c ON c.id=json_extract(e.content_json,'$.call_id')
 		LEFT JOIN turns t ON t.id=e.turn_id
-		WHERE e.session_id=? ORDER BY e.id`, session)
+		ORDER BY e.id`, base, session)
 	if err != nil {
 		return BranchTree{}, err
 	}
@@ -132,7 +143,7 @@ func (s *Store) HistoryTree(ctx context.Context, session string) (BranchTree, er
 	return tree, tx.Commit()
 }
 
-// PlanBranch selects a complete main-tool boundary owned by the session. It
+// PlanBranch selects a complete main-tool boundary available to the session. It
 // saves the current branch for redo, or preserves redo when reselecting the active
 // node. It never changes history, files or live runtime state.
 func (s *Store) PlanBranch(session string, id int64) (RestorePlan, error) {

@@ -108,7 +108,7 @@ func TestMainUsageCheckpointAndImmutableCompletion(t *testing.T) {
 	}
 }
 
-func TestMainUsageLegacyCopiesRestoreOriginalAdmission(t *testing.T) {
+func TestMainUsageSharedForksRestoreOriginalAdmissionWithoutCheckpoint(t *testing.T) {
 	s, original, turn := usageFixture(t)
 	admitted := admitUsage(t, s, original, turn, false)
 	const system = "Exact original system instructions.\n"
@@ -127,12 +127,12 @@ func TestMainUsageLegacyCopiesRestoreOriginalAdmission(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Source advancement and replacement table diagnostics must not change a copy.
+	// Source advancement and replacement table diagnostics must not change a fork.
 	later := admitUsage(t, s, original, turn, true)
 	finishUsage(t, s, later.RequestID, "completed", &llm.Usage{InputTokens: 999})
 	got := readUsage(t, s, loaded.ID)
 	if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor.RequestID != admitted.RequestID || got.Anchor.Checkpoint != nil || got.Anchor.System != system || !reflect.DeepEqual(got.Anchor.Messages, admitted.Messages) {
-		t.Fatal("legacy copy reconstructed current/copied input rather than source admission", got)
+		t.Fatal("shared fork reconstructed current input rather than original source admission", got)
 	}
 	foundRuntime := false
 	for _, message := range got.Anchor.Messages {
@@ -142,11 +142,11 @@ func TestMainUsageLegacyCopiesRestoreOriginalAdmission(t *testing.T) {
 		}
 	}
 	if !foundRuntime {
-		t.Fatal("original runtime input lost after Load hid copied runtime entries")
+		t.Fatal("original measured runtime input lost after Load masked inherited runtime messages")
 	}
 }
 
-func TestMainUsageCopyDoesNotAcquireLaterSourceCompletion(t *testing.T) {
+func TestMainUsageSharedForkDoesNotAcquireLaterSourceCompletion(t *testing.T) {
 	s, original, turn := usageFixture(t)
 	first := admitUsage(t, s, original, turn, true)
 	finishUsage(t, s, first.RequestID, "completed", &llm.Usage{InputTokens: 100})
@@ -158,7 +158,7 @@ func TestMainUsageCopyDoesNotAcquireLaterSourceCompletion(t *testing.T) {
 	finishUsage(t, s, pending.RequestID, "completed", &llm.Usage{InputTokens: 999})
 	got := readUsage(t, s, loaded.ID)
 	if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != first.RequestID || got.Anchor.RequestID != first.RequestID {
-		t.Fatal("copy acquired later source completion", got)
+		t.Fatal("shared fork acquired later source completion", got)
 	}
 }
 

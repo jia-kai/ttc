@@ -98,7 +98,7 @@ func (s *Store) PlanRedo(session string) (RestorePlan, error) {
 	return plan, nil
 }
 
-// branchPlan resolves a node owned by this session. PlanBranch additionally
+// branchPlan resolves a node in this session's logical history. PlanBranch additionally
 // validates tool boundaries and floor ancestry before exposing the plan.
 func (s *Store) branchPlan(v Session, id int64) (RestorePlan, error) {
 	if v.ReadOnly {
@@ -109,8 +109,17 @@ func (s *Store) branchPlan(v Session, id int64) (RestorePlan, error) {
 	}
 	var tip int64
 	if id != 0 {
-		if err := s.db.QueryRow("SELECT coalesce(file_tip_id,0) FROM entries WHERE id=? AND session_id=?", id, v.ID).Scan(&tip); err != nil {
+		if err := validateHistoryTip(s.db, v.ID, id); err != nil {
 			return RestorePlan{}, fmt.Errorf("branch target: %w", err)
+		}
+		base, err := forkBaseWith(s.db, v.ID)
+		if err != nil {
+			return RestorePlan{}, err
+		}
+		if id > base {
+			if err := s.db.QueryRow("SELECT coalesce(file_tip_id,0) FROM entries WHERE id=?", id).Scan(&tip); err != nil {
+				return RestorePlan{}, fmt.Errorf("branch target: %w", err)
+			}
 		}
 	}
 	redo := v.RedoTip

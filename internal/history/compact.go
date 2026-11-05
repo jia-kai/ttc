@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
@@ -44,6 +45,8 @@ func (s *Store) continueAt(session string, handoff llm.Message, sourceTip, retai
 	if e != nil {
 		return Session{}, e
 	}
+	// Retention must use the fork's effective visibility/file checkpoints, not
+	// the inherited rows' physical source-session metadata.
 	entries, e := s.Branch(session, 0)
 	if e != nil {
 		return Session{}, e
@@ -176,7 +179,8 @@ func (s *Store) continueAt(session string, handoff llm.Message, sourceTip, retai
 		if e != nil {
 			return e
 		}
-		mapping := map[int64]int64{}
+		mapping := map[int64]int64{0: summaryID}
+		copiedIDs := []int64{0}
 		pendingCopied := false
 		for _, entry := range entries {
 			var marker struct{ Type string }
@@ -225,6 +229,7 @@ func (s *Store) continueAt(session string, handoff llm.Message, sourceTip, retai
 				return e
 			}
 			mapping[entry.ID] = newid
+			copiedIDs = append(copiedIDs, entry.ID)
 			if entry.Kind == "tool_result" {
 				_, e = tx.Exec("INSERT INTO tool_records(entry_id,call_id,version,record_json,markdown_json) SELECT ?,call_id,version,record_json,markdown_json FROM tool_records WHERE entry_id=?", newid, entry.ID)
 				if e != nil {
@@ -267,16 +272,28 @@ func (s *Store) continueAt(session string, handoff llm.Message, sourceTip, retai
 		}
 		for turn := range retainedTurns {
 			var start, tip int64
-			if e := tx.QueryRow("SELECT coalesce(start_entry_id,0),coalesce(start_file_tip_id,0) FROM turns WHERE id=?", turn).Scan(&start, &tip); e != nil {
+			if e := tx.QueryRow("SELECT coalesce(start_entry_id,0),coalesce(start_file_tip_id,0) FROM turns WHERE id=? AND session_id=?", turn, session).Scan(&start, &tip); errors.Is(e, sql.ErrNoRows) {
+				continue
+			} else if e != nil {
 				return e
 			}
 			checkpoint, ok := mapping[start]
 			if !ok {
 				checkpoint = summaryID
+				// Excluded audit can be the exact old checkpoint, including a
+				// fork's undo floor. Use its nearest retained predecessor rather
+				// than moving a new human turn behind the imported boundary.
+				// Summarized checkpoints still rebase to the summary itself.
+				if start >= retainFrom {
+					index := sort.Search(len(copiedIDs), func(i int) bool { return copiedIDs[i] > start }) - 1
+					checkpoint = mapping[copiedIDs[index]]
+				}
 			}
-			if !ok || selected[start] {
+			if start < retainFrom || selected[start] {
 				tip = baseline
 			}
+			// Inherited entries retain source TurnIDs. Only turns actually owned
+			// by this live predecessor may move; a source or sibling stays live.
 			if _, e = tx.Exec("UPDATE turns SET session_id=?,start_entry_id=?,start_file_tip_id=? WHERE id=? AND session_id=?", id, checkpoint, n(tip), turn, session); e != nil {
 				return e
 			}
@@ -295,15 +312,21 @@ func (s *Store) continueAt(session string, handoff llm.Message, sourceTip, retai
 	return s.Session(id)
 }
 
-// mainCompactionMessagesWith bounds audit acquisition by the indexed session
-// tail. RequestMessages records the owning actor and purpose on each entry,
-// including copies inherited from an older continuation.
+// mainCompactionMessagesWith acquires audit IDs only on the selected ancestry,
+// including inherited audit that remains physically owned by a manual base.
+// Unselected source branches and later source requests are never included.
 func mainCompactionMessagesWith(tx *sql.Tx, session string, from, tip int64) (map[int64]bool, error) {
-	rows, err := tx.Query(`SELECT id FROM entries
-		WHERE session_id=? AND id BETWEEN ? AND ? AND kind='status'
-		AND model_visible=0 AND actor_id='main'
-		AND json_extract(content_json,'$.type')='request_message'
-		AND json_extract(content_json,'$.purpose')='compaction'`, session, from, tip)
+	if err := validateHistoryTip(tx, session, tip); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`WITH RECURSIVE ancestry(id,parent_id) AS (
+		SELECT id,parent_id FROM entries WHERE id=?
+		UNION ALL SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id AND e.id<a.id
+	) SELECT e.id FROM ancestry a CROSS JOIN entries e ON e.id=a.id
+		WHERE e.id BETWEEN ? AND ? AND e.kind='status'
+		AND e.model_visible=0 AND e.actor_id='main'
+		AND json_extract(e.content_json,'$.type')='request_message'
+		AND json_extract(e.content_json,'$.purpose')='compaction'`, tip, from, tip)
 	if err != nil {
 		return nil, err
 	}

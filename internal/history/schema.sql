@@ -1,4 +1,4 @@
-PRAGMA user_version = 13;
+PRAGMA user_version = 14;
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY NOT NULL,
@@ -19,7 +19,9 @@ CREATE TABLE sessions (
     redo_entry_id INTEGER REFERENCES entries(id),
     undo_floor_id INTEGER REFERENCES entries(id),
     last_activity_ms INTEGER NOT NULL,
-    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json))
+    metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
+    base_session_id TEXT REFERENCES sessions(id),
+    base_entry_id INTEGER REFERENCES entries(id)
 );
 CREATE INDEX session_list_workspace ON sessions(workspace_id, last_activity_ms DESC, id);
 CREATE INDEX session_lineage ON sessions(lineage_id);

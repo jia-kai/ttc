@@ -53,7 +53,7 @@ func TestOmittedNotificationBoundaryExportsOnlyExplicitSource(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := s.db.QueryRow("SELECT id FROM entries WHERE session_id=? AND source_id=?", session.ID, delivery).Scan(&id); err != nil {
+					if err := validateHistoryTip(s.db, session.ID, delivery); err != nil {
 						t.Fatal(err)
 					}
 				}

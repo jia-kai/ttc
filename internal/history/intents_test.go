@@ -127,14 +127,14 @@ func TestStorageIntentsToolMetadataAndOutcomes(t *testing.T) {
 	if outcome, err := s.ToolOutcomeForEntry(ctx, intent); err != nil || outcome.CallID != call || outcome.Name != "image_show" || outcome.Result != nil {
 		t.Fatal("pending outcome", outcome, err)
 	}
-	// Load copies physical entries but not call identity or its request selection.
+	// Load shares the physical intent and its immutable request selection.
 	loaded, err := s.Load(v.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	copy, err := s.ToolIntentEntry(ctx, call)
-	if err != nil || copy <= intent {
-		t.Fatal("did not choose latest copy", copy, intent, err)
+	if err != nil || copy != intent {
+		t.Fatal("fork changed intent identity", copy, intent, err)
 	}
 	if metadata, err := s.ToolExecution(ctx, call); err != nil || metadata.EntryID != copy || metadata.RequestID != request {
 		t.Fatal(metadata, err)

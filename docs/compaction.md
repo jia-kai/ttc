@@ -134,7 +134,7 @@ cancel them.
 - Main, child and aside compaction write no eager transcript files. Durable
   SQLite history remains the source for inspection and on-demand
   [`conversation_export`](tools.md#conversation_export). Its actor-selected
-  scope follows compaction and load-copy ancestry, deduplicates source entries
+  scope follows compaction and frozen-fork ancestry, deduplicates source entries
   and excludes sibling branches and unrelated actors. Main exports only main
   history; children export their own selected history across assignments; asides
   include their recorded frozen main prefix and their own history.
@@ -204,8 +204,8 @@ cancel them.
 - Failed handoff never switches/freezes main history. Child failure/cancellation
   still captures eager immutable diagnostic transcripts; these are not
   compaction archives. Startup leaves execution records untouched; manual
-  loading copies balanced context without work repair or restored jobs, timers
-  or pending clicks.
+  loading forks balanced context without work repair or restored jobs, timers or
+  pending clicks.
 
 ## Reload recovery
 
@@ -214,11 +214,12 @@ cancel them.
   normalizes typed `compaction_context` role indexes to user; canonical text,
   saved provider requests and archive bytes stay unchanged. Model-facing
   projection applies the current marker schema without rewriting saved text.
-- `/load ID` and `--session ID` copy writable history at its last complete tool
-  exchange. If selected history ends at main compaction or a handoff before the
-  next coding request, recover committed, undelivered child completions and
-  runtime notifications. Recovered snapshots keep this boundary until coding
-  resumes. Ordinary loads and read-only/fatal contexts do not recover messages.
+- `/load ID` and `--session ID` share a frozen writable-history prefix through
+  its last complete tool exchange. If selected history ends at main compaction
+  or a handoff before the next coding request, recover committed, undelivered
+  child completions and runtime notifications. Recovered snapshots keep this
+  boundary until coding resumes. Ordinary loads and read-only/fatal contexts do
+  not recover messages.
 - Delivery is automatic; if context is still full, a new compaction precedes the
   coding request. `/compact [focus]` while idle also preserves recovered
   messages. Partial replies remain inspectable, but are never reused as

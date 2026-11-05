@@ -43,7 +43,7 @@ func TestHistoricalCompactionRoleMigrationDoesNotElevateOrRewriteContent(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("PRAGMA user_version=12"); err != nil {
+	if _, err := s.db.Exec("ALTER TABLE sessions DROP COLUMN base_entry_id; ALTER TABLE sessions DROP COLUMN base_session_id; PRAGMA user_version=12"); err != nil {
 		t.Fatal(err)
 	}
 	root := s.Root

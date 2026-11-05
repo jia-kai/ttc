@@ -15,21 +15,6 @@ import (
 	"ttc/internal/prompts"
 )
 
-// validateTranscriptTip accepts zero only as an explicitly empty branch.
-func validateTranscriptTip(q historyReader, session string, tip int64) error {
-	var found bool
-	if tip < 0 {
-		return errors.New(prompts.HistoryTranscriptNegativeTip)
-	}
-	if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?) AND (?=0 OR EXISTS(SELECT 1 FROM entries WHERE id=? AND session_id=?))", session, tip, tip, session).Scan(&found); err != nil {
-		return err
-	}
-	if !found {
-		return errors.New(prompts.HistoryTranscriptTip)
-	}
-	return nil
-}
-
 type actorBoundary struct {
 	Type    string `json:"type"`
 	Session string `json:"source_session"`
@@ -53,7 +38,7 @@ func (s *Store) recordActorBoundary(session, turn, actor, sourceSession string, 
 		return errors.New(prompts.HistoryActorBoundary)
 	}
 	return s.transact(func(tx *sql.Tx) error {
-		if err := validateTranscriptTip(tx, sourceSession, sourceTip); err != nil {
+		if err := validateHistoryTip(tx, sourceSession, sourceTip); err != nil {
 			return err
 		}
 		var valid bool
@@ -90,8 +75,8 @@ func (s *Store) recordActorBoundary(session, turn, actor, sourceSession string, 
 }
 
 // selectedActorEntries follows only selected parent chains and summary cuts.
-// Summary source identity also preserves ancestry through manual Load copies;
-// no session-wide source scan can accidentally admit abandoned sibling branches.
+// Summary source identity preserves ancestry through legacy copies and shared
+// bases; no session-wide source scan can admit abandoned sibling branches.
 func selectedActorEntries(ctx context.Context, q historyReader, session, actor string, tip int64) ([]Entry, error) {
 	if strings.TrimSpace(actor) == "" {
 		return nil, errors.New(prompts.HistoryTranscriptActor)
@@ -168,7 +153,7 @@ func selectedActorEntries(ctx context.Context, q historyReader, session, actor s
 
 // ActorTranscript renders one actor's selected history, including original
 // precompaction ancestry and an aside's recorded main prefix. Tip is an explicit
-// frozen physical entry ID in session; zero means empty, never the current tip.
+// frozen entry ID available to session; zero means empty, never the current tip.
 func (s *Store) ActorTranscript(session, actor string, tip int64) ([]byte, error) {
 	var out bytes.Buffer
 	if err := s.WriteActorTranscript(context.Background(), &out, session, actor, tip, "markdown"); err != nil {

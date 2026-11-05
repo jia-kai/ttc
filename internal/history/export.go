@@ -409,19 +409,25 @@ func (s *Store) ArchiveActorTranscript(session, actor string, pending *llm.Messa
 	return s.writeArchive(session, text, exact)
 }
 
+const actorBranchQuery = `WITH RECURSIVE ancestry(id,parent_id) AS (
+		SELECT id,parent_id FROM entries WHERE id=?
+		UNION ALL
+		SELECT e.id,e.parent_id FROM ancestry a CROSS JOIN entries e WHERE e.id=a.parent_id AND e.id<a.id
+	) SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),coalesce(e.file_tip_id,0),e.session_id,coalesce(e.turn_id,''),e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,e.content_json,e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
+	FROM ancestry a CROSS JOIN entries selected CROSS JOIN entries e
+	WHERE selected.id=a.id AND e.id=coalesce(selected.source_id,selected.id)
+	AND (e.actor_id=? OR e.kind='summary') AND (?=0 OR e.kind='summary' OR (e.kind='status' AND json_extract(e.content_json,'$.type')='actor_compacted'))`
+
 func actorBranchWith(q historyReader, session string, tip int64, actor string, boundariesOnly bool) ([]Entry, error) {
-	if err := validateTranscriptTip(q, session, tip); err != nil {
+	if err := validateHistoryTip(q, session, tip); err != nil {
 		return nil, err
 	}
 	// Actor filtering must follow, not constrain, recursion: another actor's row
 	// can connect two selected actor entries. Keep payloads out of the recursive
 	// work table so unrelated messages and opaque state are never materialized.
-	rows, err := q.Query(`WITH RECURSIVE ancestry(id,parent_id) AS (
-		SELECT id,parent_id FROM entries WHERE id=? AND session_id=?
-		UNION ALL
-		SELECT e.id,e.parent_id FROM entries e JOIN ancestry a ON e.id=a.parent_id
-	) SELECT e.id,coalesce(e.parent_id,0),coalesce(e.source_id,0),coalesce(e.file_tip_id,0),e.session_id,coalesce(e.turn_id,''),e.actor_id,e.kind,coalesce(e.role,''),e.model_visible,e.content_json,e.created_ms,coalesce(e.main_turn_id,''),coalesce(e.undo_owner_turn_id,'')
-	FROM ancestry a JOIN entries selected ON selected.id=a.id JOIN entries e ON e.id=coalesce(selected.source_id,selected.id) WHERE (e.actor_id=? OR e.kind='summary') AND (?=0 OR e.kind='summary' OR (e.kind='status' AND json_extract(e.content_json,'$.type')='actor_compacted'))`, tip, session, actor, boundariesOnly)
+	// CROSS JOIN pins ancestry -> selected -> canonical origin PK acquisition;
+	// statistics must not make SQLite scan the shared entry_source index first.
+	rows, err := q.Query(actorBranchQuery, tip, actor, boundariesOnly)
 	if err != nil {
 		return nil, err
 	}
