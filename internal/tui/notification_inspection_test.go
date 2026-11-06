@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,6 +16,35 @@ import (
 	"ttc/internal/llm"
 	"ttc/internal/messagestream"
 )
+
+func TestRuntimeInspectorDisplaysModelTextInHeadlessTerminal(t *testing.T) {
+	u := newQuestionTestUI(t, &llm.Script{Responses: []llm.ScriptResponse{{Text: "Ready."}}})
+	u.typeText("Start the inspector fixture.")
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Turn complete")
+	for _, tc := range []struct {
+		message llm.Message
+		visible string
+	}{
+		{llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"child_steer_delivered","child_id":"main/child_fixture","message_event_seq":23,"request_id":7}`}, "type: child_steer_delivered"},
+		{llm.Message{Type: llm.TypeChildGuidance, Content: `{"type":"child_message","message":"# Literal steering text","job_read_grants":["job_fixture"]}`}, "# Literal steering text"},
+	} {
+		committed, err := u.runtime.Store.AppendMessage(u.runtime.Current(), "", "main", tc.message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.typeText(fmt.Sprintf("/inspect %d", committed.EntryID))
+		u.key(tcell.KeyEnter)
+		frame := u.wait(t, tc.visible)
+		if !strings.Contains(frame, "<runtime_notification>") || strings.Contains(frame, "Message metadata:") {
+			t.Fatalf("inspector did not show literal model text: %s", frame)
+		}
+		if tc.message.Type == llm.TypeChildGuidance && (!strings.Contains(frame, "<steer>") || !strings.Contains(frame, "type: job_read_grants")) {
+			t.Fatalf("steering wrapper/grants missing: %s", frame)
+		}
+		u.key(tcell.KeyEscape)
+	}
+}
 
 func TestRuntimeNotificationProjectionOffersSavedInspection(t *testing.T) {
 	message := llm.Message{Type: llm.TypeRuntimeNotification, Content: `{"type":"job_exit","job_id":"job_1","status":"completed"}`}

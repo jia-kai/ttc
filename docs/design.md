@@ -77,8 +77,14 @@ sequence, request identity and input source remain separate metadata.
   [message shapes](system_prompt.md#message-shapes).
 - `session.Event.MessageType` carries canonical identity to direct rendering.
   Presentation flags are derived view state, not another message classifier.
-  Provider-boundary inspection exposes notifications in their actual
-  model-facing representation, independently of their direct-rendered summaries.
+  Runtime-message and steering inspectors reuse `Message.ModelContent`, showing
+  literal model-facing tags, YAML and prose rather than canonical storage JSON.
+  The same projection applies to saved request messages and paged inspection.
+  Rendering an old record uses the current formatter; exact historical sent text
+  remains available in provider-boundary captures. Source projections do not
+  establish that a message was admitted or sent. Provider-boundary inspection
+  exposes notifications in their actual model-facing representation,
+  independently of their direct-rendered summaries.
 - Notification sources, admitted messages and human previews are distinct.
   History selects source data; session projection builds bounded model
   deliveries; admission persists those exact messages. Replay and live UI attach
@@ -732,14 +738,14 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   table definitions. Entry/change/request IDs are monotonic; other IDs are
   opaque text. Times are UTC Unix milliseconds; typed codecs validate versioned
   JSON.
-- Empty databases initialize in one immediate transaction. Current schema is 14;
-  startup supports schemas 5–14 and runs ordered, adjacent upgrades (5 → 6 → 7 →
-  8 → 9 → 10 → 11 → 12 → 13 → 14) in one transaction, validating before commit.
-  Each step reports its own progress; completion of a step is not a committed
-  upgrade. Rebuilding entries temporarily indexes all incoming foreign-key
-  lookups to avoid per-entry table scans. Schemas below 5, nonempty unversioned
-  databases and unknown newer versions fail explicitly; no automatic resets or
-  credential deletion.
+- Empty databases initialize in one immediate transaction. Current schema is 15;
+  startup supports schemas 5–15 and runs ordered, adjacent upgrades (5 → 6 → 7 →
+  8 → 9 → 10 → 11 → 12 → 13 → 14 → 15) in one transaction, validating before
+  commit. Each step reports its own progress; completion of a step is not a
+  committed upgrade. Rebuilding entries temporarily indexes all incoming
+  foreign-key lookups to avoid per-entry table scans. Schemas below 5, nonempty
+  unversioned databases and unknown newer versions fail explicitly; no automatic
+  resets or credential deletion.
 - Cooperating runtimes hold a shared data-directory lock for their process
   lifetime; initialization/upgrades require exclusive access. Stop all TTC
   instances sharing that directory before upgrading: pre-lock binaries cannot be
@@ -780,7 +786,10 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   session-base references without rewriting or deduplicating history. Existing
   copied sessions retain their recorded evidence; new manual loads share frozen
   prefixes. This step changes schema metadata only, independent of history
-  payload size.
+  payload size. The 14 → 15 step renames canonical child-steer receipt events to
+  `child_steer_delivered` and `child_steer_undelivered`, preserving event
+  identities and previously saved model messages, request snapshots and tool
+  results.
 - History recovery returns typed pending-event data, not model-facing child
   messages. Explicit session DTO projections map `outcome` to
   `assignment_status` and known `context_state` to `child_state`, omitting

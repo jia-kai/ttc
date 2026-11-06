@@ -253,6 +253,11 @@ func projectInspection(data entryPresentation) (Inspection, error) {
 	if data.Status.Type == "job_completion" {
 		inspection.System = false
 	}
+	if data.Message != nil && inspectModelText(data.Message.Type, data.Message.InputSource) {
+		// Tags, YAML and guidance are model input, not inspector Markdown.
+		inspection.Markdown = false
+		inspection.System = contextPresentation(data.Message.Type)
+	}
 	text, err := projectInspectionText(data)
 	inspection.Text = text
 	return inspection, err
@@ -260,6 +265,9 @@ func projectInspection(data entryPresentation) (Inspection, error) {
 
 func projectInspectionText(data entryPresentation) (string, error) {
 	entry := data.Entry
+	if data.Message != nil && inspectModelText(data.Message.Type, data.Message.InputSource) {
+		return data.Message.ModelContent()
+	}
 	if entry.Kind == "tool_call" || entry.Kind == "tool_result" {
 		if data.Markdown != nil {
 			return data.Markdown.Detail, nil
@@ -301,6 +309,13 @@ func projectInspectionText(data entryPresentation) (string, error) {
 		return content + "\n\nMessage metadata:\n" + render.Fence(string(b), "json"), err
 	}
 	return render.Fence(string(entry.Content), "json"), nil
+}
+
+// inspectModelText selects messages whose text is projected before reaching the
+// model. Reuse that projection in inspection rather than showing storage JSON;
+// ordinary authored text and native tool/replay inspectors keep their own views.
+func inspectModelText(typ llm.MessageType, inputSource string) bool {
+	return typ.IsRuntime() || typ == llm.TypeCompactionContext || typ == llm.TypeUserInput && inputSource == "steer"
 }
 
 func projectExportText(data entryPresentation) (string, error) {

@@ -80,7 +80,8 @@ func TestHistoricalCompactionRoleMigrationDoesNotElevateOrRewriteContent(t *test
 			t.Fatal("historical compaction lost inspection semantics", inspection, err)
 		}
 		page, err := s.InspectPage(context.Background(), entries[0].ID, 0, InspectionPageChars)
-		if err != nil || !page.System || !page.Supported || page.Text != legacyContent {
+		modelText, projectionErr := legacy.ModelContent()
+		if err != nil || projectionErr != nil || !page.System || page.Markdown || !page.Supported || page.Text != modelText {
 			t.Fatal("paged inspection changed historical summary", page, err)
 		}
 		if text, err := s.ExportText(entries[0]); err != nil || text != "" {

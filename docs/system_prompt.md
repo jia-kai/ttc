@@ -83,8 +83,10 @@ These are historical inputs, not new arrivals.
 
 Ordinary system/developer instructions, assistant replies, tool calls/results
 and native image/document blocks keep their existing provider representations.
-Model-facing projection is shared with token estimation; it does not rewrite
-canonical JSON history or inspect user text to infer a message type.
+Model-facing projection is shared with token estimation and runtime-message and
+steering inspection; it does not rewrite canonical JSON history or inspect user
+text to infer a message type. Inspectors display the current projection
+literally; provider captures preserve exact historical requests.
 
 ## Runtime snapshots
 

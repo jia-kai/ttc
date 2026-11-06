@@ -436,11 +436,11 @@ func TestChildDeliveryReceiptWakesMainBeforeAndDuringAwait(t *testing.T) {
 			r.orderMu.Lock()
 			notices := pendingMainNotices(t, r)
 			r.orderMu.Unlock()
-			if len(notices) != 1 || !strings.Contains(notices[0].Content, "child_message_delivered") {
+			if len(notices) != 1 || !strings.Contains(notices[0].Content, "child_steer_delivered") {
 				t.Fatal(notices)
 			}
 			var count int
-			if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_delivered'`).Scan(&count); err != nil || count != 1 {
+			if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_steer_delivered'`).Scan(&count); err != nil || count != 1 {
 				t.Fatal("duplicated durable receipt", count, err)
 			}
 			if _, err := r.StopChild(context.Background(), "main", child["child_id"].(string)); err != nil {

@@ -14,11 +14,11 @@ func TestSchema13ForkMetadataIsAdditiveWithoutHistoryWrites(t *testing.T) {
 	}
 	defer db.Close()
 	exec(t, db, `CREATE TABLE sessions(id TEXT PRIMARY KEY,legacy TEXT);
- CREATE TABLE entries(id INTEGER PRIMARY KEY,content_json TEXT);
+ CREATE TABLE entries(id INTEGER PRIMARY KEY,kind TEXT,content_json TEXT);
  INSERT INTO sessions VALUES('source','unchanged');
  PRAGMA user_version=13;`)
-	payload := strings.Repeat("large canonical evidence", 1<<15)
-	exec(t, db, "INSERT INTO entries VALUES(1,?)", payload)
+	payload := fmt.Sprintf(`{"type":"assistant","content":%q}`, strings.Repeat("large canonical evidence", 1<<15))
+	exec(t, db, "INSERT INTO entries VALUES(1,'message',?)", payload)
 	before := scalar(t, db, "SELECT total_changes()")
 	tx := transaction(t, db)
 	var progress []Progress
@@ -47,7 +47,13 @@ func TestSchema13ForkMetadataIsAdditiveWithoutHistoryWrites(t *testing.T) {
 	if got := scalar(t, db, "SELECT group_concat(name,',') FROM pragma_table_info('sessions')"); got != "id,legacy,base_session_id,base_entry_id" {
 		t.Fatal("unexpected additive column order", got)
 	}
-	if len(progress) != 3 || progress[0].Total != 3 || progress[0].Phase != "add_fork_metadata" {
-		t.Fatal("metadata migration work depends on history size", progress)
+	var metadataProgress []Progress
+	for _, event := range progress {
+		if event.FromVersion == 13 {
+			metadataProgress = append(metadataProgress, event)
+		}
+	}
+	if len(metadataProgress) != 3 || metadataProgress[0].Total != 3 || metadataProgress[0].Phase != "add_fork_metadata" {
+		t.Fatal("metadata migration work depends on history size", metadataProgress)
 	}
 }

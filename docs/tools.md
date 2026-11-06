@@ -535,7 +535,7 @@ Input: `{path, format?, scope?}`.
   response can continue the same assignment. Completion closes admission;
   undelivered messages are reported, never carried into a persistent follow-up
   or used to start another assignment.
-- Parent notifications `child_message_delivered` and `child_message_undelivered`
+- Parent notifications `child_steer_delivered` and `child_steer_undelivered`
   identify `message_event_seq`, child, turn and job; delivery also includes
   `request_id`. Queued is not proof of delivery or action.
 - Pending capacity is 32 messages and at most `min(4096, NextTurnInputReserve)`

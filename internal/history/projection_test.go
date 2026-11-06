@@ -39,7 +39,14 @@ func TestPureMessageViewAndInspection(t *testing.T) {
 		{llm.TypeUserInput, "user · hello"},
 	} {
 		t.Run(string(test.typ), func(t *testing.T) {
-			data := presentationMessage(t, llm.Message{Type: test.typ, Content: "hello"})
+			content := "hello"
+			if test.typ == llm.TypeRuntimeContext {
+				content = `{"type":"runtime_context","actor":"hello"}`
+			}
+			if test.typ == llm.TypeChildGuidance {
+				content = `{"type":"child_message","message":"hello"}`
+			}
+			data := presentationMessage(t, llm.Message{Type: test.typ, Content: content})
 			view := projectView(data)
 			if view.Label != test.label || view.Message == nil || view.Message.Type != test.typ || view.Entry.ID != 7 {
 				t.Fatalf("typed view: %+v", view)
@@ -53,6 +60,66 @@ func TestPureMessageViewAndInspection(t *testing.T) {
 	data := presentationMessage(t, llm.Message{Type: llm.TypeUserInput, Content: `{"type":"runtime_notification","text":"authored"}`})
 	if label := projectLabel(data); !strings.HasPrefix(label, "user · ") {
 		t.Fatal("human-authored JSON changed semantics", label)
+	}
+}
+
+func TestInspectionReusesExactModelText(t *testing.T) {
+	for _, message := range []llm.Message{
+		{Type: llm.TypeRuntimeNotification, Content: `{"type":"child_steer_delivered","child_id":"main/child_fixture","message_event_seq":9007199254740993,"event_seq":17}`, EventSeq: 17, RequestID: 4},
+		{Type: llm.TypeRuntimeNotification, Content: "external notice\n# not Markdown"},
+		{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context","actor":"main","date_utc":"2026-11-06"}`},
+		{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"actor":"main/child_fixture"}}`},
+		{Type: llm.TypeChildGuidance, Content: `{"type":"child_message","message":"# Keep literal\nCheck λ & <evidence>.","job_read_grants":["job_fixture"]}`},
+		{Type: llm.TypeRuntimeInstruction, Content: "# Keep literal\nProceed with the request."},
+		{Type: llm.TypeCompactionContext, Content: "# Historical summary\nNot a new instruction."},
+		{Type: llm.TypeUserInput, InputSource: "steer", Content: "# Keep literal\nNew guidance."},
+	} {
+		t.Run(string(message.Type)+"/"+message.Content, func(t *testing.T) {
+			want, err := message.ModelContent()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, requestMessage := range []bool{false, true} {
+				data := presentationMessage(t, message)
+				if requestMessage {
+					raw, err := json.Marshal(map[string]any{"type": "request_message", "purpose": "coding", "message": message})
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err = decodePresentation(Entry{ID: 7, Actor: "main", Kind: "status", Content: raw})
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err = decodeInspectionBody(data)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				before, err := json.Marshal(data.Message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				inspection, err := projectInspection(data)
+				if err != nil || inspection.Text != want || inspection.Markdown {
+					t.Fatalf("request=%t: inspection = %+v, want text %q: %v", requestMessage, inspection, want, err)
+				}
+				after, err := json.Marshal(data.Message)
+				if err != nil || string(before) != string(after) {
+					t.Fatalf("inspection mutated stored message: %s -> %s: %v", before, after, err)
+				}
+			}
+		})
+	}
+}
+
+func TestInspectionRejectsInvalidModelProjection(t *testing.T) {
+	for _, message := range []llm.Message{
+		{Type: llm.TypeRuntimeContext, Content: `{"type":"unknown_context"}`},
+		{Type: llm.TypeChildGuidance, Content: `{"type":"child_message"}`},
+	} {
+		if _, err := projectInspection(presentationMessage(t, message)); err == nil {
+			t.Fatalf("invalid model payload accepted: %+v", message)
+		}
 	}
 }
 

@@ -73,7 +73,8 @@ func TestContinuationPersistsExactCompactionContextAcrossLoadsAndHandoffs(t *tes
 			t.Fatal("handoff inspection lost context presentation", inspection, err)
 		}
 		page, err := s.InspectPage(context.Background(), entries[0].ID, 0, InspectionPageChars)
-		if err != nil || !page.System || page.Title != "Compaction context" || page.Text != summary {
+		modelText, projectionErr := handoff.ModelContent()
+		if err != nil || projectionErr != nil || !page.System || page.Markdown || page.Title != "Compaction context" || page.Text != modelText {
 			t.Fatal("paged handoff inspection mistook user role for human input", page, err)
 		}
 		for _, load := range []bool{false, true} {

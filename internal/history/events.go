@@ -265,7 +265,7 @@ func (s *Store) AdmitRequest(input RequestAdmission) (v Admission, err error) {
 				if source.ChildID != actor || source.TurnID != turn || source.JobID == "" {
 					return errors.New(prompts.ChildMessageEvidenceTarget)
 				}
-				body := map[string]any{"type": "child_message_delivered", "child_id": actor, "child_turn_id": turn, "job_id": source.JobID, "message_event_seq": notice.EventSeq, "request_id": v.RequestID}
+				body := map[string]any{"type": "child_steer_delivered", "child_id": actor, "child_turn_id": turn, "job_id": source.JobID, "message_event_seq": notice.EventSeq, "request_id": v.RequestID}
 				content, err := json.Marshal(body)
 				if err != nil {
 					return err

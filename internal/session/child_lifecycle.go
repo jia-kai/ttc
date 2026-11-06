@@ -160,7 +160,7 @@ func (r *Runtime) finishChild(child *codingChild, task childTask, err error) err
 		if message.Type != llm.TypeChildGuidance {
 			continue
 		}
-		body, _ := json.Marshal(map[string]any{"type": "child_message_undelivered", "child_id": child.id, "child_turn_id": task.turn, "job_id": task.assignment.job, "message_event_seq": message.EventSeq})
+		body, _ := json.Marshal(map[string]any{"type": "child_steer_undelivered", "child_id": child.id, "child_turn_id": task.turn, "job_id": task.assignment.job, "message_event_seq": message.EventSeq})
 		if e := r.queueNotificationLocked(string(body)); e != nil {
 			err = errors.Join(err, e)
 		}

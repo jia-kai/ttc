@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"ttc/internal/llm"
 )
 
 // InspectionPageChars is the maximum Unicode characters returned per page;
@@ -27,18 +29,39 @@ type InspectionPage struct {
 	LargeEnvelope                     bool // Avoid loading omitted attachment/replay data even when displayed text is short.
 }
 
+// Match canonical decoding without transferring the envelope into Go. String
+// fields take the last non-null, case-folded value. Message.UnmarshalJSON resets
+// its receiver for each object, so duplicate outer message objects do not merge.
+// Go's Unicode key folding also maps long s to ASCII s in message/input_source.
+const inspectionModelSource = `WITH inspection_entry AS (
+ SELECT *,coalesce((SELECT value FROM json_each(entries.content_json) AS field
+  WHERE lower(field.key)='type' AND field.type='text' ORDER BY field.id DESC LIMIT 1),'') canonical_type
+ FROM entries WHERE id=?
+), inspection_message AS (
+ SELECT CASE WHEN kind IN ('message','summary') THEN content_json
+  WHEN kind='status' AND canonical_type='request_message' THEN (
+   SELECT CASE WHEN field.type='object' THEN field.value END FROM json_each(content_json) AS field
+   WHERE lower(replace(field.key,'ſ','s'))='message' ORDER BY field.id DESC LIMIT 1)
+  END content_json FROM inspection_entry
+)`
+
 // InspectPage reads a bounded slice of saved Markdown/message text in SQLite,
-// without transferring its complete tool record into Go. Instruction files are
-// streamed separately, bounded to 1 MiB. Normal small inspectors retain codecs.
+// without transferring its complete tool record into Go. Model-text projections
+// read complete message content, but omit attachment/replay metadata. Instruction
+// files are streamed separately, bounded to 1 MiB. Small inspectors retain codecs.
 func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (InspectionPage, error) {
 	page := InspectionPage{ID: id, Offset: offset, Limit: limit}
 	if id <= 0 || offset < 0 || limit < 1 || limit > InspectionPageChars {
 		return page, errors.New("inspection requires a positive entry ID, nonnegative character offset and limit 1–16384")
 	}
-	const query = `WITH source AS (
+	const query = inspectionModelSource + `, source AS (
  SELECT e.actor_id actor,e.kind kind,coalesce(e.role,'') role,
-  coalesce(json_extract(e.content_json,'$.type'),'') type,
+  e.canonical_type type,
   coalesce(json_extract(e.content_json,'$.path'),'') path,
+  coalesce((SELECT value FROM json_each((SELECT content_json FROM inspection_message)) AS field
+   WHERE lower(field.key)='type' AND field.type='text' ORDER BY field.id DESC LIMIT 1),'') message_type,
+  coalesce((SELECT value FROM json_each((SELECT content_json FROM inspection_message)) AS field
+   WHERE lower(replace(field.key,'ſ','s'))='input_source' AND field.type='text' ORDER BY field.id DESC LIMIT 1),'') input_source,
   substr(coalesce(CASE WHEN e.kind='tool_result' THEN json_extract(r.markdown_json,'$.summary')
    WHEN e.kind='tool_call' THEN c.name || ' parameters'
    ELSE coalesce(json_extract(e.content_json,'$.label'),json_extract(e.content_json,'$.text'),e.role,e.kind) END,e.kind),1,192) title,
@@ -53,16 +76,43 @@ func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (I
      AND json_extract(e.content_json,'$.purpose')='compaction'
      AND json_extract(e.content_json,'$.role')='assistant' THEN json_extract(e.content_json,'$.message.content')
    END body
- FROM entries e LEFT JOIN tool_records r ON r.entry_id=e.id
- LEFT JOIN tool_calls c ON e.kind='tool_call' AND c.id=json_extract(e.content_json,'$.call_id') WHERE e.id=?)
- SELECT actor,kind,role,type,path,title,body IS NOT NULL,coalesce(length(body),0),coalesce(substr(body,?+1,?),''),coalesce(json_valid(body),0),large_envelope FROM source`
-	var kind, role, typ, path string
+ FROM inspection_entry e LEFT JOIN tool_records r ON r.entry_id=e.id
+ LEFT JOIN tool_calls c ON e.kind='tool_call' AND c.id=json_extract(e.content_json,'$.call_id'))
+ SELECT actor,kind,role,type,path,message_type,input_source,title,body IS NOT NULL,coalesce(length(body),0),coalesce(substr(body,?+1,?),''),coalesce(json_valid(body),0),large_envelope FROM source`
+	var kind, role, typ, path, inputSource string
+	var messageType llm.MessageType
 	var supported, encoded bool
-	if err := s.db.QueryRowContext(ctx, query, id, offset, limit).Scan(&page.Actor, &kind, &role, &typ, &path, &page.Title, &supported, &page.Total, &page.Text, &encoded, &page.LargeEnvelope); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, id, offset, limit).Scan(&page.Actor, &kind, &role, &typ, &path, &messageType, &inputSource, &page.Title, &supported, &page.Total, &page.Text, &encoded, &page.LargeEnvelope); err != nil {
 		return page, err
 	}
+	projected := inspectModelText(messageType, inputSource)
 	page.Kind, page.Type = kind, typ
 	page = projectInspectionPage(page, role, supported, encoded)
+	if projected {
+		message := llm.Message{Type: messageType, InputSource: inputSource}
+		// Structured projection needs the complete JSON payload, never a page
+		// of it. Extract only content so huge files/native replay envelopes stay
+		// in SQLite; canonical message semantics were checked when persisted.
+		const contentQuery = inspectionModelSource + ` SELECT coalesce((
+ SELECT value FROM json_each((SELECT content_json FROM inspection_message)) AS field
+ WHERE lower(field.key)='content' AND field.type='text' ORDER BY field.id DESC LIMIT 1),'')`
+		if err := s.db.QueryRowContext(ctx, contentQuery, id).Scan(&message.Content); err != nil {
+			return page, err
+		}
+		if err := ctx.Err(); err != nil {
+			return page, err
+		}
+		text, err := message.ModelContent()
+		if err != nil {
+			return page, err
+		}
+		page.Text, page.Total = inspectionTextPage(text, offset, limit)
+		if err := ctx.Err(); err != nil {
+			return page, err
+		}
+		page.Supported, page.Markdown, page.JSON = true, false, false
+		page.System = contextPresentation(messageType)
+	}
 	if typ == "system_prompt" {
 		text, total, err := instructionPage(ctx, path, offset, limit)
 		if err != nil {
@@ -83,6 +133,23 @@ func (s *Store) InspectPage(ctx context.Context, id int64, offset, limit int) (I
 		page.LargeEnvelope = true // Never fall back to loading the full artifact.
 	}
 	return page, nil
+}
+
+// inspectionTextPage slices projected text at Unicode character boundaries.
+// Scanning the string avoids an O(text size) rune allocation for a bounded page.
+func inspectionTextPage(text string, offset, limit int) (string, int) {
+	start, end, total := len(text), len(text), 0
+	for i := range text {
+		if total == offset {
+			start = i
+		}
+		if total >= offset && total-offset == limit {
+			end = i
+		}
+		total++
+	}
+	// Do not keep the complete projection alive through a small substring.
+	return strings.Clone(text[start:end]), total
 }
 
 func instructionPage(ctx context.Context, path string, offset, limit int) (string, int, error) {

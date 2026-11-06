@@ -168,7 +168,7 @@ func TestChildSteerCancellationReportsUndelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	var undelivered int
-	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 1 {
+	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_steer_undelivered'`).Scan(&undelivered); err != nil || undelivered != 1 {
 		t.Fatal(undelivered, err)
 	}
 	var acknowledged int
@@ -305,7 +305,7 @@ func TestChildSteerQueuedDuringCompaction(t *testing.T) {
 					t.Fatal(coding.Load(), delivered, view)
 				}
 				var undelivered int
-				if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_message_undelivered'`).Scan(&undelivered); err != nil || undelivered != 0 {
+				if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE json_extract(content_json,'$.body.type')='child_steer_undelivered'`).Scan(&undelivered); err != nil || undelivered != 0 {
 					t.Fatal(undelivered, err)
 				}
 			} else if coding.Load() != 3 || delivered != 1 || view.Status != "completed" {
@@ -371,8 +371,8 @@ func TestChildSteerDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_child_message_report BEFORE INSERT ON entries
-WHEN json_extract(NEW.content_json,'$.body.type')='child_message_delivered'
+	if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_child_steer_report BEFORE INSERT ON entries
+WHEN json_extract(NEW.content_json,'$.body.type')='child_steer_delivered'
 BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ BEGIN SELECT RAISE(ABORT,'injected child delivery report failure'); END`); err !
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE actor_id=? AND kind='message'`, actor).Scan(&messages); err != nil || messages != 0 {
 		t.Fatal(messages, err)
 	}
-	if _, err := historytest.DB(t, r.Store).Exec(`DROP TRIGGER reject_child_message_report`); err != nil {
+	if _, err := historytest.DB(t, r.Store).Exec(`DROP TRIGGER reject_child_steer_report`); err != nil {
 		t.Fatal(err)
 	}
 	admitted, _, err = r.admitChild(context.Background(), task, input, contextCursor{})
