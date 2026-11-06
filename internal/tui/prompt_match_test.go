@@ -17,6 +17,8 @@ func TestPromptSearchAllTermsAnyOrderWhitespaceAndSubstrings(t *testing.T) {
 	}{
 		{"alpha beta", []int{4, 0}},
 		{" BeTa\tALpHa\n ", []int{4, 0}},
+		{"alpha-beta", nil},
+		{"BeTa_123.ALpHa", nil},
 		{"alp pha", []int{4, 1, 0}},
 		{"α ist", []int{3}},
 		{"beta beta", []int{4, 3, 2, 0}},

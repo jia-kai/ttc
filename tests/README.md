@@ -70,14 +70,14 @@ excerpts; clicking opens full saved details with readable parameters/results.
 File mutations add short diff previews, with path headers and highlighted diffs
 in inspectors. Glob shows only its pattern. Generated IDs use readable prefixes
 and a 16-character URL-safe random suffix. Inside the shared display window, use
-Page Up/Down, Ctrl+U/D, Home/End, and Esc. Up/Down in the composer recalls
-prompts and restores drafts. Ctrl+U/D scrolls the conversation; Ctrl+D at the
-bottom follows new output and never exits. Ctrl+C clears a nonempty prompt, or
-exits from any view if the prompt is empty. Try `/model` or Ctrl+X, then M to
-browse model families and variants; Esc cancels. Keep Demo Sol/low selected
-while running the fixed interactive script. After completion you can switch
-models freely, open `/sessions` to select/reload a session, inspect history, and
-quit with `/quit`.
+Page Up/Down, Ctrl+U/D, Home/End, and Esc. Up/Down in the composer selects open
+`@` path suggestions; otherwise it recalls prompts and restores drafts. Ctrl+U/D
+scrolls the conversation; Ctrl+D at the bottom follows new output and never
+exits. Ctrl+C clears a nonempty prompt, or exits from any view if the prompt is
+empty. Try `/model` or Ctrl+X, then M to browse model families and variants; Esc
+cancels. Keep Demo Sol/low selected while running the fixed interactive script.
+After completion you can switch models freely, open `/sessions` to select/reload
+a session, inspect history, and quit with `/quit`.
 
 Each invocation makes a fresh private project copied from
 `tests/fixtures/research` under `/tmp/ttc/<uid>/demo-*`. It prints that

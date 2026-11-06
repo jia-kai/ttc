@@ -283,10 +283,13 @@ func (c *frontendController) handleCompletionKey(ev *tcell.EventKey) bool {
 	if ev.Key() == tcell.KeyEnter && ev.Modifiers()&tcell.ModShift != 0 {
 		return false // Shift+Enter always inserts a newline, never a completion.
 	}
-	if (ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyDown) && ev.Modifiers() != tcell.ModShift {
-		return false // Plain arrows recall history; Alt arrows retain view focus.
-	}
 	if c.draft.completion != nil && len(c.completion.result.items) > 0 {
+		if ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyDown {
+			plainPathArrow := ev.Modifiers() == 0 && c.completion.result.query.marker == '@'
+			if ev.Modifiers() != tcell.ModShift && !plainPathArrow {
+				return false // Slash suggestions preserve history; Alt arrows retain view focus.
+			}
+		}
 		switch ev.Key() {
 		case tcell.KeyUp:
 			c.completion.selected = max(0, c.completion.selected-1)

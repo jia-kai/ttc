@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,9 +138,21 @@ func TestCompletionModifiedNavigationAndNewline(t *testing.T) {
 			menu := &completionMenu{result: completionResult{query: q, items: []completionItem{{value: "first"}, {value: "second"}}}}
 			c := frontendController{draft: draft, completion: menu}
 			c.draft.completion = menu
-			for _, key := range []tcell.Key{tcell.KeyUp, tcell.KeyDown} {
-				if c.handleCompletionKey(tcell.NewEventKey(key, "", 0)) || menu.selected != 0 || c.draft.text != text {
-					t.Fatal("plain arrow intercepted by suggestions", key, menu.selected, c.draft.text)
+			for _, key := range []tcell.Key{tcell.KeyDown, tcell.KeyDown, tcell.KeyUp, tcell.KeyUp} {
+				wantHandled := q.marker == '@'
+				wantSelected := 0
+				if wantHandled && key == tcell.KeyDown {
+					wantSelected = 1
+				}
+				if got := c.handleCompletionKey(tcell.NewEventKey(key, "", 0)); got != wantHandled || menu.selected != wantSelected || c.draft.text != text {
+					t.Fatal("unexpected plain arrow handling", key, got, menu.selected, c.draft.text)
+				}
+			}
+			for _, mod := range []tcell.ModMask{tcell.ModAlt, tcell.ModCtrl, tcell.ModAlt | tcell.ModShift} {
+				for _, key := range []tcell.Key{tcell.KeyUp, tcell.KeyDown} {
+					if c.handleCompletionKey(tcell.NewEventKey(key, "", mod)) || menu.selected != 0 {
+						t.Fatal("modified arrow intercepted by suggestions", key, mod)
+					}
 				}
 			}
 			if !c.handleCompletionKey(tcell.NewEventKey(tcell.KeyDown, "", tcell.ModShift)) || menu.selected != 1 {
@@ -171,6 +184,80 @@ func TestCompletionDoesNotInterceptHistoryOrShiftEnter(t *testing.T) {
 	u.typeText("tail")
 	waitComposerRows(t, u, "> /he", "  tail")
 	assertComposerSubmission(t, u, "remember")
+}
+
+func TestPathCompletionPlainArrowsAndSeparatedQuery(t *testing.T) {
+	u := newQuestionTestUI(t, &llm.Script{})
+	for _, name := range []string{"abcxyz-uvdefww", "abcxyz-uvdefwx", "abcxyz_uvdefww"} {
+		if err := os.WriteFile(filepath.Join(u.runtime.Workspace.Root, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u.typeText("look @abc-def")
+	u.wait(t, "abcxyz-uvdefwx")
+	u.key(tcell.KeyDown)
+	u.key(tcell.KeyUp)
+	u.key(tcell.KeyDown)
+	u.key(tcell.KeyEnter)
+	u.wait(t, "Attached ·")
+	u.wait(t, "> look @abcxyz-uvdefwx")
+}
+
+func TestPathAndHistorySearchShareSymbolConstraints(t *testing.T) {
+	root := t.TempDir()
+	entries := []string{"abcxyz-uvdefww", "abcxyz_uvdefww", "abcxyz--uvdefww", "abcxyz_-uvdefww", "abcxyz-_uvdefww"}
+	for _, name := range entries {
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		query string
+		want  []string
+	}{
+		{"abc-def", []string{"abcxyz--uvdefww", "abcxyz-_uvdefww", "abcxyz-uvdefww", "abcxyz_-uvdefww"}},
+		{"abc--def", []string{"abcxyz--uvdefww"}},
+		{"abc-_def", []string{"abcxyz-_uvdefww"}},
+		{"abc_-def", []string{"abcxyz_-uvdefww"}},
+		{"abc.def", nil},
+	} {
+		t.Run(tt.query, func(t *testing.T) {
+			result := listPaths(context.Background(), completionQuery{root: root, prefix: tt.query, marker: '@'})
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			var paths, prompts []string
+			for _, item := range result.items {
+				paths = append(paths, item.value)
+			}
+			m := newPromptSearch(entries)
+			m.query.set(tt.query)
+			m.filter()
+			for _, index := range m.matches {
+				prompts = append(prompts, entries[index])
+			}
+			slices.Sort(paths)
+			slices.Sort(prompts)
+			if !reflect.DeepEqual(paths, tt.want) || !reflect.DeepEqual(prompts, tt.want) {
+				t.Fatalf("paths %v, prompts %v, want %v", paths, prompts, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompletionArrowsWithoutSuggestions(t *testing.T) {
+	menu := &completionMenu{}
+	c := frontendController{draft: newComposer("@missing"), completion: menu}
+	for _, active := range []bool{false, true} {
+		if active {
+			c.draft.completion = menu
+		}
+		for _, key := range []tcell.Key{tcell.KeyUp, tcell.KeyDown} {
+			if c.handleCompletionKey(tcell.NewEventKey(key, "", 0)) {
+				t.Fatal("arrow intercepted without suggestions", active, key)
+			}
+		}
+	}
 }
 
 func TestPathCompletionBoundAndWorkerShutdown(t *testing.T) {

@@ -1026,23 +1026,29 @@ The concrete boundaries above are TTC decisions, informed by:
   Shift-Enter inserts a hard newline, requiring a distinct terminal key report;
   pasted newlines remain intact. External-editor results retain leading and
   internal whitespace but have trailing whitespace removed.
-- Up/Down always recalls original main user/steer messages across saved
-  sessions, capped at 1000 entries/8 MiB. Exclude file snapshots, runtime
-  notices and continuation copies. Current submissions, including commands,
-  share the caps. Ctrl-R searches whitespace-separated case-insensitive
-  substrings with AND semantics, in any order, newest first. Queries have at
-  most 256 characters; render at most 128 visible result rows with 512-byte
-  previews. Fold full prompts once on opening; filter with deduplicated terms,
-  longest first and early rejection. Highlight all occurrences in sanitized
-  previews, merging overlaps and preserving Unicode positions. Enter recalls the
-  exact prompt; Esc preserves draft.
+- Up/Down selects open `@` path suggestions; otherwise it recalls original main
+  user/steer messages across saved sessions, capped at 1000 entries/8 MiB.
+  Exclude file snapshots, runtime notices and continuation copies. Current
+  submissions, including commands, share the caps. Ctrl-R splits queries on
+  non-letter characters (including digits) and searches case-insensitive
+  substrings with AND semantics, in any order, newest first. Non-letter,
+  non-space characters must also match an ordered subsequence, including
+  repeated punctuation and digits; whitespace-only queries match all prompts.
+  Queries have at most 256 characters; render at most 128 visible result rows
+  with 512-byte previews. Fold full prompts once on opening; filter with
+  deduplicated terms, longest first and early rejection. Highlight all
+  occurrences in sanitized previews, merging overlaps and preserving Unicode
+  positions. Enter recalls the exact prompt; Esc preserves draft.
 - Slash completion is local. One joined/debounced path worker recursively scans
   at most 10,000 entries below the current or typed directory, without following
   symlink directories; skip unreadable or disappeared descendants. Share
   Ctrl-R's folded substring AND matcher; return up to 256 matches sorted by path
-  length, then alphabetically. No persistent index. Accept only matching
-  draft/cursor/generation results; snapshot selected attachments asynchronously.
-  Paste and dialogs retain key priority.
+  length, then alphabetically. A typed directory prefix sets the search root;
+  tokenize only the remaining query. Plain Up/Down selects path suggestions;
+  Shift-Up/Down selects either path or slash suggestions. Tab/Enter accepts
+  (Enter submits an exact slash command); Esc dismisses. No persistent index.
+  Accept only matching draft/cursor/generation results; snapshot selected
+  attachments asynchronously. Paste and dialogs retain key priority.
 - Ctrl-X E suspends terminal/graphics around a cancelable `$VISUAL`/`$EDITOR`
   using a 0600 scratch file. Drain runtime events while suspended. Failure
   preserves draft/cursor; valid UTF-8 edits up to 8 MiB replace without sending.

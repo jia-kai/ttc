@@ -168,7 +168,7 @@ func listPaths(ctx context.Context, q completionQuery) completionResult {
 	if prefix == "" {
 		out.items = append(out.items, completionItem{value: dir + ".", description: "Attach this directory"})
 	}
-	terms := searchTerms(prefix)
+	pattern := newSearchPattern(prefix)
 	// Breadth-first traversal keeps at most two directory handles open.
 	// Collect the bounded scan before limiting results, so filesystem enumeration
 	// order does not decide which of the shortest matches are displayed.
@@ -206,7 +206,7 @@ func listPaths(ctx context.Context, q completionQuery) completionResult {
 				if entry.IsDir() {
 					dirs = append(dirs, rel)
 				}
-				if !matchesSearchTerms(strings.ToLower(rel), terms) {
+				if !pattern.matches(strings.ToLower(rel)) {
 					continue
 				}
 				item := completionItem{value: dir + rel, directory: entry.IsDir()}

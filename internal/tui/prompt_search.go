@@ -15,8 +15,8 @@ type promptSearch struct {
 	Window          Window
 	query           composer
 	entries, folded []string
-	terms           []string // Folded AND terms, longest first for early rejection.
-	matches         []int    // Original prompt indices, newest first.
+	pattern         searchPattern
+	matches         []int // Original prompt indices, newest first.
 	selected, start int
 	rows            []string
 }
@@ -35,10 +35,10 @@ func newPromptSearch(entries []string) *promptSearch {
 }
 
 func (m *promptSearch) filter() {
-	m.terms = searchTerms(m.query.text)
+	m.pattern = newSearchPattern(m.query.text)
 	m.matches = m.matches[:0]
 	for i := len(m.entries) - 1; i >= 0; i-- {
-		if matchesSearchTerms(m.folded[i], m.terms) {
+		if m.pattern.matches(m.folded[i]) {
 			m.matches = append(m.matches, i)
 		}
 	}
@@ -66,7 +66,7 @@ func (m *promptSearch) update() {
 			text = text[:end] + "…"
 		}
 		text = strings.ReplaceAll(render.Clean(text), "\n", " ↵ ")
-		text = highlightPrompt(text, m.terms)
+		text = highlightPrompt(text, m.pattern.terms)
 		m.rows = append(m.rows, menuRow(text, i == m.selected))
 	}
 	m.Window.Text = strings.Join(m.rows, "\n")

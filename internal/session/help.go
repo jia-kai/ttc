@@ -22,8 +22,7 @@ Keyboard shortcuts apply to the TUI; plain-mode messages queue while busy.
 ## Conversation and views
 
 - **/help** — Open this guide while busy or idle without interrupting work.
-- **Up** — Recall a previous prompt, including saved prompts from older sessions.
-- **Down** — Recall the next prompt or restore the draft.
+- **Up / Down** — Select open @ path suggestions; otherwise recall previous/next prompts across sessions or restore the draft.
 - **Ctrl+R** — Search recent prompts across sessions; Enter fills input, Esc cancels.
 - **Alt+Up / Alt+Down** — Focus a conversation message.
 - **Click a message** — Open its details.
@@ -55,9 +54,9 @@ The composer soft-wraps without changing text and grows to six rows, limited by 
 - **Ctrl+P** — Open the command menu.
 - **Enter in the command menu** — Put the selected command in the input.
 - **/** — Show command suggestions at the start of input.
-- **@** — Show file attachment suggestions.
+- **@** — Show file attachment suggestions. Path and Ctrl+R search split words on non-letter characters; words match substrings in any order, while non-space separators must also occur in order.
 - **Tab in suggestions** — Accept the selected suggestion.
-- **Shift+Up / Shift+Down in suggestions** — Select a suggestion; plain Up/Down still recalls prompts.
+- **Shift+Up / Shift+Down in suggestions** — Select a path or command suggestion; plain Up/Down selects only path suggestions.
 - **/attach PATH** — Snapshot text, directories, or supported native images/documents.
 
 ## Sessions and history

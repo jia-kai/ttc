@@ -238,18 +238,23 @@ markers containing YAML. Ordinary input stays unchanged; compaction summaries
 remain historical user-role content rather than developer instructions. See
 [message shapes](docs/system_prompt.md#message-shapes).
 
-Use `/help` for the keyboard and command guide. Up/Down recall prompts across
-sessions and restarts, even in multiline input. The composer soft-wraps without
-changing the text and grows to six rows, limited by terminal height. Ctrl+J/K
-scroll its viewport down/up without moving the cursor; editing or cursor
-movement reveals the cursor again. Shift+Enter inserts a newline when the
-terminal reports it distinctly from Enter; otherwise paste multiline text or use
-Ctrl+X E for the external editor. Pasted and editor newlines are preserved.
-Ctrl-C clears a nonempty prompt; with an empty prompt, it exits TTC and cancels
-live work. Ctrl-R searches the most recent 1000 prompts (at most 8 MiB), newest
-matches first. Every whitespace-separated term must match a case-insensitive
-substring, in any order; matches are highlighted. Enter fills the input and Esc
-cancels.
+Use `/help` for the keyboard and command guide. Up/Down select entries while `@`
+path suggestions are open; Tab or Enter accepts, and Esc dismisses. Otherwise
+Up/Down recall prompts across sessions and restarts, even in multiline input.
+The composer soft-wraps without changing the text and grows to six rows, limited
+by terminal height. Ctrl+J/K scroll its viewport down/up without moving the
+cursor; editing or cursor movement reveals the cursor again. Shift+Enter inserts
+a newline when the terminal reports it distinctly from Enter; otherwise paste
+multiline text or use Ctrl+X E for the external editor. Pasted and editor
+newlines are preserved. Ctrl-C clears a nonempty prompt; with an empty prompt,
+it exits TTC and cancels live work. Ctrl-R searches the most recent 1000 prompts
+(at most 8 MiB), newest matches first. History and `@` path search split queries
+on all non-letter characters (including digits); every word must match a
+case-insensitive substring, in any order. Non-letter, non-space characters must
+also occur in order as a subsequence, so `abc-def` matches `abcxyz-uvdefww` but
+not `abcxyz_uvdefww`. Whitespace-only queries match everything. In path search,
+a typed directory prefix sets the search root; only the remainder is matched.
+History word matches are highlighted; Enter fills the input and Esc cancels.
 
 Multiple TTC instances can share the default data directory and the same
 workspace. Each starts an independent conversation; workspace conflicts are your
