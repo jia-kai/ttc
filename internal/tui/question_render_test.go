@@ -22,7 +22,7 @@ func paintInlineQuestion(t *testing.T, s *testScreen, d *questionDialog) questio
 	w, h := s.Size()
 	if err := draw(s, drawState{
 		view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: newComposer("hidden draft"), attached: 2,
-		window: &d.Window, question: d,
+		question: d,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -209,20 +209,16 @@ func TestQuestionRenderDrawUsesQuestionCursorInsteadOfMainInput(t *testing.T) {
 	s.SetSize(60, 24)
 	d := questionRenderDraft("answer", 2)
 	main := newComposer("main draft")
-	for _, window := range []*Window{nil, &d.Window} {
-		var question *questionDialog
-		if window != nil {
-			question = d
-		}
+	for _, question := range []*questionDialog{nil, d} {
 		if err := draw(s, drawState{
-			view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: main, window: window, question: question,
+			view: newTranscript(), sidebar: newSidebar(), focused: -1, draft: main, question: question,
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if !s.cursorVisible {
 			t.Fatal("active input cursor is hidden")
 		}
-		if window == nil {
+		if question == nil {
 			geometry := layoutInput(&main, 60, 24, false, 0)
 			if s.cursorX != 12 || s.cursorY != geometry.inputY {
 				t.Fatalf("main cursor=(%d,%d)", s.cursorX, s.cursorY)

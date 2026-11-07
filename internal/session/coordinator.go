@@ -608,6 +608,22 @@ func (c *SessionCoordinator) handle(r Request) {
 		}
 	case RequestEOF:
 		c.eof = true
+	case RequestAnswer, RequestDismissQuestion, RequestReopenQuestion:
+		if c.pendingCommand != nil || c.changingSession {
+			result.Err = errors.New("wait for the current history command")
+			break
+		}
+		// These bounded, in-memory mutations must commit in mailbox order with
+		// input admission. A slow effect must not let a following prompt overtake
+		// its question dismissal and leave the suspended tool waiting forever.
+		switch r.Kind {
+		case RequestAnswer:
+			result.Err = c.runtime.AnswerQuestion(r.ID, r.Answers)
+		case RequestDismissQuestion:
+			result.Err = c.runtime.DismissQuestion(r.ID)
+		case RequestReopenQuestion:
+			result.Err = c.runtime.ReopenQuestion(r.ID)
+		}
 	case RequestCancelQueue:
 		var input contextbuild.Input
 		if len(c.queue) > 0 {

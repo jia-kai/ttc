@@ -25,7 +25,7 @@ func TestQuestionContextScrollPreservesAnswers(t *testing.T) {
 					d.tab = len(d.answers)
 				}
 				d.update()
-				c.modal.question, c.modal.window = d, &d.Window
+				c.question = d
 				for i := range 80 {
 					c.view.append(line{text: fmt.Sprintf("CONTEXT_%03d", i)})
 				}
@@ -52,7 +52,7 @@ func TestQuestionContextScrollPreservesAnswers(t *testing.T) {
 				if !c.view.followTail {
 					t.Fatal("Ctrl+D did not return to the conversation tail")
 				}
-				if !reflect.DeepEqual(before, d.answers) || d.tab != tab || d.Window.Scroll != formScroll || c.modal.question != d {
+				if !reflect.DeepEqual(before, d.answers) || d.tab != tab || d.Window.Scroll != formScroll || c.question != d {
 					t.Fatal("context scrolling changed question state")
 				}
 			})
@@ -72,7 +72,7 @@ func TestQuestionWheelTargetsPaneUnderPointer(t *testing.T) {
 	d := questionRenderDraft("draft", 2)
 	d.form.Questions[0].Prompt = "First prompt\n" + strings.Repeat("Long prompt\n", 60)
 	d.update()
-	c.modal.question, c.modal.window = d, &d.Window
+	c.question = d
 	for i := range 80 {
 		c.view.append(line{text: fmt.Sprintf("ROW_%03d", i)})
 	}
@@ -103,7 +103,7 @@ func TestQuestionReopenLeavesCopyMode(t *testing.T) {
 	}
 	form := questionFixture()
 	c.showQuestion(&form)
-	if c.fullscreen || c.copyView != nil || c.displayView() != c.view || c.sidebar.overlay || c.modal.question == nil {
+	if c.fullscreen || c.copyView != nil || c.displayView() != c.view || c.sidebar.overlay || c.question == nil {
 		t.Fatal("question opened over a frozen copy-mode transcript")
 	}
 }
@@ -126,7 +126,7 @@ func TestQuestionWheelSkipsSteeringStatusRows(t *testing.T) {
 	defer s.Fini()
 	s.SetSize(100, 40)
 	d := newQuestionDialog(questionFixture())
-	c.modal.question, c.modal.window = d, &d.Window
+	c.question = d
 	for i := range 80 {
 		c.view.append(line{text: fmt.Sprintf("ROW_%03d", i)})
 	}

@@ -16,7 +16,7 @@ func TestQuestionReopenAcknowledgmentCannotSwallowExit(t *testing.T) {
 		f.Screen = newTestScreen(t)
 	})
 	c.submit(frontendSubmission{text: "Ask", ready: true})
-	for c.modal.question == nil {
+	for c.question == nil {
 		nextControllerUpdate(t, c)
 	}
 	c.handleKey(tcell.NewEventKey(tcell.KeyEscape, "", 0))
@@ -51,10 +51,10 @@ func TestQuestionReopenAcknowledgmentCannotSwallowExit(t *testing.T) {
 	if !next.ready || next.text != "/quit" {
 		buf := make([]byte, 1<<20)
 		n := runtime.Stack(buf, true)
-		t.Fatalf("late reopen swallowed exit: submission=%+v modal=%v pending=%+v\n%s", next, c.modal.question != nil, c.frontend.Runtime.PendingQuestion(), buf[:n])
+		t.Fatalf("late reopen swallowed exit: submission=%+v modal=%v pending=%+v\n%s", next, c.question != nil, c.frontend.Runtime.PendingQuestion(), buf[:n])
 	}
 	waitControllerResult(t, c, session.RequestDismissQuestion)
-	if form := c.frontend.Runtime.PendingQuestion(); form == nil || !form.Dismissed || c.modal.question != nil {
+	if form := c.frontend.Runtime.PendingQuestion(); form == nil || !form.Dismissed || c.question != nil {
 		t.Fatal("Escape did not keep the reopened form dismissed", form)
 	}
 	if !c.submit(next) {

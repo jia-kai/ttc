@@ -90,7 +90,7 @@ func TestPasteBatchQuestionLimitsMatchDecodedEvents(t *testing.T) {
 			initial := strings.Repeat("x", session.MaxAnswerBytes-2)
 			d.answers[0].custom.set(initial)
 			d.answers[0].custom.cursor = 3
-			c.modal.question, c.modal.window = d, &d.Window
+			c.question = d
 			c.handlePaste(tcell.NewEventPaste(true))
 			c.batchingEvents = true
 			for _, text := range []string{strings.Repeat("oversized", session.MaxAnswerBytes), "a", "界", final} {
@@ -126,7 +126,7 @@ func TestPasteBatchQuestionRejectionPreservesEntireDraft(t *testing.T) {
 	d.answers[0].custom.cursor = 10
 	d.answers[0].custom.killed = "界"
 	before := d.answers[0].custom
-	c.modal.question, c.modal.window = d, &d.Window
+	c.question = d
 	c.handleScreenEvent(tcell.NewEventPaste(true))
 	if next := c.handleScreenEvent(tcell.NewEventKey(tcell.KeyEnter, "", 0)); next.ready || d.tab != 0 {
 		t.Fatal("rejected paste navigated or submitted", next, d.tab)
@@ -173,7 +173,7 @@ func TestPasteBatchDestinationOwnership(t *testing.T) {
 			original := pasteQuestionFixture()
 			switch destination {
 			case "question":
-				c.modal.question, c.modal.window = original, &original.Window
+				c.question = original
 			case "search":
 				c.modal.prompts = newPromptSearch(nil)
 			case "blocked":
@@ -182,18 +182,14 @@ func TestPasteBatchDestinationOwnership(t *testing.T) {
 			c.handlePaste(tcell.NewEventPaste(true))
 			replacement := pasteQuestionFixture()
 			c.modal.clear()
-			c.modal.question, c.modal.window = replacement, &replacement.Window
+			c.question = replacement
 			c.handleKey(pasteRune("remaining"))
 			c.handleKey(tcell.NewEventKey(tcell.KeyEnter, "", 0))
 			if original.answers[0].custom.text != "" || replacement.answers[0].custom.text != "" || replacement.tab != 0 {
 				t.Fatal("paste redirected to a new question")
 			}
-			want := ""
-			if destination == "composer" {
-				want = "remaining\n"
-			}
-			if c.draft.text != want {
-				t.Fatalf("composer text = %q, want %q", c.draft.text, want)
+			if c.draft.text != "" {
+				t.Fatalf("paste edited the composer hidden by a new question: %q", c.draft.text)
 			}
 			c.handlePaste(tcell.NewEventPaste(false))
 		})
@@ -246,7 +242,7 @@ func TestPasteBatchReceiveBoundedPartialFeedbackAndRuntime(t *testing.T) {
 func TestPasteBatchQuestionPartialBeforeEnd(t *testing.T) {
 	c := pasteTestController()
 	d := pasteQuestionFixture()
-	c.modal.question, c.modal.window = d, &d.Window
+	c.question = d
 	keys := make(chan tcell.Event, 3)
 	c.keys = keys
 	keys <- tcell.NewEventPaste(true)

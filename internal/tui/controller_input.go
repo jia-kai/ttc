@@ -50,7 +50,9 @@ func (c *frontendController) startEditor() {
 			c.draft.set(result.text)
 		}
 	}
-	if question := c.modal.question; question != nil {
+	// The explicit global editor shortcut edits the active bottom input while
+	// preserving any inspector or picker to return to after the editor closes.
+	if question := c.question; question != nil && !c.fullscreen {
 		if !question.textEntry() {
 			return
 		}
@@ -145,7 +147,6 @@ func (c *frontendController) openModelMenu() {
 	c.modal.menu = newModelMenu(c.frontend.Models, current)
 	c.modal.menu.easy = c.frontend.Runtime.EasyModelChoice()
 	c.modal.menu.update()
-	c.modal.question = nil
 	c.modal.window = &c.modal.menu.Window
 }
 

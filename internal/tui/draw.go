@@ -79,7 +79,7 @@ func draw(s tcell.Screen, frame drawState) error {
 	start := frame.view.firstLine
 	if frame.renderer != nil {
 		assets := all
-		if frame.window != nil && frame.question == nil && frame.preview == nil && frame.window.Markdown {
+		if frame.window != nil && frame.preview == nil && frame.window.Markdown {
 			if frame.window.renderer != frame.renderer {
 				frame.window.renderer = frame.renderer
 				frame.window.cachedLines = nil
@@ -191,7 +191,7 @@ func draw(s tcell.Screen, frame drawState) error {
 		if err := frame.preview.draw(s, frame.renderer.graphics); err != nil {
 			drawWindow(s, &Window{Title: "Image preview", Text: "Image preview failed: " + err.Error()})
 		}
-	} else if frame.question == nil && frame.window != nil {
+	} else if frame.window != nil {
 		s.HideCursor()
 		drawWindow(s, frame.window)
 	} else if frame.question == nil {

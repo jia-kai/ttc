@@ -27,6 +27,11 @@ answers. Esc leaves text entry, then dismisses; `/questions` reopens the pending
 form. A normal message instead settles dismissed calls with `dismissed:true` and
 redirects the agent; local commands leave them pending.
 
+While answering, click conversation rows or sidebar agents/jobs to inspect them;
+Esc returns to the same question tab and draft. Ctrl+X F hides the form in copy
+mode; Esc or Ctrl+X F restores it. Global shortcuts also work in dialogs, while
+dialog-local input stays separate from the question and composer.
+
 The fixture exercises 20 selected tool types: file read/search, three edit
 types, shell, a reusable child with an idle follow-up and explicit close, a
 managed stdio LSP query, background job list/read/stop, local web fetch/search,
@@ -120,6 +125,7 @@ make integration                  # original workflow + plain and TUI demos
 python3 tests/demo.py              # automated plain PTY
 python3 tests/demo.py --tui        # real TUI in a PTY; switches model via menu
 python3 tests/pty_input.py          # offline editor, input scrolling, Shift+Enter/paste, export
+python3 tests/pty_question_input.py # offline questions: agent/row clicks, fullscreen, draft/cursor preservation
 python3 tests/pty_control_strings.py # offline control-string idle timeout and fragmented APC
 python3 tests/pty_history.py        # offline prompt recall/search across restart and /new
 python3 tests/pty_parallel.py       # shared data/workspace, independent loads, no recovery

@@ -131,8 +131,12 @@ func (c *frontendController) drawFrame() error {
 			drawFocus = c.copyFocused
 		}
 		paneWidth := c.sidebar.bounds(width, height, c.fullscreen)
+		question := c.question
+		if c.fullscreen {
+			question = nil
+		}
 		var previewLimit int
-		if c.modal.question != nil {
+		if question != nil {
 			previewLimit = layoutQuestionInput(paneWidth, height, c.fullscreen, height).queuedRows
 		} else {
 			previewLimit = layoutInput(&c.draft, paneWidth, height, c.fullscreen, height).queuedRows
@@ -157,7 +161,7 @@ func (c *frontendController) drawFrame() error {
 			steers:     steers,
 			indicator:  indicator,
 			window:     c.modal.window,
-			question:   c.modal.question,
+			question:   question,
 			selection:  c.frontend.Runtime.CurrentSelection(),
 			easy:       c.frontend.Runtime.EasyModelChoice(),
 		}); err != nil {

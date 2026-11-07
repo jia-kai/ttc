@@ -22,6 +22,7 @@ check: prompts
 
 integration: build
 	python3 tests/pty_input.py
+	python3 tests/pty_question_input.py
 	python3 tests/pty_control_strings.py
 	python3 tests/pty_history.py
 	python3 tests/pty_parallel.py

@@ -21,16 +21,15 @@ func (c *frontendController) prepare() (bool, error) {
 		}
 		c.queueGeneration = generation
 		c.activity = turnActivity{}
+		c.question = nil
 		c.retainedQuestion = nil
 		c.deferredQuestionID = ""
 		c.questionReopenRequest = 0
+		c.composerQuestionID = ""
 		c.questionRow = -1
-		if c.modal.question != nil {
-			c.modal.clear()
-		}
 	}
 	c.syncQuestionState(c.frontend.Runtime.PendingQuestion())
-	if !c.frontend.Plain && !c.fullscreen && !c.editing && !c.draft.pasting && c.modal.empty() && len(c.pendingBTW) > 0 {
+	if !c.frontend.Plain && !c.fullscreen && !c.editing && !c.draft.pasting && c.modal.empty() && c.question == nil && len(c.pendingBTW) > 0 {
 		event := c.pendingBTW[0]
 		c.pendingBTW = c.pendingBTW[1:]
 		if event.Generation == c.frontend.Runtime.Generation() {
@@ -49,7 +48,7 @@ func (c *frontendController) prepare() (bool, error) {
 		return true, nil
 	}
 	c.draft.completion = nil
-	if c.screen != nil && c.modal.empty() && !c.fullscreen && !c.editing {
+	if c.screen != nil && c.modal.empty() && c.question == nil && !c.fullscreen && !c.editing {
 		q, active := completionAt(c.draft, c.frontend.Runtime.Workspace.Root, c.frontend.Runtime.Generation())
 		if active && !(c.completion.hasDismissed && q == c.completion.dismissed) {
 			if !c.hadQuery || q != c.lastQuery {
@@ -185,7 +184,11 @@ func (c *frontendController) handleUpdate(update session.Update) error {
 				form := c.frontend.Runtime.PendingQuestion()
 				c.syncQuestionState(form)
 				if form != nil && !form.Dismissed {
-					c.showQuestion(form)
+					if !c.modal.empty() || c.draft.pasting || c.fullscreen || c.editing {
+						c.deferredQuestionID = form.ID
+					} else {
+						c.showQuestion(form)
+					}
 				}
 			}
 		}
@@ -385,7 +388,7 @@ func (c *frontendController) handleRuntimeEvent(event session.Event) error {
 		if c.frontend.Plain {
 			fmt.Fprintln(c.frontend.Output, render.Clean(event.Text))
 		}
-		if !c.frontend.Plain && !form.Dismissed && c.modal.question == nil {
+		if !c.frontend.Plain && !form.Dismissed && c.question == nil && form.ID != c.composerQuestionID {
 			if !c.modal.empty() || c.draft.pasting || c.fullscreen || c.editing {
 				c.deferredQuestionID = form.ID
 			} else {
@@ -523,7 +526,7 @@ func (c *frontendController) receiveOne() (next frontendSubmission, stop bool, e
 		c.handleRenderResult(result)
 	case result := <-c.completer.results:
 		q, active := completionAt(c.draft, c.frontend.Runtime.Workspace.Root, c.frontend.Runtime.Generation())
-		if active && result.query == q && c.modal.empty() && !c.fullscreen {
+		if active && result.query == q && c.modal.empty() && c.question == nil && !c.fullscreen {
 			c.completion.result, c.completion.selected = result, 0
 			if result.err != nil {
 				c.completion.result.items = nil

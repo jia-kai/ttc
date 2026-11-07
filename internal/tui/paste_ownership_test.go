@@ -15,7 +15,7 @@ func TestPasteBatchBufferedTextCannotReachReplacementModal(t *testing.T) {
 			question := pasteQuestionFixture()
 			search := newPromptSearch([]string{"pending"})
 			if kind == "question" {
-				c.modal.question, c.modal.window = question, &question.Window
+				c.question = question
 			} else {
 				c.modal.prompts, c.modal.window = search, &search.Window
 			}
@@ -24,7 +24,7 @@ func TestPasteBatchBufferedTextCannotReachReplacementModal(t *testing.T) {
 			c.handleKey(pasteRune("pending"))
 			c.modal.clear()
 			replacement := pasteQuestionFixture()
-			c.modal.question, c.modal.window = replacement, &replacement.Window
+			c.question = replacement
 			c.flushPaste()
 			c.handleKey(pasteRune("remainder"))
 			c.handlePaste(tcell.NewEventPaste(false))
@@ -35,10 +35,67 @@ func TestPasteBatchBufferedTextCannotReachReplacementModal(t *testing.T) {
 	}
 }
 
+func TestPasteBatchQuestionDoesNotEditBackgroundForm(t *testing.T) {
+	for _, blocker := range []string{"modal", "fullscreen"} {
+		t.Run(blocker, func(t *testing.T) {
+			c := pasteTestController()
+			d := pasteQuestionFixture()
+			c.question = d
+			c.handlePaste(tcell.NewEventPaste(true))
+			c.batchingEvents = true
+			c.handleKey(pasteRune("buffered"))
+			inspector := &Window{Title: "Inspector"}
+			if blocker == "modal" {
+				c.modal.window = inspector
+			} else {
+				c.setFullscreen(true)
+			}
+			c.flushPaste()
+			c.handleKey(pasteRune("remainder"))
+			c.handlePaste(tcell.NewEventPaste(false))
+			if d.answers[0].custom.text != "" || c.draft.text != "" || c.question != d || blocker == "modal" && c.modal.window != inspector {
+				t.Fatal("paste changed a background form, redirected text, or closed its overlay")
+			}
+		})
+	}
+}
+
+func TestPasteBatchComposerDoesNotEditBehindNewFocus(t *testing.T) {
+	for _, focus := range []string{"modal", "question", "fullscreen", "leave fullscreen"} {
+		t.Run(focus, func(t *testing.T) {
+			c := pasteTestController()
+			if focus == "leave fullscreen" {
+				c.setFullscreen(true)
+			}
+			c.handlePaste(tcell.NewEventPaste(true))
+			if !c.paste.composer {
+				t.Fatal("paste did not capture composer focus")
+			}
+			c.batchingEvents = true
+			c.handleKey(pasteRune("buffered"))
+			inspector := &Window{Title: "Inspector"}
+			switch focus {
+			case "modal":
+				c.modal.window = inspector
+			case "question":
+				c.question = pasteQuestionFixture()
+			default:
+				c.setFullscreen(!c.fullscreen)
+			}
+			c.flushPaste()
+			c.handleKey(pasteRune("remainder"))
+			c.handlePaste(tcell.NewEventPaste(false))
+			if c.draft.text != "" || focus == "modal" && c.modal.window != inspector || focus == "question" && c.question.answers[0].custom.text != "" {
+				t.Fatal("composer paste redirected text, edited a hidden input, or closed a newer overlay")
+			}
+		})
+	}
+}
+
 func TestPasteBatchQuestionAnswerOwnershipSurvivesTabChange(t *testing.T) {
 	c := pasteTestController()
 	d := newQuestionDialog(session.QuestionForm{ID: "tabs", Questions: []session.Question{{ID: "first", Prompt: "First?"}, {ID: "second", Prompt: "Second?"}}})
-	c.modal.question, c.modal.window = d, &d.Window
+	c.question = d
 	c.handlePaste(tcell.NewEventPaste(true))
 	c.batchingEvents = true
 	c.handleKey(pasteRune("before"))

@@ -7,21 +7,7 @@ import (
 	"github.com/gdamore/tcell/v3"
 )
 
-func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmission) {
-	if !ev.Pressed() {
-		return next
-	}
-	if c.paste.active {
-		normalized := normalizeFrontendKey(ev)
-		if !isCtrl(normalized, "c") {
-			c.collectPasteKey(normalized)
-			if !c.batchingEvents {
-				c.flushPaste()
-			}
-			return next
-		}
-		c.flushPaste() // Ctrl+C observes the partially pasted draft, just like typing.
-	}
+func (c *frontendController) handleModalKey(ev *tcell.EventKey) (next frontendSubmission) {
 	if c.modal.window != nil && c.modal.window.completionEntry != 0 && ev.Key() == tcell.KeyRune && (ev.Str() == "d" || ev.Str() == "D") && ev.Modifiers() == 0 {
 		c.inspectSaved(c.modal.window.completionEntry)
 		return next
@@ -44,32 +30,13 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 			return next
 		}
 	}
-	ev = normalizeFrontendKey(ev)
-	if ev.Key() == tcell.KeyEscape && c.questionReopenRequest != 0 {
-		// Escape supersedes a requested dialog even when its asynchronous
-		// acknowledgment has not arrived. Keep the runtime form dismissed too.
-		c.questionReopenRequest = 0
-		if form := c.frontend.Runtime.PendingQuestion(); form != nil && c.modal.question == nil {
-			c.control(session.Request{Kind: session.RequestDismissQuestion, ID: form.ID})
-		}
-	}
-	if isCtrl(ev, "c") {
-		if c.draft.text != "" {
-			c.draft.set("")
-			c.recall.index, c.recall.draft = len(c.recall.entries), ""
-			c.esc, c.viewChord = false, false
-			return next
-		}
-		next.text, next.ready = "/quit", true
-		return next
-	}
 	if c.modal.prompts != nil {
 		w, h := c.screen.Size()
 		_, height := windowContentSize(w, h, c.modal.window)
 		text, closed := c.modal.prompts.key(ev, height)
 		if closed {
 			c.modal.clear()
-			if text != "" {
+			if text != "" && c.revealComposer() {
 				c.recallInput(text)
 				c.recall.index, c.recall.draft = len(c.recall.entries), ""
 			}
@@ -85,39 +52,6 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 		if close {
 			c.finishPreview(confirm)
 		}
-		return next
-	}
-	if c.viewChord && ev.Key() == tcell.KeyRune && (ev.Str() == "e" || ev.Str() == "E") {
-		c.viewChord = false
-		c.startEditor()
-		return next
-	}
-	if c.modal.question != nil {
-		c.handleQuestionKey(ev)
-		return next
-	}
-	if c.viewChord {
-		if result, handled := c.handleViewChord(ev); handled {
-			return result
-		}
-	}
-	if isCtrl(ev, "x") {
-		c.viewChord = true
-		return next
-	}
-	if isCtrl(ev, "p") {
-		c.modal.clear()
-		c.modal.generation = c.frontend.Runtime.Generation()
-		c.modal.commands = newCommandMenu()
-		c.modal.window = &c.modal.commands.Window
-		return next
-	}
-	if isCtrl(ev, "r") {
-		c.modal.clear()
-		c.setFullscreen(false)
-		c.modal.generation = c.frontend.Runtime.Generation()
-		c.modal.prompts = newPromptSearch(c.recall.entries)
-		c.modal.window = &c.modal.prompts.Window
 		return next
 	}
 	if picked, handled := c.handlePickerKey(ev); handled {
@@ -136,53 +70,7 @@ func (c *frontendController) handleKey(ev *tcell.EventKey) (next frontendSubmiss
 		w, h := c.screen.Size()
 		width, height := windowContentSize(w, h, c.modal.window)
 		c.modal.window.currentLines(width)
-		if c.modal.window.Key(ev, height) {
-			return next
-		}
-	}
-	if c.sidebar.overlay && c.modal.window == nil && c.sidebar.key(ev) {
-		return next
-	}
-	if c.handleCompletionKey(ev) {
-		return next
-	}
-	if ev.Key() == tcell.KeyEscape {
-		if c.modal.window != nil {
-			c.modal.clear()
-		} else if c.sidebar.overlay {
-			c.sidebar.overlay = false
-		} else if c.fullscreen {
-			c.setFullscreen(false)
-		} else if !c.view.followTail {
-			c.view.followTail = true
-		} else if c.esc {
-			c.control(session.Request{Kind: session.RequestInterrupt})
-			c.esc = false
-		} else {
-			c.esc = true
-		}
-		return next
-	}
-	return c.handleComposerKey(ev)
-}
-
-func (c *frontendController) handleScreenEvent(ev tcell.Event) (next frontendSubmission) {
-	if _, key := ev.(*tcell.EventKey); !key {
-		c.flushPaste()
-	}
-	switch ev := ev.(type) {
-	case *tcell.EventPaste:
-		c.handlePaste(ev)
-	case *tcell.EventFocus:
-		if ev.Focused && c.g != nil && !c.g.Tmux {
-			refreshTerminalGraphics(c.screen, c.g, false)
-		}
-	case *tcell.EventResize:
-		c.screen.Sync()
-	case *tcell.EventMouse:
-		c.handleMouse(ev)
-	case *tcell.EventKey:
-		return c.handleKey(ev)
+		c.modal.window.Key(ev, height)
 	}
 	return next
 }
@@ -194,7 +82,7 @@ func (c *frontendController) handlePickerKey(ev *tcell.EventKey) (next frontendS
 		command, closed := c.modal.commands.key(ev, height)
 		if closed {
 			c.modal.clear()
-			if command != "" {
+			if command != "" && c.revealComposer() {
 				c.draft.set(command)
 				c.setFullscreen(false)
 			}
@@ -338,10 +226,6 @@ func (c *frontendController) handleComposerKey(ev *tcell.EventKey) (next fronten
 		return next
 	}
 	switch {
-	case isCtrl(ev, "d"):
-		c.displayView().pageDown(len(c.displayView().visible))
-	case isCtrl(ev, "u"):
-		c.displayView().scroll(-max(1, len(c.displayView().visible)/2), len(c.displayView().visible))
 	case ev.Key() == tcell.KeyUp:
 		if ev.Modifiers()&tcell.ModAlt != 0 {
 			if c.fullscreen {
@@ -418,132 +302,40 @@ func normalizeFrontendKey(ev *tcell.EventKey) *tcell.EventKey {
 
 func (c *frontendController) handleQuestionKey(ev *tcell.EventKey) {
 	c.esc = false
-	c.viewChord = false
-	// Questions replace the composer, not the conversation viewport. Keep the
-	// normal context-scrolling keys available even during custom text entry.
-	if isCtrl(ev, "u") {
-		c.view.scroll(-max(1, len(c.view.visible)/2), len(c.view.visible))
-		return
-	}
-	if isCtrl(ev, "d") {
-		c.view.pageDown(len(c.view.visible))
-		return
-	}
-	if c.modal.question.textEntry() && isCtrl(ev, "x") {
-		c.viewChord = true
-		return
-	}
+	d := c.question
 	geometry := c.layoutQuestionInput()
-	c.modal.question.Window.currentLines(geometry.bodyWidth)
-	answers, dismissed := c.modal.question.key(ev, geometry.bodyHeight)
+	d.Window.currentLines(geometry.bodyWidth)
+	answers, dismissed := d.key(ev, geometry.bodyHeight)
 	if dismissed {
-		if err := c.request(session.Request{Kind: session.RequestDismissQuestion, ID: c.modal.question.form.ID}); err != nil {
-			c.modal.question.errorText = err.Error()
-			c.modal.question.update()
+		if err := c.request(session.Request{Kind: session.RequestDismissQuestion, ID: d.form.ID}); err != nil {
+			d.errorText = err.Error()
+			d.update()
 		} else {
-			c.modal.clear()
+			c.question = nil
 			c.syncQuestionState(c.frontend.Runtime.PendingQuestion())
 			c.esc = false
 		}
 	}
 	if answers != nil {
-		if err := c.request(session.Request{Kind: session.RequestAnswer, ID: c.modal.question.form.ID, Answers: answers}); err != nil {
-			c.modal.question.errorText = err.Error()
-			c.modal.question.update()
+		if err := c.request(session.Request{Kind: session.RequestAnswer, ID: d.form.ID, Answers: answers}); err != nil {
+			d.errorText = err.Error()
+			d.update()
 		} else {
 			c.retainedQuestion = nil
-			c.modal.clear()
+			c.question = nil
 		}
 	}
 
 }
 
-func (c *frontendController) handleViewChord(ev *tcell.EventKey) (next frontendSubmission, handled bool) {
-	c.viewChord = false
-	if ev.Key() == tcell.KeyRune && (ev.Str() == "f" || ev.Str() == "F") {
-		c.setFullscreen(!c.fullscreen)
-		c.sidebar.overlay = false
-		return next, true
-	}
-	if ev.Key() == tcell.KeyRune && (ev.Str() == "s" || ev.Str() == "S") {
-		c.sidebar.overlay = !c.sidebar.overlay
-		return next, true
-	}
-	if ev.Key() == tcell.KeyRune && (ev.Str() == "m" || ev.Str() == "M") {
-		c.openModelMenu()
-		return next, true
-	}
-	if ev.Key() == tcell.KeyRune && (ev.Str() == "l" || ev.Str() == "L") {
-		c.openSessionMenu()
-		return next, true
-	}
-	if ev.Key() == tcell.KeyRune && (ev.Str() == "g" || ev.Str() == "G") {
-		c.openHistoryMenu()
-		return next, true
-	}
-	if ev.Key() == tcell.KeyRune {
-		switch ev.Str() {
-		case "?":
-			c.openQuestions("")
-			return next, true
-		case "j", "J":
-			next.text = "/jobs"
-		case "t", "T":
-			next.text = "/timers"
-		case "n", "N":
-			next.text = "/new"
-		case "q", "Q":
-			next.text = "/quit"
-		}
-		if next.text != "" {
-			c.modal.clear()
-			c.setFullscreen(false)
-			next.ready = true
-			return next, true
-		}
-	}
-
-	return next, false
-}
-
-func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
-	if c.fullscreen {
-		c.dirty = false
-		return // Ignore reports already queued before terminal selection mode.
-	}
+func (c *frontendController) handleModalMouse(ev *tcell.EventMouse) bool {
 	x, y := ev.Position()
 	if c.modal.preview != nil {
 		close, confirm := c.modal.preview.mouse(ev)
 		if close {
 			c.finishPreview(confirm)
 		}
-		return
-	}
-	if c.modal.question != nil {
-		geometry := c.layoutQuestionInput()
-		width, _ := c.screen.Size()
-		width = c.sidebar.bounds(width, c.sidebar.height, false)
-		if x < 0 || x >= width {
-			return
-		}
-		delta := 0
-		if ev.Buttons()&tcell.WheelUp != 0 {
-			delta = -3
-		} else if ev.Buttons()&tcell.WheelDown != 0 {
-			delta = 3
-		}
-		if delta != 0 {
-			if y >= geometry.headerY {
-				d := c.modal.question
-				d.Window.currentLines(geometry.bodyWidth)
-				d.Window.ScrollBy(delta, geometry.bodyHeight)
-				d.Window.Scroll = max(0, d.Window.Scroll)
-				d.manualScroll = true
-			} else if y >= 0 && y < geometry.transcriptHeight {
-				c.view.scroll(delta, len(c.view.visible))
-			}
-		}
-		return
+		return true
 	}
 	if c.modal.window != nil {
 		if c.renderer != nil && ev.Buttons()&tcell.Button1 != 0 {
@@ -555,24 +347,24 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 			if bodyY >= 0 && bodyY < bodyHeight {
 				if asset := c.modal.window.imageAt(x-left-1, bodyY); asset != nil {
 					c.openLocalImage(*asset)
-					return
+					return true
 				}
 			}
 		}
 		if c.modal.prompts != nil {
 			w, h := c.screen.Size()
 			c.modal.prompts.mouse(ev, w, h)
-			return
+			return true
 		}
 		if c.modal.background != nil {
 			w, h := c.screen.Size()
 			c.modal.background.mouse(ev, w, h)
-			return
+			return true
 		}
 		if c.modal.history != nil && c.modal.window == &c.modal.history.Window {
 			w, h := c.screen.Size()
 			c.modal.history.mouse(ev, w, h)
-			return
+			return true
 		}
 		if c.modal.sessions != nil {
 			w, h := c.screen.Size()
@@ -592,8 +384,12 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 			// Preserve the nonpaged wheel's immediate top clamp.
 			c.modal.window.Scroll = max(0, c.modal.window.Scroll)
 		}
-		return
+		return true
 	}
+	return false
+}
+
+func (c *frontendController) handleSidebarMouse(ev *tcell.EventMouse) bool {
 	if consumed, action := c.sidebar.mouse(ev); consumed {
 		if action.workspace {
 			c.modal.clear()
@@ -621,32 +417,69 @@ func (c *frontendController) handleMouse(ev *tcell.EventMouse) {
 				c.modal.window.Text = "Timer inspection failed: " + err.Error()
 			}
 		}
-		return
+		return true
 	}
+	return false
+}
+
+func (c *frontendController) handleQuestionMouse(ev *tcell.EventMouse) bool {
+	if c.question == nil {
+		return false
+	}
+	x, y := ev.Position()
+	geometry := c.layoutQuestionInput()
+	// Status and queued-input rows are neither form nor transcript content.
+	if x < 0 || x > geometry.bodyWidth || y < geometry.transcriptHeight {
+		return false
+	}
+	_, height := c.screen.Size()
+	if y >= geometry.headerY && y < height-1 {
+		delta := mouseWheelDelta(ev)
+		if delta != 0 {
+			d := c.question
+			d.Window.currentLines(geometry.bodyWidth)
+			d.Window.ScrollBy(delta, geometry.bodyHeight)
+			d.Window.Scroll = max(0, d.Window.Scroll)
+			d.manualScroll = true
+		}
+	}
+	return true
+}
+
+func mouseWheelDelta(ev *tcell.EventMouse) int {
 	if ev.Buttons()&tcell.WheelUp != 0 {
-		c.view.scroll(-3, len(c.view.visible))
+		return -3
 	}
 	if ev.Buttons()&tcell.WheelDown != 0 {
-		c.view.scroll(3, len(c.view.visible))
+		return 3
 	}
+	return 0
+}
+
+func (c *frontendController) handleTranscriptMouse(ev *tcell.EventMouse) {
+	x, y := ev.Position()
 	width, _ := c.screen.Size()
 	width = c.sidebar.bounds(width, c.sidebar.height, c.fullscreen)
-	if ev.Buttons()&tcell.Button1 != 0 && x >= 0 && x < width-1 {
-		if y >= 0 && y < len(c.view.visible) {
-			if c.renderer != nil {
-				if asset := imageAt(c.view.visible[y].assets, x); asset != nil {
-					c.openLocalImage(*asset)
-					return
-				}
+	if x < 0 || x >= width || y < 0 || y >= len(c.view.visible) {
+		return
+	}
+	if delta := mouseWheelDelta(ev); delta != 0 {
+		c.view.scroll(delta, len(c.view.visible))
+	}
+	if ev.Buttons()&tcell.Button1 != 0 && x < width-1 {
+		if c.renderer != nil {
+			if asset := imageAt(c.view.visible[y].assets, x); asset != nil {
+				c.openLocalImage(*asset)
+				return
 			}
-			c.openRow(c.view.visible[y])
 		}
+		c.openRow(c.view.visible[y])
 	}
 }
 
 func (c *frontendController) handlePaste(ev *tcell.EventPaste) {
 	c.flushPaste()
-	c.paste = pasteBatch{active: ev.Start()}
+	c.paste = pasteBatch{active: ev.Start(), fullscreen: c.fullscreen}
 	c.draft.pasting = ev.Start()
 	if !ev.Start() {
 		return
@@ -655,8 +488,8 @@ func (c *frontendController) handlePaste(ev *tcell.EventPaste) {
 	switch {
 	case c.modal.prompts != nil:
 		c.paste.search = c.modal.prompts
-	case c.modal.question != nil:
-		d := c.modal.question
+	case c.focusedQuestion() != nil:
+		d := c.focusedQuestion()
 		c.paste.question, c.paste.tab = d, d.tab
 		if d.tab < len(d.answers) {
 			d.manualScroll = false
@@ -665,7 +498,7 @@ func (c *frontendController) handlePaste(ev *tcell.EventPaste) {
 			a.useCustom, a.editing = true, true
 			d.update()
 		}
-	case c.modal.menu == nil && c.modal.commands == nil && c.modal.preview == nil:
+	case c.modal.empty():
 		c.paste.composer = true
 	}
 }

@@ -88,9 +88,11 @@ type frontendController struct {
 	attaching         bool
 	cancelAttachment  context.CancelFunc
 
-	retainedQuestion      *questionDialog
+	question              *questionDialog // Open inline form, independent of foreground modal windows.
+	retainedQuestion      *questionDialog // Keeps dismissed answers and tab state available for reopening.
 	deferredQuestionID    string
-	questionReopenRequest uint64 // Only this acknowledgment may still open the question dialog.
+	questionReopenRequest uint64 // Only this acknowledgment may still open the inline form.
+	composerQuestionID    string // Composer acceptance suppresses this form's queued publication until explicit reopening.
 	questionRow           int    // Only the singleton live status row needs reconciliation; -1 means absent.
 	pendingBTW            []session.Event
 }

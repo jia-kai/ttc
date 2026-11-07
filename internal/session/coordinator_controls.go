@@ -75,12 +75,6 @@ func (c *SessionCoordinator) executeControl(r Request) OperationResult {
 		}
 	case RequestBTW:
 		_, result.Err = c.runtime.StartBTW(r.Command)
-	case RequestAnswer:
-		result.Err = c.runtime.AnswerQuestion(r.ID, r.Answers)
-	case RequestDismissQuestion:
-		result.Err = c.runtime.DismissQuestion(r.ID)
-	case RequestReopenQuestion:
-		result.Err = c.runtime.ReopenQuestion(r.ID)
 	case RequestConfirmImage:
 		result.Err = c.runtime.ConfirmImage(r.ID, r.Point)
 	case RequestBackground:

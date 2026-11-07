@@ -1029,6 +1029,20 @@ The concrete boundaries above are TTC decisions, informed by:
 
 ### Composer and session windows
 
+- One root input dispatcher normalizes key presses, captures global shortcuts,
+  then routes to the focused dialog, sidebar overlay, inline question or
+  composer. Dialog-local keys cannot edit hidden inputs. Mouse events route to
+  dialogs, then sidebar and inline-form hit regions, then the transcript.
+  Questions own inline input state independently of modal windows; inspection
+  and fullscreen preserve their tab, answers and editing cursor. Fullscreen
+  hides the form and ignores mouse reports. Accepting a command/history picker
+  result dismisses the form without discarding its draft and reveals the
+  composer; canceling returns to the form. Bracketed paste captures its target
+  at paste-start and bypasses shortcuts except Ctrl-C; focus changes never
+  redirect its remaining payload to another input. Question
+  answer/dismiss/reopen mutations commit in coordinator mailbox order with input
+  admission, so a following prompt cannot overtake dismissal while the slow
+  control-effects worker is busy.
 - The composer soft-wraps without changing text, grows to six rows subject to
   terminal height, and scrolls beyond that cap. Ctrl-J/K scroll its viewport
   down/up without moving the cursor; editing or cursor movement reveals it. Only
@@ -1057,7 +1071,7 @@ The concrete boundaries above are TTC decisions, informed by:
   Shift-Up/Down selects either path or slash suggestions. Tab/Enter accepts
   (Enter submits an exact slash command); Esc dismisses. No persistent index.
   Accept only matching draft/cursor/generation results; snapshot selected
-  attachments asynchronously. Paste and dialogs retain key priority.
+  attachments asynchronously. Focused dialogs take priority over completion.
 - Ctrl-X E suspends terminal/graphics around a cancelable `$VISUAL`/`$EDITOR`
   using a 0600 scratch file. Drain runtime events while suspended. Failure
   preserves draft/cursor; valid UTF-8 edits up to 8 MiB replace without sending.

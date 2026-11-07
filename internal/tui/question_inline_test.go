@@ -81,7 +81,7 @@ func TestQuestionInlinePreservesTranscriptSidebarAndHidesDraft(t *testing.T) {
 		t.Helper()
 		if err := draw(s, drawState{
 			view: view, sidebar: bar, focused: -1, draft: draft, attached: 3,
-			queue: queue, steers: []string{"next steering"}, indicator: "Working", window: &d.Window, question: d,
+			queue: queue, steers: []string{"next steering"}, indicator: "Working", question: d,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +143,7 @@ func TestQuestionInlineSidebarOverlayStaysAboveForm(t *testing.T) {
 	bar.overlay = true
 	d := questionRenderDraft(strings.Repeat("x", 60), 60)
 	if err := draw(s, drawState{
-		view: newTranscript(), sidebar: bar, focused: -1, draft: newComposer(""), window: &d.Window, question: d,
+		view: newTranscript(), sidebar: bar, focused: -1, draft: newComposer(""), question: d,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestQuestionInlineKeepsVisibleTranscriptKittyGraphics(t *testing.T) {
 	d := questionRenderDraft("answer", 2)
 	g.Begin()
 	if err := draw(s, drawState{
-		view: view, sidebar: newSidebar(), renderer: r, focused: -1, draft: newComposer("hidden"), window: &d.Window, question: d,
+		view: view, sidebar: newSidebar(), renderer: r, focused: -1, draft: newComposer("hidden"), question: d,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,5 +192,32 @@ func TestQuestionInlineKeepsVisibleTranscriptKittyGraphics(t *testing.T) {
 	}
 	if count == 0 || !strings.Contains(wire.String(), "a=T") || !strings.Contains(screenText(s), "Text: answer") {
 		t.Fatalf("visible transcript graphic or question missing: placeholders=%d wire=%q", count, wire.String())
+	}
+}
+
+func TestQuestionInlineModalKeepsKittyGraphics(t *testing.T) {
+	var wire bytes.Buffer
+	g := graphics.New(&wire, false)
+	key := assets.Key("mathjax-hires-v1", "test", "x", "16", fmt.Sprint(assets.MathRasterScale))
+	r := &imageRenderer{graphics: g, backend: "test", cellWidth: 8, cellHeight: 16, ready: map[string]renderReply{key: {pixels: image.NewRGBA(image.Rect(0, 0, 120, 36))}}}
+	s := newTestScreen(t)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Fini()
+	s.SetSize(80, 24)
+	d := questionRenderDraft("answer", 2)
+	window := &Window{Title: "Inspector", Text: "Inspector math $x$", Markdown: true}
+	g.Begin()
+	if err := draw(s, drawState{
+		view: newTranscript(), sidebar: newSidebar(), renderer: r, focused: -1, draft: newComposer("hidden"), question: d, window: window,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wire.String(), "a=T") || !strings.Contains(screenText(s), "\U0010eeee") || !strings.Contains(screenText(s), "Inspector math") || s.cursorVisible {
+		t.Fatalf("modal graphic was hidden by the inline question or exposed its cursor: cursor=%v wire=%q\n%s", s.cursorVisible, wire.String(), screenText(s))
 	}
 }

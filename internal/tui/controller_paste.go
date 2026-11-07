@@ -12,6 +12,7 @@ import (
 // text contains accepted decoded chunks for one event-loop batch only.
 type pasteBatch struct {
 	active, composer bool
+	fullscreen       bool // Composer focus at paste-start; copy-mode transitions invalidate it.
 	question         *questionDialog
 	tab              int
 	search           *promptSearch
@@ -45,7 +46,7 @@ func (c *frontendController) collectPasteKey(ev *tcell.EventKey) {
 			p.searchChunks = append(p.searchChunks, text)
 		}
 	case p.question != nil:
-		if c.modal.question != p.question || p.tab >= len(p.question.answers) {
+		if c.focusedQuestion() != p.question || p.tab >= len(p.question.answers) {
 			return
 		}
 		p.questionTouched, p.questionError = true, ""
@@ -58,9 +59,14 @@ func (c *frontendController) collectPasteKey(ev *tcell.EventKey) {
 			p.text.WriteString(text)
 		}
 	case p.composer:
-		c.modal.clear()
-		p.text.WriteString(text)
+		if c.composerPasteFocused() {
+			p.text.WriteString(text)
+		}
 	}
+}
+
+func (c *frontendController) composerPasteFocused() bool {
+	return c.modal.empty() && c.focusedQuestion() == nil && c.fullscreen == c.paste.fullscreen
 }
 
 func (c *frontendController) flushPaste() {
@@ -80,14 +86,14 @@ func (c *frontendController) flushPaste() {
 			m.update()
 		}
 	}
-	if p.question != nil && c.modal.question == p.question && p.questionTouched {
+	if p.question != nil && c.focusedQuestion() == p.question && p.questionTouched {
 		d := p.question
 		if p.text.Len() != 0 {
 			d.answers[p.tab].custom.insert(p.text.String())
 		}
 		d.errorText = p.questionError
 		d.update()
-	} else if p.composer && p.text.Len() != 0 {
+	} else if p.composer && c.composerPasteFocused() && p.text.Len() != 0 {
 		c.draft.insert(p.text.String())
 	}
 	p.text.Reset()

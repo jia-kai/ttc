@@ -243,10 +243,10 @@ func TestQuestionFreeTextOnlyAndNarrowViewport(t *testing.T) {
 func TestQuestionPasteDoesNotNavigateOrSubmit(t *testing.T) {
 	d := newQuestionDialog(session.QuestionForm{ID: "form", Questions: []session.Question{{ID: "text", Prompt: "Text?"}}})
 	c := pasteTestController()
-	c.modal.question, c.modal.window = d, &d.Window
+	c.question = d
 	c.handleScreenEvent(tcell.NewEventPaste(true))
 	for _, event := range []*tcell.EventKey{tcell.NewEventKey(tcell.KeyRune, "a", 0), tcell.NewEventKey(tcell.KeyTab, "", 0), tcell.NewEventKey(tcell.KeyEnter, "", 0), tcell.NewEventKey(tcell.KeyRune, "b", 0), tcell.NewEventKey(tcell.KeyRight, "", 0), tcell.NewEventKey(tcell.KeyEscape, "", 0)} {
-		if next := c.handleScreenEvent(event); next.ready || c.modal.question != d || d.tab != 0 {
+		if next := c.handleScreenEvent(event); next.ready || c.question != d || d.tab != 0 {
 			t.Fatal("paste triggered navigation", next, d.tab)
 		}
 	}
