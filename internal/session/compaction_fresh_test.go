@@ -57,13 +57,12 @@ func TestPrepareCompactionSeparatesHighContextPrefixFromFreshBatch(t *testing.T)
 			}}
 			// The full structured request does not fit, but the prefix does.
 			// Fresh results must remain available for the next coding request.
-			snapshot := contextbuild.InputSnapshot{Selection: selection, Messages: messages, Lineage: r.Current()}
-			estimator := &contextbuild.Estimator{}
-			if _, err := r.summarize(context.Background(), "main", "", snapshot, estimator, "", false); err == nil || !strings.Contains(err.Error(), "estimated input") || requests != 0 {
+			snapshot := llm.Request{Selection: selection, Messages: messages, ConversationID: r.Current()}
+			if _, err := r.summarize(context.Background(), "main", "", snapshot, "", false); err == nil || !strings.Contains(err.Error(), "estimated input") || requests != 0 {
 				t.Fatal("fixture did not exceed full-summary capacity", err, requests)
 			}
 			snapshot.Messages = prepared.prefix
-			if _, err := r.summarize(context.Background(), "main", "", snapshot, estimator, "", false); err != nil || requests != 1 {
+			if _, err := r.summarize(context.Background(), "main", "", snapshot, "", false); err != nil || requests != 1 {
 				t.Fatal("older prefix did not fit separately from fresh batch", err, requests)
 			}
 		})

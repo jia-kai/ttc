@@ -28,30 +28,26 @@ cancel them.
   caps.
 
 - `/compact [focus]` requests main compaction. Admission assembles the next
-  input and checks the budget above. The context estimator owns local counts and
-  provider feedback. With a compatible measured request,
-  `I = reported_input + local_next_input - local_measured_input`; otherwise use
-  the full local estimate. Newly retained output is already in that difference;
-  do not add reported output again. Missing feedback preserves an older
-  compatible measurement. Compaction and history resets invalidate calibration;
-  loads restore compatible saved feedback. Model switches preserve it only for
-  the same provider tokenizer, service tier and reasoning effort; recognized
-  same-version OpenAI model IDs are treated as tokenizer-compatible. Native
-  replay estimates model-visible occupancy, not encrypted transport JSON.
-  Summary preflight uses the same actor estimator on the selected structured
-  prefix plus its final instruction, preserving compatible coding feedback
-  without updating its anchor. It reserves `Q + M`. The reserves are proactive
-  slack: uncapped output, heuristic estimates, oversized committed input or
-  model changes can still cause recoverable summary or handoff failures.
-  Explicit provider context-length rejection stops retries and leaves the
-  existing context usable; it does not trigger automatic compaction. Use
-  explicit compaction or select a larger-context model before retrying.
-- Asides fork compatible main calibration for their frozen input, adjusting
-  local system/tool overhead for the read-only role. The fork is approximate and
-  independent: pending requests and later main feedback are not shared. Without
-  compatible feedback, use local estimates. The shared child loop uses the
-  supplied estimator or creates a fresh one; actor feedback supersedes its
-  initial calibration, and successful compaction resets it.
+  input and asks the provider for its token estimate before checking the budget
+  above. OpenAI uses the longest matching previously measured native input
+  prefix plus a local estimate of the unmatched suffix; without a measured
+  prefix, it estimates the complete input. Measurements require the same
+  underlying model, instructions, tool schemas and encoding policy. Reported
+  output is not added separately. Native replay estimates model-visible
+  occupancy, not encrypted transport JSON. Summary preflight estimates the
+  selected structured prefix plus its final instruction and reserves `Q + M`.
+  The reserves are proactive slack: uncapped output, heuristic estimates,
+  oversized committed input or model changes can still cause recoverable summary
+  or handoff failures. Explicit provider context-length rejection stops retries
+  and leaves the existing context usable; it does not trigger automatic
+  compaction. Use explicit compaction or select a larger-context model before
+  retrying.
+- Main, children and asides share the provider's bounded, concurrency-safe
+  measurement cache, not actor-local estimators. Changed aside instructions or
+  tools prevent direct measurement reuse; there is no approximate transfer.
+  Compaction changes input rather than clearing the shared cache. Loads restore
+  compatible saved provider checkpoints; older checkpoints remain readable but
+  do not seed measurements.
 - `/force-compact [focus]` is an explicit idle main-actor command that bypasses
   only the estimated summary input-size check. It uses the same structured
   request and cache identity as `/compact`; automatic and child compaction keep

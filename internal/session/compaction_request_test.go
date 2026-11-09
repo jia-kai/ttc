@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/historytest"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -149,7 +148,7 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 					result, err = r.Store.Messages(r.Current())
 				}
 			} else {
-				result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_"), estimator: &contextbuild.Estimator{}}, messages, contextCursor{}, nil)
+				result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}, messages, contextCursor{}, nil)
 			}
 			if err != nil || requests != 1 {
 				t.Fatal("structured compaction failed", requests, err)
@@ -236,8 +235,8 @@ func TestSummaryRequestExcludesIncompatibleReplayWithoutFlattening(t *testing.T)
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Canonical handoff."})
 	}}
-	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: messages, Lineage: r.Current()}
-	if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false); err != nil || requests != 1 {
+	snapshot := llm.Request{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: messages, ConversationID: r.Current()}
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, "", false); err != nil || requests != 1 {
 		t.Fatal("summary failed", requests, err)
 	}
 	if messages[1].State == nil || messages[2].State == nil {

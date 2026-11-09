@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/historytest"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -87,7 +86,7 @@ func TestAgentRunnerSharedRecoveryAccountingAndPresentation(t *testing.T) {
 				}
 				err = r.runChild(context.Background(), childTask{
 					actor: actor, turn: turn, prompt: "Run recovery cycle", selection: r.CurrentSelection(),
-					tools: r.Tools.Filter(readOnlyTool), estimator: &contextbuild.Estimator{}, aside: role == "aside",
+					tools: r.Tools.Filter(readOnlyTool), aside: role == "aside",
 				}, &stdout, io.Discard)
 				if err != nil {
 					t.Fatal(err)

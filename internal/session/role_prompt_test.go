@@ -9,7 +9,6 @@ import (
 	"time"
 	"ttc/internal/historytest"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
@@ -159,7 +158,7 @@ func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
 	if !codingInputFits(usage.Input, r.selection.Model.Budget, false) || codingInputFits(mainUsage.Input, r.selection.Model.Budget, false) {
 		t.Fatal("fixture does not distinguish shared-only from main prompt budgeting")
 	}
-	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: true, estimator: &contextbuild.Estimator{}}, messages, contextCursor{}); err != nil {
+	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: true}, messages, contextCursor{}); err != nil {
 		t.Fatal("aside admission budgeted irrelevant role instructions", err)
 	}
 }

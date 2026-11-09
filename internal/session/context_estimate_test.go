@@ -2,8 +2,9 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,59 +13,22 @@ import (
 	"ttc/internal/providers/openai"
 )
 
-func TestMainAndChildAdmissionUseAdapterReplayEstimate(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	compactionBudget(t, r)
-	r.Provider = &openai.Adapter{}
-	r.selection.Provider = "openai"
-	seedRuntime(t, r, "Continue reasoning.")
-	item, err := json.Marshal(map[string]string{"type": "reasoning", "encrypted_content": strings.Repeat("A", 12000)})
+type fixturePreparedInput struct{}
+
+func (*fixturePreparedInput) Provider() string { return "script" }
+
+// estimateUsage is a fixture helper for constructing conservative budgets. Runtime
+// admission and handoff checks always delegate the complete request to Inference.
+func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefinition, messages []llm.Message) ContextUsage {
+	messages, err := contextbuild.ProjectRetainedInputs(llm.ContextFor(selection, messages))
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
-	m := llm.Message{Type: llm.TypeAssistant, State: &llm.ReplayState{Provider: "openai", Model: r.selection.Model.RequestID(), Version: 1, Items: []json.RawMessage{item}}}
-	if _, err := r.Store.Append(r.Current(), "", "main", "message", "assistant", true, m); err != nil {
-		t.Fatal(err)
-	}
-	cm, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
+	result, err := llm.EstimateInput(context.Background(), llm.Request{Selection: selection, System: system, Tools: defs, Messages: messages})
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
-	messages, err := r.Store.Messages(r.Current())
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), []llm.Message{messages[0], *cm})
-	r.selection.Model.Budget.ContextLimit = base.Input + base.Reserved + 3000
-	transportInput := contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: append(messages, *cm)}).Input
-	if codingInputFits(transportInput, r.selection.Model.Budget, false) {
-		t.Fatal("fixture did not expose transport inflation")
-	}
-	turn := admissionTurn(t, r)
-	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err != nil {
-		t.Fatal("main compacted due to transport size", err)
-	}
-	u := r.UsageSnapshot()
-	annotated := r.contextMessages(r.selection, messages)
-	if u.Input != base.Input+contextbuild.Tokens(annotated[1:]) {
-		t.Fatal("sidebar and admission disagree", u.Input, base.Input, contextbuild.Tokens(annotated[1:]))
-	}
-	if messages[1].State.EstimatedTokens != nil {
-		t.Fatal("estimation mutated stored projection")
-	}
-	encoded, err := json.Marshal(annotated[1])
-	if err != nil || strings.Contains(string(encoded), "EstimatedTokens") || strings.Contains(string(encoded), "estimated_tokens") {
-		t.Fatal("derived estimate leaked into durable state", err)
-	}
-	actor := "main/child_estimate"
-	childTurn, err := r.Store.BeginChildTurn(r.Current(), actor, r.selection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childMessages := []llm.Message{{Type: llm.TypeUserInput, Content: "Continue reasoning."}, m}
-	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: childTurn, selection: r.selection, tools: r.Tools, estimator: &contextbuild.Estimator{}}, childMessages, contextCursor{}); err != nil {
-		t.Fatal("child compacted due to transport size", err)
-	}
+	return usageFromEstimate(selection, result)
 }
 
 func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *testing.T) {
@@ -74,25 +38,12 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	if _, err := r.Store.Append(r.Current(), "", "main", "message", "user", true, llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
 		t.Fatal(err)
 	}
-	// Keep the predecessor near the model's input ceiling, independent of the
-	// size of the current generated tool and runtime prompts.
 	budget := r.selection.Model.Budget
 	predecessorInput := budget.ContextLimit - budget.OutputAllowance - budget.EstimationMargin - budget.NextTurnInputReserve
 	r.usage = ContextUsage{Input: predecessorInput, Limit: budget.ContextLimit}
 	r.reported = &ReportedUsage{Model: "previous", Tokens: llm.Usage{InputTokens: predecessorInput, OutputTokens: 50}}
-	original, err := r.Store.Messages(r.Current())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldSnapshot := contextbuild.InputSnapshot{Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: append(original, *runtime), Lineage: r.Current(), TokenEstimator: r.Provider}
-	r.estimator.ObserveRequest(87, r.estimator.Prepare(oldSnapshot))
-	r.estimator.ObserveUsage(87, predecessorInput)
 	r.recordUsage(&r.reported.Tokens)
-	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 		if err := emit(llm.StreamEvent{Kind: "text", Text: "Earlier task completed."}); err != nil {
 			return err
 		}
@@ -103,115 +54,178 @@ func TestManualCompactionRefreshesOccupancyWithoutReplacingReportedUsage(t *test
 	}
 	u := r.UsageSnapshot()
 	if !u.Estimated || u.Input >= predecessorInput || u.Input <= 0 || u.Reported.Tokens.InputTokens != predecessorInput {
-		t.Fatal("manual handoff kept predecessor occupancy or replaced response", u)
+		t.Fatal("handoff retained occupancy or replaced response", u)
 	}
 	if u.Totals.Requests != 2 || u.Totals.Tokens.InputTokens != predecessorInput+4000 || u.Totals.Tokens.OutputTokens != 130 {
-		t.Fatal("compaction usage was duplicated or became context size", u.Totals)
-	}
-	if result := r.estimator.Estimate(oldSnapshot); !result.Estimated || result.Input != result.LocalInput {
-		t.Fatal("handoff retained measured anchor", result)
+		t.Fatal("compaction usage duplicated", u.Totals)
 	}
 }
 
-func TestMainAdmissionUsesMeasuredInputAtThreshold(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	seedRuntime(t, r, "Continue research.")
-	turn := admissionTurn(t, r)
-	first, _, err := r.admitMain(context.Background(), turn, r.selection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local := r.UsageSnapshot()
-	if local.Input+local.Reserved >= local.Limit {
-		t.Fatal("fixture does not fit locally", local)
-	}
-	if _, ok := r.estimator.ObserveUsage(first.RequestID, local.Limit-local.Reserved); !ok {
-		t.Fatal("provider feedback rejected")
-	}
-	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err != errNeedsCompaction {
-		t.Fatalf("measured input at threshold admitted: %v", err)
-	}
-	u := r.UsageSnapshot()
-	if u.Input+u.Reserved != u.Limit {
-		t.Fatal("admission and displayed occupancy disagree", u)
-	}
-	r.estimator.Reset()
-	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err != nil {
-		t.Fatal("reset retained old measurement", err)
-	}
-}
-
-func TestMainRequestFeedbackUpdatesSharedEstimate(t *testing.T) {
+func TestMainRequestFeedbackUpdatesDisplayedUsage(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
-		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234, OutputTokens: 0}})
+		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
 	}}
 	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Measure this request."}); err != nil {
 		t.Fatal(err)
 	}
 	u := r.UsageSnapshot()
 	if u.Input != 1234 || u.Estimated || u.Reported == nil || u.Reported.Tokens.InputTokens != 1234 {
-		t.Fatal("report not reflected in shared estimate", u)
+		t.Fatal("report not reflected in status", u)
 	}
 }
 
-func TestMainInterruptedFeedbackPreservesAnchorAndModelSwitchIsolatesIt(t *testing.T) {
+func TestAdmissionDelegatesCompleteInputAndPropagatesEstimateErrors(t *testing.T) {
+	for _, role := range []string{"main", "child", "aside"} {
+		t.Run(role, func(t *testing.T) {
+			a := newSummaryBudgetActor(t, role)
+			want := a.snapshot(t)
+			failure := errors.New("provider estimate unavailable")
+			calls := 0
+			a.r.Provider = &childProvider{estimate: func(_ context.Context, req llm.Request) (llm.InputEstimate, error) {
+				calls++
+				if !reflect.DeepEqual(req, want) {
+					t.Fatal("admission estimated an incomplete or different request", req, want)
+				}
+				return llm.InputEstimate{Input: -1}, failure
+			}}
+			before, err := a.r.Store.Session(a.r.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			admitted, err := a.admit()
+			if !errors.Is(err, failure) || admitted.RequestID != 0 || calls != 1 {
+				t.Fatal(admitted, err, calls)
+			}
+			after, err := a.r.Store.Session(a.r.Current())
+			if err != nil || after.EntryTip != before.EntryTip {
+				t.Fatal("estimate failure mutated history", after, err)
+			}
+		})
+	}
+}
+
+func TestCompactionEstimationErrorsAreNotCapacityRefusals(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	var baseline contextbuild.InputSnapshot
-	interrupted := errors.New("interrupted after usage")
-	calls := 0
-	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		calls++
-		if calls == 1 {
-			baseline = contextbuild.InputSnapshot{Selection: req.Selection, System: req.System, Tools: req.Tools, Messages: req.Messages, Lineage: r.Current(), TokenEstimator: r.Provider}
-			return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
-		}
-		if err := emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 9999}}); err != nil {
-			return err
-		}
-		return interrupted
+	seedRuntime(t, r, "Research")
+	failure := errors.New("provider preparation failed")
+	r.Provider = &childProvider{estimate: func(context.Context, llm.Request) (llm.InputEstimate, error) {
+		return llm.InputEstimate{Input: -1}, failure
 	}}
-	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "First request."}); err != nil {
+	request := llm.Request{ConversationID: r.Current(), Selection: r.selection, Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "Research"}}}
+	if _, err := r.summarize(context.Background(), "main", "", request, "", false); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
-	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Interrupted request."}); !errors.Is(err, interrupted) {
+	if _, err := r.compactionEstimate(context.Background(), r.Current(), r.selection, systemTemplate, r.Tools.Definitions(), request.Messages, nil, nil); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
-	if result := r.estimator.Estimate(baseline); result.Input != 1234 || result.Estimated {
-		t.Fatal("failed stream replaced successful measurement", result)
-	}
-	standard := r.CurrentSelection()
-	for _, tier := range []string{"priority", ""} {
-		for _, effort := range []string{"low", "medium", "high"} {
-			selection := standard
-			selection.Variant = effort
-			if tier != "" {
-				selection.Model.BaseID = standard.Model.RequestID()
-				selection.Model.ID += "/fast"
-			}
-			selection.Model.ServiceTier = tier
-			if err := r.RequestModel(selection); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := r.ApplyModel(""); err != nil {
-				t.Fatal(err)
-			}
-			baseline.Selection = r.CurrentSelection()
-			if result := r.estimator.Estimate(baseline); result.Input != 1234 || result.Estimated {
-				t.Fatal("speed/reasoning switch lost successful measurement", selection, result)
-			}
-		}
-	}
-	selection := r.CurrentSelection()
-	selection.Model.ID += "-other"
-	if err := r.RequestModel(selection); err != nil {
+}
+
+func TestAsideAdmissionDoesNotTransferMainMeasurementAcrossHeaders(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Inherited research.")
+	provider := &openai.Adapter{}
+	r.Provider = provider
+	r.selection.Provider = "openai"
+	ctx := context.Background()
+	prefix, err := r.Store.Messages(r.Current())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ApplyModel(""); err != nil {
+	mainRequest := llm.Request{ConversationID: r.Current(), Selection: r.selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: prefix}
+	mainEstimate, err := r.estimateInput(ctx, mainRequest)
+	if err != nil || mainEstimate.Checkpoint == nil {
+		t.Fatal(mainEstimate, err)
+	}
+	if err := provider.RestoreEstimate(*mainEstimate.Checkpoint, llm.Usage{InputTokens: 1}); err != nil {
 		t.Fatal(err)
 	}
-	baseline.Selection = selection
-	if result := r.estimator.Estimate(baseline); !result.Estimated || result.Input != result.LocalInput {
-		t.Fatal("different model reused old measurement", result)
+	measured, err := r.estimateInput(ctx, mainRequest)
+	if err != nil || measured.Input != 1 || measured.Estimated {
+		t.Fatal("main measurement was not restored", measured, err)
+	}
+	actor := "main/btw_strict_header"
+	turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := r.Tools.Filter(readOnlyTool)
+	messages := append(append([]llm.Message(nil), prefix...), llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction}, llm.Message{Type: llm.TypeUserInput, Content: "Explain the research.", InputSource: "btw", InputTimeMS: 1000})
+	cm, _, err := r.runtimeContext(ctx, actor, r.selection, contextCursor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := append(append([]llm.Message(nil), messages...), *cm)
+	asideRequest := llm.Request{ConversationID: actor, Selection: r.selection, System: asideSystemTemplate, Tools: tools.Definitions(), Messages: input}
+	asideEstimate, err := r.estimateInput(ctx, asideRequest)
+	if err != nil || !asideEstimate.Estimated || asideEstimate.Input <= 1 {
+		t.Fatal("aside borrowed main measurement across changed system/tools", asideEstimate, err)
+	}
+	selection := r.selection
+	b := &selection.Model.Budget
+	b.ContextLimit = asideEstimate.Input + b.OutputAllowance + b.EstimationMargin + b.SummaryOutputAllowance + compactionInstructionTokens()
+	if _, _, err := r.admitChild(ctx, childTask{actor: actor, turn: turn, selection: selection, tools: tools, aside: true}, messages, contextCursor{}); !errors.Is(err, errNeedsCompaction) {
+		t.Fatal("aside bypassed strict capacity boundary using main evidence", err)
+	}
+}
+
+func TestActorStreamUsesExactPreparedAdmission(t *testing.T) {
+	for _, role := range []string{"main", "child", "aside"} {
+		t.Run(role, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			prepared := &fixturePreparedInput{}
+			var estimated llm.Request
+			estimates, streams := 0, 0
+			r.Provider = &childProvider{
+				estimate: func(_ context.Context, req llm.Request) (llm.InputEstimate, error) {
+					estimates++
+					estimated = req
+					estimated.Prepared = prepared
+					return llm.InputEstimate{Input: 100, Estimated: true, Prepared: prepared}, nil
+				},
+				stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+					streams++
+					req.Observe = nil
+					if len(req.Messages) != len(estimated.Messages) {
+						t.Fatal("stream changed prepared message count")
+					}
+					for i, got := range req.Messages {
+						want := estimated.Messages[i]
+						// History commit fills audit identity and human timestamps;
+						// neither changes this non-retained native input.
+						got.RequestID, got.InputTimeMS = want.RequestID, want.InputTimeMS
+						if !reflect.DeepEqual(got, want) {
+							t.Fatal("stream changed prepared model content", got, want)
+						}
+					}
+					estimated.Messages = req.Messages
+					if req.Prepared != prepared || !reflect.DeepEqual(req, estimated) {
+						t.Fatal("stream reconstructed or lost prepared admission input")
+					}
+					return emit(llm.StreamEvent{Kind: "text", Text: "Done."})
+				},
+			}
+			if role == "main" {
+				if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Research."}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				seedRuntime(t, r, "Parent task.")
+				actor := "main/child_prepared"
+				if role == "aside" {
+					actor = "main/btw_prepared"
+				}
+				turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.selection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Research.", selection: r.selection, tools: r.Tools.Filter(readOnlyTool), aside: role == "aside"}, io.Discard, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if estimates != 1 || streams != 1 {
+				t.Fatal("unexpected preparation/inference count", estimates, streams)
+			}
+		})
 	}
 }

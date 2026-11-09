@@ -157,14 +157,17 @@ def finish_fixture_request(db: sqlite3.Connection, append: Callable[..., int],
 
 
 def measure_seed_completion(db: sqlite3.Connection, source: str) -> int:
-    """Change only stopped private-fixture usage, retaining the CLI's genuine input."""
+    """Seed reported usage on a stopped script request without inventing a checkpoint."""
     request, completion, admission, checkpoint, raw = db.execute(
         'SELECT r.id,o.completion_entry_id,o.admission_entry_id,o.checkpoint_json,e.content_json '
         'FROM request_observations o JOIN model_requests r ON r.id=o.request_id '
         'JOIN entries e ON e.id=o.completion_entry_id '
         "WHERE r.session_id=? AND r.actor_id='main' AND r.purpose='coding' "
         "AND o.status='completed' ORDER BY o.completion_entry_id DESC LIMIT 1", (source,)).fetchone()
-    assert admission and checkpoint, 'Seed CLI must persist genuine admitted input accounting'
+    assert admission, 'Seed CLI must persist genuine request admission'
+    # Offline scripts do not measure tokens or issue provider checkpoints.
+    # Synthetic usage exercises selected reported-usage restoration only.
+    assert checkpoint is None, 'Offline scripts must not invent measured-input checkpoints'
     assert db.execute(
         "SELECT admission_entry_id,json_extract(input_json,'$.input_estimate') "
         'FROM model_requests WHERE id=?', (request,)).fetchone() == (admission, checkpoint)
@@ -193,7 +196,7 @@ def verify_selected_usage(db: sqlite3.Connection, tip: int, delivery: FixtureReq
         'ORDER BY e.id DESC', (tip,)).fetchall()
     assert rows[0][:3] == (delivery.request_id, None, delivery.admission_entry_id), rows
     anchor = next(row for row in rows if row[1] is not None)
-    assert anchor[0] == measured_request and anchor[2] and anchor[3], anchor
+    assert anchor[0] == measured_request and anchor[2] and anchor[3] is None, anchor
     assert json.loads(anchor[1]) == {'input_tokens': 10000, 'output_tokens': 32}, anchor
 
 

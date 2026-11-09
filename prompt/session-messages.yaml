@@ -80,8 +80,11 @@ SessionNamingTruncated: "\n[truncated]"
 SessionNamingUser: "User:\n"
 SessionNamingAssistant: "\n\nAssistant:\n"
 SessionNamingTool: "\n\nTool call: "
-SessionCompactionIdentity:
-  compaction requires the actor's estimator and conversation identity
+SessionEstimateMainInput: "estimate main input: %w"
+SessionEstimateChildInput: "estimate child input: %w"
+SessionEstimateCompactedInput: "estimate compacted input: %w"
+SessionEstimateSummaryInput: "estimate summary input: %w"
+SessionCompactionIdentity: compaction requires the actor's conversation identity
 SessionCompactionHeadroom: >-
   The child's context is still too large after compaction, so the assignment
   failed and the child is closed. Inspect any returned partial answer and

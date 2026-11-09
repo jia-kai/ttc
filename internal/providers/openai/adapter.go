@@ -26,14 +26,16 @@ type Config struct {
 	ResolveBinary func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)
 }
 
-// Adapter owns only HTTP protocol and codecs. Dependencies must remain valid for
-// its lifetime and support concurrent calls if the adapter is used concurrently.
+// Adapter owns HTTP protocol, codecs and a bounded measured-input token cache.
+// Dependencies must remain valid for its lifetime and support concurrent calls
+// if the adapter is used concurrently. An Adapter must not be copied after use.
 type Adapter struct {
 	Client        *http.Client
 	BaseURL       string
 	tokenSource   func(context.Context) (AccessTokens, error)
 	resolveBinary func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)
 	idleTimeout   time.Duration // Response inactivity interval; zero selects the 90-second provider default.
+	estimates     inputTokenCache
 }
 
 // NewAdapter constructs a transport without reading credentials or application files.

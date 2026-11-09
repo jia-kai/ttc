@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
 )
 
@@ -74,7 +73,7 @@ func upgrade11(tx *sql.Tx, progress *progressReporter) error {
 			return err
 		}
 		if r.checkpoint.Valid {
-			var checkpoint *ctxmgr.Checkpoint
+			var checkpoint *llm.TokenCheckpoint
 			if err := json.Unmarshal([]byte(r.checkpoint.String), &checkpoint); err != nil {
 				rows.Close()
 				return fmt.Errorf("request %d checkpoint: %w", id, err)
@@ -209,15 +208,17 @@ func legacyObservationUsage(raw sql.NullString) (sql.NullString, error) {
 	}
 	var usage *struct {
 		llm.Usage
-		Input *int `json:"input_tokens"`
+		Input  *int `json:"input_tokens"`
+		Output *int `json:"output_tokens"`
 	}
 	if err := json.Unmarshal([]byte(raw.String), &usage); err != nil {
 		return sql.NullString{}, fmt.Errorf("invalid usage: %w", err)
 	}
-	if usage == nil || usage.Input == nil {
+	if usage == nil || usage.Input == nil || usage.Output == nil {
 		return sql.NullString{}, nil
 	}
 	usage.InputTokens = *usage.Input
+	usage.OutputTokens = *usage.Output
 	if !usage.Usage.Usable() {
 		// Legacy providers sometimes reported negative sentinel counts. Keep
 		// their immutable audit bytes, but do not expose them as measurements.

@@ -8,13 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 	"ttc/internal/historytest"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -163,6 +163,211 @@ func TestToolBatchOverlapsReadsShellsAndOrderedWrites(t *testing.T) {
 	}
 	if !strings.Contains(string(result.records[3].Result), "unknown_tool") {
 		t.Fatal("unknown tool did not fail explicitly")
+	}
+}
+
+func TestToolBatchCallOrderSurvivesCompletionOrderAndReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		tool       string
+		count      int
+		background bool
+	}{
+		{"parallel_reads", "read", 3, false},
+		{"parallel_shells", "shell", 3, false},
+		{"parallel_children", "subagent", 3, false},
+		{"background_shell_returns", "shell", 3, true},
+		{"background_child_returns", "subagent", 3, true},
+		{"single_read", "read", 1, false},
+		{"single_shell", "shell", 1, false},
+		{"single_child", "subagent", 1, false},
+		{"single_background_shell_return", "shell", 1, true},
+		{"single_background_child_return", "subagent", 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			var previous []string
+			for _, reverse := range []bool{true, false} {
+				func() {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					r.Tools = tool.NewRegistry()
+					started := make(chan int, tc.count)
+					completed := make(chan string, tc.count)
+					gates := make([]chan struct{}, tc.count)
+					for i := range gates {
+						gates[i] = make(chan struct{})
+					}
+					type args struct {
+						Index      int  `json:"index"`
+						Background bool `json:"background"`
+					}
+					tool.Register(r.Tools, tc.tool, "controlled completion", map[string]any{"index": tool.Property("integer"), "background": tool.Property("boolean")}, nil,
+						func(args) error { return nil },
+						func(ctx context.Context, _ tool.Execution, a args) (any, error) {
+							started <- a.Index
+							select {
+							case <-gates[a.Index]:
+							case <-ctx.Done():
+								return nil, ctx.Err()
+							}
+							result := map[string]any{"index": a.Index, "status": "completed"}
+							if a.Background {
+								result["status"] = "running"
+								result["job_id"] = fmt.Sprintf("job_fixture_%d", a.Index)
+							}
+							return result, nil
+						})
+					calls := make([]llm.ToolCall, tc.count)
+					// Deliberately not lexical ID order: only declared order matters.
+					for i, id := range []string{"z", "a", "m"}[:tc.count] {
+						calls[i] = llm.ToolCall{ID: id, Name: tc.tool, Arguments: json.RawMessage(fmt.Sprintf(`{"index":%d,"background":%t}`, i, tc.background))}
+					}
+					turn, ids := batchIntents(t, r, "main", calls)
+					r.Emit = func(e Event) {
+						if e.Kind == "tool" {
+							completed <- e.CallID
+						}
+					}
+					type outcome struct {
+						records []tool.Record
+						err     error
+					}
+					done := make(chan outcome, 1)
+					go func() {
+						records, err := r.runToolBatch(ctx, turn, "main", r.Tools, calls, ids, nil)
+						done <- outcome{records, err}
+					}()
+					for range calls {
+						receive(t, started)
+					}
+					for step := range calls {
+						i := step
+						if reverse {
+							i = len(calls) - step - 1
+						}
+						close(gates[i])
+						// Fast/background returns stay visible and durable while an
+						// earlier foreground sibling is still blocked.
+						if got := receive(t, completed); got != ids[i] {
+							t.Fatalf("completion event = %s, want %s", got, ids[i])
+						}
+						var stored string
+						if err := historytest.DB(t, r.Store).QueryRow("SELECT result_json FROM tool_calls WHERE id=?", ids[i]).Scan(&stored); err != nil || stored == "" {
+							t.Fatal("completion was not persisted independently", stored, err)
+						}
+					}
+					result := receive(t, done)
+					if result.err != nil || len(result.records) != len(calls) {
+						t.Fatal(result.err, len(result.records))
+					}
+					messages, err := r.Store.Messages(r.Current())
+					if err != nil {
+						t.Fatal(err)
+					}
+					results := messages[len(messages)-len(calls):]
+					payloads := make([]string, len(calls))
+					for i, record := range result.records {
+						if record.Name != calls[i].Name || string(record.Arguments) != string(calls[i].Arguments) {
+							t.Fatal("returned records lost declared call order", i, record)
+						}
+						if results[i].Type != llm.TypeToolResult || results[i].CallID != calls[i].ID || results[i].Content != string(record.Result) {
+							t.Fatal("replay differs from live ordered results", i, results[i], record)
+						}
+						payloads[i] = results[i].Content
+					}
+					if previous != nil && !slices.Equal(payloads, previous) {
+						t.Fatal("completion timing changed canonical results", payloads, previous)
+					}
+					previous = payloads
+					if err := r.Store.FinishTurn(turn, "completed"); err != nil {
+						t.Fatal(err)
+					}
+				}()
+			}
+		})
+	}
+}
+
+func TestToolBatchShellBackgroundHandoffsDoNotWaitForForegroundSibling(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	r.Tools = tool.NewRegistry()
+	tool.AddShell(r.Tools, r.Jobs, r.Workspace, nil)
+	started, release := make(chan struct{}), make(chan struct{})
+	tool.Register(r.Tools, "read", "blocked foreground sibling", nil, nil,
+		func(struct{}) error { return nil },
+		func(ctx context.Context, _ tool.Execution, _ struct{}) (any, error) {
+			close(started)
+			select {
+			case <-release:
+				return map[string]bool{"finished": true}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		})
+	calls := []llm.ToolCall{
+		{ID: "foreground", Name: "read", Arguments: json.RawMessage(`{}`)},
+		{ID: "promoted", Name: "shell", Arguments: json.RawMessage(`{"command":"sleep 30","max_fg_wait_seconds":0}`)},
+		{ID: "background", Name: "shell", Arguments: json.RawMessage(`{"command":"sleep 30","background":true}`)},
+	}
+	turn, ids := batchIntents(t, r, "main", calls)
+	completed := make(chan string, len(calls))
+	r.Emit = func(e Event) {
+		if e.Kind == "tool" {
+			completed <- e.CallID
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		records []tool.Record
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		records, err := r.runToolBatch(ctx, turn, "main", r.Tools, calls, ids, nil)
+		done <- outcome{records, err}
+	}()
+	receive(t, started)
+	seen := map[string]bool{}
+	for range 2 {
+		seen[receive(t, completed)] = true
+	}
+	if !seen[ids[1]] || !seen[ids[2]] || seen[ids[0]] {
+		t.Fatal("background handoffs were hidden behind foreground work", seen)
+	}
+	select {
+	case <-done:
+		t.Fatal("batch did not join foreground sibling")
+	default:
+	}
+	close(release)
+	result := receive(t, done)
+	if result.err != nil || len(result.records) != len(calls) {
+		t.Fatal(result.err, len(result.records))
+	}
+	for i, record := range result.records[1:] {
+		var view struct {
+			ID         string `json:"job_id"`
+			Status     string `json:"status"`
+			Background bool   `json:"background"`
+			Promoted   bool   `json:"promoted"`
+		}
+		if err := json.Unmarshal(record.Result, &view); err != nil || view.ID == "" || !view.Background || view.Status != "running" || view.Promoted != (i == 0) {
+			t.Fatal("lost background handoff facts", string(record.Result), err)
+		}
+		if _, err := r.Jobs.Stop("main", view.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	messages, err := r.Store.Messages(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, message := range messages[len(messages)-len(calls):] {
+		if message.CallID != calls[i].ID || message.Content != string(result.records[i].Result) {
+			t.Fatal("background handoff replay lost declared order", i, message)
+		}
 	}
 }
 
@@ -451,7 +656,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools, estimator: &contextbuild.Estimator{}}, io.Discard, io.Discard); err != nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var contextRecords int

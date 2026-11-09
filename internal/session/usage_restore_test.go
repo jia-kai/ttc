@@ -2,7 +2,7 @@ package session
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,191 +10,125 @@ import (
 	contextbuild "ttc/internal/context"
 	"ttc/internal/historytest"
 	"ttc/internal/llm"
-	"ttc/internal/providers/openai"
-	"ttc/internal/tool"
 )
 
-// tokenizerProvider keeps a controllable stream with the production tokenizer policy.
-type tokenizerProvider struct{ Inference }
-
-func (*tokenizerProvider) TokenizerID(model llm.ModelSpec) string {
-	return (&openai.Adapter{}).TokenizerID(model)
+func fixtureCheckpoint(version int) *llm.TokenCheckpoint {
+	return &llm.TokenCheckpoint{Version: version, LocalInput: 100, Compatible: strings.Repeat("a", 64), Exact: strings.Repeat("b", 64)}
 }
 
-func requestSnapshot(r *Runtime, req llm.Request) contextbuild.InputSnapshot {
-	return contextbuild.InputSnapshot{Selection: req.Selection, System: req.System, Tools: req.Tools,
-		Messages: req.Messages, Lineage: r.Current(), TokenEstimator: r.Provider}
-}
-
-func TestLoadRestoresMeasuredCalibrationForNextAdmission(t *testing.T) {
-	for _, mode := range []string{"load", "restart", "legacy-load"} {
-		t.Run(mode, func(t *testing.T) {
+func TestLoadDelegatesSavedEvidenceAndEstimatesCurrentTarget(t *testing.T) {
+	for _, version := range []int{0, 1, 2} {
+		name := map[int]string{0: "missing", 1: "legacy-v1", 2: "provider-v2"}[version]
+		t.Run(name, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
-			r.Emit = nil
-			var original contextbuild.InputSnapshot
-			measured, originalLocal, calls := 0, 0, 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-				calls++
-				local := contextbuild.EstimateInput(requestSnapshot(r, req)).Input
-				if calls == 1 {
-					original = requestSnapshot(r, req)
-					originalLocal = local
-					measured = local + 1000
-				} else {
-					want := measured + local - originalLocal
-					if got := r.UsageSnapshot(); got.Input != want || !got.Estimated || got.Input == local {
-						t.Fatalf("admission lost measurement: %+v, want %d; local %d", got, want, local)
+			var checkpoint *llm.TokenCheckpoint
+			if version != 0 {
+				checkpoint = fixtureCheckpoint(version)
+			}
+			p := &childProvider{
+				estimate: func(context.Context, llm.Request) (llm.InputEstimate, error) {
+					return llm.InputEstimate{Input: 100, Estimated: true, Checkpoint: checkpoint}, nil
+				},
+				stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
+					if err := emit(llm.StreamEvent{Kind: "text", Text: "Saved answer."}); err != nil {
+						return err
 					}
-				}
-				if err := emit(llm.StreamEvent{Kind: "text", Text: "Saved answer."}); err != nil {
-					return err
-				}
-				return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: measured, OutputTokens: 5}})
-			}}
-			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save this measurement."}); err != nil {
+					return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 777, OutputTokens: 5}})
+				},
+			}
+			r.Provider = p
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save evidence."}); err != nil {
 				t.Fatal(err)
 			}
-			saved := r.Current()
-			if mode == "legacy-load" {
-				if _, err := historytest.DB(t, r.Store).Exec("UPDATE request_observations SET checkpoint_json=NULL"); err != nil {
-					t.Fatal(err)
+			before := r.UsageSnapshot()
+			restored, estimated := 0, 0
+			p.restore = func(got llm.TokenCheckpoint, usage llm.Usage) error {
+				restored++
+				if checkpoint == nil || got != *checkpoint || usage.InputTokens != 777 || usage.OutputTokens != 5 {
+					t.Fatal("incorrect restore evidence", got, usage)
 				}
+				return nil
 			}
-			if mode == "restart" {
-				prior := r
-				r.Close()
-				var err error
-				r, err = New(context.Background(), prior.Store, prior.Workspace, prior.Provider, prior.CurrentSelection(), saved, prior.Skills, tool.WebSearchConfig{}, nil)
+			p.estimate = func(_ context.Context, req llm.Request) (llm.InputEstimate, error) {
+				estimated++
+				messages, err := r.Store.Messages(req.ConversationID)
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(r.Close)
-				r.AutoName = false
-			} else {
-				if _, err := r.Command("/load " + saved); err != nil {
+				messages, err = contextbuild.ProjectRetainedInputs(llm.ContextFor(req.Selection, messages))
+				if err != nil {
 					t.Fatal(err)
 				}
+				if req.ConversationID == "" || req.System != systemTemplate || !reflect.DeepEqual(req.Tools, r.defaultTools) || !reflect.DeepEqual(req.Messages, messages) {
+					t.Fatal("load estimated wrong target", req)
+				}
+				return llm.InputEstimate{Input: 321, Estimated: true}, nil
+			}
+			if err := r.Load(r.Current()); err != nil {
+				t.Fatal(err)
+			}
+			wantRestored := 1
+			if version == 0 {
+				wantRestored = 0
+			}
+			if restored != wantRestored || estimated != 1 {
+				t.Fatal("legacy data was reconstructed or restore skipped", restored, estimated)
 			}
 			got := r.UsageSnapshot()
-			if got.Reported == nil || got.Reported.Tokens.InputTokens != measured {
-				t.Fatal("missing measured response", got)
-			}
-			messages, err := r.Store.Messages(r.Current())
-			if err != nil {
-				t.Fatal(err)
-			}
-			current := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate,
-				Tools: r.Tools.Definitions(), Messages: messages, Lineage: r.Current(), TokenEstimator: r.Provider}
-			local := contextbuild.EstimateInput(current).Input
-			if got.Input != measured+local-originalLocal || got.Input == local || !got.Estimated {
-				t.Fatalf("load lost calibration: %+v, original local=%d, new local=%d", got, originalLocal, local)
-			}
-			if mode == "restart" && got.Totals.Requests != 0 {
-				t.Fatal("restart restored process totals", got.Totals)
-			}
-			if mode != "restart" && got.Totals.Requests != 1 {
-				t.Fatal("load changed process totals", got.Totals)
-			}
-			// Exact identity remains exact only for a durable checkpoint. Legacy
-			// reconstruction cannot establish which tool schemas originally ran.
-			original.Lineage = r.Current()
-			check := r.estimator.Estimate(original)
-			if check.Input != measured || check.Estimated != (mode == "legacy-load") {
-				t.Fatal("restored anchor identity", check)
-			}
-			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
-				t.Fatal(err)
-			}
-			if calls != 2 {
-				t.Fatal("load performed extra inference", calls)
+			if got.Input != 321 || !got.Estimated || got.Reported == nil || got.Reported.Tokens.InputTokens != 777 || got.Totals.Requests != before.Totals.Requests {
+				t.Fatal("load ignored provider estimate or response usage", got)
 			}
 		})
 	}
 }
 
-func TestSameVersionModelSwitchPreservesMeasuredCalibration(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	r.Emit = nil
-	r.selection.Provider = "openai"
-	r.selection.Model.ID = "gpt-6-sol"
-	var baseline contextbuild.InputSnapshot
-	measured, originalLocal, calls := 0, 0, 0
-	r.Provider = &tokenizerProvider{Inference: &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-		calls++
-		snapshot := requestSnapshot(r, req)
-		local := contextbuild.EstimateInput(snapshot).Input
-		if calls == 1 {
-			baseline, originalLocal, measured = snapshot, local, local+1000
-		} else if calls == 2 {
-			if got := r.UsageSnapshot(); got.Input != measured+local-originalLocal || !got.Estimated || got.Input == local {
-				t.Fatal("model variant lost measurement", got, local)
+func TestLoadEstimateFailurePreservesActiveRuntimeAndRestoredProviderEvidence(t *testing.T) {
+	for _, stage := range []string{"restore", "estimate", "activation"} {
+		t.Run(stage, func(t *testing.T) {
+			r, _ := runtimeFixture(t, nil)
+			p := &childProvider{
+				estimate: func(context.Context, llm.Request) (llm.InputEstimate, error) {
+					return llm.InputEstimate{Input: 100, Estimated: true, Checkpoint: fixtureCheckpoint(2)}, nil
+				},
+				stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
+					return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 777}})
+				},
 			}
-			// Native replay is still model-specific, even when tokenizers match.
-			for _, m := range req.Messages {
-				if m.State != nil {
-					t.Fatal("variant switch reused foreign native replay")
+			r.Provider = p
+			if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save evidence."}); err != nil {
+				t.Fatal(err)
+			}
+			saved, generation, tools, before := r.Current(), r.Generation(), r.Tools, r.UsageSnapshot()
+			failure := errors.New("estimation failure")
+			restored := false
+			p.restore = func(llm.TokenCheckpoint, llm.Usage) error {
+				if stage == "restore" {
+					return failure
+				}
+				restored = true
+				return nil
+			}
+			p.estimate = func(context.Context, llm.Request) (llm.InputEstimate, error) {
+				if stage == "estimate" {
+					return llm.InputEstimate{Input: -1}, failure
+				}
+				return llm.InputEstimate{Input: 333, Estimated: true}, nil
+			}
+			if stage == "activation" {
+				if _, err := historytest.DB(t, r.Store).Exec(`CREATE TRIGGER reject_load_activity BEFORE UPDATE OF last_activity_ms ON sessions BEGIN SELECT RAISE(ABORT,'activation blocked'); END`); err != nil {
+					t.Fatal(err)
 				}
 			}
-		} else {
-			if got := r.UsageSnapshot(); got.Input != local || !got.Estimated {
-				t.Fatal("different model version reused calibration", got, local)
+			if err := r.Load(saved); err == nil {
+				t.Fatal("failed preparation succeeded")
 			}
-		}
-		if calls == 1 {
-			if err := emit(llm.StreamEvent{Kind: "state", StateVersion: 1, StateItem: json.RawMessage(`{"type":"reasoning","encrypted_content":"old model"}`)}); err != nil {
-				return err
+			if r.Current() != saved || r.Generation() != generation || r.Tools != tools || !reflect.DeepEqual(r.UsageSnapshot(), before) {
+				t.Fatal("failed load replaced active state")
 			}
-		}
-		if err := emit(llm.StreamEvent{Kind: "text", Text: "Done."}); err != nil {
-			return err
-		}
-		var usage *llm.Usage
-		if calls == 1 {
-			usage = &llm.Usage{InputTokens: measured}
-		}
-		return emit(llm.StreamEvent{Kind: "completed", Usage: usage})
-	}}}
-	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Measure."}); err != nil {
-		t.Fatal(err)
-	}
-	for _, model := range []string{"gpt-6-luna", "gpt-6.1-sol"} {
-		next := r.CurrentSelection()
-		next.Model.ID = model
-		if err := r.RequestModel(next); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.ApplyModel(""); err != nil {
-			t.Fatal(err)
-		}
-		if model == "gpt-6-luna" {
-			baseline.Selection = next
-			if got := r.estimator.Estimate(baseline); got.Input != measured || got.Estimated {
-				t.Fatal("switch discarded tokenizer-compatible anchor", got)
+			if restored != (stage != "restore") {
+				t.Fatal("provider evidence was not retained independently", restored)
 			}
-		}
-		if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Continue."}); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestLoadInvalidCheckpointPreservesActiveRuntime(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
-		return emit(llm.StreamEvent{Kind: "completed", Usage: &llm.Usage{InputTokens: 1234}})
-	}}
-	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Save"}); err != nil {
-		t.Fatal(err)
-	}
-	saved, generation, tools, before := r.Current(), r.Generation(), r.Tools, r.UsageSnapshot()
-	if _, err := historytest.DB(t, r.Store).Exec("UPDATE request_observations SET checkpoint_json=json_set(checkpoint_json,'$.version',999)"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Command("/load " + saved); err == nil || !strings.Contains(err.Error(), "checkpoint") {
-		t.Fatal("load accepted invalid checkpoint", err)
-	}
-	if r.Current() != saved || r.Generation() != generation || r.Tools != tools || !reflect.DeepEqual(r.UsageSnapshot(), before) {
-		t.Fatal("failed load destroyed active runtime")
+		})
 	}
 }
 
@@ -220,6 +154,11 @@ func TestLoadInvalidProjectionPreservesActiveRuntime(t *testing.T) {
 
 func TestCheckpointPersistenceFailureRollsBackAdmission(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
+	r.Provider = &childProvider{estimate: func(ctx context.Context, req llm.Request) (llm.InputEstimate, error) {
+		estimate, err := llm.EstimateInput(ctx, req)
+		estimate.Checkpoint = fixtureCheckpoint(2)
+		return estimate, err
+	}}
 	seedRuntime(t, r, "Observe messages")
 	turn := admissionTurn(t, r)
 	if _, _, err := r.admitMain(context.Background(), turn, r.selection); err != nil {
@@ -260,52 +199,55 @@ func TestCheckpointPersistenceFailureRollsBackAdmission(t *testing.T) {
 
 func TestUnusableFeedbackMatchesLiveAndReloadedAccounting(t *testing.T) {
 	for _, invalid := range []llm.Usage{{InputTokens: -1}, {InputTokens: 12345, OutputTokens: -1}} {
-		name := "negative input"
+		name := "negative-input"
 		if invalid.OutputTokens < 0 {
-			name = "negative output"
+			name = "negative-output"
 		}
 		t.Run(name, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
-			r.Emit = nil
-			var original contextbuild.InputSnapshot
-			measured, calls := 0, 0
-			r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
-				calls++
-				usage := invalid
-				if calls == 1 {
-					original = requestSnapshot(r, req)
-					measured = contextbuild.EstimateInput(original).Input + 1000
-					usage = llm.Usage{InputTokens: measured, OutputTokens: 5}
-				}
-				if err := emit(llm.StreamEvent{Kind: "text", Text: "Done."}); err != nil {
-					return err
-				}
-				return emit(llm.StreamEvent{Kind: "completed", Usage: &usage})
-			}}
-			for _, prompt := range []string{"Measure.", "Continue."} {
-				if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: prompt}); err != nil {
+			calls := 0
+			p := &childProvider{
+				estimate: func(context.Context, llm.Request) (llm.InputEstimate, error) {
+					return llm.InputEstimate{Input: 100, Estimated: true, Checkpoint: fixtureCheckpoint(2)}, nil
+				},
+				stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
+					calls++
+					usage := invalid
+					if calls == 1 {
+						usage = llm.Usage{InputTokens: 777, OutputTokens: 5}
+					}
+					if err := emit(llm.StreamEvent{Kind: "text", Text: "Done."}); err != nil {
+						return err
+					}
+					return emit(llm.StreamEvent{Kind: "completed", Usage: &usage})
+				},
+			}
+			r.Provider = p
+			for _, text := range []string{"Measure.", "Continue."} {
+				if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: text}); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if got := r.UsageSnapshot(); got.Reported != nil || got.Totals.Requests != 2 || got.Totals.ReportedRequests != 1 {
 				t.Fatal("unusable feedback became live usage", got)
 			}
-			if got := r.estimator.Estimate(original); got.Input != measured || got.Estimated {
-				t.Fatal("unusable feedback replaced live anchor", got)
-			}
 			saved, err := r.Store.MainUsage(context.Background(), r.Current())
-			if err != nil || saved.Reported != nil || saved.Anchor == nil || saved.Anchor.Tokens.InputTokens != measured {
+			if err != nil || saved.Reported != nil || saved.Anchor == nil || saved.Anchor.Tokens.InputTokens != 777 {
 				t.Fatal("durable feedback differs from live", saved, err)
 			}
-			if _, err := r.Command("/load " + r.Current()); err != nil {
+			restores := 0
+			p.restore = func(_ llm.TokenCheckpoint, usage llm.Usage) error {
+				restores++
+				if usage.InputTokens != 777 {
+					t.Fatal("unusable feedback replaced durable evidence", usage)
+				}
+				return nil
+			}
+			if err := r.Load(r.Current()); err != nil {
 				t.Fatal(err)
 			}
-			original.Lineage = r.Current()
-			if got := r.estimator.Estimate(original); got.Input != measured || got.Estimated {
-				t.Fatal("reload restored different anchor", got)
-			}
-			if r.UsageSnapshot().Reported != nil {
-				t.Fatal("reload restored unusable reported usage")
+			if restores != 1 || r.UsageSnapshot().Reported != nil {
+				t.Fatal("reload restored different response accounting", restores, r.UsageSnapshot())
 			}
 		})
 	}

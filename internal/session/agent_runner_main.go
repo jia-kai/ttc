@@ -9,7 +9,6 @@ import (
 )
 
 // mainAgentContext follows the durable branch, including compaction handoffs.
-// Main's estimator remains session-owned and is never shared with assignments.
 type mainAgentContext struct {
 	runtime *Runtime
 	turn    string
@@ -53,21 +52,19 @@ func (c *mainAgentContext) admit(ctx context.Context, recovery *llm.Message) (ag
 		r.prefixSelection, r.prefixTurn = selection, c.turn
 		r.prefixSession, r.prefixTip = r.current, admitted.EntryTip
 		r.mu.Unlock()
-		return agentRequest{id: admitted.RequestID, conversation: r.Current(), selection: selection, system: systemTemplate, messages: admitted.Messages}, nil
+		return agentRequest{id: admitted.RequestID, Request: admitted.input}, nil
 	}
 }
 
 func (*mainAgentContext) append(...llm.Message) {} // Durable commits already extend main context.
 
-func (c *mainAgentContext) observe(request int64, selection llm.Selection, usage *llm.Usage, success bool) {
+func (c *mainAgentContext) observe(_ int64, selection llm.Selection, usage *llm.Usage, success bool) {
 	r := c.runtime
 	if success {
 		if usage.Usable() {
-			if result, ok := r.estimator.ObserveUsage(request, usage.InputTokens); ok {
-				r.mu.Lock()
-				r.usage = usageFromEstimate(selection, result)
-				r.mu.Unlock()
-			}
+			r.mu.Lock()
+			r.usage.Input, r.usage.Estimated = usage.InputTokens, false
+			r.mu.Unlock()
 		}
 		r.mu.Lock()
 		r.reported = nil

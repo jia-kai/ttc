@@ -72,8 +72,14 @@ type Inference interface {
 	// Implementations must honor the context and support concurrent attempts.
 	// Unsupported remote cancellation is a no-op, never a local-abort substitute.
 	Cancel(context.Context, string) error
-	EstimateReplay(llm.Message) int
-	TokenizerID(llm.ModelSpec) string
+	// EstimateInput prepares the same native input as Stream and reports complete
+	// input occupancy. Pass the returned Prepared handle to the matching Stream
+	// call before binding its checkpoint to usage. Errors return Input -1 without
+	// a checkpoint or prepared handle.
+	EstimateInput(context.Context, llm.Request) (llm.InputEstimate, error)
+	// RestoreEstimate installs a checkpoint bound by the caller to successful,
+	// usable endpoint usage. Legacy version 1 checkpoints are validated no-ops.
+	RestoreEstimate(llm.TokenCheckpoint, llm.Usage) error
 }
 
 // Catalog supplies discovery binding and a cache location, not refresh policy.

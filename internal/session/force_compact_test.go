@@ -132,7 +132,11 @@ func TestForceCompactCommandPreservesStructuredRequestAndPendingChildAnswer(t *t
 		t.Fatal("force consumed or changed a child completion queued during summary")
 	}
 	cm, _, err := r.runtimeContext(context.Background(), "main", selection, contextCursor{})
-	if err != nil || !compactionFits(selection, systemTemplate, r.Tools.Definitions(), messages, pendingMainNotices(t, r), cm) {
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimate, err := r.compactionEstimate(context.Background(), r.Current(), selection, systemTemplate, r.Tools.Definitions(), messages, pendingMainNotices(t, r), cm)
+	if err != nil || !codingInputFits(estimate.Input, selection.Model.Budget, true) {
 		t.Fatal("successful force handoff does not fit with pending completion/runtime", err)
 	}
 	admitted, _, err := r.admitMain(context.Background(), admissionTurn(t, r), selection)
@@ -269,9 +273,9 @@ type forceReplayProvider struct {
 	estimates atomic.Int32
 }
 
-func (p *forceReplayProvider) EstimateReplay(llm.Message) int {
+func (p *forceReplayProvider) EstimateInput(context.Context, llm.Request) (llm.InputEstimate, error) {
 	p.estimates.Add(1)
-	return 1 << 30
+	return llm.InputEstimate{Input: 1 << 30, Estimated: true}, nil
 }
 
 func TestForceSummarySkipsInputEstimation(t *testing.T) {
@@ -290,8 +294,8 @@ func TestForceSummarySkipsInputEstimation(t *testing.T) {
 				return emit(llm.StreamEvent{Kind: "text", Text: "Summary."})
 			}}}
 			r.Provider = p
-			snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Messages: []llm.Message{message}, Lineage: r.Current()}
-			text, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", force)
+			snapshot := llm.Request{Selection: selection, System: systemTemplate, Messages: []llm.Message{message}, ConversationID: r.Current()}
+			text, err := r.summarize(context.Background(), "main", "", snapshot, "", force)
 			if force {
 				if err != nil || text != "Summary." || calls != 1 || p.estimates.Load() != 0 {
 					t.Fatal("forced summary performed input estimation", text, err, calls, p.estimates.Load())
@@ -320,8 +324,8 @@ func TestSummaryRejectsInvalidProjectionBeforeRequest(t *testing.T) {
 				{Type: llm.TypeAssistant, RetainedAtMS: 1000},
 				{Type: llm.TypeUserInput, RetainedAtMS: 1000},
 			} {
-				snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Messages: []llm.Message{message}, Lineage: r.Current()}
-				if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", force); err == nil || calls != 0 {
+				snapshot := llm.Request{Selection: r.CurrentSelection(), System: systemTemplate, Messages: []llm.Message{message}, ConversationID: r.Current()}
+				if _, err := r.summarize(context.Background(), "main", "", snapshot, "", force); err == nil || calls != 0 {
 					t.Fatal("invalid semantic/projection input reached provider", message, calls, err)
 				}
 			}

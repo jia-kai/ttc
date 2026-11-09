@@ -26,11 +26,22 @@ type Script struct {
 // Cancel is a no-op because offline scripts have no remote inference operation.
 func (s *Script) Cancel(context.Context, string) error { return nil }
 
-// EstimateReplay uses a conservative transport estimate for synthetic codecs.
-func (s *Script) EstimateReplay(m Message) int { return ReplayTokens(m.State) }
+// EstimateInput conservatively counts synthetic input without measured usage.
+func (s *Script) EstimateInput(ctx context.Context, req Request) (InputEstimate, error) {
+	return EstimateInput(ctx, req)
+}
 
-// TokenizerID keeps synthetic models separate by their exact request model.
-func (s *Script) TokenizerID(m ModelSpec) string { return m.RequestID() }
+// RestoreEstimate ignores measurements because scripts never measure token usage.
+// Malformed saved metadata still fails validation rather than hiding corruption.
+func (s *Script) RestoreEstimate(checkpoint TokenCheckpoint, usage Usage) error {
+	if err := checkpoint.Validate(); err != nil {
+		return err
+	}
+	if !usage.Usable() {
+		return errors.New(prompts.LLMInvalidMeasuredUsage)
+	}
+	return nil
+}
 
 // ScriptModel supplies a synthetic budget, never a claim about a real model.
 func ScriptModel() ModelSpec {

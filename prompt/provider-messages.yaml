@@ -1,5 +1,17 @@
 # Authored OpenAI inference diagnostics, including credential refresh failures.
 # Preserve exact printf slots, whitespace, wrapping, and safe diagnostic fragments.
+OpenAIBindPreparedInput: "bind prepared input: %w"
+OpenAIForeignPreparedInput: OpenAI request has a foreign prepared input
+OpenAIChangedPreparedInput: OpenAI request input changed after preparation
+OpenAIRestoreEstimateUsage:
+  restore token estimate requires usable measured usage
+OpenAIMeasuredTokenOverflow: measured input token estimate overflow
+OpenAIPrepareInputConfiguration: "prepare input configuration: %w"
+OpenAIPrepareInputItem: "prepare native input item: %w"
+OpenAIUnsupportedEstimateItem:
+  unsupported native input item for token estimation
+OpenAIInvalidEstimateContent: invalid native input content for token estimation
+OpenAIInvalidEstimateBinary: invalid native binary content for token estimation
 OpenAIRequiresCredentialsSource:
   "OpenAI transport requires a credentials source"
 OpenAIRequiresAccessAndAccount:

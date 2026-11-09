@@ -154,34 +154,33 @@ admission and handoff inequalities, retention defaults and failure behavior.
   unavailable if any reported response omitted it. Offline scripts report no
   usage and use local context estimates.
 - Copy counters under the runtime mutex. Match parent reported input/cache and
-  frozen model to the producing request ID. Admission and the sidebar share one
-  input estimate, calibrated by compatible provider input feedback. Occupancy
-  includes coding/summary output allowances, summary instruction tokens and
-  safety margin: `Context n.n%` for directly reported input,
-  `Context (est.) n.n%` for calibrated growth or local estimates. Compaction
-  refreshes occupancy immediately while prior reported usage remains visible.
-  Loads restore the latest successful parent response's reported usage and the
-  latest measured coding input on the selected branch, excluding precompaction
-  calibration. A successful response without usage clears the reported display
-  but preserves an older calibration. New requests save a bounded checkpoint
-  containing local tokens and input fingerprints, not payloads. Typed completion
-  observations provide branch-aware usage without parsing audit diagnostics;
-  startup migration builds these observations for existing histories. Older
-  requests reconstruct their original input using saved instructions and current
-  tool schemas; that calibration is always estimated. Missing historical
-  instruction artifacts leave reported usage available but skip that
-  reconstruction. Changed system instructions or schemas invalidate
-  checkpoint-backed calibration. Obsolete checkpoint fingerprints fall back to
-  local estimation until the next measured request. TTC treats OpenAI
-  `gpt-<numeric-version>-sol`, `-luna`, `-terra` and `-astra` as
-  tokenizer-compatible within the exact version; other model IDs remain
-  separate. Speed and reasoning-effort switches preserve calibration; provider
-  changes invalidate it. Native replay remains specific to its producing model,
-  even when tokenizers match. Other explicit history resets clear parent context
-  usage. `/new` clears run totals; loads, `/clear` and other session changes
-  never rebuild them from history. Changed input still uses measured input plus
-  a local delta, not an exact count. `/force-compact` can attempt summary
-  inference despite that estimate.
+  frozen model to the producing request ID. Admission and the sidebar share the
+  provider's input estimate. Occupancy includes coding/summary output
+  allowances, summary instruction tokens and safety margin: `Context n.n%` for
+  matching measured input, `Context (est.) n.n%` for measured-prefix growth or
+  local estimates. Compaction refreshes occupancy immediately while prior
+  reported usage remains visible. A successful response without usage clears the
+  reported display but does not remove cached measurements.
+- OpenAI caches successful input measurements at its API boundary. Reuse
+  requires identical instructions, tool schemas, underlying request model and
+  encoding policy, followed by an exact native-item prefix match. The estimate
+  is measured prefix tokens plus estimated suffix tokens; divergent requests
+  cannot borrow an unmatched request's measurement. Only submitted complete
+  inputs receive measurements, not every intermediate prefix. Speed and
+  reasoning-effort switches preserve compatible measurements; different models
+  do not share them. The bounded cache is shared across actors; eviction only
+  loses estimation precision. Native replay remains specific to its producing
+  model.
+- New main requests save bounded provider checkpoints containing counts and
+  fingerprints, not payloads. Typed completion observations bind checkpoints to
+  successful usage on the selected branch. Loads restore the latest eligible
+  measurement after compaction and the latest successful parent response's
+  reported usage. Legacy checkpoints and requests without checkpoints retain
+  reported usage but do not reconstruct measurements from current schemas. Other
+  explicit history resets clear parent context usage, not the shared provider
+  cache. `/new` clears run totals; loads, `/clear` and other session changes
+  never rebuild them from history. `/force-compact` can attempt summary
+  inference despite its input estimate.
 - Cost needs each producing model/tier's rates: ordinary input × input rate +
   reads × cached-input rate + writes × cache-write rate + output × output rate.
   Mixed-model totals determine neither cost nor a subscription bill. See

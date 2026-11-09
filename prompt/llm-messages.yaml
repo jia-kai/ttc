@@ -4,6 +4,11 @@ LLMMixedReplayState: mixed provider replay state
 LLMScriptExhausted: offline script exhausted
 LLMScriptPrefixMismatch: "offline script prefix mismatch: expected "
 LLMScriptNoTools: script returned tools to a no-tools request
+LLMInvalidMeasuredUsage: invalid measured token usage
+LLMInvalidTokenCheckpoint: invalid token checkpoint version or count
+LLMInvalidTokenFingerprint: invalid token checkpoint fingerprint
+LLMInputTokenOverflow: input token estimate overflow
+LLMEstimateInputMessage: "estimate input message %d: %w"
 LLMInvalidMessageType: "invalid message type %q"
 LLMMessageToolCalls: "%s cannot contain tool calls"
 LLMMessageCallID: "%s cannot contain a tool call ID"

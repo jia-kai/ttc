@@ -11,7 +11,6 @@ import (
 	"testing"
 	"ttc/internal/historytest"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
@@ -365,7 +364,7 @@ func TestChildSteerDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 		t.Fatal("steering grant notice changed granted capabilities", notice)
 	}
 	queuedTokens := assignment.queuedTokens
-	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment, estimator: &contextbuild.Estimator{}}
+	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment}
 	input := []llm.Message{{Type: llm.TypeUserInput, Content: "task", InputSource: "task"}}
 	var before int
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {

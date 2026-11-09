@@ -11,7 +11,6 @@ import (
 	"time"
 	"ttc/internal/historytest"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/skills"
 	"ttc/internal/tool"
@@ -404,7 +403,7 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 				if beginErr != nil {
 					t.Fatal(beginErr)
 				}
-				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: role == skills.Aside, estimator: &contextbuild.Estimator{}}
+				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: role == skills.Aside}
 				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)}}
 				seedIsolatedHistory(t, r, actor, turn, messages)
 				_, cursor, err = r.compactChild(context.Background(), task, messages, cursor, nil)

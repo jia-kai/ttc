@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
@@ -18,6 +17,13 @@ import (
 )
 
 var errNeedsCompaction = errors.New("request requires compaction")
+
+// requestAdmission keeps provider preparation transient; history persists only
+// the payload-free checkpoint bound to the durable request.
+type requestAdmission struct {
+	history.Admission
+	input llm.Request
+}
 
 // deliverNoticeEntries updates timer delivery state only after durable request
 // admission. It runs outside orderMu because timer publishers hold timers.mu
@@ -78,7 +84,7 @@ func (r *Runtime) committedJobs(actor string) []jobs.Snapshot {
 
 // admitMain freezes delivery and live state under the same publication gate.
 // A failed/oversized admission neither consumes notices nor advances cursors.
-func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Selection) (admitted history.Admission, cm *llm.Message, err error) {
+func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Selection) (admitted requestAdmission, cm *llm.Message, err error) {
 	err = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
@@ -105,35 +111,34 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if cm != nil {
 			messages = append(messages, *cm)
 		}
-		projected, e := contextbuild.ProjectRetainedInputs(messages)
-		if e != nil {
-			return e
-		}
 		defs := r.Tools.Definitions()
-		snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: defs, Messages: projected, Lineage: r.Current(), TokenEstimator: r.Provider}
-		observation := r.estimator.Prepare(snapshot)
-		result := observation.Result
+		input, result, e := r.prepareInput(ctx, llm.Request{ConversationID: r.Current(), Selection: selection, System: systemTemplate, Tools: defs, Messages: messages, OutputTokens: selection.Model.Budget.OutputAllowance})
+		if e != nil {
+			return fmt.Errorf(prompts.SessionEstimateMainInput, e)
+		}
 		r.mu.Lock()
 		r.usage = usageFromEstimate(selection, result)
 		r.mu.Unlock()
 		if !codingInputFits(result.Input, selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
-		checkpoint := observation.Checkpoint()
-		if checkpoint == nil {
-			return errors.New("admitted request has no token checkpoint")
-		}
-		admitted, e = r.Store.AdmitRequest(history.RequestAdmission{
+		admitted.Admission, e = r.Store.AdmitRequest(history.RequestAdmission{
 			SessionID: r.Current(), TurnID: turn, Actor: "main", Selection: selection, EasySelection: next.easy,
-			Checkpoint: checkpoint, Context: cm, Notices: notices, Steers: steers,
+			Checkpoint: result.Checkpoint, Context: cm, Notices: notices, Steers: steers,
 		})
 		if e != nil {
 			return e
 		}
+		// Commit assigns request IDs and steering timestamps. They are required
+		// canonical metadata, but do not alter the provider's prepared native input.
+		input.Messages, e = projectInputMessages(selection, admitted.Messages)
+		if e != nil {
+			return e
+		}
+		admitted.input = input
 		r.notifications.consume(count)
 		r.steers = nil
 		r.mainContext = next
-		r.estimator.ObserveRequest(admitted.RequestID, observation)
 		return nil
 	})
 	return admitted, cm, err

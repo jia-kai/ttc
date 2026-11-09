@@ -49,8 +49,8 @@ func TestSummaryRequestPreservesRetainedProvenance(t *testing.T) {
 		}
 		return emit(llm.StreamEvent{Kind: "text", Text: "Retained task handoff."})
 	}}
-	snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{input}, Lineage: r.Current()}
-	if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false); err != nil || requests != 1 {
+	snapshot := llm.Request{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{input}, ConversationID: r.Current()}
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, "", false); err != nil || requests != 1 {
 		t.Fatal("retained-input summary failed", requests, err)
 	}
 }
@@ -94,7 +94,7 @@ func TestIsolatedGroupedRetainedCodingDelivery(t *testing.T) {
 			}
 			usage := estimateUsage(r.selection, system, r.Tools.Definitions(), []llm.Message{*cm})
 			r.selection.Model.Budget.ContextLimit = usage.Input + usage.Reserved + 2600 + 4*4096
-			task := childTask{actor: actor, prompt: "Continue isolated work.", selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
+			task := childTask{actor: actor, prompt: "Continue isolated work.", selection: r.selection, tools: r.Tools, aside: aside}
 			task.turn, err = r.Store.BeginChildTurn(mainSession, task.actor, task.selection)
 			if err != nil {
 				t.Fatal(err)

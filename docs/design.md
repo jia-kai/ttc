@@ -172,9 +172,9 @@ One Go module uses direct construction and small interfaces at their consumers:
   `ReadReplay` supplies typed presentation rows and selected stream revisions;
   the frontend does not decode storage envelopes or resolve tool supersession.
   Compaction views/plans hide physical cuts and map retention by message index;
-  runtime owns token policy and checks capacity before the atomic handoff.
-  Context/compaction snapshots use separate read-only WAL connections so message
-  decoding does not occupy the store's commit connection.
+  runtime owns budget policy and checks provider-estimated capacity before the
+  atomic handoff. Context/compaction snapshots use separate read-only WAL
+  connections so message decoding does not occupy the store's commit connection.
 - Opaque restore plans own undo/redo selection and file-history divergence.
   Workspace code interprets application-owned path effects and applies checked
   filesystem changes before committing the plan. Plans reject stale selections;
@@ -208,10 +208,10 @@ One Go module uses direct construction and small interfaces at their consumers:
   outside the frontend, which owns drafts, navigation and dialog presentation.
 - Main, coding-child and aside execution use one `AgentRunner`
   request/tool/recovery cycle. Explicit context and completion policies preserve
-  independent calibration, capabilities, assignment journals and resource
-  lifetimes. A retained child keeps context only; assignment work is joined
-  before completion, while main-owned background work survives ordinary turn
-  completion.
+  distinct capabilities, assignment journals and resource lifetimes while
+  delegating input estimation to the provider. A retained child keeps context
+  only; assignment work is joined before completion, while main-owned background
+  work survives ordinary turn completion.
 - Runtime updates and settled operation results share one ordered, bounded
   stream. Slow consumers apply backpressure outside shared locks; publication
   inside short routing commits uses capacity reserved before taking those locks.
@@ -427,14 +427,30 @@ production provider registration or services. Sessions consume only
 type Inference interface {
     Stream(context.Context, llm.Request, func(llm.StreamEvent) error) error
     Cancel(context.Context, string) error
-    EstimateReplay(llm.Message) int
-    TokenizerID(llm.ModelSpec) string
+    EstimateInput(context.Context, llm.Request) (llm.InputEstimate, error)
+    RestoreEstimate(llm.TokenCheckpoint, llm.Usage) error
 }
 ```
 
-`TokenizerID` supplies the provider-owned calibration identity; sharing an
-identity is TTC policy, not a claim of a provider tokenizer guarantee. Native
-replay compatibility remains separate.
+Providers own complete-input token estimation, native encoding and measurement
+reuse. Sessions own limits, reserves and compaction policy. `EstimateInput`
+returns a count, whether it is estimated, an optional payload-free provider
+checkpoint, and an optional immutable prepared-input handle. Admission carries
+that handle to execution so the sent input matches the budgeted checkpoint even
+if attachment availability changes. Handles are request-owned and never
+persisted. Estimation honors cancellation and reports projection/counting
+errors. `RestoreEstimate` seeds compatible historical measurements; obsolete
+checkpoint versions remain loadable without becoming current measurements.
+
+OpenAI prepares native input through the same projection for estimation and
+sending. Its immutable prepared sequence holds item counts and chained prefix
+fingerprints. A bounded adapter-owned cache maps complete submitted input hashes
+to successful endpoint input usage; it never fabricates measured intermediate
+prefixes. Estimation uses the longest measured prefix plus locally estimated new
+items. Instructions, ordered tools, exact request model and encoding policy
+namespace the cache. Different instructions or schemas cannot transfer a
+measurement by subtracting approximate overhead. Matching requests can reuse
+measurements across actors without estimator forks or actor-local resets.
 
 `internal/providers` defines neutral module contracts and configuration helpers.
 Concrete subpackages own each provider's implementation and wiring; shared LLM
@@ -476,11 +492,12 @@ provider-specific flags rather than silently ignoring them.
   credentials. Standard transports are cloned, isolating caller-owned pools.
   Custom transports keep their socket policy; custom TLS dialers cannot Reset,
   and their Close cleanup depends on cancellation and idle-connection support.
-- Transports own context-bound protocol HTTP, wire/replay codecs and in-request
-  retries, not files, caches, background workers, login UI or conversation
-  state. OpenAI accepts injected credential and binary-resolution functions;
-  `openai.AccessTokens` contains only access token/account identity. ID and
-  refresh tokens stay with the auth owner, never the inference dependency.
+- Transports own context-bound protocol HTTP, wire/replay codecs, input-estimate
+  caches and in-request retries, not files, background workers, login UI or
+  actor-local conversation state. OpenAI accepts injected credential and
+  binary-resolution functions; `openai.AccessTokens` contains only access
+  token/account identity. ID and refresh tokens stay with the auth owner, never
+  the inference dependency.
 - `catalog.Source.Models` returns remote `ModelInfo` capacities/capabilities.
   The provider-neutral `catalog.Manager` applies TTC `Policy` to create budgeted
   `ModelSpec` snapshots and owns scoped cache storage and discovery lifetimes;
@@ -1103,9 +1120,9 @@ The concrete boundaries above are TTC decisions, informed by:
   registry: no shell, mutations, interactions, timers or child creation. Timer
   listing is runtime-wide; job visibility still follows child ownership. Coding
   children, persistent follow-ups and asides share execution, admission and
-  compaction. The loop accepts an optional independently owned estimator; asides
-  seed it from compatible main feedback for the frozen input. See
-  [compaction calibration](compaction.md#trigger-and-retention).
+  compaction. All use provider-owned input estimation; changed aside
+  instructions/tools prevent direct reuse of main measurements. See
+  [compaction budgets](compaction.md#trigger-and-retention).
 - Each aside has its own actor/cache identity, hidden inspectable records,
   supervisor captures and a 64 KiB final-answer limit. It shares the
   [supervisor limit](tools.md#subagent), survives compaction and is

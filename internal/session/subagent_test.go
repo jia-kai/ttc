@@ -19,7 +19,23 @@ import (
 // childProvider retains the fixture's catalog/login behavior and controls streams.
 type childProvider struct {
 	llm.Script
-	stream func(context.Context, llm.Request, func(llm.StreamEvent) error) error
+	stream   func(context.Context, llm.Request, func(llm.StreamEvent) error) error
+	estimate func(context.Context, llm.Request) (llm.InputEstimate, error)
+	restore  func(llm.TokenCheckpoint, llm.Usage) error
+}
+
+func (p *childProvider) EstimateInput(ctx context.Context, req llm.Request) (llm.InputEstimate, error) {
+	if p.estimate != nil {
+		return p.estimate(ctx, req)
+	}
+	return llm.EstimateInput(ctx, req)
+}
+
+func (p *childProvider) RestoreEstimate(checkpoint llm.TokenCheckpoint, usage llm.Usage) error {
+	if p.restore != nil {
+		return p.restore(checkpoint, usage)
+	}
+	return checkpoint.Validate()
 }
 
 func TestSubagentRequiresConciseTitle(t *testing.T) {

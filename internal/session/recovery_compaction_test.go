@@ -98,7 +98,8 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 				if err := b.Validate(); err != nil {
 					t.Fatal("fixture budget is invalid", err)
 				}
-				if !compactionFits(r.selection, system, r.Tools.Definitions(), baseline, nil, runtime) {
+				estimate, err := r.compactionEstimate(context.Background(), r.Current(), r.selection, system, r.Tools.Definitions(), baseline, nil, runtime)
+				if err != nil || !codingInputFits(estimate.Input, r.selection.Model.Budget, true) {
 					t.Fatal("baseline without warning does not fit")
 				}
 				withWarning, _ := contextbuild.AppendPendingMessage(baseline, &warning)
@@ -122,7 +123,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 						result, err = r.Store.Messages(r.Current())
 					}
 				} else {
-					result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}, messages, contextCursor{}, &warning)
+					result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
 				}
 				if summaries != 1 {
 					t.Fatal("expected one summary", summaries, err)
@@ -219,7 +220,7 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Evidence summarized; continue the task."})
 			}}
-			result, _, err := r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}, messages, contextCursor{}, &warning)
+			result, _, err := r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
 			if err != nil || summaries != 2 || r.Current() == before {
 				t.Fatal("nested main/child handoff failed", err, summaries)
 			}
@@ -308,7 +309,7 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				err = r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Isolated task", selection: r.selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_"), estimator: &contextbuild.Estimator{}}, io.Discard, io.Discard)
+				err = r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Isolated task", selection: r.selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}, io.Discard, io.Discard)
 				partialRetryNoMainLeak(t, r)
 			}
 			if err != nil || coding != 2 || summaries != 1 {

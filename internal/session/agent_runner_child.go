@@ -11,7 +11,6 @@ import (
 )
 
 // assignmentAgentContext owns a private transcript and request-context cursor.
-// Its estimator belongs to task, never to the main actor or another child.
 type assignmentAgentContext struct {
 	runtime  *Runtime
 	task     childTask
@@ -54,7 +53,7 @@ func (c *assignmentAgentContext) admit(ctx context.Context, recovery *llm.Messag
 		if err := r.deliverNoticeEntries(c.task.actor, admitted.NoticeEntries); err != nil {
 			return agentRequest{}, err
 		}
-		return agentRequest{id: admitted.RequestID, conversation: c.task.actor, selection: c.task.selection, system: c.system, messages: c.messages}, nil
+		return agentRequest{id: admitted.RequestID, Request: admitted.input}, nil
 	}
 }
 
@@ -62,11 +61,7 @@ func (c *assignmentAgentContext) append(messages ...llm.Message) {
 	c.messages = append(c.messages, messages...)
 }
 
-func (c *assignmentAgentContext) observe(request int64, _ llm.Selection, usage *llm.Usage, success bool) {
-	if success && usage.Usable() {
-		c.task.estimator.ObserveUsage(request, usage.InputTokens)
-	}
-}
+func (*assignmentAgentContext) observe(int64, llm.Selection, *llm.Usage, bool) {}
 
 type assignmentAgentPolicy struct {
 	runtime *Runtime

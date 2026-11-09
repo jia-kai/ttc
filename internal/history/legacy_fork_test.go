@@ -285,8 +285,8 @@ func TestSchema13LegacyManualCopyMigratesAndForksWithoutHistoricalCopies(t *test
 	}
 	usage := projected.Usage
 	if usage.Reported == nil || usage.Anchor == nil || usage.Reported.RequestID != admitted.RequestID || usage.Anchor.RequestID != admitted.RequestID ||
-		usage.Anchor.Checkpoint != nil || usage.Anchor.System != system || !reflect.DeepEqual(usage.Anchor.Messages, admitted.Messages) || usage.Reported.Tokens.InputTokens != 210 {
-		t.Fatal("migrated manual copy lost original source-backed usage input", usage)
+		usage.Anchor.Checkpoint != nil || usage.Reported.Tokens.InputTokens != 210 {
+		t.Fatal("migrated manual copy lost original source-backed usage", usage)
 	}
 	conversation, err := migrated.Transcript(legacy.ID, 0)
 	if err != nil || !strings.Contains(string(conversation), "Legacy source response evidence") {

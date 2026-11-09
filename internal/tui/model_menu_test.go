@@ -231,9 +231,6 @@ type gatedModelProvider struct {
 	step     int // Stream calls are serial in this fixture, matching Runtime ownership.
 }
 
-func (p *gatedModelProvider) EstimateReplay(m llm.Message) int {
-	return llm.ReplayTokens(m.State)
-}
 func (p *gatedModelProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	p.requests <- req
 	select {

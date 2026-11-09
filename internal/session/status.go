@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"encoding/json"
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 )
 
@@ -93,19 +92,9 @@ func (r *Runtime) recordUsage(u *llm.Usage) {
 	r.emit(Event{Kind: "usage"})
 }
 
-func estimateUsage(selection llm.Selection, system string, defs []llm.ToolDefinition, messages []llm.Message) ContextUsage {
-	return usageFromEstimate(selection, contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: selection, System: system, Tools: defs, Messages: messages}))
-}
-
-func usageFromEstimate(selection llm.Selection, result contextbuild.Result) ContextUsage {
+func usageFromEstimate(selection llm.Selection, result llm.InputEstimate) ContextUsage {
 	b := selection.Model.Budget
 	return ContextUsage{Model: selection.Model.ID + " · " + selection.Variant, Limit: b.ContextLimit, Input: result.Input, Estimated: result.Estimated, Reserved: b.OutputAllowance + b.EstimationMargin + b.SummaryOutputAllowance + compactionInstructionTokens()}
-}
-
-// contextMessages copies the selected provider projection and annotates replay
-// occupancy without changing durable history or the payload sent to the model.
-func (r *Runtime) contextMessages(selection llm.Selection, messages []llm.Message) []llm.Message {
-	return contextbuild.MessagesForEstimation(selection, messages, r.Provider)
 }
 
 // UsageSnapshot returns an immutable estimate without rebuilding history on UI ticks.

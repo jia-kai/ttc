@@ -13,13 +13,13 @@ const replayVersion = 1
 
 // replayItems validates the native output against canonical history before
 // replaying it. Assistant phases, reasoning and original item IDs stay intact.
-func replayItems(m llm.Message) ([]any, error) {
+func replayItems(m llm.Message) ([]map[string]any, error) {
 	if m.State.Version != replayVersion || m.Type != llm.TypeAssistant || len(m.State.Items) == 0 {
 		return nil, errors.New(prompts.OpenAIUnsupportedReplayState)
 	}
 	var content strings.Builder
 	var calls []llm.ToolCall
-	var out []any
+	var out []map[string]any
 	for _, raw := range m.State.Items {
 		var item struct {
 			Type      string `json:"type"`

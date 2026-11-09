@@ -9,7 +9,6 @@ import (
 	"ttc/internal/prompts"
 	"unicode/utf8"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/jobs"
 	"ttc/internal/llm"
@@ -43,7 +42,6 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	selection, turn := r.prefixSelection, r.prefixTurn
 	prefixSession, prefixTip := r.prefixSession, r.prefixTip
 	sessionID := r.current
-	estimator := r.estimator
 	if !active {
 		selection = r.selection
 	}
@@ -79,12 +77,6 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	}
 	actor := "main/" + history.NewID("btw")
 	tools := r.Tools.Filter(readOnlyTool)
-	// Rebase only the frozen main input. The fork owns approximate calibration
-	// independently; catalog projection and aside-local input are ordinary deltas.
-	estimator = estimator.Fork(contextbuild.InputSnapshot{
-		Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(),
-		Messages: prefix, Lineage: prefixSession, TokenEstimator: r.Provider,
-	}, asideSystemTemplate, tools.Definitions(), actor)
 	prefix, err = r.projectInheritedSkillCatalogs(prefix, actor)
 	if err != nil {
 		return "", err
@@ -93,7 +85,7 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if len(label) > 64 {
 		label = append(label[:63], '…')
 	}
-	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: tools, aside: true, estimator: estimator}
+	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: tools, aside: true}
 	count := len(r.coordinator.children)
 	for _, v := range r.Jobs.Live() {
 		if v.Kind == "btw" {

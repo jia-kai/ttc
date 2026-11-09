@@ -163,21 +163,18 @@ type BinaryFile struct {
 // Adapters validate their own codec and never replay another provider/model's data.
 // Items replace the entire canonical message on the wire, rather than augmenting it.
 type ReplayState struct {
-	Provider        string            `json:"provider"`
-	Model           string            `json:"model"`
-	Version         int               `json:"version"`
-	Items           []json.RawMessage `json:"items"`
-	EstimatedTokens *int              `json:"-"` // Adapter-derived context occupancy; transient, never wire/history metadata.
+	Provider string            `json:"provider"`
+	Model    string            `json:"model"`
+	Version  int               `json:"version"`
+	Items    []json.RawMessage `json:"items"`
 }
 
-// ReplayTokens estimates opaque transport data when an adapter has not supplied
-// a model-visible estimate. It is conservative, not endpoint-reported usage.
+// ReplayTokens conservatively estimates opaque transport data for local-only
+// accounting. Providers count their own model-visible replay representation;
+// neither estimate is endpoint-reported usage.
 func ReplayTokens(state *ReplayState) int {
 	if state == nil {
 		return 0
-	}
-	if state.EstimatedTokens != nil {
-		return max(0, *state.EstimatedTokens)
 	}
 	n := 0
 	for _, item := range state.Items {
@@ -249,7 +246,8 @@ const DefaultMaxAttempts = 9
 // including developer messages. Providers own transport/state codecs and map
 // roles to their API. NoTools prohibits executable calls, regardless of schemas.
 type Request struct {
-	ConversationID string // Opaque, stable per conversation/actor; providers may use it for cache affinity.
+	ConversationID string        // Opaque, stable per conversation/actor; providers may use it for cache affinity.
+	Prepared       PreparedInput // Optional provider-owned immutable preparation from this request's estimate.
 	Selection      Selection
 	System         string
 	Messages       []Message

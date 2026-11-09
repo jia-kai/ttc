@@ -131,7 +131,11 @@ func TestMainCompactionEmptySuffixWithForeignEntryGap(t *testing.T) {
 				}
 			}
 			cm, _, err := r.runtimeContext(context.Background(), "main", selection, contextCursor{})
-			if err != nil || !compactionFits(selection, systemTemplate, r.Tools.Definitions(), got, nil, cm) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			estimate, err := r.compactionEstimate(context.Background(), r.Current(), selection, systemTemplate, r.Tools.Definitions(), got, nil, cm)
+			if err != nil || !codingInputFits(estimate.Input, selection.Model.Budget, true) {
 				t.Fatal("persisted canonical handoff and postcut tail do not fit", err)
 			}
 			entries, err := r.Store.Branch(r.Current(), 0)

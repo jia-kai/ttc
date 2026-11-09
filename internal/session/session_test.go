@@ -214,9 +214,6 @@ type gatedNamingProvider struct {
 	release chan struct{}
 }
 
-func (p *gatedNamingProvider) EstimateReplay(m llm.Message) int {
-	return llm.ReplayTokens(m.State)
-}
 func (p *gatedNamingProvider) Stream(ctx context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
 	if req.NoTools {
 		p.naming <- req

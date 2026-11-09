@@ -131,18 +131,56 @@ func supportedBinaryType(model llm.ModelSpec, mt string, size int) (llm.BinaryFi
 	return llm.BinaryFileType{}, fmt.Errorf(prompts.OpenAIBinaryMIMEUnsupported, mt)
 }
 
+type nativeTool struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+	Strict      bool            `json:"strict"`
+}
+
+type nativeReasoning struct {
+	Effort  string `json:"effort"`
+	Summary string `json:"summary"`
+}
+
+type nativeRequest struct {
+	Model             string           `json:"model"`
+	ServiceTier       string           `json:"service_tier"`
+	Instructions      string           `json:"instructions"`
+	Input             []map[string]any `json:"input"`
+	Tools             []nativeTool     `json:"tools"`
+	ToolChoice        string           `json:"tool_choice"`
+	ParallelToolCalls bool             `json:"parallel_tool_calls"`
+	Stream            bool             `json:"stream"`
+	Store             bool             `json:"store"`
+	PromptCacheKey    string           `json:"prompt_cache_key"`
+	Include           []string         `json:"include"`
+	Reasoning         *nativeReasoning `json:"reasoning,omitempty"`
+}
+
 func wire(ctx context.Context, req llm.Request, resolve func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)) ([]byte, error) {
+	body, err := prepareWire(ctx, req, resolve)
+	if err != nil {
+		return nil, err
+	}
+	return marshalWire(req, body)
+}
+
+// prepareWire is the shared native projection for streaming and estimation.
+// Its maps and slices belong to this call and are never retained by the cache.
+func prepareWire(ctx context.Context, req llm.Request, resolve func(context.Context, llm.BinaryFile) (llm.BinaryPayload, error)) (*nativeRequest, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if req.Selection.Provider != "openai" || req.Selection.Model.RequestID() == "" {
 		return nil, errors.New(prompts.OpenAISelectionRequired)
 	}
-	if req.ConversationID == "" || strings.IndexFunc(req.ConversationID, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
-		return nil, errors.New(prompts.OpenAIConversationIdentityRequired)
-	}
-	input := []any{}
+	input := []map[string]any{}
 	for _, m := range llm.ContextFor(req.Selection, req.Messages) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for _, file := range m.Files {
 			mt := file.MIMEType
 			if mt != "" {
@@ -217,22 +255,39 @@ func wire(ctx context.Context, req llm.Request, resolve func(context.Context, ll
 			input = append(input, map[string]any{"type": "function_call", "call_id": c.ID, "name": c.Name, "arguments": string(c.Arguments)})
 		}
 	}
-	tools := []any{}
+	tools := []nativeTool{}
 	// Keep supplied schemas in the cache prefix even when tool choice is disabled.
 	for _, t := range req.Tools {
-		tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": t.Parameters, "strict": false})
+		tools = append(tools, nativeTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: t.Parameters})
 	}
-	body := map[string]any{"model": req.Selection.Model.RequestID(), "service_tier": "default", "instructions": req.System, "input": input, "tools": tools, "tool_choice": "auto", "parallel_tool_calls": true, "stream": true, "store": false, "prompt_cache_key": req.ConversationID, "include": []string{"reasoning.encrypted_content"}}
+	body := &nativeRequest{Model: req.Selection.Model.RequestID(), ServiceTier: "default", Instructions: req.System, Input: input, Tools: tools, ToolChoice: "auto", ParallelToolCalls: true, Stream: true, PromptCacheKey: req.ConversationID, Include: []string{"reasoning.encrypted_content"}}
 	if req.Selection.Model.ServiceTier != "" {
-		body["service_tier"] = req.Selection.Model.ServiceTier
+		body.ServiceTier = req.Selection.Model.ServiceTier
 	}
 	if req.Selection.Variant != "" && (req.Selection.Variant != "none" || req.Selection.Model.SupportsReasoning) {
-		body["reasoning"] = map[string]string{"effort": req.Selection.Variant, "summary": "auto"}
+		body.Reasoning = &nativeReasoning{Effort: req.Selection.Variant, Summary: "auto"}
 	}
 	if req.NoTools {
-		body["tool_choice"] = "none"
+		body.ToolChoice = "none"
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func marshalWire(req llm.Request, body *nativeRequest) ([]byte, error) {
+	if err := validateConversationID(req.ConversationID); err != nil {
+		return nil, err
 	}
 	return json.Marshal(body)
+}
+
+func validateConversationID(id string) error {
+	if id == "" || strings.IndexFunc(id, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
+		return errors.New(prompts.OpenAIConversationIdentityRequired)
+	}
+	return nil
 }
 
 type wireEvent struct {
@@ -269,10 +324,14 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 	if req.PriorAttempts < 0 || req.PriorAttempts >= maxAttempts {
 		return errors.New(prompts.OpenAIPriorAttemptsRange)
 	}
-	body, e := wire(ctx, req, a.resolveBinary)
+	if err := validateConversationID(req.ConversationID); err != nil {
+		return err
+	}
+	prepared, e := a.preparedInput(ctx, req)
 	if e != nil {
 		return e
 	}
+	body := prepared.body
 	for attempt := req.PriorAttempts; attempt < maxAttempts; attempt++ {
 		tokens, e := a.credentials(ctx)
 		if e != nil {
@@ -390,6 +449,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 			// rather than requiring a coding continuation or mixing two replies.
 			var privateText strings.Builder
 			var privateEvents []llm.StreamEvent
+			var measured *llm.Usage
 			var observeItem func(json.RawMessage) error
 			if req.Observe != nil {
 				observeItem = func(item json.RawMessage) error {
@@ -399,6 +459,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 				}
 			}
 			committed, upstreamErr = parseStreamObserved(tokens.Access, resp.Body, func(event llm.StreamEvent) error {
+				if event.Kind == "completed" && event.Usage.Usable() {
+					usage := *event.Usage
+					measured = &usage
+				}
 				if req.NoTools && (event.Kind == "call" || event.Kind == "call_start") {
 					return errors.New(prompts.OpenAINoToolsReturnedTool)
 				}
@@ -440,7 +504,13 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request, emit func(llm.Str
 						}
 					}
 				}
-				return observeOutcome(nil, false)
+				if err := observeOutcome(nil, false); err != nil {
+					return err
+				}
+				if measured != nil {
+					a.estimates.remember(prepared.tokens.checkpoint(), measured.InputTokens)
+				}
+				return nil
 			}
 			if req.NoTools {
 				committed = false // Buffered output has not reached a consumer.

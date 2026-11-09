@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 )
@@ -36,9 +35,9 @@ type Admission struct {
 // requestInputMetadata describes an admitted input without duplicating its
 // messages. Exact records remain in history; retries own the frozen input in memory.
 type requestInputMetadata struct {
-	Version       int                `json:"version"`
-	MessageCount  int                `json:"message_count"`
-	InputEstimate *ctxmgr.Checkpoint `json:"input_estimate,omitempty"`
+	Version       int                  `json:"version"`
+	MessageCount  int                  `json:"message_count"`
+	InputEstimate *llm.TokenCheckpoint `json:"input_estimate,omitempty"`
 }
 
 // RequestAdmission describes the input to one coding request. The caller owns
@@ -52,7 +51,7 @@ type RequestAdmission struct {
 	EasySelection *llm.Selection
 	// Checkpoint is optional main-only input accounting, committed atomically
 	// with the request after validation.
-	Checkpoint *ctxmgr.Checkpoint
+	Checkpoint *llm.TokenCheckpoint
 	// Context is an optional nonempty runtime-context message. Admission copies
 	// it and assigns the committed request ID without changing the caller's value.
 	Context *llm.Message

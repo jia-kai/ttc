@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -16,7 +15,7 @@ import (
 	"ttc/internal/tool"
 )
 
-// agentContext owns an actor's request projection and independent calibration.
+// agentContext owns an actor's request projection and response accounting.
 // Main reads the durable branch; assignments extend their isolated transcript.
 // Neither implementation owns execution or the lifetime of background work.
 type agentContext interface {
@@ -26,11 +25,8 @@ type agentContext interface {
 }
 
 type agentRequest struct {
-	id           int64
-	conversation string
-	selection    llm.Selection
-	system       string
-	messages     []llm.Message
+	id int64
+	llm.Request
 }
 
 // agentPolicy owns the response journal and the terminal admission decision.
@@ -88,21 +84,15 @@ func (a *AgentRunner) run(ctx context.Context) (result agentResult, err error) {
 		if err != nil {
 			return result, err
 		}
-		projected, err := contextbuild.ProjectRetainedInputs(request.messages)
-		if err != nil {
-			return result, err
-		}
 		reply := llm.Message{Type: llm.TypeAssistant}
 		var text strings.Builder
 		var usage *llm.Usage
 		var responseID, serviceTier string
 		callbackFailed := false
 		started := time.Now()
-		streamErr := r.stream(ctx, a.turn, a.actor, request.id, llm.Request{
-			ConversationID: request.conversation, Selection: request.selection,
-			System: request.system, Messages: projected, Tools: a.tools.Definitions(),
-			OutputTokens: request.selection.Model.Budget.OutputAllowance, PriorAttempts: priorAttempts,
-		}, func(event llm.StreamEvent) (err error) {
+		input := request.Request
+		input.PriorAttempts = priorAttempts
+		streamErr := r.stream(ctx, a.turn, a.actor, request.id, input, func(event llm.StreamEvent) (err error) {
 			defer func() { callbackFailed = callbackFailed || err != nil }()
 			if err := ctx.Err(); err != nil {
 				return err
@@ -135,7 +125,7 @@ func (a *AgentRunner) run(ctx context.Context) (result agentResult, err error) {
 			case "phase":
 				reply.Phase = event.Phase
 			case "state":
-				return reply.AppendState(request.selection, event.StateVersion, event.StateItem)
+				return reply.AppendState(request.Selection, event.StateVersion, event.StateItem)
 			case "completed":
 				usage, responseID, serviceTier = event.Usage, event.ResponseID, event.ServiceTier
 			}
@@ -173,7 +163,7 @@ func (a *AgentRunner) run(ctx context.Context) (result agentResult, err error) {
 		if err != nil {
 			return result, err
 		}
-		a.context.observe(request.id, request.selection, usage, streamErr == nil)
+		a.context.observe(request.id, request.Selection, usage, streamErr == nil)
 		if a.output.showUsage {
 			r.emit(Event{Kind: "usage"})
 		}
@@ -223,7 +213,7 @@ func (a *AgentRunner) run(ctx context.Context) (result agentResult, err error) {
 			continue
 		}
 		priorAttempts, recovery = 0, nil
-		done, err := a.policy.complete(ctx, request.selection, reply)
+		done, err := a.policy.complete(ctx, request.Selection, reply)
 		if err != nil || done {
 			return result, err
 		}

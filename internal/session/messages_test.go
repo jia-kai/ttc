@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
 	"ttc/internal/render"
@@ -120,15 +119,15 @@ func TestSessionCompactionDiagnosticAssets(t *testing.T) {
 			r.Provider = &childProvider{stream: func(_ context.Context, _ llm.Request, emit func(llm.StreamEvent) error) error {
 				return emit(test.event)
 			}}
-			snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: childSystemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "raw input"}}, Lineage: "main/child_fixture"}
-			_, err := r.summarize(context.Background(), "main/child_fixture", "", snapshot, &contextbuild.Estimator{}, "", false)
+			snapshot := llm.Request{Selection: r.CurrentSelection(), System: childSystemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: llm.TypeUserInput, Content: "raw input"}}, ConversationID: "main/child_fixture"}
+			_, err := r.summarize(context.Background(), "main/child_fixture", "", snapshot, "", false)
 			if err == nil || err.Error() != test.message {
 				t.Fatalf("got %v, want %q", err, test.message)
 			}
 		})
 	}
 	r, _ := runtimeFixture(t, nil)
-	_, _, err := r.compactChild(context.Background(), childTask{estimator: &contextbuild.Estimator{}}, nil, contextCursor{}, nil)
+	_, _, err := r.compactChild(context.Background(), childTask{}, nil, contextCursor{}, nil)
 	if err == nil || err.Error() != prompts.ChildCompactionIdentity {
 		t.Fatalf("got %v, want %q", err, prompts.ChildCompactionIdentity)
 	}
@@ -160,8 +159,8 @@ func TestSummaryRequestRejectsInvalidSemanticMessage(t *testing.T) {
 		requests++
 		return nil
 	}}
-	snapshot := contextbuild.InputSnapshot{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: "unknown"}}, Lineage: r.Current()}
-	if _, err := r.summarize(context.Background(), "main", "", snapshot, r.estimator, "", false); err == nil || requests != 0 {
+	snapshot := llm.Request{Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(), Messages: []llm.Message{{Type: "unknown"}}, ConversationID: r.Current()}
+	if _, err := r.summarize(context.Background(), "main", "", snapshot, "", false); err == nil || requests != 0 {
 		t.Fatal("invalid semantic message reached summary provider", err, requests)
 	}
 }

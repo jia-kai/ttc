@@ -6,27 +6,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 
-	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
 )
 
 // MeasuredRequest binds endpoint token counts to a selected immutable main
-// coding completion. Messages and System are populated only for an older input
-// without a Checkpoint; they exclude the response and all later arrivals.
+// coding completion. Checkpoint is optional: legacy usage remains readable
+// without reconstructing the original request input.
 type MeasuredRequest struct {
 	RequestID  int64
 	Selection  llm.Selection
 	Tokens     llm.Usage
-	Checkpoint *ctxmgr.Checkpoint
-	Messages   []llm.Message
-	System     string
+	Checkpoint *llm.TokenCheckpoint
 }
 
 // MainUsage separates the last successful completion's reported usage from the
-// latest usable calibration anchor. A successful completion without usage clears
-// Reported but preserves an older Anchor. Anchor never crosses compaction.
+// latest owned measurement eligible for input accounting. A successful completion
+// without usage clears Reported but preserves an older Anchor. Anchor never
+// crosses compaction; callers decide whether its checkpoint is usable by a provider.
 type MainUsage struct {
 	Reported *MeasuredRequest
 	Anchor   *MeasuredRequest
@@ -41,17 +38,16 @@ const usageAncestry = `WITH RECURSIVE ancestry(id,parent_id) AS (
 ) `
 
 type requestObservation struct {
-	request, admission, prompt int64 // Original request/admission/system-prompt identities, not copied row IDs.
-	selection                  llm.Selection
-	usage                      *llm.Usage // Nil means unavailable; a measured zero remains nonnil.
-	checkpoint                 *ctxmgr.Checkpoint
+	request, admission int64 // Original request/admission identities, not copied row IDs.
+	selection          llm.Selection
+	usage              *llm.Usage // Nil means unavailable; a measured zero remains nonnil.
+	checkpoint         *llm.TokenCheckpoint
 }
 
 // MainUsage reads typed main coding observations on the selected branch in one
 // snapshot. Naming, compaction, children, siblings and later source completions
-// are excluded. Checkpoints need no original-input reads. Older observations use
-// their saved admission and prompt identities to reconstruct approximate input;
-// a missing instruction artifact disables that anchor without failing the load.
+// are excluded. Observations need no original-input or prompt-artifact reads;
+// anchors are returned only after validating selected admission ownership.
 func (s *Store) MainUsage(ctx context.Context, session string) (MainUsage, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -121,9 +117,9 @@ func mainObservation(ctx context.Context, tx contextSQLReader, tip int64, measur
 	// Acquire payloads only after selecting one identity; SQLite may otherwise
 	// evaluate all historical projections before sorting the ancestry.
 	err = tx.QueryRowContext(ctx, `SELECT o.request_id,coalesce(o.admission_entry_id,0),
-		coalesce(o.system_prompt_entry_id,0),r.model_json,o.usage_json,o.checkpoint_json
+		r.model_json,o.usage_json,o.checkpoint_json
 		FROM request_observations o JOIN model_requests r ON r.id=o.request_id WHERE o.completion_entry_id=?`, completion).Scan(
-		&value.request, &value.admission, &value.prompt, &model, &usage, &checkpoint)
+		&value.request, &value.admission, &model, &usage, &checkpoint)
 	if err != nil {
 		return nil, fmt.Errorf("read selected request observation: %w", err)
 	}
@@ -165,35 +161,14 @@ func (o requestObservation) input(ctx context.Context, tx contextSQLReader, tip 
 	if !selected {
 		return nil, nil
 	}
-	var originalSession string
-	err := tx.QueryRowContext(ctx, `SELECT e.session_id FROM entries e JOIN model_requests r ON r.id=?
-		WHERE e.id=? AND e.source_id IS NULL AND e.session_id=r.session_id AND e.actor_id=r.actor_id`, o.request, o.admission).Scan(&originalSession)
-	if err != nil {
+	var owned bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM entries e JOIN model_requests r ON r.id=?
+		WHERE e.id=? AND e.source_id IS NULL AND e.session_id=r.session_id AND e.actor_id=r.actor_id)`, o.request, o.admission).Scan(&owned); err != nil {
 		return nil, fmt.Errorf("read observed admission: %w", err)
 	}
-	measured := o.measured()
-	if o.checkpoint != nil {
-		return measured, nil
+	if !owned {
+		return nil, fmt.Errorf("observed admission %d does not own request %d", o.admission, o.request)
 	}
-	if o.prompt == 0 {
-		return nil, nil
-	}
-	var path string
-	if err := tx.QueryRowContext(ctx, "SELECT json_extract(content_json,'$.path') FROM entries WHERE id=?", o.prompt).Scan(&path); err != nil {
-		return nil, fmt.Errorf("read observed system prompt: %w", err)
-	}
-	prompt, err := readArtifact(path, instructionSnapshotBytes)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read observed system prompt: %w", err)
-	}
-	messages, err := messagesWith(contextHistoryReader{ctx, tx}, originalSession, o.admission)
-	if err != nil {
-		return nil, fmt.Errorf("reconstruct observed input: %w", err)
-	}
-	measured.Messages = llm.ContextFor(measured.Selection, messages)
-	measured.System = string(prompt)
-	return measured, nil
+	return o.measured(), nil
 }

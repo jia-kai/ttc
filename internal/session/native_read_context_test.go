@@ -12,7 +12,6 @@ import (
 	"time"
 	"ttc/internal/historytest"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/llm"
 	"ttc/internal/tool"
 )
@@ -177,7 +176,7 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_"), estimator: &contextbuild.Estimator{}}
+				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}
 				messages := []llm.Message{
 					{Type: llm.TypeUserInput, Content: "Research", InputTimeMS: time.Now().UnixMilli()},
 					{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)},

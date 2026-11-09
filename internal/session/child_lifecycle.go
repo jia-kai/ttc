@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -25,7 +24,6 @@ type codingChild struct {
 	selection                   llm.Selection
 	easy                        bool // Creation-time routing request, including fallback.
 	tools                       *tool.Registry
-	estimator                   *contextbuild.Estimator // Owned by the running worker; retained across idle assignments.
 	messages                    []llm.Message
 	cursor                      contextCursor
 	closing                     bool
@@ -303,7 +301,7 @@ func (r *Runtime) childNoticeBatchLocked(assignment *childAssignment) ([]llm.Mes
 	return notices, count, nil
 }
 
-func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor) (admitted history.Admission, next contextCursor, err error) {
+func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor) (admitted requestAdmission, next contextCursor, err error) {
 	next = cursor
 	err = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
@@ -327,17 +325,23 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		if cm != nil {
 			input = append(input, *cm)
 		}
-		snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, Lineage: task.actor, TokenEstimator: r.Provider}
-		observation := task.estimator.Prepare(snapshot)
-		if !codingInputFits(observation.Input, task.selection.Model.Budget, false) {
+		prepared, estimate, e := r.prepareInput(ctx, llm.Request{ConversationID: task.actor, Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, OutputTokens: task.selection.Model.Budget.OutputAllowance})
+		if e != nil {
+			return fmt.Errorf(prompts.SessionEstimateChildInput, e)
+		}
+		if !codingInputFits(estimate.Input, task.selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
-		admitted, e = r.Store.AdmitRequest(history.RequestAdmission{
+		admitted.Admission, e = r.Store.AdmitRequest(history.RequestAdmission{
 			SessionID: r.Current(), TurnID: task.turn, Actor: task.actor, Selection: task.selection,
 			Context: cm, Notices: notices, ChildInput: messages,
 		})
 		if e == nil {
-			task.estimator.ObserveRequest(admitted.RequestID, observation)
+			prepared.Messages, e = projectInputMessages(task.selection, admitted.Messages)
+			if e != nil {
+				return e
+			}
+			admitted.input = prepared
 			if task.assignment != nil {
 				r.Jobs.AddReadGrants(task.actor, task.assignment.initialReadGrants)
 				task.assignment.initialReadGrants = nil

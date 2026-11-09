@@ -99,7 +99,7 @@ func compactionInstructionTokens() int {
 }
 
 // codingInputFits leaves room for both the next coding response and a later
-// summary instruction/response. It uses the same calibrated input estimate as
+// summary instruction/response. It uses the same provider input estimate as
 // coding, not a separately serialized transcript. Output reserves remain soft
 // where the endpoint cannot cap generation.
 func codingInputFits(input int, budget llm.Budget, headroom bool) bool {
@@ -143,8 +143,7 @@ func prepareCompaction(messages []llm.Message, selection llm.Selection) (prepare
 // it must not change the admitted message snapshot.
 type compactionInput struct {
 	actor, turn, focus string
-	snapshot           contextbuild.InputSnapshot
-	estimator          *contextbuild.Estimator
+	snapshot           llm.Request
 	force              bool
 	freeze             func(preparedCompaction) error
 }
@@ -173,7 +172,7 @@ func (r *Runtime) compactInput(ctx context.Context, input compactionInput) (comp
 		}
 	}
 	input.snapshot.Messages = prepared.prefix
-	summary, err := r.summarize(ctx, input.actor, input.turn, input.snapshot, input.estimator, input.focus, input.force)
+	summary, err := r.summarize(ctx, input.actor, input.turn, input.snapshot, input.focus, input.force)
 	if err != nil {
 		return result, err
 	}
@@ -181,20 +180,23 @@ func (r *Runtime) compactInput(ctx context.Context, input compactionInput) (comp
 	return compactedInput{prepared: prepared, summary: summary, messages: messages}, nil
 }
 
-func compactionFits(selection llm.Selection, system string, tools []llm.ToolDefinition, retained, notices []llm.Message, runtime *llm.Message) bool {
+func (r *Runtime) compactionEstimate(ctx context.Context, actor string, selection llm.Selection, system string, tools []llm.ToolDefinition, retained, notices []llm.Message, runtime *llm.Message) (llm.InputEstimate, error) {
 	messages := append(append([]llm.Message(nil), retained...), notices...)
 	if runtime != nil {
 		messages = append(messages, *runtime)
 	}
-	input := contextbuild.EstimateInput(contextbuild.InputSnapshot{Selection: selection, System: system, Tools: tools, Messages: messages})
-	return codingInputFits(input.Input, selection.Model.Budget, true)
+	input, err := r.estimateInput(ctx, llm.Request{ConversationID: actor, Selection: selection, System: system, Tools: tools, Messages: messages, OutputTokens: selection.Model.Budget.OutputAllowance})
+	if err != nil {
+		return llm.InputEstimate{}, fmt.Errorf(prompts.SessionEstimateCompactedInput, err)
+	}
+	return input, nil
 }
 
 // summarize shares one request across main, coding children and asides using
 // the compaction operation's context. Persistence follows the current continuation.
 // force bypasses only the estimated input fit, never message validation or output limits.
-func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot contextbuild.InputSnapshot, estimator *contextbuild.Estimator, focus string, force bool) (text string, err error) {
-	if estimator == nil || snapshot.Lineage == "" {
+func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot llm.Request, focus string, force bool) (text string, err error) {
+	if snapshot.ConversationID == "" {
 		return "", errors.New(prompts.SessionCompactionIdentity)
 	}
 	selection := snapshot.Selection
@@ -212,14 +214,20 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 		snapshot.Messages = append(snapshot.Messages, llm.Message{Type: llm.TypeRuntimeInstruction, Content: fmt.Sprintf(prompts.CompactionFocus, focus)})
 	}
 	snapshot.Messages = append(snapshot.Messages, compactionInstruction())
+	input := snapshot
+	input.NoTools = true
+	input.OutputTokens = selection.Model.Budget.SummaryOutputAllowance
 	if !force {
-		snapshot.TokenEstimator = r.Provider
-		estimate := estimator.Estimate(snapshot)
+		estimate, err := r.estimateInput(ctx, input)
+		if err != nil {
+			return "", fmt.Errorf(prompts.SessionEstimateSummaryInput, err)
+		}
 		b := selection.Model.Budget
 		b.OutputAllowance = b.SummaryOutputAllowance
 		if !contextbuild.FitsInput(estimate.Input, b, false) {
 			return "", &compactionCapacityError{fmt.Sprintf(prompts.SessionCompactionInputTooLarge, estimate.Input, b.OutputAllowance+b.EstimationMargin, b.ContextLimit)}
 		}
+		input.Prepared = estimate.Prepared
 	}
 	r.routeMu.RLock()
 	session := r.Current()
@@ -261,7 +269,7 @@ func (r *Runtime) summarize(ctx context.Context, actor, turn string, snapshot co
 		return "", err
 	}
 	var summary strings.Builder
-	err = r.stream(ctx, turn, actor, request, llm.Request{ConversationID: snapshot.Lineage, Selection: selection, System: snapshot.System, Tools: snapshot.Tools, Messages: snapshot.Messages, NoTools: true, OutputTokens: selection.Model.Budget.SummaryOutputAllowance}, func(ev llm.StreamEvent) error {
+	err = r.stream(ctx, turn, actor, request, input, func(ev llm.StreamEvent) error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
@@ -316,9 +324,9 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	}
 	var sourceSession string
 	var sourceTip int64
-	snapshot := contextbuild.InputSnapshot{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: messages, Lineage: task.actor}
+	snapshot := llm.Request{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: messages, ConversationID: task.actor}
 	compacted, err := r.compactInput(ctx, compactionInput{
-		actor: task.actor, turn: task.turn, snapshot: snapshot, estimator: task.estimator,
+		actor: task.actor, turn: task.turn, snapshot: snapshot,
 		freeze: func(preparedCompaction) error {
 			r.routeMu.RLock()
 			defer r.routeMu.RUnlock()
@@ -371,7 +379,11 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if err != nil {
 		return nil, cursor, err
 	}
-	if !compactionFits(task.selection, system, task.tools.Definitions(), result, notices, runtime) {
+	estimate, err := r.compactionEstimate(ctx, task.actor, task.selection, system, task.tools.Definitions(), result, notices, runtime)
+	if err != nil {
+		return nil, cursor, err
+	}
+	if !codingInputFits(estimate.Input, task.selection.Model.Budget, true) {
 		if task.aside {
 			return nil, cursor, &compactionCapacityError{"Read-only answer context still exceeds the model's budget after compaction. Retry /btw with a shorter, more focused question. The main conversation is unchanged."}
 		}
@@ -385,7 +397,6 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if err != nil {
 		return nil, cursor, err
 	}
-	task.estimator.Reset()
 	if !task.aside {
 		event, _ := json.Marshal(map[string]any{"type": "child_compacted", "child_id": task.actor, "turn_id": task.turn, "context_tokens_estimate": contextbuild.Tokens(result)})
 		if err = r.queueNotificationLocked(string(event)); err != nil {

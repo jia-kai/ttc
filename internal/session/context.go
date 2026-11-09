@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	contextbuild "ttc/internal/context"
 	"ttc/internal/history"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -224,9 +223,9 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		return nil, e
 	}
 	var plan history.CompactionPlan
-	snapshot := contextbuild.InputSnapshot{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: view.Messages(), Lineage: session}
+	snapshot := llm.Request{Selection: selection, System: systemTemplate, Tools: r.Tools.Definitions(), Messages: view.Messages(), ConversationID: session}
 	compacted, e := r.compactInput(ctx, compactionInput{
-		actor: "main", snapshot: snapshot, estimator: r.estimator, focus: focus, force: force,
+		actor: "main", snapshot: snapshot, focus: focus, force: force,
 		freeze: func(prepared preparedCompaction) error {
 			var err error
 			plan, err = view.Retain(prepared.retention.Start, prepared.retention.Inputs, prepared.at)
@@ -266,7 +265,11 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 			return e
 		}
 		notices = append(notices, r.steeringMessagesLocked()...)
-		if !compactionFits(selection, systemTemplate, r.Tools.Definitions(), assembled, notices, contextMessage) {
+		estimate, e := r.compactionEstimate(ctx, session, selection, systemTemplate, r.Tools.Definitions(), assembled, notices, contextMessage)
+		if e != nil {
+			return e
+		}
+		if !codingInputFits(estimate.Input, selection.Model.Budget, true) {
 			return &compactionCapacityError{"Compacted context still exceeds this model's input budget. The current context was not replaced, and existing jobs/timers remain live. Select a larger-context model with /model, or save a concise handoff and start a new session with /new (which cancels session-owned work)."}
 		}
 		r.mu.Lock()
@@ -277,13 +280,8 @@ func (r *Runtime) compactContext(ctx context.Context, focus string, selection ll
 		}
 		r.current = v.ID
 		automatic = r.activeTurn != ""
-		r.estimator.Reset()
 		r.mainContext = contextCursor{}
-		input := append(append([]llm.Message(nil), assembled...), notices...)
-		if contextMessage != nil {
-			input = append(input, *contextMessage)
-		}
-		r.usage = estimateUsage(selection, systemTemplate, r.Tools.Definitions(), input)
+		r.usage = usageFromEstimate(selection, estimate)
 		// CommitCompaction returns the committed tip while routing remains locked. No
 		// later coding, child or stream revision may extend this replay cut.
 		result.EntryTip = v.EntryTip

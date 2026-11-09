@@ -135,6 +135,41 @@ func TestSchema11OrphanAttemptDiagnosticsRollback(t *testing.T) {
 	}
 }
 
+func TestSchema11CheckpointVersions(t *testing.T) {
+	for _, version := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("version=%d", version), func(t *testing.T) {
+			db := observationFixture(t)
+			checkpoint := fmt.Sprintf(`{"version":%d,"local_input":12,"compatible":"%s","exact":"%s"}`, version, strings.Repeat("a", 64), strings.Repeat("b", 64))
+			exec(t, db, `UPDATE model_requests SET input_json=? WHERE id=1`, `{"input_estimate":`+checkpoint+`}`)
+			observationEvent(t, db, 100, "old", "main", `{"type":"request_admitted","request_id":1}`, 0)
+			observationEvent(t, db, 101, "old", "main", `{"type":"request_finished","request_id":1,"status":"completed","attempts":[{"status":"completed","usage":{"input_tokens":123}}]}`, 0)
+			tx := transaction(t, db)
+			err := Apply(tx, nil)
+			if version == 3 {
+				if err == nil || !strings.Contains(err.Error(), "request 1 checkpoint") {
+					t.Fatal("unsupported checkpoint did not fail clearly", err)
+				}
+				if err := tx.Rollback(); err != nil {
+					t.Fatal(err)
+				}
+				if got := scalar(t, db, "PRAGMA user_version"); got != "11" {
+					t.Fatal("failed checkpoint migration advanced schema", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			if got := scalar(t, db, `SELECT checkpoint_json FROM request_observations WHERE completion_entry_id=101`); got != checkpoint {
+				t.Fatal("migration changed durable checkpoint", got, checkpoint)
+			}
+		})
+	}
+}
+
 func TestSchema11EmptyAttemptDiagnosticsNeedNoCompletion(t *testing.T) {
 	for _, attempts := range []string{"[]", " [ ] ", "null"} {
 		t.Run(attempts, func(t *testing.T) {
@@ -202,8 +237,17 @@ func TestSchema11MalformedEvidenceRollsBack(t *testing.T) {
 	}
 }
 
-func TestSchema11NegativeUsageUnavailableWithoutChangingAudit(t *testing.T) {
+func TestSchema11IncompleteAndNegativeUsageUnavailableWithoutChangingAudit(t *testing.T) {
 	db := observationFixture(t)
+	usages := []string{
+		`{"input_tokens":-1,"output_tokens":2}`,
+		`{"input_tokens":0,"output_tokens":-1}`,
+		`{"input_tokens":123}`,
+		`{"input_tokens":123,"output_tokens":null}`,
+		`{"output_tokens":123}`,
+		`{"input_tokens":null,"output_tokens":123}`,
+		`{"input_tokens":0,"output_tokens":0}`,
+	}
 	for i, purpose := range []string{"coding", "naming", "compaction", "coding"} {
 		actor := "main"
 		if i == 3 {
@@ -211,25 +255,25 @@ func TestSchema11NegativeUsageUnavailableWithoutChangingAudit(t *testing.T) {
 		}
 		request := i + 2
 		exec(t, db, `INSERT INTO model_requests(id,session_id,actor_id,purpose,model_json,status,attempts_json,created_ms) VALUES(?,'old',?,?,'{}','completed','[]',1)`, request, actor, purpose)
-		for j, usage := range []string{`{"input_tokens":-1,"output_tokens":2}`, `{"input_tokens":0,"output_tokens":-1}`, `{"input_tokens":0,"output_tokens":0}`} {
+		for j, usage := range usages {
 			raw := fmt.Sprintf(` { "type":"request_finished", "request_id":%d, "status":"completed", "attempts":[{"status":"completed","usage":%s}] } `, request, usage)
-			observationEvent(t, db, 100+3*i+j, "old", actor, raw, 0)
+			observationEvent(t, db, 100+len(usages)*i+j, "old", actor, raw, 0)
 		}
 	}
 	entriesBefore := scalar(t, db, `SELECT json_group_array(json_array(id,content_json)) FROM entries`)
 	requestsBefore := scalar(t, db, `SELECT json_group_array(json_array(id,input_json,status)) FROM model_requests`)
 	applyCurrent(t, db)
-	if got := scalar(t, db, `SELECT count(*) FROM request_observations WHERE status='completed' AND usage_json IS NULL`); got != "8" {
-		t.Fatal("negative usage was not unavailable", got)
+	if got := scalar(t, db, `SELECT count(*) FROM request_observations WHERE status='completed' AND usage_json IS NULL`); got != "24" {
+		t.Fatal("incomplete or negative usage was not unavailable", got)
 	}
 	if got := scalar(t, db, `SELECT count(*) FROM request_observations WHERE json_extract(usage_json,'$.input_tokens')=0 AND json_extract(usage_json,'$.output_tokens')=0`); got != "4" {
 		t.Fatal("measured zero was lost", got)
 	}
 	if got := scalar(t, db, `SELECT json_group_array(json_array(id,content_json)) FROM entries`); got != entriesBefore {
-		t.Fatal("negative usage audit bytes changed")
+		t.Fatal("usage audit bytes changed")
 	}
 	if got := scalar(t, db, `SELECT json_group_array(json_array(id,input_json,status)) FROM model_requests`); got != requestsBefore {
-		t.Fatal("negative usage request audit changed")
+		t.Fatal("usage request audit changed")
 	}
 }
 
@@ -302,7 +346,7 @@ func TestSchema11CompletionSnapshotsPromptAtEachCut(t *testing.T) {
 	observationEvent(t, db, 101, "old", "main", `{"type":"request_finished","request_id":1,"status":"interrupted"}`, 0)
 	observationEvent(t, db, 102, "old", "main", `{"type":"request_admitted","request_id":1}`, 0)
 	observationEvent(t, db, 103, "continued", "main", `{"type":"system_prompt","request_id":1}`, 0)
-	observationEvent(t, db, 104, "continued", "main", `{"type":"request_finished","request_id":1,"status":"completed","attempts":[{"status":"completed","usage":{"input_tokens":1}}]}`, 0)
+	observationEvent(t, db, 104, "continued", "main", `{"type":"request_finished","request_id":1,"status":"completed","attempts":[{"status":"completed","usage":{"input_tokens":1,"output_tokens":0}}]}`, 0)
 	observationEvent(t, db, 105, "continued", "main", `{"type":"system_prompt","request_id":1}`, 0)
 	observationEvent(t, db, 106, "continued", "main", `{"type":"request_finished","request_id":1,"status":"failed","attempts":[{"status":"completed","usage":{"input_tokens":2}}]}`, 0)
 	applyCurrent(t, db)

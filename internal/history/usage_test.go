@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	ctxmgr "ttc/internal/context"
 	"ttc/internal/llm"
 )
 
@@ -28,26 +27,24 @@ func usageFixture(t *testing.T) (*Store, Session, string) {
 	return s, v, turn
 }
 
-func usageCheckpoint(t *testing.T, selection llm.Selection, messages []llm.Message) ctxmgr.Checkpoint {
-	t.Helper()
-	var estimator ctxmgr.Estimator
-	checkpoint := estimator.Prepare(ctxmgr.InputSnapshot{Selection: selection, Messages: messages, System: "instructions"}).Checkpoint()
-	if checkpoint == nil {
-		t.Fatal("invalid checkpoint fixture")
+func usageCheckpoint(messages []llm.Message) llm.TokenCheckpoint {
+	// Persistence tests need stable evidence, not a provider's counting algorithm.
+	return llm.TokenCheckpoint{
+		Version: 2, LocalInput: len(messages),
+		Compatible: strings.Repeat("a", 64), Exact: strings.Repeat("b", 64),
 	}
-	return *checkpoint
 }
 
 func admitUsage(t *testing.T, s *Store, v Session, turn string, checkpoint bool) Admission {
 	t.Helper()
-	var saved *ctxmgr.Checkpoint
+	var saved *llm.TokenCheckpoint
 	runtimeContext := &llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context","original":true}`}
 	if checkpoint {
 		messages, err := s.Messages(v.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		value := usageCheckpoint(t, v.Model, append(messages, *runtimeContext))
+		value := usageCheckpoint(append(messages, *runtimeContext))
 		saved = &value
 	}
 	admitted, err := s.AdmitRequest(RequestAdmission{SessionID: v.ID, TurnID: turn, Actor: "main", Selection: v.Model, Checkpoint: saved, Context: runtimeContext})
@@ -102,13 +99,13 @@ func TestMainUsageCheckpointAndImmutableCompletion(t *testing.T) {
 	if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor.RequestID != admitted.RequestID || !reflect.DeepEqual(got.Anchor.Tokens, tokens) || !reflect.DeepEqual(got.Anchor.Selection, v.Model) {
 		t.Fatal(got)
 	}
-	want := usageCheckpoint(t, v.Model, admitted.Messages)
-	if got.Anchor.Checkpoint == nil || *got.Anchor.Checkpoint != want || len(got.Anchor.Messages) != 0 || got.Anchor.System != "" {
-		t.Fatal("checkpoint anchor reconstructed payloads", got.Anchor)
+	want := usageCheckpoint(admitted.Messages)
+	if got.Anchor.Checkpoint == nil || *got.Anchor.Checkpoint != want {
+		t.Fatal("checkpoint anchor differs from admitted evidence", got.Anchor)
 	}
 }
 
-func TestMainUsageSharedForksRestoreOriginalAdmissionWithoutCheckpoint(t *testing.T) {
+func TestMainUsageSharedForksPreserveLegacyUsageWithoutCheckpoint(t *testing.T) {
 	s, original, turn := usageFixture(t)
 	admitted := admitUsage(t, s, original, turn, false)
 	const system = "Exact original system instructions.\n"
@@ -131,18 +128,8 @@ func TestMainUsageSharedForksRestoreOriginalAdmissionWithoutCheckpoint(t *testin
 	later := admitUsage(t, s, original, turn, true)
 	finishUsage(t, s, later.RequestID, "completed", &llm.Usage{InputTokens: 999})
 	got := readUsage(t, s, loaded.ID)
-	if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor.RequestID != admitted.RequestID || got.Anchor.Checkpoint != nil || got.Anchor.System != system || !reflect.DeepEqual(got.Anchor.Messages, admitted.Messages) {
-		t.Fatal("shared fork reconstructed current input rather than original source admission", got)
-	}
-	foundRuntime := false
-	for _, message := range got.Anchor.Messages {
-		foundRuntime = foundRuntime || message.Type == llm.TypeRuntimeContext
-		if message.Type == llm.TypeAssistant {
-			t.Fatal("response entered legacy measurement input")
-		}
-	}
-	if !foundRuntime {
-		t.Fatal("original measured runtime input lost after Load masked inherited runtime messages")
+	if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor.RequestID != admitted.RequestID || got.Anchor.Checkpoint != nil || got.Reported.Tokens.InputTokens != 210 {
+		t.Fatal("shared fork lost original source-backed legacy usage", got)
 	}
 }
 
@@ -159,6 +146,40 @@ func TestMainUsageSharedForkDoesNotAcquireLaterSourceCompletion(t *testing.T) {
 	got := readUsage(t, s, loaded.ID)
 	if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != first.RequestID || got.Anchor.RequestID != first.RequestID {
 		t.Fatal("shared fork acquired later source completion", got)
+	}
+}
+
+func TestMainUsageAnchorRequiresSelectedOwnedAdmission(t *testing.T) {
+	for _, checkpoint := range []bool{false, true} {
+		for _, corruption := range []string{"unselected", "foreign owner"} {
+			name := "legacy/"
+			if checkpoint {
+				name = "checkpoint/"
+			}
+			t.Run(name+corruption, func(t *testing.T) {
+				s, v, turn := usageFixture(t)
+				admitted := admitUsage(t, s, v, turn, checkpoint)
+				finishUsage(t, s, admitted.RequestID, "completed", &llm.Usage{InputTokens: 100})
+				other, otherTurn := startHistorySession(t, s, t.TempDir(), v.Model, "other input")
+				foreign := admitUsage(t, s, other, otherTurn, checkpoint)
+				if corruption == "unselected" {
+					if _, err := s.db.Exec(`UPDATE request_observations SET admission_entry_id=? WHERE request_id=?`, foreign.EntryTip, admitted.RequestID); err != nil {
+						t.Fatal(err)
+					}
+					got := readUsage(t, s, v.ID)
+					if got.Reported == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor != nil {
+						t.Fatal("unselected admission supplied an accounting anchor", got)
+					}
+				} else {
+					if _, err := s.db.Exec(`UPDATE model_requests SET session_id=? WHERE id=?`, other.ID, admitted.RequestID); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := s.MainUsage(context.Background(), v.ID); err == nil || !strings.Contains(err.Error(), "does not own request") {
+						t.Fatal("foreign admission owner supplied an accounting anchor", err)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -337,7 +358,7 @@ func TestMainUsageCompactionResetUsesAdmissionSource(t *testing.T) {
 	}
 }
 
-func TestMainUsageLegacyMissingPromptSkipsAnchor(t *testing.T) {
+func TestMainUsageLegacyUsageNeedsNoPrompt(t *testing.T) {
 	for _, missing := range []string{"record", "artifact"} {
 		t.Run(missing, func(t *testing.T) {
 			s, v, turn := usageFixture(t)
@@ -361,14 +382,14 @@ func TestMainUsageLegacyMissingPromptSkipsAnchor(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := readUsage(t, s, loaded.ID)
-			if got.Reported == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor != nil {
-				t.Fatal("missing legacy prompt failed history or created incomplete anchor", got)
+			if got.Reported == nil || got.Anchor == nil || got.Reported.RequestID != admitted.RequestID || got.Anchor.RequestID != admitted.RequestID || got.Anchor.Checkpoint != nil || got.Reported.Tokens.InputTokens != 100 {
+				t.Fatal("legacy usage depended on prompt reconstruction", got)
 			}
 		})
 	}
 }
 
-func TestMainUsageLegacyPromptReadIsBounded(t *testing.T) {
+func TestMainUsageLegacyDoesNotReadPromptArtifact(t *testing.T) {
 	s, v, turn := usageFixture(t)
 	admitted := admitUsage(t, s, v, turn, false)
 	id, err := s.RecordSystemPrompt(v.ID, turn, "main", admitted.RequestID, "instructions")
@@ -383,8 +404,9 @@ func TestMainUsageLegacyPromptReadIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	finishUsage(t, s, admitted.RequestID, "completed", &llm.Usage{InputTokens: 100})
-	if _, err := s.MainUsage(context.Background(), v.ID); err == nil {
-		t.Fatal("oversized legacy prompt was not rejected by bounded artifact read", err)
+	got := readUsage(t, s, v.ID)
+	if got.Reported == nil || got.Anchor == nil || got.Reported.Tokens.InputTokens != 100 || got.Anchor.Checkpoint != nil {
+		t.Fatal("legacy usage depended on prompt artifact contents", got)
 	}
 }
 
@@ -392,39 +414,61 @@ func TestMainUsageRejectsCorruptCheckpoint(t *testing.T) {
 	s, v, turn := usageFixture(t)
 	admitted := admitUsage(t, s, v, turn, true)
 	finishUsage(t, s, admitted.RequestID, "completed", &llm.Usage{InputTokens: 100})
-	if _, err := s.db.Exec(`UPDATE request_observations SET checkpoint_json=json_set(checkpoint_json,'$.version',99) WHERE request_id=?`, admitted.RequestID); err != nil {
+	if _, err := s.db.Exec(`UPDATE request_observations SET checkpoint_json=json_set(checkpoint_json,'$.version',3) WHERE request_id=?`, admitted.RequestID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MainUsage(context.Background(), v.ID); err == nil {
+	if _, err := s.MainUsage(context.Background(), v.ID); err == nil || !strings.Contains(err.Error(), "decode observed input checkpoint") {
 		t.Fatal("corrupt durable checkpoint escaped validation")
 	}
 }
 
-func TestMainUsageCheckpointDoesNotAcquireHugeBodies(t *testing.T) {
-	s, v, turn := usageFixture(t)
-	// This visible payload predates admission, while the hidden audit has no
-	// model-input role. Neither body should be acquired for checkpoint restore.
-	huge := strings.Repeat("x", 12<<20)
-	if _, err := s.Append(v.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: huge}); err != nil {
-		t.Fatal(err)
-	}
-	admitted := admitUsage(t, s, v, turn, true)
-	if _, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{"type": "request_message", "message": map[string]string{"content": huge}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.FinishRequest(admitted.RequestID, RequestCompletion{Status: "completed", Attempts: []RequestAttempt{{Status: "completed", Usage: &llm.Usage{InputTokens: 100}, Error: huge}}}); err != nil {
-		t.Fatal(err)
-	}
-	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	got := readUsage(t, s, v.ID)
-	runtime.ReadMemStats(&after)
-	if got.Anchor == nil || got.Anchor.Checkpoint == nil || len(got.Anchor.Messages) != 0 {
-		t.Fatal(got)
-	}
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
-		t.Fatalf("usage reader acquired large entry/attempt bodies: allocated %d bytes", allocated)
+func TestMainUsageDoesNotAcquireHugeBodies(t *testing.T) {
+	for _, version := range []int{0, 1, 2} {
+		name := "missing checkpoint"
+		if version == 1 {
+			name = "legacy checkpoint"
+		} else if version == 2 {
+			name = "provider checkpoint"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, v, turn := usageFixture(t)
+			// This visible payload predates admission, while the hidden audit has
+			// no model-input role. Neither body is needed to read measured usage.
+			huge := strings.Repeat("x", 12<<20)
+			if _, err := s.Append(v.ID, turn, "main", "message", "assistant", true, llm.Message{Type: llm.TypeAssistant, Content: huge}); err != nil {
+				t.Fatal(err)
+			}
+			admitted := admitUsage(t, s, v, turn, version != 0)
+			if _, err := s.Append(v.ID, turn, "main", "status", "", false, map[string]any{"type": "request_message", "message": map[string]string{"content": huge}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.FinishRequest(admitted.RequestID, RequestCompletion{Status: "completed", Attempts: []RequestAttempt{{Status: "completed", Usage: &llm.Usage{InputTokens: 100}, Error: huge}}}); err != nil {
+				t.Fatal(err)
+			}
+			if version == 1 {
+				if _, err := s.db.Exec(`UPDATE request_observations SET checkpoint_json=json_set(checkpoint_json,'$.version',1) WHERE request_id=?`, admitted.RequestID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			got := readUsage(t, s, v.ID)
+			runtime.ReadMemStats(&after)
+			if got.Reported == nil || got.Anchor == nil || got.Reported.Tokens.InputTokens != 100 || got.Anchor.RequestID != admitted.RequestID {
+				t.Fatal(got)
+			}
+			if version == 0 {
+				if got.Anchor.Checkpoint != nil {
+					t.Fatal("fabricated checkpoint for legacy usage", got)
+				}
+			} else if got.Anchor.Checkpoint == nil || got.Anchor.Checkpoint.Version != version {
+				t.Fatal("checkpoint changed while reading usage", got)
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+				t.Fatalf("usage reader acquired large entry/attempt bodies: allocated %d bytes", allocated)
+			}
+		})
 	}
 }
 
@@ -434,13 +478,13 @@ func TestAdmissionCheckpointValidationAndAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkpoint := usageCheckpoint(t, v.Model, messages)
+	checkpoint := usageCheckpoint(messages)
 	before := sourceRecoveryState(t, s, v.ID)
-	for _, mutate := range []func(*ctxmgr.Checkpoint){
-		func(c *ctxmgr.Checkpoint) { c.Version++ },
-		func(c *ctxmgr.Checkpoint) { c.LocalInput = -1 },
-		func(c *ctxmgr.Checkpoint) { c.Compatible = "invalid" },
-		func(c *ctxmgr.Checkpoint) { c.Exact = strings.Repeat("z", 64) },
+	for _, mutate := range []func(*llm.TokenCheckpoint){
+		func(c *llm.TokenCheckpoint) { c.Version = 3 },
+		func(c *llm.TokenCheckpoint) { c.LocalInput = -1 },
+		func(c *llm.TokenCheckpoint) { c.Compatible = "invalid" },
+		func(c *llm.TokenCheckpoint) { c.Exact = strings.Repeat("z", 64) },
 	} {
 		bad := checkpoint
 		mutate(&bad)

@@ -73,7 +73,7 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 			if aside {
 				actor = "main/btw_timestamp"
 			}
-			task := childTask{actor: actor, prompt: "committed input", selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
+			task := childTask{actor: actor, prompt: "committed input", selection: r.selection, tools: r.Tools, aside: aside}
 			var err error
 			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.selection)
 			if err != nil {
@@ -324,7 +324,7 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			if aside {
 				actor = "main/btw_policy"
 			}
-			task := childTask{actor: actor, selection: r.selection, tools: r.Tools, aside: aside, estimator: &contextbuild.Estimator{}}
+			task := childTask{actor: actor, selection: r.selection, tools: r.Tools, aside: aside}
 			var err error
 			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.selection)
 			if err != nil {

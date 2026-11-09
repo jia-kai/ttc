@@ -151,16 +151,12 @@ func TestRetainedProjectionTokenAccountingUsesSingleWrapper(t *testing.T) {
 	if canonical, grouped := Tokens(messages), Tokens(projected); canonical != want || grouped != want {
 		t.Fatalf("single-wrapper tokens: canonical=%d grouped=%d want=%d", canonical, grouped, want)
 	}
-	snapshot := estimatorSnapshot()
+	snapshot := localInputSnapshot()
 	snapshot.Messages = messages
 	canonical := EstimateInput(snapshot)
 	snapshot.Messages = projected
 	grouped := EstimateInput(snapshot)
 	if want := want + Estimate(snapshot.System); canonical.Input != want || grouped.Input != want {
 		t.Fatalf("single-wrapper estimation: canonical=%+v grouped=%+v want=%d", canonical, grouped, want)
-	}
-	var estimator Estimator
-	if prepared := estimator.Prepare(snapshot); prepared.Input != grouped.Input || prepared.LocalInput != grouped.LocalInput {
-		t.Fatal("prepared admission disagrees with stateless estimate", prepared, grouped)
 	}
 }

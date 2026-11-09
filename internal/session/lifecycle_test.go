@@ -100,7 +100,7 @@ func TestLoadPreparationFailureLeavesLiveWorkRunning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			id, generation, manager, timers, naming, estimator := r.Current(), r.Generation(), r.Jobs, r.timers, r.namingCtx, r.estimator
+			id, generation, manager, timers, naming := r.Current(), r.Generation(), r.Jobs, r.timers, r.namingCtx
 			before := r.UsageSnapshot()
 			db := historytest.DB(t, r.Store)
 			switch failure {
@@ -117,7 +117,7 @@ func TestLoadPreparationFailureLeavesLiveWorkRunning(t *testing.T) {
 			if err := r.Load(source); err == nil {
 				t.Fatal("invalid preparation succeeded")
 			}
-			if r.Current() != id || r.Generation() != generation || r.Jobs != manager || r.timers != timers || r.namingCtx != naming || naming.Err() != nil || r.estimator != estimator || !reflect.DeepEqual(r.UsageSnapshot(), before) {
+			if r.Current() != id || r.Generation() != generation || r.Jobs != manager || r.timers != timers || r.namingCtx != naming || naming.Err() != nil || !reflect.DeepEqual(r.UsageSnapshot(), before) {
 				t.Fatal("failed preparation replaced active runtime state")
 			}
 			view, err := r.Jobs.View("main", job)
@@ -145,7 +145,7 @@ func TestPreparedActivationDoesNotReadStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.activateSession(target)
-	if r.Current() != target.session.ID || r.estimator != target.accounting.estimator {
+	if r.Current() != target.session.ID || !reflect.DeepEqual(r.UsageSnapshot().Input, target.accounting.usage.Input) {
 		t.Fatal("activation did not install prepared state")
 	}
 }
@@ -189,7 +189,7 @@ func TestLoadAccountingUsesActivatedToolSchemas(t *testing.T) {
 			// must match the exact schemas now advertised by the fresh runtime.
 			estimate := contextbuild.EstimateInput(contextbuild.InputSnapshot{
 				Selection: r.CurrentSelection(), System: systemTemplate, Tools: r.Tools.Definitions(),
-				Messages: messages, Lineage: r.Current(), TokenEstimator: r.Provider,
+				Messages: messages,
 			})
 			if got := r.UsageSnapshot(); got.Input != estimate.Input {
 				t.Fatalf("prepared accounting used source schemas: got %d, want %d", got.Input, estimate.Input)

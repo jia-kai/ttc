@@ -59,8 +59,12 @@ type Inference interface {
 	// transport abort. Missing identity/unsupported APIs must no-op, never cancel
 	// another attempt; implementations must honor context and concurrency.
 	Cancel(context.Context, string) error
-	EstimateReplay(llm.Message) int
-	TokenizerID(llm.ModelSpec) string
+	// EstimateInput accounts for the complete native input. Optional preparation
+	// is passed unchanged to Stream; only checkpoints are persisted in history.
+	EstimateInput(context.Context, llm.Request) (llm.InputEstimate, error)
+	// RestoreEstimate imports completed usable response evidence into the
+	// provider's content-keyed cache. Legacy version 1 checkpoints are a no-op.
+	RestoreEstimate(llm.TokenCheckpoint, llm.Usage) error
 }
 
 // Runtime owns exactly one main session, and joins transient work before switching it.
@@ -112,11 +116,10 @@ type Runtime struct {
 	questions         questions
 	images            imageInteractions
 	usage             ContextUsage
-	estimator         *contextbuild.Estimator // Owns main-request input estimates and provider feedback.
-	reported          *ReportedUsage          // Protected by mu; loads restore selected parent feedback after reset.
-	totals            UsageTotals             // All inference usage since construction or /new, protected by mu.
-	mainContext       contextCursor           // Owned by serial Run/Command; reset on explicit session changes.
-	mainPrefix        []llm.Message           // Latest balanced main request input, immutable after publication under mu.
+	reported          *ReportedUsage // Protected by mu; loads restore selected parent feedback after reset.
+	totals            UsageTotals    // All inference usage since construction or /new, protected by mu.
+	mainContext       contextCursor  // Owned by serial Run/Command; reset on explicit session changes.
+	mainPrefix        []llm.Message  // Latest balanced main request input, immutable after publication under mu.
 	prefixSelection   llm.Selection
 	prefixTurn        string
 	prefixSession     string // Durable source of mainPrefix, frozen at request admission.
