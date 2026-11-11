@@ -100,7 +100,7 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 				seedIsolatedHistory(t, r, actor, turn, messages)
 				system, conversation = childSystemTemplate, actor
 				if strings.Contains(actor, "/btw_") {
-					system = asideSystemTemplate
+					system = systemTemplate
 				}
 			}
 			requests := 0
@@ -148,7 +148,7 @@ func TestCompactionRequestPreservesStructuredPrefixAndCacheIdentity(t *testing.T
 					result, err = r.Store.Messages(r.Current())
 				}
 			} else {
-				result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}, messages, contextCursor{}, nil)
+				result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, input: childModelInput(actor, selection, r.Tools, nil, strings.Contains(actor, "/btw_")), tools: r.Tools, aside: strings.Contains(actor, "/btw_")}, messages, contextCursor{}, nil)
 			}
 			if err != nil || requests != 1 {
 				t.Fatal("structured compaction failed", requests, err)

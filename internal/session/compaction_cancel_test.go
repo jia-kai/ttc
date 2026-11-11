@@ -68,7 +68,7 @@ func TestCompactionTimeoutAndOwningCancellation(t *testing.T) {
 						t.Fatal(e)
 					}
 					seedIsolatedHistory(t, r, id, turn, messages)
-					_, _, err = r.compactChild(ctx, childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
+					_, _, err = r.compactChild(ctx, childTask{actor: id, turn: turn, input: childModelInput(id, r.CurrentSelection(), r.Tools, nil, actor == "btw"), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
 				}
 				if calls != 1 {
 					t.Fatal("expected one summary request", calls)

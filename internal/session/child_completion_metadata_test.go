@@ -31,7 +31,7 @@ func TestFinishChildPersistsInspectableMetadataBeforeJobCompletion(t *testing.T)
 			label := strings.Repeat("界", 600)
 			assignment := &childAssignment{turn: turn, job: "saved-job", result: response, answer: "preview", background: true}
 			child := &codingChild{id: childID, label: label, easy: easy, state: "running", turn: turn, job: "saved-job", assignment: assignment}
-			if err := r.finishChild(child, childTask{actor: childID, turn: turn, child: child, assignment: assignment}, nil); err != nil {
+			if err := r.finishChild(child, childTask{actor: childID, turn: turn, input: childModelInput(childID, r.selection, r.Tools, nil, false), tools: r.Tools, child: child, assignment: assignment}, nil); err != nil {
 				t.Fatal(err)
 			}
 			var terminalJobs int

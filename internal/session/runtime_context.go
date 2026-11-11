@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -35,97 +34,6 @@ type projectInstruction struct {
 type projectContext struct {
 	Instructions []projectInstruction `json:"instructions"`
 	Skills       []skills.Skill       `json:"available_skills"`
-}
-
-// projectInheritedSkillCatalogs filters historical announcements for their new
-// receiver. Only catalog entries change: actor provenance, other runtime fields,
-// and historical instructions/tool evidence remain intact. The parent slice and
-// saved messages are never modified. A fresh runtime context announces the full
-// receiving catalog separately.
-func (r *Runtime) projectInheritedSkillCatalogs(messages []llm.Message, actor string) ([]llm.Message, error) {
-	available, err := r.Skills.List(actor)
-	if err != nil {
-		return nil, err
-	}
-	role, err := skills.RoleForActor(actor)
-	if err != nil {
-		return nil, err
-	}
-	allowed := make(map[string]bool, len(available))
-	for _, skill := range available {
-		allowed[skill.Name] = true
-	}
-	projected := append([]llm.Message(nil), messages...)
-	for i, message := range projected {
-		if message.Type != llm.TypeRuntimeContext {
-			continue
-		}
-		var fields map[string]json.RawMessage
-		if json.Unmarshal([]byte(message.Content), &fields) != nil {
-			continue
-		}
-		container := fields
-		switch string(fields["type"]) {
-		case `"runtime_context"`:
-		case `"runtime_context_update"`:
-			container = nil
-			if err := json.Unmarshal(fields["set"], &container); err != nil {
-				return nil, err
-			}
-		default:
-			continue
-		}
-		var project map[string]json.RawMessage
-		if err := json.Unmarshal(container["project"], &project); err != nil {
-			if len(container["project"]) == 0 {
-				continue
-			}
-			return nil, err
-		}
-		catalog, exists := project["available_skills"]
-		if !exists {
-			continue
-		}
-		var entries []json.RawMessage
-		if err := json.Unmarshal(catalog, &entries); err != nil {
-			return nil, err
-		}
-		filtered := make([]json.RawMessage, 0, len(entries))
-		for _, entry := range entries {
-			var skill skills.Skill
-			if err := json.Unmarshal(entry, &skill); err != nil {
-				return nil, err
-			}
-			// Current discovery also excludes restricted legacy announcements that
-			// predate roles metadata. Historical roles can only narrow visibility.
-			if allowed[skill.Name] && (len(skill.Roles) == 0 || slices.Contains(skill.Roles, role)) {
-				filtered = append(filtered, entry)
-			}
-		}
-		if len(filtered) == len(entries) {
-			continue
-		}
-		project["available_skills"], err = json.Marshal(filtered)
-		if err != nil {
-			return nil, err
-		}
-		container["project"], err = json.Marshal(project)
-		if err != nil {
-			return nil, err
-		}
-		if string(fields["type"]) == `"runtime_context_update"` {
-			fields["set"], err = json.Marshal(container)
-			if err != nil {
-				return nil, err
-			}
-		}
-		data, err := json.Marshal(fields)
-		if err != nil {
-			return nil, err
-		}
-		projected[i].Content = string(data)
-	}
-	return projected, nil
 }
 
 // runtimeContext is a frozen view, not a second mutable source of runtime state.

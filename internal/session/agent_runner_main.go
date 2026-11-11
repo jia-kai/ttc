@@ -48,8 +48,12 @@ func (c *mainAgentContext) admit(ctx context.Context, recovery *llm.Message) (ag
 			return agentRequest{}, err
 		}
 		r.mu.Lock()
-		r.mainPrefix = append([]llm.Message(nil), admitted.Messages...)
-		r.prefixSelection, r.prefixTurn = selection, c.turn
+		r.mainInput = admitted.input
+		// Retain the complete model input, but not the provider's wire payload.
+		// Canonical messages are projected identically at every actor admission.
+		r.mainInput.Prepared = nil
+		r.mainInput.Messages = append([]llm.Message(nil), admitted.Messages...)
+		r.prefixTurn = c.turn
 		r.prefixSession, r.prefixTip = r.current, admitted.EntryTip
 		r.mu.Unlock()
 		return agentRequest{id: admitted.RequestID, Request: admitted.input}, nil

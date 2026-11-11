@@ -79,7 +79,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 					system = systemTemplate
 				}
 				if aside {
-					system = asideSystemTemplate
+					system = systemTemplate
 					baseline = append(baseline, llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction})
 				}
 				runtime, _, err := r.runtimeContext(context.Background(), actor, r.selection, contextCursor{})
@@ -123,7 +123,7 @@ func TestRecoveryCompactionCountsPendingWarningBeforeFit(t *testing.T) {
 						result, err = r.Store.Messages(r.Current())
 					}
 				} else {
-					result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
+					result, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, input: childModelInput(actor, r.selection, r.Tools, nil, aside), tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
 				}
 				if summaries != 1 {
 					t.Fatal("expected one summary", summaries, err)
@@ -220,7 +220,7 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Evidence summarized; continue the task."})
 			}}
-			result, _, err := r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
+			result, _, err := r.compactChild(context.Background(), childTask{actor: actor, turn: turn, input: childModelInput(actor, r.selection, r.Tools, nil, aside), tools: r.Tools, aside: aside}, messages, contextCursor{}, &warning)
 			if err != nil || summaries != 2 || r.Current() == before {
 				t.Fatal("nested main/child handoff failed", err, summaries)
 			}
@@ -243,19 +243,16 @@ func TestChildRecoveryCompactionRestoresDurabilityAfterMainHandoff(t *testing.T)
 	}
 }
 
-func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
-	for _, actor := range []string{"main", "main/child_zero_reserve", "main/btw_zero_reserve"} {
+func TestPartialRecoveryCompactionZeroReserveContinuesMainAndChild(t *testing.T) {
+	for _, actor := range []string{"main", "main/child_zero_reserve"} {
 		t.Run(actor, func(t *testing.T) {
 			r, _ := runtimeFixture(t, nil)
 			compactionBudget(t, r)
 			// Keep the same output headroom for each receiving role rather than
-			// depending on the size difference between main and aside prompts.
+			// depending on the size difference between main and child prompts.
 			system := systemTemplate
 			if actor != "main" {
 				system = childSystemTemplate
-				if strings.Contains(actor, "/btw_") {
-					system = asideSystemTemplate
-				}
 			}
 			r.selection.Model.Budget.ContextLimit += contextbuild.Estimate(system) - contextbuild.Estimate(systemTemplate)
 			r.selection.Model.Budget.NextTurnInputReserve = 0
@@ -274,9 +271,6 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 				wantSystem := systemTemplate
 				if actor != "main" {
 					wantSystem = childSystemTemplate
-					if strings.Contains(actor, "/btw_") {
-						wantSystem = asideSystemTemplate
-					}
 				}
 				if req.System != wantSystem {
 					t.Error("recovery/compaction changed role-specific system")
@@ -309,7 +303,7 @@ func TestPartialRecoveryCompactionZeroReserveContinuesAllActors(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				err = r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Isolated task", selection: r.selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}, io.Discard, io.Discard)
+				err = r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Isolated task", input: childModelInput(actor, r.selection, r.Tools, nil, false), tools: r.Tools}, io.Discard, io.Discard)
 				partialRetryNoMainLeak(t, r)
 			}
 			if err != nil || coding != 2 || summaries != 1 {

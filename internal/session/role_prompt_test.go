@@ -87,12 +87,8 @@ func assertReceivingRolePrompt(t *testing.T, r *Runtime, role string, req llm.Re
 	case "child":
 		assertChildCapabilities(t, r, req)
 	case "aside":
-		if req.System != prompts.System {
-			t.Error("aside received coding or main role instructions")
-		}
-		want := []string{"conversation_export", "glob", "grep", "job_list", "job_read", "lsp_query", "read", "skill", "wakeup_list", "web_fetch", "web_search"}
-		if !reflect.DeepEqual(names, want) {
-			t.Errorf("aside advertised capabilities = %v, want %v", names, want)
+		if req.System != prompts.System+"\n"+prompts.Coding+"\n"+prompts.Main || !reflect.DeepEqual(req.Tools, r.Tools.Definitions()) {
+			t.Error("aside did not preserve the full main system and tool schemas")
 		}
 		foundScope := false
 		for _, message := range req.Messages {
@@ -101,13 +97,8 @@ func assertReceivingRolePrompt(t *testing.T, r *Runtime, role string, req llm.Re
 		if !foundScope {
 			t.Error("aside missing separate-question runtime scope")
 		}
-		for _, guidance := range []string{"Use write", "Use edit", "Use patch", "Use foreground shell", "background shell jobs", "persistent=false", "job_stop(child_id="} {
-			if strings.Contains(received.String(), guidance) {
-				t.Errorf("aside received irrelevant call guidance %q", guidance)
-			}
-		}
 	}
-	if role != "main" {
+	if role == "child" {
 		for _, guidance := range []string{"use question", "Use subagent"} {
 			if strings.Contains(received.String(), guidance) {
 				t.Errorf("%s received main-only call guidance %q", role, guidance)
@@ -136,7 +127,7 @@ func assertPersistedReceivedSystem(t *testing.T, r *Runtime, req llm.Request) {
 	}
 }
 
-func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
+func TestAsideAdmissionPreservesFullMainSystemDespiteLocalBudget(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
 	seedRuntime(t, r, "Main task")
 	actor := "main/btw_budget"
@@ -150,15 +141,26 @@ func TestAsideAdmissionBudgetsSharedOnlySystem(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := append(append([]llm.Message(nil), messages...), *cm)
-	usage := estimateUsage(r.selection, asideSystemTemplate, r.Tools.Definitions(), input)
-	// Keep all schemas identical here to isolate the system contribution. A
-	// main-sized prompt must fail while the actual aside prompt just fits.
-	r.selection.Model.Budget.ContextLimit = usage.Input + usage.Reserved + 1
+	sharedUsage := estimateUsage(r.selection, prompts.System, r.Tools.Definitions(), input)
+	// A limit sized for shared-only instructions cannot fit the inherited main
+	// prompt, but aside admission must still send that complete prompt upstream.
+	r.selection.Model.Budget.ContextLimit = sharedUsage.Input + sharedUsage.Reserved + 1
 	mainUsage := estimateUsage(r.selection, systemTemplate, r.Tools.Definitions(), input)
-	if !codingInputFits(usage.Input, r.selection.Model.Budget, false) || codingInputFits(mainUsage.Input, r.selection.Model.Budget, false) {
+	if !codingInputFits(sharedUsage.Input, r.selection.Model.Budget, false) || codingInputFits(mainUsage.Input, r.selection.Model.Budget, false) {
 		t.Fatal("fixture does not distinguish shared-only from main prompt budgeting")
 	}
-	if _, _, err := r.admitChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: true}, messages, contextCursor{}); err != nil {
-		t.Fatal("aside admission budgeted irrelevant role instructions", err)
+	task := childTask{
+		actor: actor, turn: turn, tools: r.Tools, aside: true,
+		input: llm.Request{
+			ConversationID: actor, Selection: r.selection, System: systemTemplate,
+			Tools: r.Tools.Definitions(), Messages: messages, OutputTokens: r.selection.Model.Budget.OutputAllowance,
+		},
+	}
+	admitted, _, err := r.admitChild(context.Background(), task, messages, contextCursor{})
+	if err != nil {
+		t.Fatal("aside admission rejected the locally oversized main prompt", err)
+	}
+	if admitted.input.System != systemTemplate || !reflect.DeepEqual(admitted.input.Tools, r.Tools.Definitions()) {
+		t.Fatal("aside admission did not preserve full main system and schemas")
 	}
 }

@@ -1,5 +1,12 @@
 # TTC agent guidance
 
+Take ownership of the full codebase. When working on a task, refactor and clean
+up existing code wherever doing so clearly improves maintainability; do not
+treat internal interfaces or file boundaries as fixed. Keep these improvements
+relevant to the task, preserve supported behavior and external contracts unless
+the request requires otherwise, and update affected callers, documentation and
+tests together.
+
 TTC is a coding agent for research workflows in the terminal. Read `README.md`
 before changing product behavior. Keep this file aligned with the features and
 constraints documented there as the project grows. Go is the implementation
@@ -18,8 +25,8 @@ for remaining features. Linux hosts are the only supported platform. See
 
 - Inspect the relevant code and documentation before editing. Follow the
   conventions already present in the files you touch.
-- Keep changes scoped to the requested behavior. Update `README.md` when a
-  change affects documented capabilities, setup, or supported environments.
+- Keep behavior changes scoped to the request. Update `README.md` when a change
+  affects documented capabilities, setup, or supported environments.
 - Keep all TTC-authored LLM-facing text in `prompt/`, including runtime/tool
   guidance and bundled skills. Go supplies behavior and dynamic values; use
   generated prompt constants and run `make prompts` after changing assets.

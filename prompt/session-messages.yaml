@@ -82,6 +82,8 @@ SessionNamingAssistant: "\n\nAssistant:\n"
 SessionNamingTool: "\n\nTool call: "
 SessionEstimateMainInput: "estimate main input: %w"
 SessionEstimateChildInput: "estimate child input: %w"
+SessionChildInputIdentity:
+  child input conversation identity must match its actor
 SessionEstimateCompactedInput: "estimate compacted input: %w"
 SessionEstimateSummaryInput: "estimate summary input: %w"
 SessionCompactionIdentity: compaction requires the actor's conversation identity

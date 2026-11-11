@@ -364,7 +364,7 @@ func TestChildSteerDeliveryReportFailureRollsBackAdmission(t *testing.T) {
 		t.Fatal("steering grant notice changed granted capabilities", notice)
 	}
 	queuedTokens := assignment.queuedTokens
-	task := childTask{actor: actor, turn: turn, selection: r.selection, tools: child.tools, child: child, assignment: assignment}
+	task := childTask{actor: actor, turn: turn, input: childModelInput(actor, r.selection, r.Tools, nil, false), tools: child.tools, child: child, assignment: assignment}
 	input := []llm.Message{{Type: llm.TypeUserInput, Content: "task", InputSource: "task"}}
 	var before int
 	if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE actor_id=?`, actor).Scan(&before); err != nil {

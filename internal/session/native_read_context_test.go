@@ -176,7 +176,7 @@ func TestNativeReadCompactionReannouncesAllActors(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: strings.Contains(actor, "/btw_")}
+				task := childTask{actor: actor, turn: turn, input: childModelInput(actor, selection, r.Tools, nil, strings.Contains(actor, "/btw_")), tools: r.Tools, aside: strings.Contains(actor, "/btw_")}
 				messages := []llm.Message{
 					{Type: llm.TypeUserInput, Content: "Research", InputTimeMS: time.Now().UnixMilli()},
 					{Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)},

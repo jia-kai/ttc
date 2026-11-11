@@ -303,19 +303,18 @@ func (r *Runtime) childNoticeBatchLocked(assignment *childAssignment) ([]llm.Mes
 
 func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm.Message, cursor contextCursor) (admitted requestAdmission, next contextCursor, err error) {
 	next = cursor
+	if task.actor == "" || task.input.ConversationID != task.actor {
+		return admitted, next, errors.New(prompts.SessionChildInputIdentity)
+	}
 	err = r.Workspace.Admit(ctx, func() error {
 		r.orderMu.Lock()
 		defer r.orderMu.Unlock()
 		if r.orderError != nil {
 			return r.orderError
 		}
-		cm, candidate, e := r.runtimeContextLocked(ctx, task.actor, task.selection, cursor)
+		cm, candidate, e := r.runtimeContextLocked(ctx, task.actor, task.input.Selection, cursor)
 		if e != nil {
 			return e
-		}
-		system := childSystemTemplate
-		if task.aside {
-			system = asideSystemTemplate
 		}
 		notices, runtimeCount, e := r.childNoticeBatchLocked(task.assignment)
 		if e != nil {
@@ -325,19 +324,23 @@ func (r *Runtime) admitChild(ctx context.Context, task childTask, messages []llm
 		if cm != nil {
 			input = append(input, *cm)
 		}
-		prepared, estimate, e := r.prepareInput(ctx, llm.Request{ConversationID: task.actor, Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: input, OutputTokens: task.selection.Model.Budget.OutputAllowance})
+		request := task.input
+		request.Messages = input
+		prepared, estimate, e := r.prepareInput(ctx, request)
 		if e != nil {
 			return fmt.Errorf(prompts.SessionEstimateChildInput, e)
 		}
-		if !codingInputFits(estimate.Input, task.selection.Model.Budget, false) {
+		// Asides preserve the frozen history and let upstream decide capacity;
+		// local estimates must not reject or compact their input.
+		if !task.aside && !codingInputFits(estimate.Input, task.input.Selection.Model.Budget, false) {
 			return errNeedsCompaction
 		}
 		admitted.Admission, e = r.Store.AdmitRequest(history.RequestAdmission{
-			SessionID: r.Current(), TurnID: task.turn, Actor: task.actor, Selection: task.selection,
+			SessionID: r.Current(), TurnID: task.turn, Actor: task.actor, Selection: task.input.Selection,
 			Context: cm, Notices: notices, ChildInput: messages,
 		})
 		if e == nil {
-			prepared.Messages, e = projectInputMessages(task.selection, admitted.Messages)
+			prepared.Messages, e = projectInputMessages(task.input.Selection, admitted.Messages)
 			if e != nil {
 				return e
 			}

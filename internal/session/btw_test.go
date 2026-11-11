@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -44,6 +45,48 @@ func TestBTWAdmissionNeverBlocksFrontendOnChildRegistry(t *testing.T) {
 	}
 }
 
+func TestBTWUsesCapturedModelInputWithoutRebuildingHeader(t *testing.T) {
+	r, _ := runtimeFixture(t, []llm.ScriptResponse{{Text: "Main answer"}})
+	if _, err := r.Run(&llm.Message{Type: llm.TypeUserInput, Content: "Main question"}); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	// A header distinct from the default catches reconstruction in admission,
+	// rather than only comparing two independently assembled default headers.
+	r.mainInput.System += "\nCaptured header sentinel."
+	r.mainInput.Tools = append(append([]llm.ToolDefinition(nil), r.mainInput.Tools...), llm.ToolDefinition{
+		Name: "captured_tool", Description: "Captured schema sentinel.", Parameters: json.RawMessage(`{"type":"object"}`),
+	})
+	captured := r.mainInput
+	r.mu.Unlock()
+	history, err := r.Store.Messages(r.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := make(chan llm.Request, 1)
+	r.Provider = &childProvider{stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+		requests <- req
+		return emit(llm.StreamEvent{Kind: "text", Text: "Aside answer"})
+	}}
+	id, err := r.StartBTW("Separate question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	job, err := r.Jobs.Wait(ctx, "main", id, nil)
+	if err != nil || job.Status != "completed" {
+		t.Fatal(job, err)
+	}
+	req := receive(t, requests)
+	if req.System != captured.System || !reflect.DeepEqual(req.Tools, captured.Tools) || !reflect.DeepEqual(req.Selection, captured.Selection) || req.OutputTokens != captured.OutputTokens {
+		t.Fatal("aside rebuilt the captured input header")
+	}
+	if !reflect.DeepEqual(req.Messages[:len(history)], history) {
+		t.Fatal("idle aside did not copy the complete selected main history")
+	}
+}
+
 func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 	r, events := runtimeFixture(t, nil)
 	if err := os.WriteFile(filepath.Join(r.Workspace.Root, "fixture.txt"), []byte("evidence\n"), 0600); err != nil {
@@ -78,30 +121,21 @@ func TestBTWParallelFrozenPrefixReadOnlyAndCounters(t *testing.T) {
 			}
 			return finish()
 		}
-		if req.System != asideSystemTemplate || req.Selection.Model.ID != parent.Selection.Model.ID {
-			return errors.New("aside changed shared-only instructions or model")
+		if req.System != parent.System || req.System != systemTemplate || !reflect.DeepEqual(req.Selection, parent.Selection) || req.OutputTokens != parent.OutputTokens {
+			return errors.New("aside changed main system instructions, selection, or output allowance")
 		}
-		for _, d := range req.Tools {
-			if !readOnlyTool(d.Name) {
-				return errors.New("mutating tool advertised")
-			}
+		if !reflect.DeepEqual(req.Tools, parent.Tools) || !reflect.DeepEqual(req.Tools, r.Tools.Definitions()) {
+			return errors.New("aside changed full main tool schemas")
 		}
 		if asideCalls.Add(1) == 1 {
 			if len(req.Messages) < len(parent.Messages)+3 {
 				return errors.New("missing shared prefix")
 			}
-			inherited, err := r.projectInheritedSkillCatalogs(parent.Messages, req.ConversationID)
-			if err != nil {
-				return err
+			if !reflect.DeepEqual(parent.Messages, req.Messages[:len(parent.Messages)]) {
+				return errors.New("inherited main prefix changed")
 			}
-			for i := range inherited {
-				a, _ := json.Marshal(inherited[i])
-				b, _ := json.Marshal(req.Messages[i])
-				if string(a) != string(b) {
-					return errors.New("main evidence prefix changed beyond receiving skill catalogs")
-				}
-			}
-			if req.Messages[len(parent.Messages)].Content != btwInstruction {
+			instruction := req.Messages[len(parent.Messages)]
+			if instruction.Content != btwInstruction || instruction.Role() != "developer" || !instruction.Type.IsRuntime() {
 				return errors.New("missing turn-local aside instruction")
 			}
 			for _, call := range []llm.ToolCall{
@@ -232,6 +266,113 @@ func TestBTWAdmissionAndCancellation(t *testing.T) {
 	}
 	if len(r.Jobs.Live()) != 0 || r.UsageSnapshot().Totals.Requests != 0 {
 		t.Fatal("reset retained aside jobs or counters")
+	}
+}
+
+func TestBTWBypassesLocalCapacityAndReportsUpstreamFailure(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		name := "accepted"
+		if rejected {
+			name = "upstream_rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, events := runtimeFixture(t, nil)
+			seedRuntime(t, r, "Unchanged main evidence")
+			prefix, err := r.Store.Messages(r.Current())
+			if err != nil {
+				t.Fatal(err)
+			}
+			const failure = "upstream context_length_exceeded: aside input is too large"
+			calls := 0
+			r.Provider = &childProvider{
+				estimate: func(context.Context, llm.Request) (llm.InputEstimate, error) {
+					return llm.InputEstimate{Input: 2 * r.selection.Model.Budget.ContextLimit, Estimated: true}, nil
+				},
+				stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+					calls++
+					if req.NoTools || calls > 2 || len(req.Messages) < len(prefix) || !reflect.DeepEqual(req.Messages[:len(prefix)], prefix) {
+						return errors.New("aside compacted or changed its inherited prefix")
+					}
+					if calls == 1 {
+						return emit(llm.StreamEvent{Kind: "call", Call: &llm.ToolCall{ID: "aside-read", Name: "read", Arguments: json.RawMessage(`{"path":"."}`)}})
+					}
+					if rejected {
+						return &llm.ContextLengthError{Err: errors.New(failure)}
+					}
+					return emit(llm.StreamEvent{Kind: "text", Text: "Upstream accepted the aside."})
+				},
+			}
+			id, err := r.StartBTW("Answer without changing main history")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			job, err := r.Jobs.Wait(ctx, "main", id, nil)
+			wantStatus := "completed"
+			if rejected {
+				wantStatus = "failed"
+			}
+			if err != nil || job.Status != wantStatus || calls != 2 || rejected && !strings.Contains(job.Stderr, failure) {
+				t.Fatal("aside did not defer capacity to upstream", job, err, calls)
+			}
+			var compactions int
+			if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM model_requests WHERE purpose='compaction'`).Scan(&compactions); err != nil || compactions != 0 {
+				t.Fatal("aside requested automatic compaction", compactions, err)
+			}
+			after, err := r.Store.Messages(r.Current())
+			if err != nil || !reflect.DeepEqual(after, prefix) || r.checkContext(false) != nil || r.HasNotifications() {
+				t.Fatal("aside changed or invalidated main context", err)
+			}
+			for {
+				select {
+				case event := <-events:
+					if event.Kind == "btw_result" {
+						if rejected && !strings.Contains(event.Text, failure) {
+							t.Fatal("aside popup omitted the upstream failure", event.Text)
+						}
+						return
+					}
+				case <-ctx.Done():
+					t.Fatal("aside result was not published")
+				}
+			}
+		})
+	}
+}
+
+func TestBTWPartialRecoveryDoesNotCompact(t *testing.T) {
+	r, _ := runtimeFixture(t, nil)
+	seedRuntime(t, r, "Unchanged main evidence")
+	calls := 0
+	r.Provider = &childProvider{
+		estimate: func(context.Context, llm.Request) (llm.InputEstimate, error) {
+			return llm.InputEstimate{Input: 2 * r.selection.Model.Budget.ContextLimit, Estimated: true}, nil
+		},
+		stream: func(_ context.Context, req llm.Request, emit func(llm.StreamEvent) error) error {
+			calls++
+			if req.NoTools || calls > 2 {
+				return errors.New("aside attempted compaction")
+			}
+			if calls == 1 {
+				if err := partialRetryText(emit, "Partial aside evidence"); err != nil {
+					return err
+				}
+				return partialRetryFailure(req)
+			}
+			partialRetryWarning(t, req)
+			return emit(llm.StreamEvent{Kind: "text", Text: "Recovered aside answer"})
+		},
+	}
+	id, err := r.StartBTW("Answer the separate question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	job, err := r.Jobs.Wait(ctx, "main", id, nil)
+	if err != nil || job.Status != "completed" || calls != 2 || job.Stdout != "Recovered aside answer" {
+		t.Fatal("aside recovery compacted or leaked partial output", job, err, calls)
 	}
 }
 

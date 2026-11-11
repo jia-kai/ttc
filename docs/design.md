@@ -695,12 +695,12 @@ See [system_prompt.md](system_prompt.md) for canonical sources and runtime use.
   history. Full scope ends at the committed call cut; before-compaction scope
   ends at the latest successful actor cut. Scratch is ephemeral; exporting does
   not pin attachment cache bytes.
-- Compaction creates no eager main/child/aside transcript files. Shared
-  preparation selects and budgets actor history and generates the summary; main
-  continuation and child/aside handoffs own their distinct commits. Child
-  failure/cancellation still writes immutable diagnostic transcripts. Existing
-  archive files, saved summaries and immutable evidence are preserved by
-  migration, not rewritten or required for loading.
+- Compaction creates no eager transcript files. Shared preparation selects and
+  budgets actor history and generates the summary; main continuation and
+  coding-child handoffs own their distinct commits. Child failure/cancellation
+  still writes immutable diagnostic transcripts. Existing archive files, saved
+  summaries and immutable evidence are preserved by migration, not rewritten or
+  required for loading.
 
 ## Serialized edits and shared undo
 
@@ -1113,16 +1113,29 @@ The concrete boundaries above are TTC decisions, informed by:
 ## Read-only side questions
 
 - `/btw QUESTION` freezes the latest balanced main request while busy, or
-  selected canonical history while idle. Model/context freeze at admission;
-  shared system guidance plus the `Btw` section in
+  selected canonical history while idle. It forks the captured main model input
+  directly, including its selection, system, tool schemas and unchanged message
+  history; it does not reconstruct an aside-specific input header. Idle
+  admission refreshes the selected history and model; a loaded session without a
+  captured request uses the same input builder as main. The fork appends the
+  `Btw` developer instruction, question and a fresh aside runtime-context
+  baseline with a role-filtered skill catalog. Model/context freeze at
+  admission; shared guidance and the `Btw` section in
   [system.yaml](../prompt/system.yaml) constrain the quick answer.
-- For asides, the shared child loop advertises and dispatches only a read-only
-  registry: no shell, mutations, interactions, timers or child creation. Timer
-  listing is runtime-wide; job visibility still follows child ownership. Coding
-  children, persistent follow-ups and asides share execution, admission and
-  compaction. All use provider-owned input estimation; changed aside
-  instructions/tools prevent direct reuse of main measurements. See
+- Advertised schemas do not grant execution: aside dispatch uses a filtered
+  read-only registry, leaving shell, mutations, controls, interactions, timers
+  and child creation unavailable. Timer listing is runtime-wide; job visibility
+  still follows child ownership. Coding children, persistent follow-ups and
+  asides share execution and admission. All use provider-owned input estimation
+  and the same measurement cache; an aside can reuse the longest matching main
+  measured prefix, while its conversation/cache-affinity ID remains separate.
+  Upstream cache hits are not guaranteed. See
   [compaction budgets](compaction.md#trigger-and-retention).
+- Asides bypass local input-capacity checks and automatic compaction, including
+  after tool results or partial-response recovery. They send their full frozen
+  context upstream and show any provider rejection in the aside result without
+  changing main. Input validation, read-only dispatch and response limits
+  remain.
 - Each aside has its own actor/cache identity, hidden inspectable records,
   supervisor captures and a 64 KiB final-answer limit. It shares the
   [supervisor limit](tools.md#subagent), survives compaction and is

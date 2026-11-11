@@ -120,7 +120,7 @@ func TestInitialAssignmentReadGrantsRequireSuccessfulAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	assignment := &childAssignment{initialReadGrants: []string{job}}
-	task := childTask{actor: actor, turn: turn, prompt: prompt, assignment: assignment, selection: r.selection, tools: r.Tools}
+	task := childTask{actor: actor, turn: turn, prompt: prompt, assignment: assignment, input: childModelInput(actor, r.selection, r.Tools, nil, false), tools: r.Tools}
 	r.Provider = &childProvider{stream: func(context.Context, llm.Request, func(llm.StreamEvent) error) error {
 		t.Error("provider called after failed admission")
 		return nil

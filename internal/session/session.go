@@ -119,10 +119,9 @@ type Runtime struct {
 	reported          *ReportedUsage // Protected by mu; loads restore selected parent feedback after reset.
 	totals            UsageTotals    // All inference usage since construction or /new, protected by mu.
 	mainContext       contextCursor  // Owned by serial Run/Command; reset on explicit session changes.
-	mainPrefix        []llm.Message  // Latest balanced main request input, immutable after publication under mu.
-	prefixSelection   llm.Selection
+	mainInput         llm.Request    // Latest balanced main model input; canonical messages and headers are immutable after publication under mu. No provider preparation or callbacks.
 	prefixTurn        string
-	prefixSession     string // Durable source of mainPrefix, frozen at request admission.
+	prefixSession     string // Durable source of mainInput, frozen at request admission.
 	prefixTip         int64  // Selected branch tip of prefixSession, not a global event cutoff.
 	namingCtx         context.Context
 	namingCancel      context.CancelFunc
@@ -168,7 +167,7 @@ func (r *Runtime) resetLiveWork() {
 	r.mu.Lock()
 	r.fatalCompaction = ""
 	r.mainContext = contextCursor{}
-	r.mainPrefix = nil
+	r.mainInput = llm.Request{}
 	r.prefixTurn = ""
 	r.prefixSession, r.prefixTip = "", 0
 	r.generation++

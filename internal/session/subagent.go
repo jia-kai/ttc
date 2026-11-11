@@ -130,7 +130,9 @@ func (r *Runtime) addSubagentTool() {
 		r.orderMu.Lock()
 		r.actorAssignments[child.id] = assignment
 		r.orderMu.Unlock()
-		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, selection: child.selection, prefix: child.messages, cursor: child.cursor, tools: child.tools, child: child}
+		input := llm.Request{ConversationID: child.id, Selection: child.selection, System: childSystemTemplate,
+			Tools: child.tools.Definitions(), Messages: child.messages, OutputTokens: child.selection.Model.Budget.OutputAllowance}
+		task := childTask{assignment: assignment, actor: child.id, turn: turn, prompt: a.Prompt, input: input, cursor: child.cursor, tools: child.tools, child: child}
 		ready := make(chan struct{})
 		r.coordinator.childMu.Unlock()
 		id, err := r.Jobs.StartTask(child.id, jobs.TaskOptions{Kind: "subagent", Label: child.label, Background: a.Background, Easy: child.easy, Inspector: assignment.inspection.inspect}, func(childCtx context.Context, stdout, stderr io.Writer) (result jobs.TaskResult, runErr error) {
@@ -199,9 +201,8 @@ func (r *Runtime) addSubagentTool() {
 // childTask freezes one child request's context, capabilities and model selection.
 type childTask struct {
 	actor, turn, prompt string
-	selection           llm.Selection
-	prefix              []llm.Message
-	tools               *tool.Registry
+	input               llm.Request    // Frozen model input; independent from executable capabilities.
+	tools               *tool.Registry // Dispatch registry; asides cannot execute all advertised schemas.
 	aside               bool
 	child               *codingChild
 	assignment          *childAssignment
@@ -212,7 +213,7 @@ type childTask struct {
 func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr io.Writer) error {
 	actor, turn, prompt := task.actor, task.turn, task.prompt
 	defer r.clearActorImage(actor, "")
-	messages := append([]llm.Message(nil), task.prefix...)
+	messages := append([]llm.Message(nil), task.input.Messages...)
 	var grantNotice *llm.Message
 	if task.assignment != nil && len(task.assignment.initialReadGrants) != 0 {
 		notice := llm.NewJobReadGrantNotice(task.assignment.initialReadGrants)
@@ -262,16 +263,19 @@ func (r *Runtime) runChild(ctx context.Context, task childTask, stdout, stderr i
 		r.emit(Event{Kind: "message", Actor: actor, Text: grantNotice.Content, EntryID: grant.EntryID, MessageType: grantNotice.Type})
 	}
 	actorContext := &assignmentAgentContext{
-		runtime: r, task: task, messages: messages, cursor: task.cursor, system: childSystemTemplate,
+		runtime: r, task: task, messages: messages, cursor: task.cursor,
 	}
 	var policy agentPolicy = &assignmentAgentPolicy{runtime: r, context: actorContext}
 	output := agentOutput{stdout: stdout, stderr: stderr, textLimit: 32 << 20, streamText: true, showReply: true}
+	executionTools := task.tools
 	if task.aside {
-		actorContext.system = asideSystemTemplate
+		// Keep the request schemas identical to main's for prefix reuse, but
+		// never trust the model to enforce the read-only instruction itself.
+		executionTools = task.tools.Filter(readOnlyTool)
 		policy = &asideAgentPolicy{stdout: stdout}
 		output.textLimit, output.streamText, output.showReply = 64<<10, false, false
 	}
-	runner := AgentRunner{runtime: r, actor: actor, turn: turn, tools: task.tools, context: actorContext, policy: policy, output: output, saveEmpty: true}
+	runner := AgentRunner{runtime: r, actor: actor, turn: turn, tools: executionTools, context: actorContext, policy: policy, output: output, saveEmpty: true}
 	_, err = runner.run(ctx)
 	return err
 }

@@ -73,9 +73,9 @@ func TestIsolatedInputTimestampUsesCommittedEntry(t *testing.T) {
 			if aside {
 				actor = "main/btw_timestamp"
 			}
-			task := childTask{actor: actor, prompt: "committed input", selection: r.selection, tools: r.Tools, aside: aside}
+			task := childTask{actor: actor, prompt: "committed input", input: childModelInput(actor, r.selection, r.Tools, nil, aside), tools: r.Tools, aside: aside}
 			var err error
-			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.selection)
+			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.input.Selection)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -324,9 +324,9 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 			if aside {
 				actor = "main/btw_policy"
 			}
-			task := childTask{actor: actor, selection: r.selection, tools: r.Tools, aside: aside}
+			task := childTask{actor: actor, input: childModelInput(actor, r.selection, r.Tools, nil, aside), tools: r.Tools, aside: aside}
 			var err error
-			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.selection)
+			task.turn, err = r.Store.BeginChildTurn(r.Current(), task.actor, task.input.Selection)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -353,7 +353,7 @@ func TestIsolatedRetainedInputsPolicyAcrossCompactions(t *testing.T) {
 					}
 					projection = append([]llm.Message{result[0]}, result[2:]...)
 				}
-				assertRetainedProjection(t, messages, projection, task.selection)
+				assertRetainedProjection(t, messages, projection, task.input.Selection)
 				messages = result
 			}
 		})

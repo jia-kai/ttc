@@ -152,7 +152,7 @@ func TestIsolatedCompactionHandoffBudgetsPendingGuidanceAndRuntimeNotices(t *tes
 			}
 			system := childSystemTemplate
 			if a.task.aside {
-				system = asideSystemTemplate
+				system = systemTemplate
 			}
 			required := func(pending []llm.Message) int {
 				messages := append(append(append([]llm.Message(nil), replacement...), pending...), *cm)
@@ -344,7 +344,7 @@ func TestCodingAdmissionUsesProviderInputWithInstructionAndSummaryReserve(t *tes
 				if calls != 1 {
 					t.Fatal("admission did not delegate once", calls)
 				}
-				if extra > 0 {
+				if extra > 0 || role == "aside" {
 					if err != nil || admitted.RequestID == 0 {
 						t.Fatal(admitted, err)
 					}
@@ -380,7 +380,7 @@ func newSummaryBudgetActor(t *testing.T, role string) *summaryBudgetActor {
 		t.Fatal(err)
 	}
 	a.turn = turn
-	a.task = &childTask{actor: actor, turn: turn, selection: r.selection, tools: r.Tools, aside: role == "aside", assignment: &childAssignment{accepting: true}}
+	a.task = &childTask{actor: actor, turn: turn, input: childModelInput(actor, r.selection, r.Tools, nil, role == "aside"), tools: r.Tools, aside: role == "aside", assignment: &childAssignment{accepting: true}}
 	r.actorAssignments[actor] = a.task.assignment
 	a.messages = []llm.Message{{Type: llm.TypeUserInput, Content: "Continue the isolated research.", InputTimeMS: 1000}}
 	seedIsolatedHistory(t, r, actor, turn, a.messages)
@@ -389,7 +389,7 @@ func newSummaryBudgetActor(t *testing.T, role string) *summaryBudgetActor {
 
 func (a *summaryBudgetActor) selection() *llm.Selection {
 	if a.task != nil {
-		return &a.task.selection
+		return &a.task.input.Selection
 	}
 	return &a.r.selection
 }
@@ -426,10 +426,7 @@ func (a *summaryBudgetActor) snapshot(t *testing.T) llm.Request {
 		messages = append(messages, pendingMainNotices(t, a.r)...)
 		messages = append(messages, a.r.steeringMessagesLocked()...)
 	} else {
-		actor, system, lineage, cursor = a.task.actor, childSystemTemplate, a.task.actor, a.cursor
-		if a.task.aside {
-			system = asideSystemTemplate
-		}
+		actor, system, lineage, cursor = a.task.actor, a.task.input.System, a.task.actor, a.cursor
 		messages = append([]llm.Message(nil), a.messages...)
 		notices, _, err := a.r.childNoticeBatchLocked(a.task.assignment)
 		if err != nil {
@@ -448,5 +445,10 @@ func (a *summaryBudgetActor) snapshot(t *testing.T) llm.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return llm.Request{Selection: *a.selection(), System: system, Tools: a.r.Tools.Definitions(), Messages: messages, ConversationID: lineage, OutputTokens: a.selection().Model.Budget.OutputAllowance}
+	tools := a.r.Tools.Definitions()
+	if a.task != nil {
+		system = a.task.input.System
+		tools = a.task.input.Tools
+	}
+	return llm.Request{Selection: *a.selection(), System: system, Tools: tools, Messages: messages, ConversationID: lineage, OutputTokens: a.selection().Model.Budget.OutputAllowance}
 }

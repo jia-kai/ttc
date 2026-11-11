@@ -7,6 +7,11 @@ These are TTC's complete target contracts. Current code:
 
 ## Common contracts
 
+- Tool schemas describe the request surface; the actor's dispatch registry
+  determines what can execute. Asides advertise the main tool schemas but use a
+  filtered read-only registry: file mutations, shell, controls, interactions,
+  timers and child creation remain unavailable. Schema visibility alone never
+  grants execution.
 - Input is one JSON object containing only listed fields; `?` means optional.
   Reject unknown fields and invalid operation-specific combinations before
   execution, except documented safe normalizations. Known redundant values are

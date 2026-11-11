@@ -318,13 +318,10 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if task.actor == "" || task.tools == nil {
 		return nil, cursor, errors.New(prompts.ChildCompactionIdentity)
 	}
-	system := childSystemTemplate
-	if task.aside {
-		system = asideSystemTemplate
-	}
 	var sourceSession string
 	var sourceTip int64
-	snapshot := llm.Request{Selection: task.selection, System: system, Tools: task.tools.Definitions(), Messages: messages, ConversationID: task.actor}
+	snapshot := task.input
+	snapshot.Messages = messages
 	compacted, err := r.compactInput(ctx, compactionInput{
 		actor: task.actor, turn: task.turn, snapshot: snapshot,
 		freeze: func(preparedCompaction) error {
@@ -371,7 +368,7 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	defer r.routeMu.RUnlock()
 	r.orderMu.Lock()
 	defer r.orderMu.Unlock()
-	runtime, _, err := r.runtimeContextLocked(ctx, task.actor, task.selection, next)
+	runtime, _, err := r.runtimeContextLocked(ctx, task.actor, task.input.Selection, next)
 	if err != nil {
 		return nil, cursor, err
 	}
@@ -379,11 +376,11 @@ func (r *Runtime) compactChild(ctx context.Context, task childTask, messages []l
 	if err != nil {
 		return nil, cursor, err
 	}
-	estimate, err := r.compactionEstimate(ctx, task.actor, task.selection, system, task.tools.Definitions(), result, notices, runtime)
+	estimate, err := r.compactionEstimate(ctx, task.actor, task.input.Selection, task.input.System, task.input.Tools, result, notices, runtime)
 	if err != nil {
 		return nil, cursor, err
 	}
-	if !codingInputFits(estimate.Input, task.selection.Model.Budget, true) {
+	if !codingInputFits(estimate.Input, task.input.Selection.Model.Budget, true) {
 		if task.aside {
 			return nil, cursor, &compactionCapacityError{"Read-only answer context still exceeds the model's budget after compaction. Retry /btw with a shorter, more focused question. The main conversation is unchanged."}
 		}

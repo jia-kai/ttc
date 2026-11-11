@@ -43,7 +43,7 @@ func setupRoleSkills(t *testing.T, r *Runtime) {
 func assertRoleCatalog(t *testing.T, role string, messages []llm.Message) {
 	t.Helper()
 	catalogs := 0
-	receiverCatalog := false
+	latestRole := ""
 	for _, message := range messages {
 		if !message.Type.IsRuntime() || !strings.Contains(message.Content, `"type":"runtime_context"`) {
 			continue
@@ -60,8 +60,10 @@ func assertRoleCatalog(t *testing.T, role string, messages []llm.Message) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		own := string(actorRole) == role
-		receiverCatalog = receiverCatalog || own
+		// Historical catalogs retain their original actor and role. The fresh
+		// receiving catalog, rather than rewriting history, establishes availability.
+		catalogRole := string(actorRole)
+		latestRole = catalogRole
 		found := map[string]bool{}
 		for _, s := range v.Project.Skills {
 			if s.Content != "" {
@@ -70,15 +72,15 @@ func assertRoleCatalog(t *testing.T, role string, messages []llm.Message) {
 			found[s.Name] = true
 		}
 		for _, candidate := range []string{"main", "child", "aside"} {
-			if found["role-"+candidate] && role != candidate || own && found["role-"+candidate] != (role == candidate) {
+			if found["role-"+candidate] != (catalogRole == candidate) {
 				t.Fatal(role, "incorrect catalog from", v.Actor, found)
 			}
 		}
-		if !found["role-all"] || role == "main" && found["role-multi"] || role != "main" && found["file-based-plan"] || own && (found["role-multi"] != (role != "main") || found["file-based-plan"] != (role == "main")) {
+		if !found["role-all"] || found["role-multi"] != (catalogRole != "main") || found["file-based-plan"] != (catalogRole == "main") {
 			t.Fatal(role, "incorrect default/multi/bundled catalog from", v.Actor, found)
 		}
 	}
-	if catalogs == 0 || !receiverCatalog {
+	if catalogs == 0 || latestRole != role {
 		t.Fatal("missing model-facing receiving skill catalog")
 	}
 }
@@ -228,9 +230,23 @@ func TestSkillRolesAsideInheritsRealMainAdmission(t *testing.T) {
 			if err != nil || job.Status != "completed" {
 				t.Fatal(job, err)
 			}
+			prefix := parent.Messages
+			if !active {
+				prefix = llm.ContextFor(parent.Selection, before)
+			}
 			for range 2 {
 				request := receive(t, requests)
+				if request.System != parent.System || !reflect.DeepEqual(request.Tools, parent.Tools) || !reflect.DeepEqual(request.Selection, parent.Selection) || request.OutputTokens != parent.OutputTokens {
+					t.Fatal("aside changed main system, full tool schemas, selection, or output allowance")
+				}
+				if len(request.Messages) <= len(prefix) || !reflect.DeepEqual(prefix, request.Messages[:len(prefix)]) {
+					t.Fatal("aside changed inherited main prefix")
+				}
+				if request.Messages[len(prefix)].Content != btwInstruction {
+					t.Fatal("aside instruction did not follow the unchanged main prefix")
+				}
 				assertRoleCatalog(t, "aside", request.Messages)
+				assertRoleCatalog(t, "aside", request.Messages[len(prefix)+1:])
 				inheritedCatalog, historicalLoad, userEvidence := false, false, false
 				for _, message := range request.Messages {
 					if message.Type.IsRuntime() && strings.Contains(message.Content, `"type":"runtime_context"`) {
@@ -258,117 +274,6 @@ func TestSkillRolesAsideInheritsRealMainAdmission(t *testing.T) {
 			if active {
 				r.Interrupt()
 				<-done
-			}
-		})
-	}
-}
-
-func TestSkillRolesInheritedProjectionPreservesOtherFields(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	setupRoleSkills(t, r)
-	initial, _, err := r.runtimeContext(context.Background(), "main", r.selection, contextCursor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(initial.Content), &fields); err != nil {
-		t.Fatal(err)
-	}
-	fields["historical_extension"] = json.RawMessage(`{"evidence":"keep"}`)
-	var project map[string]json.RawMessage
-	if err := json.Unmarshal(fields["project"], &project); err != nil {
-		t.Fatal(err)
-	}
-	project["historical_project_extension"] = json.RawMessage(`{"provenance":"keep"}`)
-	fields["project"], err = json.Marshal(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial.Content = string(data)
-	messages := []llm.Message{*initial, {Type: llm.TypeToolResult, CallID: "loaded-skill", Content: "PRIVATE role-main historical instructions"}, {Type: llm.TypeUserInput, Content: initial.Content}}
-	before, err := json.Marshal(messages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projected, err := r.projectInheritedSkillCatalogs(messages, "main/btw_projection")
-	if err != nil {
-		t.Fatal(err)
-	}
-	after, err := json.Marshal(messages)
-	if err != nil || string(before) != string(after) {
-		t.Fatal("projection mutated parent messages", err)
-	}
-	if !reflect.DeepEqual(messages[1:], projected[1:]) {
-		t.Fatal("projection changed historical tool/user evidence")
-	}
-	var projectedFields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(projected[0].Content), &projectedFields); err != nil {
-		t.Fatal(err)
-	}
-	var projectedProject map[string]json.RawMessage
-	if err := json.Unmarshal(projectedFields["project"], &projectedProject); err != nil {
-		t.Fatal(err)
-	}
-	delete(fields, "project")
-	delete(projectedFields, "project")
-	delete(project, "available_skills")
-	delete(projectedProject, "available_skills")
-	if !reflect.DeepEqual(fields, projectedFields) || !reflect.DeepEqual(project, projectedProject) {
-		t.Fatal("projection changed non-catalog historical fields")
-	}
-}
-
-func TestSkillRolesInheritedUpdateProjection(t *testing.T) {
-	r, _ := runtimeFixture(t, nil)
-	setupRoleSkills(t, r)
-	catalog, err := r.Skills.List("main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, actor := range []string{"main/child_projection", "main/btw_projection"} {
-		t.Run(actor, func(t *testing.T) {
-			payload := runtimeContextUpdate{Type: "runtime_context_update", Set: map[string]any{
-				"model": "historical/model", "image_input": false,
-				"project": map[string]any{"available_skills": catalog, "instructions": []projectInstruction{{Path: "AGENTS.md", Content: "preserved evidence"}}},
-			}}
-			data, err := json.Marshal(payload)
-			if err != nil {
-				t.Fatal(err)
-			}
-			original := llm.Message{Type: llm.TypeRuntimeContext, Content: string(data)}
-			instructionOnly := llm.Message{Type: llm.TypeRuntimeContext, Content: `{"type":"runtime_context_update","set":{"project":{"instructions":[]}}}`}
-			messages := []llm.Message{original, instructionOnly}
-			projected, err := r.projectInheritedSkillCatalogs(messages, actor)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(messages[0], original) || !reflect.DeepEqual(projected[1], instructionOnly) {
-				t.Fatal("projection mutated input or invented a catalog")
-			}
-			fields := runtimeFields(t, &projected[0], "runtime_context_update")
-			var project struct {
-				Skills       []skills.Skill       `json:"available_skills"`
-				Instructions []projectInstruction `json:"instructions"`
-			}
-			if err := json.Unmarshal(fields["project"], &project); err != nil {
-				t.Fatal(err)
-			}
-			if string(fields["model"]) != `"historical/model"` || string(fields["image_input"]) != "false" || len(project.Instructions) != 1 || project.Instructions[0].Content != "preserved evidence" {
-				t.Fatal("projection changed non-catalog delta fields", projected[0])
-			}
-			foundAll := false
-			for _, skill := range project.Skills {
-				if skill.Name == "role-main" || skill.Name == "file-based-plan" {
-					t.Fatal("main-only skill leaked through inherited delta", skill)
-				}
-				foundAll = foundAll || skill.Name == "role-all"
-			}
-			if !foundAll {
-				t.Fatal("unrestricted inherited skill removed")
 			}
 		})
 	}
@@ -403,8 +308,18 @@ func TestSkillRolesReannouncedAfterCompaction(t *testing.T) {
 				if beginErr != nil {
 					t.Fatal(beginErr)
 				}
-				task := childTask{actor: actor, turn: turn, selection: selection, tools: r.Tools, aside: role == skills.Aside}
+				system := childSystemTemplate
+				if role == skills.Aside {
+					system = systemTemplate
+				}
 				messages := []llm.Message{{Type: llm.TypeUserInput, Content: "Review", InputTimeMS: time.Now().UnixMilli()}, {Type: llm.TypeAssistant, Content: strings.Repeat("Earlier evidence. ", 500)}}
+				task := childTask{
+					actor: actor, turn: turn, tools: r.Tools, aside: role == skills.Aside,
+					input: llm.Request{
+						ConversationID: actor, Selection: selection, System: system,
+						Tools: r.Tools.Definitions(), Messages: messages, OutputTokens: selection.Model.Budget.OutputAllowance,
+					},
+				}
 				seedIsolatedHistory(t, r, actor, turn, messages)
 				_, cursor, err = r.compactChild(context.Background(), task, messages, cursor, nil)
 			}

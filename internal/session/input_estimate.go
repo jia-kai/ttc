@@ -7,6 +7,13 @@ import (
 	"ttc/internal/llm"
 )
 
+// mainModelInput is the common main-input template, including for an idle aside
+// loaded before this runtime has admitted a main request.
+func (r *Runtime) mainModelInput(selection llm.Selection, messages []llm.Message) llm.Request {
+	return llm.Request{ConversationID: r.Current(), Selection: selection, System: systemTemplate,
+		Tools: r.Tools.Definitions(), Messages: messages, OutputTokens: selection.Model.Budget.OutputAllowance}
+}
+
 // estimateInput applies the same canonical projection as request admission before
 // asking the provider to account for its complete native input. Retained human
 // inputs must be grouped here too: persisted accounting targets are not yet

@@ -84,7 +84,7 @@ func TestCompactionKeepsRawToolPayloadsForMainAndChild(t *testing.T) {
 					t.Fatal(e)
 				}
 				seedIsolatedHistory(t, r, actor, turn, messages)
-				_, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{}, nil)
+				_, _, err = r.compactChild(context.Background(), childTask{actor: actor, turn: turn, input: childModelInput(actor, r.CurrentSelection(), r.Tools, nil, false), tools: r.Tools}, messages, contextCursor{}, nil)
 			} else {
 				for _, message := range messages {
 					if _, e := r.Store.Append(r.Current(), "", "main", "message", message.Role(), true, message); e != nil {
@@ -140,7 +140,7 @@ func TestCompactionPreservesOversizedFreshToolCycle(t *testing.T) {
 					t.Fatal(e)
 				}
 				seedIsolatedHistory(t, r, id, turn, messages)
-				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
+				result, _, err = r.compactChild(context.Background(), childTask{actor: id, turn: turn, input: childModelInput(id, r.CurrentSelection(), r.Tools, nil, actor == "btw"), tools: r.Tools, aside: actor == "btw"}, messages, contextCursor{}, nil)
 			}
 			if err != nil || requests != 1 || r.checkContext(false) != nil {
 				t.Fatal("oversized cycle prevented handoff", err, requests)
@@ -406,7 +406,7 @@ func TestChildCompactionIsolatedHistoryAndNotification(t *testing.T) {
 				}
 				return emit(llm.StreamEvent{Kind: "text", Text: "Useful child handoff."})
 			}}
-			task := childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools, aside: aside}
+			task := childTask{actor: actor, turn: turn, input: childModelInput(actor, r.CurrentSelection(), r.Tools, nil, aside), tools: r.Tools, aside: aside}
 			result, cursor, err := r.compactChild(context.Background(), task, messages, contextCursor{snapshot: &runtimeContext{Actor: "old actor"}}, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -510,7 +510,7 @@ func TestCanceledChildCompactionPreservesCursorAndPublishesNothing(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	cursor := contextCursor{snapshot: &runtimeContext{Actor: "unchanged"}}
-	result, next, err := r.compactChild(ctx, childTask{actor: "main/child_fixture", tools: r.Tools}, nil, cursor, nil)
+	result, next, err := r.compactChild(ctx, childTask{actor: "main/child_fixture", input: childModelInput("main/child_fixture", r.selection, r.Tools, nil, false), tools: r.Tools}, nil, cursor, nil)
 	if !errors.Is(err, context.Canceled) || result != nil || next.snapshot != cursor.snapshot {
 		t.Fatal("canceled child changed context", result, next, err)
 	}

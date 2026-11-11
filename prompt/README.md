@@ -17,7 +17,9 @@ fixtures.
 
 - `system.yaml`: role instructions. Main receives `System` + `Coding` + `Main`;
   coding children receive `System` + `Coding` + `Child`, separated by newlines.
-  Read-only asides receive `System`, with `Btw` as a separate developer message.
+  Read-only asides inherit main's complete model input and tool schemas for
+  prefix reuse, then append `Btw` as a developer message. Dispatch remains
+  restricted to read-only tools.
 - `child-messages.yaml`: active-assignment steering diagnostics.
 - `recovery.md`: continuation warning after a partial coding failure.
 - `compaction.md`: the final summary instruction (`Compaction`).
@@ -68,5 +70,7 @@ trace indirect model-input paths when adding runtime features.
 Keep system instructions focused on decisions and tool descriptions focused on
 parameter semantics, defaults and results. Recoverable errors should explain how
 to adjust the call rather than expanding descriptions into lists of edge cases.
-Audit the assembled request against its tool list: give each receiver actionable
-guidance, not main-only workflows followed by child/aside prohibition overrides.
+Audit the assembled request against its executable capabilities. Children
+receive their own role guidance. Asides preserve main's prefix, so their
+appended `Btw` instruction explicitly overrides inherited workflows requiring
+disabled tools.

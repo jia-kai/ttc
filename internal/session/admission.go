@@ -111,8 +111,7 @@ func (r *Runtime) admitMain(ctx context.Context, turn string, selection llm.Sele
 		if cm != nil {
 			messages = append(messages, *cm)
 		}
-		defs := r.Tools.Definitions()
-		input, result, e := r.prepareInput(ctx, llm.Request{ConversationID: r.Current(), Selection: selection, System: systemTemplate, Tools: defs, Messages: messages, OutputTokens: selection.Model.Budget.OutputAllowance})
+		input, result, e := r.prepareInput(ctx, r.mainModelInput(selection, messages))
 		if e != nil {
 			return fmt.Errorf(prompts.SessionEstimateMainInput, e)
 		}

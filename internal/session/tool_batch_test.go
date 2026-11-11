@@ -656,7 +656,7 @@ func TestChildContextRetainsCallOrderAfterOutOfOrderCompletion(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", selection: r.selection, tools: r.Tools}, io.Discard, io.Discard); err != nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_test", turn: turn, prompt: "parallel child", input: childModelInput("main/child_test", r.selection, r.Tools, nil, false), tools: r.Tools}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	var contextRecords int

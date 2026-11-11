@@ -85,8 +85,7 @@ func TestAgentRunnerSharedRecoveryAccountingAndPresentation(t *testing.T) {
 					t.Fatal(err)
 				}
 				err = r.runChild(context.Background(), childTask{
-					actor: actor, turn: turn, prompt: "Run recovery cycle", selection: r.CurrentSelection(),
-					tools: r.Tools.Filter(readOnlyTool), aside: role == "aside",
+					actor: actor, turn: turn, prompt: "Run recovery cycle", input: childModelInput(actor, r.CurrentSelection(), r.Tools, nil, role == "aside"), tools: r.Tools, aside: role == "aside",
 				}, &stdout, io.Discard)
 				if err != nil {
 					t.Fatal(err)
@@ -160,8 +159,7 @@ func TestAgentRunnerAssignmentTextLimitsDoNotAuthorizeRecovery(t *testing.T) {
 			}
 			var stdout bytes.Buffer
 			err = r.runChild(context.Background(), childTask{
-				actor: tc.actor, turn: turn, prompt: "Bound this response", selection: r.CurrentSelection(),
-				tools: r.Tools.Filter(readOnlyTool), aside: tc.aside,
+				actor: tc.actor, turn: turn, prompt: "Bound this response", input: childModelInput(tc.actor, r.CurrentSelection(), r.Tools, nil, tc.aside), tools: r.Tools, aside: tc.aside,
 			}, &stdout, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf(prompts.ChildResponseTooLarge, tc.limit)) {
 				t.Fatalf("limit error = %v", err)

@@ -16,7 +16,6 @@ type assignmentAgentContext struct {
 	task     childTask
 	messages []llm.Message
 	cursor   contextCursor
-	system   string
 }
 
 func (c *assignmentAgentContext) admit(ctx context.Context, recovery *llm.Message) (agentRequest, error) {
@@ -28,7 +27,7 @@ func (c *assignmentAgentContext) admit(ctx context.Context, recovery *llm.Messag
 		}
 		r.routeMu.RLock()
 		admitted, next, err := r.admitChild(ctx, c.task, c.messages, c.cursor)
-		if errors.Is(err, errNeedsCompaction) {
+		if !c.task.aside && errors.Is(err, errNeedsCompaction) {
 			r.routeMu.RUnlock()
 			if compacted {
 				return agentRequest{}, errors.New(prompts.ChildAdmissionAfterCompaction)
@@ -45,7 +44,7 @@ func (c *assignmentAgentContext) admit(ctx context.Context, recovery *llm.Messag
 			return agentRequest{}, err
 		}
 		c.cursor, c.messages = next, admitted.Messages
-		_, err = r.Store.RecordSystemPrompt(r.Current(), c.task.turn, c.task.actor, admitted.RequestID, c.system)
+		_, err = r.Store.RecordSystemPrompt(r.Current(), c.task.turn, c.task.actor, admitted.RequestID, admitted.input.System)
 		r.routeMu.RUnlock()
 		if err != nil {
 			return agentRequest{}, err

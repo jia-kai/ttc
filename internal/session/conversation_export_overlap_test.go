@@ -167,7 +167,7 @@ func TestConversationExportChildCompactionOverlapsMainHandoff(t *testing.T) {
 	}}
 	finished := make(chan error, 1)
 	go func() {
-		_, _, err := r.compactChild(ctx, childTask{actor: actor, turn: turn, selection: r.CurrentSelection(), tools: r.Tools}, messages, contextCursor{}, nil)
+		_, _, err := r.compactChild(ctx, childTask{actor: actor, turn: turn, input: childModelInput(actor, r.CurrentSelection(), r.Tools, nil, false), tools: r.Tools}, messages, contextCursor{}, nil)
 		finished <- err
 	}()
 	select {

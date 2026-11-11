@@ -101,7 +101,7 @@ func TestChildImageReplySlotAndExitCleanup(t *testing.T) {
 	v = showTestImage(t, r, "three", "main/child_fixture", true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := r.runChild(ctx, childTask{actor: "main/child_fixture", prompt: "task", selection: r.CurrentSelection(), tools: r.Tools}, io.Discard, io.Discard); err == nil {
+	if err := r.runChild(ctx, childTask{actor: "main/child_fixture", prompt: "task", input: childModelInput("main/child_fixture", r.CurrentSelection(), r.Tools, nil, false), tools: r.Tools}, io.Discard, io.Discard); err == nil {
 		t.Fatal("canceled child continued")
 	}
 	if r.ImageClickPending(v.ID) {

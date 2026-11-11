@@ -43,11 +43,14 @@ cancel them.
   compaction. Use explicit compaction or select a larger-context model before
   retrying.
 - Main, children and asides share the provider's bounded, concurrency-safe
-  measurement cache, not actor-local estimators. Changed aside instructions or
-  tools prevent direct measurement reuse; there is no approximate transfer.
-  Compaction changes input rather than clearing the shared cache. Loads restore
-  compatible saved provider checkpoints; older checkpoints remain readable but
-  do not seed measurements.
+  measurement cache, not actor-local estimators. An aside may reuse the longest
+  matching measured main-input prefix and locally estimate its unmatched suffix.
+  Its conversation/cache-affinity ID remains separate, so upstream cache hits
+  are not guaranteed. Compaction changes input rather than clearing the shared
+  cache. Loads restore compatible saved provider checkpoints; older checkpoints
+  remain readable but do not seed measurements. `/btw` bypasses local
+  input-capacity checks and automatic compaction; an oversized aside reaches
+  upstream unchanged and any provider rejection is shown in its result.
 - `/force-compact [focus]` is an explicit idle main-actor command that bypasses
   only the estimated summary input-size check. It uses the same structured
   request and cache identity as `/compact`; automatic and child compaction keep
@@ -123,12 +126,12 @@ cancel them.
   over 1 MiB. Estimated oversized input is refused unless explicitly forced.
   Output reserves follow [model metadata](models.md#budget-metadata);
   instructions live in [prompt/compaction.md](../prompt/compaction.md).
-- Main, child and aside compaction use a cooperative 10-minute deadline for the
+- Main and coding-child compaction use a cooperative 10-minute deadline for the
   whole operation, including naming, summary inference/retries and handoff.
   Earlier owning-operation deadlines and cancellation still apply. Synchronous
   storage I/O or lock waits can delay return after the deadline expires.
-- Main, child and aside compaction write no eager transcript files. Durable
-  SQLite history remains the source for inspection and on-demand
+- Compaction writes no eager transcript files. Durable SQLite history remains
+  the source for inspection and on-demand
   [`conversation_export`](tools.md#conversation_export). Its actor-selected
   scope follows compaction and frozen-fork ancestry, deduplicates source entries
   and excludes sibling branches and unrelated actors. Main exports only main
@@ -146,9 +149,9 @@ cancel them.
 ## Handoff
 
 - One shared engine selects retained history, freezes the actor's cut, requests
-  the summary and constructs the canonical replacement for main, children and
-  asides. Actor adapters supply only ownership-specific commits, scope and live
-  state; they do not format or reinterpret the handoff.
+  the summary and constructs the canonical replacement for main and coding
+  children. Actor adapters supply only ownership-specific commits, scope and
+  live state; they do not format or reinterpret the handoff.
 - The first replacement message has type `compaction_context` and user role.
   Canonical content is the raw generated Markdown; model projection encloses it
   directly in `<compaction_context>` without JSON quoting or an instruction
@@ -175,7 +178,8 @@ cancel them.
   batch under the publication gate without consuming either. Commit one
   `child_compacted` on success with child/turn, estimated usage, not archive
   links or the summary body. Failure ends the child turn without a success
-  event. `/btw` uses the same algorithm with events/answers outside main input.
+  event. `/btw` does not compact its private context; its events and answers
+  stay outside main input.
 - Refresh main estimated occupancy immediately; label previous reported usage
   separately. Summary inference counts once in run totals even if handoff fails.
 

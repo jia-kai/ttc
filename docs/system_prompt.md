@@ -6,11 +6,14 @@
   boundaries, generation and the source inventory. All interactive roles share
   the `System` section in [system.yaml](../prompt/system.yaml). Main adds
   `Coding` then `Main`; coding children add `Coding` then `Child`, separated by
-  newlines. Read-only asides receive only `System`, with `Btw` as a separate
-  developer message. Naming uses its own instructions. Compaction preserves the
-  actor's system/history prefix and appends a temporary developer instruction
-  from [compaction.md](../prompt/compaction.md), optionally preceded by focus
-  from [compaction-messages.yaml](../prompt/compaction-messages.yaml). Dynamic
+  newlines. Asides retain the main `System` + `Coding` + `Main` template and
+  append a separate `Btw` developer instruction; their question and fresh
+  runtime-context baseline are also appended to the admitted history. The
+  runtime context supplies a role-filtered skill catalog. Naming uses its own
+  instructions. Compaction preserves the actor's system/history prefix and
+  appends a temporary developer instruction from
+  [compaction.md](../prompt/compaction.md), optionally preceded by focus from
+  [compaction-messages.yaml](../prompt/compaction-messages.yaml). Dynamic
   identity belongs in runtime context, not those stable instructions.
 - Preserve exact per-request instructions through the
   [inspection/artifact contract](design.md#inspectable-request-messages).

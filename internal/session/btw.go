@@ -38,13 +38,10 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	}
 	r.mu.Lock()
 	persisted, active := r.persisted, r.activeCancel != nil
-	prefix := append([]llm.Message(nil), r.mainPrefix...)
-	selection, turn := r.prefixSelection, r.prefixTurn
+	input, turn := r.mainInput, r.prefixTurn
+	selection := r.selection
 	prefixSession, prefixTip := r.prefixSession, r.prefixTip
 	sessionID := r.current
-	if !active {
-		selection = r.selection
-	}
 	r.mu.Unlock()
 	if !persisted {
 		return "", errors.New("session is empty; send a message before /btw")
@@ -62,30 +59,35 @@ func (r *Runtime) StartBTW(question string) (string, error) {
 	if saved.RedoTip != 0 {
 		return "", errors.New("redo is pending; use /redo before /btw, or submit a new turn to start a history branch")
 	}
-	if active && prefix == nil {
+	if active && input.Messages == nil {
 		return "", errors.New("main request is still preparing; retry /btw once it starts")
 	}
 	if !active {
-		var err error
-		prefix, err = r.Store.Messages(sessionID)
+		messages, err := r.Store.Messages(sessionID)
 		if err != nil {
 			return "", err
 		}
-		prefix = llm.ContextFor(selection, prefix)
+		if input.Messages == nil {
+			input = r.mainModelInput(selection, messages)
+		} else {
+			input.Selection, input.Messages = selection, messages
+			input.OutputTokens = selection.Model.Budget.OutputAllowance
+		}
 		prefixSession, prefixTip = sessionID, saved.EntryTip
 		turn = "" // Idle asides belong to the session, not a completed turn.
 	}
 	actor := "main/" + history.NewID("btw")
-	tools := r.Tools.Filter(readOnlyTool)
-	prefix, err = r.projectInheritedSkillCatalogs(prefix, actor)
-	if err != nil {
-		return "", err
-	}
+	// Preserve main's system, tool definitions and messages for native prefix
+	// reuse. Only identity and the private history suffix differ; execution
+	// capabilities are separate from the inherited model-facing definitions.
+	input.ConversationID = actor
+	input.Messages = append([]llm.Message(nil), input.Messages...)
+	tools := r.Tools
 	label := []rune(strings.Join(strings.Fields(render.Clean(question)), " "))
 	if len(label) > 64 {
 		label = append(label[:63], '…')
 	}
-	task := childTask{actor: actor, turn: turn, prompt: question, selection: selection, prefix: prefix, tools: tools, aside: true}
+	task := childTask{actor: actor, turn: turn, prompt: question, input: input, tools: tools, aside: true}
 	count := len(r.coordinator.children)
 	for _, v := range r.Jobs.Live() {
 		if v.Kind == "btw" {

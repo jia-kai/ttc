@@ -121,9 +121,17 @@ func TestCompactionEstimationErrorsAreNotCapacityRefusals(t *testing.T) {
 	}
 }
 
-func TestAsideAdmissionDoesNotTransferMainMeasurementAcrossHeaders(t *testing.T) {
+func TestChildAdmissionRejectsMismatchedInputIdentity(t *testing.T) {
+	a := newSummaryBudgetActor(t, "child")
+	a.task.input.ConversationID = a.r.Current()
+	if admitted, err := a.admit(); err == nil || admitted.RequestID != 0 {
+		t.Fatal("child admission accepted a different conversation identity", admitted, err)
+	}
+}
+
+func TestAsideAdmissionReusesMainMeasuredPrefix(t *testing.T) {
 	r, _ := runtimeFixture(t, nil)
-	seedRuntime(t, r, "Inherited research.")
+	seedRuntime(t, r, strings.Repeat("Inherited research. ", 1000))
 	provider := &openai.Adapter{}
 	r.Provider = provider
 	r.selection.Provider = "openai"
@@ -144,28 +152,40 @@ func TestAsideAdmissionDoesNotTransferMainMeasurementAcrossHeaders(t *testing.T)
 	if err != nil || measured.Input != 1 || measured.Estimated {
 		t.Fatal("main measurement was not restored", measured, err)
 	}
-	actor := "main/btw_strict_header"
+	actor := "main/btw_measured_prefix"
 	turn, err := r.Store.BeginChildTurn(r.Current(), actor, r.selection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := r.Tools.Filter(readOnlyTool)
+	tools := r.Tools
 	messages := append(append([]llm.Message(nil), prefix...), llm.Message{Type: llm.TypeRuntimeInstruction, Content: btwInstruction}, llm.Message{Type: llm.TypeUserInput, Content: "Explain the research.", InputSource: "btw", InputTimeMS: 1000})
 	cm, _, err := r.runtimeContext(ctx, actor, r.selection, contextCursor{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	input := append(append([]llm.Message(nil), messages...), *cm)
-	asideRequest := llm.Request{ConversationID: actor, Selection: r.selection, System: asideSystemTemplate, Tools: tools.Definitions(), Messages: input}
+	asideRequest := llm.Request{ConversationID: actor, Selection: r.selection, System: systemTemplate, Tools: tools.Definitions(), Messages: input}
 	asideEstimate, err := r.estimateInput(ctx, asideRequest)
-	if err != nil || !asideEstimate.Estimated || asideEstimate.Input <= 1 {
-		t.Fatal("aside borrowed main measurement across changed system/tools", asideEstimate, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := (&openai.Adapter{}).EstimateInput(ctx, asideRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 1 + local.Input - mainEstimate.Input
+	if !asideEstimate.Estimated || asideEstimate.Input != want || want <= 1 {
+		t.Fatal("aside did not reuse main measurement plus locally estimated suffix", asideEstimate, want)
 	}
 	selection := r.selection
 	b := &selection.Model.Budget
-	b.ContextLimit = asideEstimate.Input + b.OutputAllowance + b.EstimationMargin + b.SummaryOutputAllowance + compactionInstructionTokens()
-	if _, _, err := r.admitChild(ctx, childTask{actor: actor, turn: turn, selection: selection, tools: tools, aside: true}, messages, contextCursor{}); !errors.Is(err, errNeedsCompaction) {
-		t.Fatal("aside bypassed strict capacity boundary using main evidence", err)
+	b.ContextLimit = want + b.OutputAllowance + b.EstimationMargin + b.SummaryOutputAllowance + compactionInstructionTokens() + 1
+	if codingInputFits(local.Input, *b, false) {
+		t.Fatal("fixture must refuse the uncalibrated estimate", local)
+	}
+	asideRequest.Selection = selection
+	if _, _, err := r.admitChild(ctx, childTask{actor: actor, turn: turn, input: asideRequest, tools: tools, aside: true}, messages, contextCursor{}); err != nil {
+		t.Fatal("aside refused admission", err)
 	}
 }
 
@@ -219,7 +239,8 @@ func TestActorStreamUsesExactPreparedAdmission(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Research.", selection: r.selection, tools: r.Tools.Filter(readOnlyTool), aside: role == "aside"}, io.Discard, io.Discard); err != nil {
+				input := childModelInput(actor, r.selection, r.Tools, nil, role == "aside")
+				if err := r.runChild(context.Background(), childTask{actor: actor, turn: turn, prompt: "Research.", input: input, tools: r.Tools, aside: role == "aside"}, io.Discard, io.Discard); err != nil {
 					t.Fatal(err)
 				}
 			}
