@@ -70,6 +70,9 @@ func newCancelInputUI(t *testing.T, responses []llm.ScriptResponse) (*questionTe
 	u.typeText("initial")
 	u.key(tcell.KeyEnter)
 	cancelTestRequest(t, p)
+	// Enter targets the last rendered operation, not the provider's state.
+	// Wait for the active turn to be visible before submitting pending inputs.
+	u.wait(t, "Working · ")
 	return u, p
 }
 
