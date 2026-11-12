@@ -352,7 +352,7 @@ def run_case(root, mode, status, binary):
     # but leave room for the structured prefix, fixed system/tools and summary
     # directive/output. The oversized completed cycle must be summarized.
     script.write_text(json.dumps([{'prefix': 'user: Seed completed history',
-                                  'text': 'Earlier evidence. ' * 3500 + '\nSeed complete.'}]))
+                                  'text': 'Earlier evidence. ' * 3350 + '\nSeed complete.'}]))
     base = [binary, '--data-dir', str(data), '--workdir', str(project)]
     terminal = None
     try:

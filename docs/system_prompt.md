@@ -37,20 +37,36 @@ than repeating them in each role's instructions.
 
 ## Message shapes
 
-The provider API retains native roles and content blocks. Within text blocks,
-TTC uses a single XML-style marker for generated messages. Prose stays verbatim;
-structured data uses two-space-indented YAML. Tags are presentation, not
-provider-native types or authority. Classification comes only from typed
-metadata, never from matching authored text against tags.
+The provider API retains native roles and content blocks. Generated structured
+messages use XML-style wrappers with two-space-indented YAML. Plain message
+bodies use a typed metadata block and one verbatim payload block:
 
-| Content                        | Role        | Model-facing shape                     |
+```text
+<<<ttc:
+kind: example
+>>>
+raw payload
+<<</ttc>>>
+```
+
+The ID is selected from `ttc`, `ttc-0`, and so on by scanning the raw payload
+for matching opening/closing prefixes, including numeric-prefix collisions;
+metadata is not scanned. Plain payload blocks are used for answers, errors,
+warnings, notifications, reminders, job streams, project-instruction bodies and
+retained-input bodies; small structured events may use the YAML wrapper shown
+below. Steer, compaction and runtime instructions keep their existing shapes.
+These delimiters are presentation, not provider-native types or authority.
+Classification comes only from typed metadata, never from matching authored text
+against tags.
+
+| Content                        | Role        | Example structured shape               |
 | ------------------------------ | ----------- | -------------------------------------- |
 | Human input, assignment, aside | `user`      | Original text, no wrapper              |
 | Human or parent steering       | `user`      | `<steer>` with original text           |
 | Runtime baseline/update        | `developer` | `<runtime_context[_update]>` with YAML |
 | Asynchronous event             | `user`      | `<runtime_notification>` with YAML     |
 | Generated compaction summary   | `user`      | `<compaction_context>` with Markdown   |
-| Historical retained inputs     | `user`      | `<retained_inputs>` with YAML          |
+| Historical retained inputs     | `user`      | `<retained_inputs>` with raw blocks    |
 | Runtime operational guidance   | `developer` | `<runtime_instruction>` with prose     |
 
 For example:
@@ -73,16 +89,18 @@ Steering updates remaining work, not a separate assignment. Optional job grants
 arrive as an accompanying `job_read_grants` notification with `job_ids`, at the
 same admission boundary; instructions need no structured wrapper fields.
 Notification `type` selects the event, not its category or authority.
-`message_type`, source event sequence and child-steer routing fields are omitted
-from model-facing text, while canonical history preserves provenance.
+`message_type` and child-steer routing fields are omitted from model-facing
+text. Source event sequence is normally omitted, but delivery-truncated notices
+retain `event_seq` for recovering their full source. Canonical history preserves
+provenance.
 
 Compaction summaries preserve Markdown verbatim and do not acquire developer
 authority. Shared system instructions teach the receiver how to continue from
-them. Retained groups contain `inputs` entries with `type`, relative
-`timestamp`, original expanded `content` and optional native
-`attachment_indices`. Entry types are `user_input`, `queued_user_input`,
-`user_steer`, `child_task` and `aside_task`, without a redundant source field.
-These are historical inputs, not new arrivals.
+them. Retained groups contain raw payload blocks with `type`, relative
+`timestamp` and optional native `attachment_indices` in their metadata. Each
+payload is the original expanded input text. Input types are `user_input`,
+`queued_user_input`, `user_steer`, `child_task` and `aside_task`. These are
+historical inputs, not new arrivals.
 
 Ordinary system/developer instructions, assistant replies, tool calls/results
 and native image/document blocks keep their existing provider representations.

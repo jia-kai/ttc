@@ -62,19 +62,23 @@ func (m Message) ModelContent() (string, error) {
 		default:
 			return "", fmt.Errorf(prompts.LLMInvalidContextKind)
 		}
-		return modelObjectData(kind, fields)
+		return projectRuntimeContext(kind, fields)
 	case TypeRuntimeNotification:
 		fields, err := modelObject(m.Content)
 		if err != nil {
 			// Some notifications contain plain external text rather than an
 			// event object. It remains data inside a structured notification.
-			return FormatModelData("runtime_notification", struct {
-				Event string `yaml:"event"`
-			}{Event: m.Content})
+			return FormatModelPayload(ModelPayload{Metadata: PayloadMetadata{Kind: "runtime_notification", Field: "event"}, Text: m.Content})
 		}
 		delete(fields, "message_type")
-		delete(fields, "event_seq")
-		return modelObjectData("runtime_notification", fields)
+		var outputOmitted bool
+		_ = json.Unmarshal(fields["output_omitted"], &outputOmitted)
+		// Omitted output can be recovered from its canonical source event;
+		// ordinary notices need no delivery bookkeeping in model context.
+		if !outputOmitted {
+			delete(fields, "event_seq")
+		}
+		return projectNotification(fields)
 	case TypeCompactionContext:
 		return modelText("compaction_context", m.Content), nil
 	case TypeRuntimeInstruction:

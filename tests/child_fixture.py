@@ -5,7 +5,7 @@ import sqlite3
 CHILD_PREFIX = 'CHILD-PREVIEW 4.0'
 CHILD_BODY = 'CHILD-HIDDEN-BODY'
 CHILD_TAIL = 'CHILD-FULL-TAIL: all three observations independently verified.'
-CHILD_ANSWER_CAP = 8 << 10  # Parent handoff cap, not the full-message inspector limit.
+CHILD_ANSWER_CAP = 6 << 10  # Parent handoff cap, not the full-message inspector limit.
 CHILD_ANSWER = '\n'.join([
     CHILD_PREFIX + ' ' + 'Independent arithmetic check passed for three fixture observations. ' * 6,
     '',

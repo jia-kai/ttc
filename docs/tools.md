@@ -183,6 +183,15 @@ Input: `{path, format?, scope?}`.
   Entries are sorted by name. Enumeration is cancellable and capped at 10,000
   entries; larger directories return `directory_too_large`. Use `glob` with a
   narrower pattern instead.
+- A successful file read (including a partial text page) records the whole-file
+  content hash. Full-file `write` is allowed when that agent observed the
+  current contents, or no other agent has modified the file in this workspace
+  runtime. A successful full-file write also records its resulting contents as
+  observed. Targeted `edit` and patch operations retain their matching rules and
+  record the modifying agent; they do not require a prior read. Rejected
+  rewrites explain how to recover. Shell commands and other runtimes are outside
+  this mechanism; detected external changes to known content require a fresh
+  read.
 - Native binary formats are announced in runtime `binary_files` as deduplicated
   extension groups and `max_bytes`, at first admission, after compaction and on
   capability changes. Omission retains the prior announcement; `[]` clears it.
@@ -281,7 +290,8 @@ Input: `{path, format?, scope?}`.
 - Input: `{path:string, content:string}`. `content` is the entire new file,
   including its intended final newline. Missing parent directories are made.
 - Result: `{path:string, created:boolean, bytes:integer}`. `bytes` is the UTF-8
-  byte count written.
+  byte count written. The read guard above also applies to `write` and other
+  mutations; a partial read qualifies because its hash covers the full snapshot.
 
 ### `patch`
 
@@ -420,6 +430,12 @@ Input: `{path, format?, scope?}`.
   match; the child's selection remains fixed. New assignments get distinct
   child-turn/job IDs. Running children return `child_busy` with wait guidance;
   closed/unknown handles require a new child.
+- Children may call `notify_parent` to send a milestone message of at most 2048
+  UTF-8 bytes; each assignment may send at most 32. Delivery is durable and
+  wakes a waiting parent. The child assignment continues after notification.
+  Parent-facing events have `type: child_notification` and attach the child,
+  turn and job IDs. Use it for useful interim progress, not as a replacement for
+  the final completion answer.
 - `job_read_grants` lists up to 128 job IDs per call, counting duplicates, whose
   data the child may read. Grants take effect on assignment delivery and
   accumulate for the child's lifetime, including persistent follow-ups. If any
@@ -452,9 +468,10 @@ Input: `{path, format?, scope?}`.
   close the context after managed-work cleanup. Foreground results carry that
   event for acknowledgment at request admission; background turns always notify
   the main agent, whether busy or idle. Do not emit an additional `job_exit`.
-- Child handoffs should stay under 500 words: summarize the result, evidence and
-  unresolved issues. Put lengthy reports in the shared scratch directory and
-  return their paths instead of copying them into the final response.
+- A new completion answer is limited to 6 KiB of UTF-8; existing 8 KiB
+  historical answers remain readable. Child handoffs should stay under 500
+  words: summarize result, evidence and unresolved issues. Put lengthy reports
+  in shared scratch and return paths instead of copying reports into the answer.
 - Result: a child-specific named-stream snapshot with `kind:"subagent"`,
   `child_id`, `child_turn_id`, `persistent`, and a terminal `finish_event_seq`
   when available. Unlike shell results, it uses `assignment_status` (`running`,
@@ -467,12 +484,13 @@ Input: `{path, format?, scope?}`.
   semantic assignment status. Recovered historical completions may omit
   `child_state` (unknown historical state, not closed or restorable); see
   [async messages](#async-messages-sent-to-the-model). `completed` means no
-  runtime error, not verified claims. Successful completion includes `answer`
-  capped at 8 KiB of UTF-8 and `answer_truncated:true` only when the answer
-  exceeds that limit. `result_entry_id` identifies the exact final assistant
-  message; the result never contains the full child transcript. Background
-  finish notifications carry the same answer and reference. Ordinary answers
-  need no `job_read`, and disposable children need no `job_stop`.
+  runtime error, not verified claims. New completions include `answer` capped at
+  6 KiB of UTF-8 and `answer_truncated:true` only when the answer exceeds that
+  limit; historical 8 KiB answers remain readable. `result_entry_id` identifies
+  the exact final assistant message; the result never contains the full child
+  transcript. Background finish notifications carry the same answer and
+  reference. Ordinary answers need no `job_read`, and disposable children need
+  no `job_stop`.
 - Failure: if automatic recovery cannot continue, `assignment_status` remains
   `failed` (or `cancelled` for a stop). `error` reports the terminal cause as
   text; `answer` contains the last nonempty assistant message from the child
@@ -489,7 +507,7 @@ Input: `{path, format?, scope?}`.
   child's whole selected conversation, including original pre-compaction entries
   and earlier persistent assignments. Export failure instead reports
   `transcript_export_error` and an explicit warning, without inventing a path.
-  Warning and paths are not clipped with the 8 KiB answer. Foreground results
+  Warning and paths are not clipped with the 6 KiB answer. Foreground results
   and background finish notifications carry the same failure metadata.
   Transcript artifacts share lineage retention. If completion
   storage/publication itself fails, the runtime aborts explicitly; its fatal
@@ -989,19 +1007,26 @@ always deliver their turn event.
 
 Main and child runtime-event backlogs retain compact durable source references
 and drain in bounded admission batches (32 events / 2048 estimated tokens;
-children may have a smaller input reserve). Large events may omit output
-explicitly while preserving source/job identity, known outcome, and child
-completion references; full payloads remain in history. Every admitted source is
-acknowledged separately. Unadmitted events keep inference active rather than
-being lost at completion; failed admission consumes nothing. Human steering
-remains separate from this output budget. Committed child-message delivery
-receipts also wake an awaiting main agent.
+children may have a smaller input reserve). Notices are projected to a total 6
+KiB per event; when necessary, retain a raw UTF-8 prefix and metadata/source
+reference rather than dropping the notice. Job stdout and stderr receive
+separate, fairly redistributed budgets (a short stream leaves room for the
+other) and separate verbatim payload blocks; empty streams are omitted.
+Per-field `*_delivery_truncated` flags mark omitted delivered bytes.
+`output_omitted` stays true when only a prefix is delivered: full source remains
+available through history/export and UI inspection. Capture truncation,
+stored-answer `answer_truncated` and notice-delivery truncation are distinct.
+Full payloads remain in history. Every admitted source is acknowledged
+separately. Unadmitted events keep inference active rather than being lost at
+completion; failed admission consumes nothing. Human steering remains separate
+from this output budget. Committed child-message delivery receipts also wake an
+awaiting main agent.
 
 Events arrive at the owning actor's next model boundary or resume its awaiting
-inference as user-role messages containing YAML inside `<runtime_notification>`.
-The canonical semantic type determines role and presentation; payload text does
-not control authority. Projection preserves event-specific fields but omits
-`message_type` and source `event_seq`. See
+inference as user-role messages using typed metadata/raw-payload blocks or YAML
+inside `<runtime_notification>`. The canonical semantic type determines role and
+presentation; payload text does not control authority. Projection preserves
+event-specific fields but omits `message_type` and source `event_seq`. See
 [message shapes](system_prompt.md#message-shapes).
 
 ```xml

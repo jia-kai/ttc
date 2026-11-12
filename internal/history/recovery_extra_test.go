@@ -28,7 +28,7 @@ func TestChildFinishValidationMatchesRecovery(t *testing.T) {
 			case "bad status":
 				finish.Outcome = "running"
 			case "oversized answer":
-				finish.Answer = strings.Repeat("x", MaxChildAnswerBytes+1)
+				finish.Answer = strings.Repeat("x", maxSavedChildAnswerBytes+1)
 			case "failed answer":
 				finish.Outcome, finish.Answer = "failed", "unexpected answer"
 			}

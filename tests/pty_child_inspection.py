@@ -184,7 +184,7 @@ def main():
         finish_entry, finish = state['finishes'][0]
         assert finish['easy'] is True and finish['persistent'] is False, finish
         assert finish['answer_truncated'] is True and answer.startswith(finish['answer']), finish
-        assert len(finish['answer'].encode()) <= 8192 and TAIL not in finish['answer']
+        assert len(finish['answer'].encode()) <= 6144 and TAIL not in finish['answer']
         with sqlite3.connect(database) as db:
             saved = json.loads(db.execute('SELECT content_json FROM entries WHERE id=?',
                                           (finish['result_entry_id'],)).fetchone()[0])

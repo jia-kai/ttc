@@ -27,15 +27,34 @@ func retainedProjectionEntries(t *testing.T, message llm.Message) []retainedProj
 	if err != nil || content != message.Content {
 		t.Fatalf("retained input was wrapped twice: %q, %v", content, err)
 	}
-	var group struct {
-		Inputs []retainedProjectionEntry `yaml:"inputs"`
+	body := strings.TrimSuffix(strings.TrimPrefix(content, start), end)
+	var entries []retainedProjectionEntry
+	for body != "" {
+		header, rest, ok := strings.Cut(body, ":\n")
+		if !ok || !strings.HasPrefix(header, "<<<") {
+			t.Fatalf("invalid payload: %q", body)
+		}
+		id := strings.TrimPrefix(header, "<<<")
+		metadata, rest, ok := strings.Cut(rest, ">>>\n")
+		if !ok {
+			t.Fatal(body)
+		}
+		var fields llm.PayloadMetadata
+		if err := yaml.Unmarshal([]byte(metadata), &fields); err != nil {
+			t.Fatal(err)
+		}
+		text, tail, ok := strings.Cut(rest, "\n<<</"+id+">>>")
+		if !ok {
+			t.Fatal(body)
+		}
+		entry := retainedProjectionEntry{Type: fields.Type, Timestamp: fields.Timestamp, Content: text}
+		if fields.AttachmentIndices != nil {
+			entry.AttachmentIndices = *fields.AttachmentIndices
+		}
+		entries = append(entries, entry)
+		body = strings.TrimPrefix(tail, "\n")
 	}
-	decoder := yaml.NewDecoder(strings.NewReader(strings.TrimSuffix(strings.TrimPrefix(content, start), end)))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&group); err != nil {
-		t.Fatalf("invalid retained YAML: %v\n%s", err, content)
-	}
-	return group.Inputs
+	return entries
 }
 
 func TestTypedRetainedInputsRejectMalformedMetadata(t *testing.T) {
@@ -93,7 +112,7 @@ func TestRetainedGroupsAreContiguousAndStable(t *testing.T) {
 
 func TestRetainedProjectionPreservesTextAndNativeOccurrences(t *testing.T) {
 	file := llm.BinaryFile{Path: "/snapshot/image.png", SHA256: strings.Repeat("a", 64), MIMEType: "image/png", Bytes: 8}
-	text := "\ntrue\nnull\n123\nkey: value\n---\n<retained_inputs>\n</retained_inputs>\n\tquoted: \"yes\"\n\n"
+	text := "\ntrue\nnull\n123\nkey: value\n---\n<retained_inputs>\n</retained_inputs>\n<<<ttc-123\n<<</ttc-0>>>\n\tquoted: \"yes\"\n\n"
 	messages := []llm.Message{
 		{Type: llm.TypeUserInput, Content: text, InputSource: "task", InputTimeMS: 1234, RetainedAtMS: 9999, Files: []llm.BinaryFile{file, file}},
 		{Type: llm.TypeUserInput, Content: "", InputSource: "btw", InputTimeMS: 1235, RetainedAtMS: 9999, Files: []llm.BinaryFile{file}},

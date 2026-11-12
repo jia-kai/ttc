@@ -78,11 +78,12 @@ func TestMessageSemanticsRejectUnknownAndIncompatibleInputs(t *testing.T) {
 func modelYAML(t *testing.T, text, name string) map[string]any {
 	t.Helper()
 	prefix, suffix := "<"+name+">\n", "</"+name+">"
-	if !strings.HasPrefix(text, prefix) || !strings.HasSuffix(text, suffix) {
+	if !strings.HasPrefix(text, prefix) || !strings.Contains(text, suffix) {
 		t.Fatal("incorrect marker", text)
 	}
 	var got map[string]any
-	if err := yaml.Unmarshal([]byte(strings.TrimSuffix(strings.TrimPrefix(text, prefix), suffix)), &got); err != nil {
+	body, _, _ := strings.Cut(strings.TrimPrefix(text, prefix), "\n"+suffix)
+	if err := yaml.Unmarshal([]byte(body+"\n"), &got); err != nil {
 		t.Fatal(err)
 	}
 	return got
@@ -96,7 +97,7 @@ func TestModelContentStructuredData(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := modelYAML(t, projected, "runtime_notification")
-	if got["type"] != "job_exit" || got["job_id"] != "job_1" || got["large"] != 9007199254740993 || got["fraction"] != 0.125 || got["numeric_text"] != "0123" || got["answer"] != "first\nsecond\n" || got["missing"] != nil || !reflect.DeepEqual(got["empty"], []any{}) {
+	if got["type"] != "job_exit" || got["job_id"] != "job_1" || got["large"] != 9007199254740993 || got["fraction"] != 0.125 || got["numeric_text"] != "0123" || !reflect.DeepEqual(got["answer"], map[string]any{"payload_index": 0}) || !strings.Contains(projected, ">>>\nfirst\nsecond\n\n<<</ttc>>>") || got["missing"] != nil || !reflect.DeepEqual(got["empty"], []any{}) {
 		t.Fatal("scalar or payload changed", got)
 	}
 	if _, ok := got["message_type"]; ok {
@@ -129,7 +130,7 @@ func TestModelContentStructuredData(t *testing.T) {
 		}
 	}
 	text, err := (Message{Type: TypeRuntimeNotification, Content: "finished\nwith evidence"}).ModelContent()
-	if err != nil || modelYAML(t, text, "runtime_notification")["event"] != "finished\nwith evidence" {
+	if err != nil || payloadMetadataForTest(t, text)["field"] != "event" || !strings.Contains(text, ">>>\nfinished\nwith evidence\n<<</ttc>>>") {
 		t.Fatal(text, err)
 	}
 	for _, content := range []string{"plain text", "null", "[]", `{}`, `{"type":"wrong"}`, `{"type":"runtime_context_update","set":null}`} {

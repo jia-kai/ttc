@@ -11,9 +11,14 @@ import (
 	"ttc/internal/prompts"
 )
 
-// MaxChildAnswerBytes bounds the final answer delivered to the parent, in UTF-8
-// bytes. Full text stays in its committed assistant entry or failure transcript.
-const MaxChildAnswerBytes = 8 << 10
+// MaxChildAnswerBytes bounds newly saved child-answer prefixes, in UTF-8 bytes.
+// Full text stays in its committed assistant entry or failure transcript. Runtime
+// notification framing shares a separate total delivery allowance of this size.
+const MaxChildAnswerBytes = 6 << 10
+
+// maxSavedChildAnswerBytes accepts the largest supported historical prefix at
+// decoding boundaries without relaxing admission of new completions.
+const maxSavedChildAnswerBytes = 8 << 10
 
 // ChildSnapshot records a child's observed context and latest assignment state
 // independently of the model-facing subagent API.
@@ -94,7 +99,7 @@ func (s *Store) FinishChildTurn(session string, finish ChildFinish) (int64, erro
 
 // validateChildFinish requires the complete current write contract.
 func validateChildFinish(finish ChildFinish) error {
-	if err := validateChildFinishFields(finish); err != nil {
+	if err := validateChildFinishFields(finish, MaxChildAnswerBytes); err != nil {
 		return err
 	}
 	return validateChildFinishState(finish)
@@ -109,7 +114,7 @@ func validateChildFinishState(finish ChildFinish) error {
 	return errors.New(prompts.HistoryChildCompletionState)
 }
 
-func validateChildFinishFields(finish ChildFinish) error {
+func validateChildFinishFields(finish ChildFinish, answerLimit int) error {
 	if finish.ChildID == "" || finish.TurnID == "" || finish.JobID == "" && finish.Outcome == "completed" {
 		return errors.New(prompts.HistoryChildCompletionIDs)
 	}
@@ -119,8 +124,11 @@ func validateChildFinishFields(finish ChildFinish) error {
 	if finish.ResultEntry < 0 {
 		return errors.New(prompts.HistoryChildResultEntry)
 	}
-	if len(finish.Answer) > MaxChildAnswerBytes || !utf8.ValidString(finish.Answer) {
-		return errors.New(prompts.HistoryChildAnswer)
+	if len(finish.Answer) > answerLimit || !utf8.ValidString(finish.Answer) {
+		if answerLimit == MaxChildAnswerBytes {
+			return errors.New(prompts.HistoryChildAnswer)
+		}
+		return errors.New(prompts.HistorySavedChildAnswer)
 	}
 	if len(finish.Label) > 1024 || !utf8.ValidString(finish.Label) {
 		return errors.New(prompts.HistoryChildLabel)
@@ -134,8 +142,9 @@ func validateChildFinishFields(finish ChildFinish) error {
 	return nil
 }
 
-// readChildFinish validates only the current storage format. Unknown fields and
-// provenance belong to the raw record, not this typed inspection view.
+// readChildFinish validates the supported saved format, including historical
+// answer prefixes larger than today's write cap. Unknown fields and provenance
+// belong to the raw record, not this typed inspection view.
 func readChildFinish(body json.RawMessage) (ChildFinish, error) {
 	var finish ChildFinish
 	if err := json.Unmarshal(body, &finish); err != nil {
@@ -144,7 +153,7 @@ func readChildFinish(body json.RawMessage) (ChildFinish, error) {
 	if finish.Type != "child_turn_finished" {
 		return ChildFinish{}, errors.New(prompts.HistoryChildCompletionType)
 	}
-	if err := validateChildFinishFields(finish); err != nil {
+	if err := validateChildFinishFields(finish, maxSavedChildAnswerBytes); err != nil {
 		return ChildFinish{}, err
 	}
 	if finish.ContextState != "unknown" {

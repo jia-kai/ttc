@@ -3,6 +3,7 @@ package context
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -83,12 +84,6 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 	if first < 0 {
 		return messages, nil
 	}
-	type entry struct {
-		Type              string `yaml:"type"`
-		Timestamp         string `yaml:"timestamp"`
-		Content           string `yaml:"content"`
-		AttachmentIndices []int  `yaml:"attachment_indices,omitempty"`
-	}
 	out := make([]llm.Message, 0, len(messages))
 	out = append(out, messages[:first]...)
 	for i := first; i < len(messages); {
@@ -103,9 +98,8 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 		}
 		inputs := append([]llm.Message(nil), messages[start:i]...)
 		sort.SliceStable(inputs, func(i, j int) bool { return inputs[i].InputTimeMS < inputs[j].InputTimeMS })
-		group := struct {
-			Inputs []entry `yaml:"inputs"`
-		}{}
+		var group strings.Builder
+		group.WriteString("<retained_inputs>\n")
 		user := llm.Message{Type: llm.TypeUserInput}
 		for _, input := range inputs {
 			source, _ := inputSource(input) // Validated above.
@@ -122,18 +116,24 @@ func ProjectRetainedInputs(messages []llm.Message) ([]llm.Message, error) {
 			case "btw":
 				kind = "aside_task"
 			}
-			item := entry{Type: kind, Timestamp: fmt.Sprintf(prompts.ContextRetainedTimestamp, float64(input.RetainedAtMS-input.InputTimeMS)/1000), Content: input.Content}
+			metadata := llm.PayloadMetadata{Kind: "retained_input", Type: kind, Timestamp: fmt.Sprintf(prompts.ContextRetainedTimestamp, float64(input.RetainedAtMS-input.InputTimeMS)/1000)}
+			var indices []int
 			for _, file := range input.Files {
-				item.AttachmentIndices = append(item.AttachmentIndices, len(user.Files))
+				indices = append(indices, len(user.Files))
 				user.Files = append(user.Files, file)
 			}
-			group.Inputs = append(group.Inputs, item)
+			if len(indices) != 0 {
+				metadata.AttachmentIndices = &indices
+			}
+			content, err := llm.FormatModelPayload(llm.ModelPayload{Metadata: metadata, Text: input.Content})
+			if err != nil {
+				return nil, err
+			}
+			group.WriteString(content)
+			group.WriteByte('\n')
 		}
-		content, err := llm.FormatModelData("retained_inputs", group)
-		if err != nil {
-			return nil, err
-		}
-		user.Content = content
+		group.WriteString("</retained_inputs>")
+		user.Content = group.String()
 		out = append(out, user)
 	}
 	return out, nil

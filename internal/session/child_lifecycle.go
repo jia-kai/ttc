@@ -37,6 +37,8 @@ type childAssignment struct {
 	executionID uint64                 // Coordinator lifecycle; retained context never reuses an execution identity.
 	inspection  *childPromptInspection // Assignment-local atomic UI snapshot; never used for admission or model input.
 	// orderMu protects the admission queue and terminal admission gate.
+	parentNotifications int // Successful durable intermediate sends; bounded for the entire assignment, never replenished by delivery.
+
 	accepting         bool
 	queued            []llm.Message
 	initialReadGrants []string

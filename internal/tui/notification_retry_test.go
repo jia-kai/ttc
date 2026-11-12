@@ -149,16 +149,43 @@ func latestRetainedInputText(t *testing.T, req llm.Request) string {
 	if message.Type != llm.TypeUserInput || !strings.HasPrefix(message.Content, start) || !strings.HasSuffix(message.Content, end) {
 		t.Fatalf("expected retained-input transport after compaction: %+v", message)
 	}
-	var group struct {
-		Inputs []struct {
-			Content string `yaml:"content"`
-		} `yaml:"inputs"`
-	}
 	body := strings.TrimSuffix(strings.TrimPrefix(message.Content, start), end)
-	if err := yaml.Unmarshal([]byte(body), &group); err != nil || len(group.Inputs) == 0 {
-		t.Fatalf("invalid retained-input fixture: %v\n%s", err, body)
+	var latest string
+	count := 0
+	for body != "" {
+		header, rest, ok := strings.Cut(body, ":\n")
+		if !ok || !strings.HasPrefix(header, "<<<") {
+			t.Fatalf("invalid retained-input payload header: %q", body)
+		}
+		id := strings.TrimPrefix(header, "<<<")
+		metadata, rest, ok := strings.Cut(rest, ">>>\n")
+		if !ok {
+			t.Fatalf("missing retained-input metadata terminator: %q", body)
+		}
+		var fields llm.PayloadMetadata
+		decoder := yaml.NewDecoder(strings.NewReader(metadata))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&fields); err != nil {
+			t.Fatalf("invalid retained-input metadata: %v\n%s", err, metadata)
+		}
+		if fields.Kind != "retained_input" {
+			t.Fatalf("wrong retained-input payload kind: %+v", fields)
+		}
+		text, tail, ok := strings.Cut(rest, "\n<<</"+id+">>>")
+		if !ok {
+			t.Fatalf("missing retained-input closing marker: %q", body)
+		}
+		latest = text
+		count++
+		if tail != "" && !strings.HasPrefix(tail, "\n") {
+			t.Fatalf("invalid retained-input separator: %q", tail)
+		}
+		body = strings.TrimPrefix(tail, "\n")
 	}
-	return group.Inputs[len(group.Inputs)-1].Content
+	if count == 0 {
+		t.Fatal("retained-input fixture contains no payloads")
+	}
+	return latest
 }
 
 func TestNotificationCompactionFailurePausesAutomaticRetryAndExplicitRecoveryResumes(t *testing.T) {

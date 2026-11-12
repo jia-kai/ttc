@@ -1,0 +1,5 @@
+WorkspaceStaleFullWrite: >-
+  Full write rejected for %s: another actor or an untracked change modified the
+  file, and your last observed content does not match its current contents. Read
+  the file again (a partial read qualifies), then retry the write; use an exact
+  edit or patch instead when only a targeted change is intended.

@@ -41,9 +41,44 @@ func sessionRetainedInputs(t *testing.T, message llm.Message) []sessionRetainedE
 	if err != nil || content != message.Content {
 		t.Fatalf("retained group was wrapped twice: %q, %v", content, err)
 	}
-	var group struct {
-		Inputs []sessionRetainedEntry `yaml:"inputs"`
+	const start, end = "<retained_inputs>\n", "\n</retained_inputs>"
+	if !strings.HasPrefix(content, start) || !strings.HasSuffix(content, end) {
+		t.Fatalf("missing retained_inputs wrapper: %q", content)
 	}
-	decodeSessionModelData(t, content, "retained_inputs", &group)
-	return group.Inputs
+	body := strings.TrimSuffix(strings.TrimPrefix(content, start), end)
+	var entries []sessionRetainedEntry
+	for body != "" {
+		header, rest, ok := strings.Cut(body, ":\n")
+		if !ok || !strings.HasPrefix(header, "<<<") {
+			t.Fatalf("invalid retained payload header: %q", body)
+		}
+		id := strings.TrimPrefix(header, "<<<")
+		metadata, rest, ok := strings.Cut(rest, ">>>\n")
+		if !ok {
+			t.Fatalf("missing retained payload metadata terminator: %q", body)
+		}
+		var fields llm.PayloadMetadata
+		decoder := yaml.NewDecoder(strings.NewReader(metadata))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&fields); err != nil {
+			t.Fatalf("invalid retained payload metadata: %v\n%s", err, metadata)
+		}
+		if fields.Kind != "retained_input" {
+			t.Fatalf("wrong retained payload kind: %+v", fields)
+		}
+		text, tail, ok := strings.Cut(rest, "\n<<</"+id+">>>")
+		if !ok {
+			t.Fatalf("missing retained payload closing marker: %q", body)
+		}
+		entry := sessionRetainedEntry{Type: fields.Type, Timestamp: fields.Timestamp, Content: text}
+		if fields.AttachmentIndices != nil {
+			entry.Indices = *fields.AttachmentIndices
+		}
+		entries = append(entries, entry)
+		if tail != "" && !strings.HasPrefix(tail, "\n") {
+			t.Fatalf("invalid retained payload separator: %q", tail)
+		}
+		body = strings.TrimPrefix(tail, "\n")
+	}
+	return entries
 }

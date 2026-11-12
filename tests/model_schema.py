@@ -1,17 +1,43 @@
-"""Assertions/readers for the tagged YAML emitted to local provider fixtures.
+"""Narrow readers for structured model metadata and raw payload blocks.
 
-These fixtures read only top-level scalar fields, not arbitrary YAML documents.
-Full YAML values and escaping are independently tested at the Go HTTP boundary;
-keeping these readers narrow avoids adding a Python YAML package prerequisite.
+These fixtures read only top-level scalar fields and payload_index references,
+not arbitrary YAML documents. Full projections are tested at the Go boundary;
+keeping these readers narrow avoids a Python YAML package prerequisite.
 """
 import json
 import re
 
 
+class ModelData(str):
+    """Metadata text with its ordered raw payloads; behaves like a plain string."""
+
+    def __new__(cls, metadata, payloads):
+        value = super().__new__(cls, metadata)
+        value.payloads = payloads
+        return value
+
+
 def model_data(text, name):
     prefix, suffix = f'<{name}>\n', f'\n</{name}>'
-    assert text.startswith(prefix) and text.endswith(suffix), (name, text)
-    return text[len(prefix):-len(suffix)]
+    assert text.startswith(prefix), (name, text)
+    end = text.find(suffix, len(prefix))
+    assert end >= 0, (name, text)
+    metadata = text[len(prefix):end]
+    remaining = text[end + len(suffix):]
+    payloads = []
+    while remaining:
+        opening = re.match(r'\n\n<<<([A-Za-z0-9_-]+):\n', remaining)
+        assert opening, (name, remaining)
+        header_end = remaining.find('\n>>>\n', opening.end())
+        assert header_end >= 0, (name, remaining)
+        start = header_end + len('\n>>>\n')
+        closing = '\n<<</' + opening[1] + '>>>'
+        stop = remaining.find(closing, start)
+        assert stop >= 0, (name, remaining)
+        # Remove only framing newlines: raw whitespace and escapes are data.
+        payloads.append(remaining[start:stop])
+        remaining = remaining[stop + len(closing):]
+    return ModelData(metadata, payloads)
 
 
 def scalar_field(data, name):
@@ -21,6 +47,15 @@ def scalar_field(data, name):
                for index, line in enumerate(lines) if line.startswith(name + ':')]
     assert len(matches) == 1, (name, data)
     index, value = matches[0]
+    if not value:
+        # The Go projection emits references as a one-field indented mapping.
+        reference = re.fullmatch(r'  payload_index: (\d+)', lines[index + 1] if index + 1 < len(lines) else '')
+        assert reference, (name, data)
+        assert index + 2 == len(lines) or not lines[index + 2].startswith(' '), (name, data)
+        payload_index = int(reference[1])
+        payloads = getattr(data, 'payloads', ())
+        assert payload_index < len(payloads), (name, payload_index, data)
+        return payloads[payload_index]
     if value in ('|', '|-', '|+'):
         block = []
         for line in lines[index + 1:]:

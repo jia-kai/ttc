@@ -191,6 +191,9 @@ func addPatch(r *Registry, w *workspace.Manager) {
 			}
 			files = append(files, map[string]string{"path": w.Path(s.path), "action": s.action})
 		}
+		for i := range ops {
+			ops[i].Actor = x.Actor
+		}
 		res, e := w.Apply(ctx, x.SessionID, x.CallID, ops)
 		return mutationResult(ctx, map[string]any{"files": files}, res, e, true)
 	})

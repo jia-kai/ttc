@@ -273,7 +273,7 @@ def main():
             assert finish['persistent'] is False
             if args.offline:
                 assert finish['answer_truncated'] is True
-                assert answer.startswith(finish['answer']) and len(finish['answer'].encode()) <= 8192
+                assert answer.startswith(finish['answer']) and len(finish['answer'].encode()) <= 6144
                 result = json.loads(db.execute("SELECT result_json FROM tool_calls WHERE name='subagent'").fetchone()[0])
                 assert result['answer'] == finish['answer'] and result['answer_truncated'] is True
                 assert result['persistent'] is False and 'stdout' not in result
@@ -286,6 +286,18 @@ def main():
             assert json.loads(states[-1][0])['child']['context_state'] == 'closed'
             assert db.execute("SELECT count(*) FROM tool_calls WHERE name IN ('job_read','job_stop')").fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM model_requests,json_each(delivered_events_json) WHERE value=?", (event_id,)).fetchone()[0] == 1
+            if not args.offline:
+                # Foreground offline completion is carried by the tool result above.
+                delivered = [json.loads(row[0]) for row in db.execute(
+                    "SELECT json_extract(content_json,'$.content') FROM entries "
+                    "WHERE kind='message' AND json_extract(content_json,'$.type')='runtime_notification'")]
+                completion = next(notice for notice in delivered if notice.get('event_seq') == event_id)
+                assert completion['answer'] and finish['answer'].startswith(completion['answer'])
+                if completion.get('output_omitted'):
+                    # Omitted output retains a bounded answer prefix, not only a history reference.
+                    assert completion['answer_delivery_truncated'] is True
+                else:
+                    assert completion['answer'] == finish['answer']
             meters = db.execute("""SELECT r.status,(SELECT json_extract(e.content_json,'$.attempts')
                 FROM request_observations o JOIN entries e ON e.id=o.completion_entry_id
                 WHERE o.request_id=r.id ORDER BY o.completion_entry_id DESC LIMIT 1)

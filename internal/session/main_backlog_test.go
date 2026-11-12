@@ -100,7 +100,7 @@ func assertMainAcknowledgments(t *testing.T, r *Runtime, sources []int64) {
 	}
 	for _, seq := range sources {
 		var count int
-		if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE kind='message' AND json_extract(content_json,'$.event_seq')=?`, seq).Scan(&count); err != nil || count != 1 {
+		if err := historytest.DB(t, r.Store).QueryRow(`SELECT count(*) FROM entries WHERE kind='message' AND source_id IS NULL AND json_extract(content_json,'$.event_seq')=?`, seq).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("source %d has %d admitted messages: %v", seq, count, err)
 		}
 	}
@@ -124,12 +124,13 @@ func TestMainNotificationBurstDrainsBoundedBatches(t *testing.T) {
 		t.Fatal("fixture burst fits model budget")
 	}
 	batch, count, err := r.notifications.batch(r.projectRuntimeNotice, 0)
-	if err != nil || count == 0 || count >= len(sources) || contextbuild.Tokens(batch) > maxRuntimeNoticeTokens {
+	if err != nil || count == 0 || count >= len(sources) || count > 1 && contextbuild.Tokens(batch) > maxRuntimeNoticeTokens {
 		t.Fatal("invalid bounded projection", count, err)
 	}
 	for _, message := range batch {
-		if !strings.Contains(message.Content, `"output_omitted":true`) || strings.Contains(message.Content, strings.Repeat("x", 100)) {
-			t.Fatal("large output was not replaced by durable reference", message)
+		text, err := message.ModelContent()
+		if err != nil || !strings.Contains(message.Content, `"output_omitted":true`) || !strings.Contains(message.Content, strings.Repeat("x", 100)) || len(text) > maxRuntimeNoticeBytes {
+			t.Fatal("large output lost bounded prefix or durable reference", message, err)
 		}
 	}
 	steer := strings.Repeat("Human instruction remains exact. ", 100)
@@ -254,7 +255,7 @@ func TestMainOversizedChildCompletionKeepsActionableReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := strings.Repeat("Large evidence. ", 500)
+	answer := strings.Repeat("Large evidence. ", 380)
 	result, err := r.Store.Append(r.Current(), turn, "main/child_large", "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: answer})
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +338,7 @@ func TestOmittedChildCompletionRemainsRecoverableThroughMainExport(t *testing.T)
 			if _, err := r.Store.Append(r.Current(), turn, child, "message", "user", false, llm.Message{Type: llm.TypeUserInput, Content: "PRIVATE_CHILD_TASK_NOT_RECEIVED_BY_MAIN"}); err != nil {
 				t.Fatal(err)
 			}
-			answer := "UNIQUE_CHILD_ANSWER " + strings.Repeat("large evidence ", 500)
+			answer := "UNIQUE_CHILD_ANSWER " + strings.Repeat("large evidence ", 400)
 			var result int64
 			if hasResult {
 				result, err = r.Store.Append(r.Current(), turn, child, "message", "assistant", false, llm.Message{Type: llm.TypeAssistant, Content: answer})
@@ -363,7 +364,7 @@ func TestOmittedChildCompletionRemainsRecoverableThroughMainExport(t *testing.T)
 				t.Fatal(err)
 			}
 			for _, message := range admitted.Messages {
-				if message.EventSeq == seq && (!strings.Contains(message.Content, `"output_omitted":true`) || strings.Contains(message.Content, finish.Warning)) {
+				if message.EventSeq == seq && (!strings.Contains(message.Content, `"output_omitted":true`) || !strings.Contains(message.Content, finish.Warning)) {
 					t.Fatal("export fixture must keep model input bounded", message)
 				}
 			}

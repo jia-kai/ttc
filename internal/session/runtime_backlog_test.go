@@ -95,7 +95,7 @@ func noticeSequences(messages []llm.Message) []int64 {
 func TestRuntimeNoticeBacklogContract(t *testing.T) {
 	var q runtimeNoticeBacklog
 	project := func(seq int64, tokenLimit int) (llm.Message, error) {
-		if tokenLimit <= 0 || tokenLimit > maxRuntimeNoticeTokens {
+		if tokenLimit != maxRuntimeNoticeBytes {
 			t.Fatalf("unbounded delivery budget: %d", tokenLimit)
 		}
 		return llm.Message{Type: llm.TypeRuntimeNotification, EventSeq: seq, Content: `{}`}, nil

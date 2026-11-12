@@ -1,4 +1,5 @@
 RuntimeEventHistoryDetails: >-
-  Full event details remain in committed conversation history. Use
-  conversation_export and inspect the source event identified by event_seq to
-  recover the omitted payload.
+  Full event details remain in committed history. Use conversation_export and
+  inspect event_seq to recover omitted content.
+SessionNotificationMetadataLimit:
+  "notification metadata exceeds the %d-byte delivery limit"

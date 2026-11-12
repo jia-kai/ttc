@@ -84,7 +84,7 @@ func TestOmittedNotificationSharedReferenceValidation(t *testing.T) {
 			s, session, turn, _ := historyFixture(t)
 			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_boundary", TurnID: "assignment", JobID: "job", Answer: "display answer"}
 			if test == "oversized answer" {
-				finish.Answer = strings.Repeat("x", MaxChildAnswerBytes+1)
+				finish.Answer = strings.Repeat("x", (8<<10)+1)
 			}
 			seq, err := s.Append(session.ID, "", finish.ChildID, "status", "", false, finish)
 			if err != nil {

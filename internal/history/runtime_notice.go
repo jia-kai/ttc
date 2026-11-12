@@ -1,10 +1,12 @@
 package history
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -33,40 +35,78 @@ func (s *Store) ReadNotificationSource(id int64) (source NotificationSourceRef, 
 
 // NotificationDelivery contains source data selected for model delivery, not a
 // human presentation or the final admitted llm.Message. Body is owned by the
-// caller. OutputOmitted requires explicit disclosure in the model projection.
+// caller. TruncatedFields requires explicit disclosure in the model projection.
 type NotificationDelivery struct {
-	Source        NotificationSourceRef
-	Body          json.RawMessage
-	OutputOmitted bool
+	Source NotificationSourceRef
+	Body   json.RawMessage
+	// TruncatedFields identifies fields shortened by the bounded source read.
+	// It is delivery metadata, never part of the immutable source event.
+	TruncatedFields []string
 }
 
 // ReadNotificationDelivery selects canonical notification data for delivery.
-// A positive maxSourceBytes projects oversized records to scalar reference
-// metadata inside SQLite; zero selects the complete immutable body. The limit
-// bounds source transfer, not SQLite processing or malformed metadata fields.
-// No source is modified or acknowledged. The session owns model API projection
-// and admission of the exact delivered llm.Message.
-func (s *Store) ReadNotificationDelivery(id int64, maxSourceBytes int) (NotificationDelivery, error) {
-	if maxSourceBytes < 0 {
+// A positive maxFieldBytes bounds each string prefix inside SQLite before it
+// crosses into Go; zero selects the full immutable body. Oversized structured
+// fields become null. The session applies the single final formatted-message
+// limit. Neither source-size nor token estimates discard complete answers.
+// No source is modified or acknowledged.
+func (s *Store) ReadNotificationDelivery(id int64, maxFieldBytes int) (NotificationDelivery, error) {
+	if maxFieldBytes < 0 {
 		return NotificationDelivery{}, errors.New("negative notification body limit")
 	}
-	var body string
+	var body, clipped string
 	delivery := NotificationDelivery{Source: NotificationSourceRef{EventSeq: id}}
 	err := s.db.QueryRow(`WITH source AS (
 		SELECT content_json AS raw,
 		coalesce(json_extract(content_json,'$.recovered_from_event_seq'),0) AS recovered,
-		json_extract(content_json,'$.type')='runtime_event' AS wrapped,
-		? > 0 AND length(CAST(content_json AS BLOB)) > ? AS omitted
+		CASE WHEN json_extract(content_json,'$.type')='runtime_event'
+		 THEN json_extract(content_json,'$.body') ELSE content_json END AS body
 		FROM entries WHERE id=? AND kind='status' AND source_id IS NULL
-	) SELECT recovered,omitted,CASE WHEN omitted THEN (
-		SELECT json_group_object(key,CASE type WHEN 'true' THEN json('true')
-			WHEN 'false' THEN json('false') ELSE value END)
-		FROM json_each(raw,CASE WHEN wrapped THEN '$.body' ELSE '$' END)
-		WHERE key IN ('type','job_id','kind','exit_code','signal','wakeup_id','fired_count',
-			'status','child_id','child_turn_id','outcome','context_state','persistent','result_entry_id')
-	) WHEN wrapped THEN json_extract(raw,'$.body') ELSE raw END FROM source`, maxSourceBytes, maxSourceBytes, id).Scan(&delivery.Source.RecoveredFrom, &delivery.OutputOmitted, &body)
+	), fields AS (
+		SELECT key,type,value,? > 0 AND type IN ('text','object','array')
+		 AND length(CAST(value AS BLOB)) > ? AS clipped FROM source,json_each(body)
+	) SELECT recovered,CASE WHEN ?=0 THEN body ELSE (
+		SELECT json_group_object(key,CASE
+		 WHEN type='text' AND clipped THEN hex(substr(CAST(value AS BLOB),1,?))
+		 WHEN type IN ('object','array') AND clipped THEN json('null')
+		 WHEN type IN ('object','array') THEN json(value)
+		 WHEN type='true' THEN json('true') WHEN type='false' THEN json('false')
+		 WHEN type='null' THEN json('null') ELSE value END) FROM fields
+	) END, (SELECT json_group_array(key) FROM fields WHERE clipped) FROM source`, id, maxFieldBytes, maxFieldBytes, maxFieldBytes, maxFieldBytes).Scan(&delivery.Source.RecoveredFrom, &body, &clipped)
 	if err != nil {
 		return NotificationDelivery{}, err
+	}
+	if err := json.Unmarshal([]byte(clipped), &delivery.TruncatedFields); err != nil {
+		return NotificationDelivery{}, err
+	}
+	// SQLite text substr stops at embedded NUL. Slice bytes and hex-encode in
+	// SQL instead, then repair a potentially split final UTF-8 rune in Go. This
+	// transfers at most twice the prefix allowance, independent of source size.
+	if len(delivery.TruncatedFields) != 0 {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(body), &fields); err != nil {
+			return NotificationDelivery{}, err
+		}
+		for _, key := range delivery.TruncatedFields {
+			var text string
+			if len(fields[key]) != 0 && fields[key][0] == '"' && json.Unmarshal(fields[key], &text) == nil {
+				prefix, err := hex.DecodeString(text)
+				if err != nil {
+					return NotificationDelivery{}, err
+				}
+				// JSON source strings are valid UTF-8; only the final rune may
+				// have been split by the byte slice (at most three removals).
+				for len(prefix) > 0 && !utf8.Valid(prefix) {
+					prefix = prefix[:len(prefix)-1]
+				}
+				fields[key], _ = json.Marshal(string(prefix))
+			}
+		}
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			return NotificationDelivery{}, err
+		}
+		body = string(encoded)
 	}
 	delivery.Body = json.RawMessage(body)
 	return delivery, nil

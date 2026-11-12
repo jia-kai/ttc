@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 	"ttc/internal/historytest"
+	"ttc/internal/tool"
 
 	"ttc/internal/llm"
 	"ttc/internal/prompts"
@@ -25,11 +27,15 @@ func assertChildCapabilities(t *testing.T, r *Runtime, request llm.Request) {
 			want = append(want, definition)
 		}
 	}
+	childOnly := tool.NewRegistry()
+	r.addNotifyParentTool(childOnly, "main/test_child")
+	want = append(want, childOnly.Definitions()...)
+	sort.Slice(want, func(i, j int) bool { return want[i].Name < want[j].Name })
 	if !mainQuestion {
 		t.Error("main lost the question tool")
 	}
 	if !reflect.DeepEqual(request.Tools, want) {
-		t.Errorf("child capabilities differ from main minus question/subagent/child_steer: %v", request.Tools)
+		t.Errorf("child capabilities differ from main minus question/subagent/child_steer plus notify_parent: %v", request.Tools)
 	}
 	if request.System != prompts.System+"\n"+prompts.Coding+"\n"+prompts.Child {
 		t.Error("child system does not contain only shared, coding and child guidance")

@@ -202,8 +202,8 @@ func TestChildNoticeOmissionPathsPreserveDeliveryMetadata(t *testing.T) {
 		answerBytes int
 		sqlOmitted  bool
 	}{
-		{"token_projection", 3500, false},
-		{"sql_projection", 8192, true},
+		{"formatted_prefix", 6144, false},
+		{"historical_source_prefix", 8192, true},
 	} {
 		for _, recovered := range []bool{false, true} {
 			t.Run(path.name+"/recovered="+strconv.FormatBool(recovered), func(t *testing.T) {
@@ -226,11 +226,11 @@ func TestChildNoticeOmissionPathsPreserveDeliveryMetadata(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				delivery, err := r.Store.ReadNotificationDelivery(seq, 3*maxRuntimeNoticeTokens)
-				if err != nil || delivery.OutputOmitted != path.sqlOmitted {
-					t.Fatal("fixture did not exercise the intended omission path", delivery.OutputOmitted, err)
+				delivery, err := r.Store.ReadNotificationDelivery(seq, maxRuntimeNoticeBytes)
+				if err != nil || (len(delivery.TruncatedFields) != 0) != path.sqlOmitted {
+					t.Fatal("fixture did not exercise the intended omission path", delivery.TruncatedFields, err)
 				}
-				message, err := r.projectRuntimeNotice(seq, maxRuntimeNoticeTokens)
+				message, err := r.projectRuntimeNotice(seq, maxRuntimeNoticeBytes)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -253,13 +253,16 @@ func TestChildNoticeOmissionPathsPreserveDeliveryMetadata(t *testing.T) {
 						t.Fatalf("%s=%s want=%s in %s", key, actual[key], value, message.Content)
 					}
 				}
-				for _, key := range []string{"answer", "warning", "transcript_path", "outcome", "context_state"} {
-					if actual[key] != nil {
-						t.Fatalf("source-only field %s entered bounded delivery", key)
-					}
+				prefix := noticeString(t, actual, "answer")
+				if prefix == "" || !strings.HasPrefix(finish.Answer, prefix) || len(prefix) >= len(finish.Answer) || actual["answer_delivery_truncated"] == nil {
+					t.Fatal("bounded delivery lost answer prefix", actual)
 				}
-				if message.EventSeq != seq || string(actual["details"]) == "" || noticeTokens(message) > maxRuntimeNoticeTokens {
-					t.Fatal("bounded delivery lost identity/details or exceeded budget", message)
+				if noticeString(t, actual, "warning") != finish.Warning || noticeString(t, actual, "transcript_path") != finish.TranscriptPath || actual["outcome"] != nil || actual["context_state"] != nil {
+					t.Fatal("failure evidence lost or storage fields leaked", actual)
+				}
+				text, err := message.ModelContent()
+				if err != nil || message.EventSeq != seq || string(actual["details"]) == "" || len(text) > maxRuntimeNoticeBytes {
+					t.Fatal("bounded delivery lost identity/details or exceeded budget", message, err)
 				}
 			})
 		}

@@ -1,0 +1,9 @@
+# Child-to-main intermediate notification diagnostics.
+NotifyParentNonempty: message must be nonempty UTF-8
+NotifyParentTooLarge:
+  "message exceeds %d UTF-8 bytes; shorten it before retrying"
+NotifyParentOwnership: only the owning coding child can notify main
+NotifyParentInactive: assignment is inactive; no notification was queued
+NotifyParentCapacity:
+  "notification limit of %d per assignment reached; include further findings in
+  the final handoff"

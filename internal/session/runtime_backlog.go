@@ -125,7 +125,7 @@ func (q *runtimeNoticeBacklog) batch(project func(int64, int) (llm.Message, erro
 		if len(notices) == maxRuntimeNoticeBatch {
 			break
 		}
-		message, err := project(pending.seq, limit)
+		message, err := project(pending.seq, maxRuntimeNoticeBytes)
 		if err != nil {
 			return nil, 0, err
 		}

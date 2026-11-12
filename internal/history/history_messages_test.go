@@ -37,8 +37,8 @@ func TestHistoryChildCompletionMessages(t *testing.T) {
 		{"IDs", func(f *ChildFinish) { f.JobID = "" }, "child completion requires child and turn IDs; successful assignments require a job ID"},
 		{"outcome", func(f *ChildFinish) { f.Outcome = "unknown" }, "invalid child completion outcome"},
 		{"result", func(f *ChildFinish) { f.ResultEntry = -1 }, "child completion result entry must be nonnegative"},
-		{"UTF-8", func(f *ChildFinish) { f.Answer = "\xff" }, "child answer must be valid UTF-8 and at most 8 KiB"},
-		{"size", func(f *ChildFinish) { f.Answer = strings.Repeat("x", MaxChildAnswerBytes+1) }, "child answer must be valid UTF-8 and at most 8 KiB"},
+		{"UTF-8", func(f *ChildFinish) { f.Answer = "\xff" }, "child answer must be valid UTF-8 and at most 6 KiB"},
+		{"size", func(f *ChildFinish) { f.Answer = strings.Repeat("x", MaxChildAnswerBytes+1) }, "child answer must be valid UTF-8 and at most 6 KiB"},
 		{"paths", func(f *ChildFinish) { f.TranscriptPath = "archive.md" }, "child transcript requires both artifact paths or an export error, never both"},
 		{"partial", func(f *ChildFinish) { f.Outcome, f.Answer = "failed", "partial" }, "partial child answers require a warning and transcript paths or an explicit export error"},
 	}

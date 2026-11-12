@@ -389,7 +389,10 @@ remain in the
   idle/closed state and `child_turn_finished` before another assignment.
   Foreground results carry that event for acknowledgment; background queues one
   notice, with no extra child `job_exit` or redundant wake. Child handoff and
-  `child_compacted` commit together; `/btw` events are UI-only.
+  `child_compacted` commit together; `/btw` events are UI-only. Child-only
+  `notify_parent` messages commit durable `child_notification` events, capped at
+  32 per assignment and 2048 UTF-8 bytes each; their receipts wake a waiting
+  parent without ending the child assignment.
 - [Compaction handoff](compaction.md#handoff) uses this gate to retain committed
   tails and move actor context without losing pending events or replaying
   delivery. Closing rejects new admissions, joins workers, records terminal

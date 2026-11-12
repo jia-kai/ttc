@@ -44,6 +44,8 @@ type PathChange struct {
 
 // Mutation requests complete bytes or deletion. An optional Transform runs under the queue lock.
 type Mutation struct {
+	Actor      string // Runtime actor identity; shared across that actor's compacted sessions.
+	FullWrite  bool   // Require a current observation when another actor modified this path.
 	Source     string // Optional source file read under the mutation lock (for moves).
 	Path       string
 	Delete     bool
@@ -68,7 +70,8 @@ type Manager struct {
 	Store       *history.Store
 	mu          sync.Mutex
 	atomicFile  func(string, []byte, os.FileMode) error
-	directories directoryOwnership // Runtime-only cleanup authority; guarded by mu.
+	directories directoryOwnership        // Runtime-only cleanup authority; guarded by mu.
+	files       map[string]*fileKnowledge // Runtime-lifetime observations and modifiers; guarded by mu.
 }
 
 // Open resolves the workspace without locking it or recovering filesystem changes.
@@ -318,6 +321,11 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 		if op.MustAbsent && before.Exists {
 			return Result{}, fmt.Errorf(prompts.WorkspaceTargetExists, path)
 		}
+		knowledge := m.fileKnowledge(path)
+		knowledge.reconcile(fingerprint(before))
+		if op.FullWrite && !knowledge.allowWrite(op.Actor, fingerprint(before)) {
+			return Result{}, fmt.Errorf(prompts.WorkspaceStaleFullWrite, path)
+		}
 		after := State{}
 		sourceMode := uint32(0)
 		if !op.Delete {
@@ -372,6 +380,14 @@ func (m *Manager) Apply(ctx context.Context, session, call string, ops []Mutatio
 		}
 		effect, e := m.apply(c.Path, c.After)
 		c.Applied = effect.applied
+		if c.Applied {
+			op := ops[i]
+			knowledge := m.fileKnowledge(c.Path)
+			knowledge.modified(op.Actor, fingerprint(c.After))
+			if op.FullWrite && e == nil {
+				knowledge.observed[op.Actor] = fingerprint(c.After)
+			}
+		}
 		if e != nil {
 			failure = e // A rename may have succeeded before fsync failed.
 			break

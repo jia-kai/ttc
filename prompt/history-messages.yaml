@@ -19,7 +19,9 @@ HistoryArtifactRead: "read saved artifact: %w"
 HistoryArtifactRegularFile: "saved artifact must be a regular file"
 HistoryArtifactTooLarge: "saved artifact exceeds %d-byte limit"
 HistoryAssistantArguments: "invalid provider call arguments"
-HistoryChildAnswer: "child answer must be valid UTF-8 and at most 8 KiB"
+HistoryChildAnswer: "child answer must be valid UTF-8 and at most 6 KiB"
+HistorySavedChildAnswer:
+  "saved child answer must be valid UTF-8 and at most 8 KiB"
 HistoryChildLabel:
   "child completion label must be valid UTF-8 and at most 1024 bytes"
 HistoryChildCompletionIDs:

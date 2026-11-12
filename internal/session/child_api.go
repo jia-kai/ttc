@@ -111,50 +111,18 @@ func (r *Runtime) childResult(child *codingChild, assignment *childAssignment, v
 	return result
 }
 
-// projectRuntimeNotice applies the delivery budget without changing the source
-// or its human presentation. Zero requests the complete source projection.
-func (r *Runtime) projectRuntimeNotice(seq int64, tokenLimit int) (llm.Message, error) {
-	// The local estimator charges at least one token per three content bytes.
-	// Larger bodies need scalar references, not megabyte reads under orderMu.
-	delivery, err := r.Store.ReadNotificationDelivery(seq, 3*tokenLimit)
+// projectRuntimeNotice applies one byte-based delivery policy without changing
+// the immutable source. Zero requests the complete source for explicit inspection.
+func (r *Runtime) projectRuntimeNotice(seq int64, byteLimit int) (llm.Message, error) {
+	delivery, err := r.Store.ReadNotificationDelivery(seq, byteLimit)
 	if err != nil {
 		return llm.Message{}, err
 	}
 	message, err := notificationDeliveryMessage(delivery)
-	if err != nil {
-		return llm.Message{}, err
+	if err != nil || byteLimit == 0 {
+		return message, err
 	}
-	if tokenLimit == 0 || !delivery.OutputOmitted && noticeTokens(message) <= tokenLimit/2 {
-		return message, nil
-	}
-	var ref struct {
-		Type             string `json:"type"`
-		JobID            string `json:"job_id,omitempty"`
-		Kind             string `json:"kind,omitempty"`
-		ExitCode         *int   `json:"exit_code,omitempty"`
-		Signal           string `json:"signal,omitempty"`
-		WakeupID         string `json:"wakeup_id,omitempty"`
-		Fired            int    `json:"fired_count,omitempty"`
-		Status           string `json:"status,omitempty"`
-		ChildID          string `json:"child_id,omitempty"`
-		ChildTurnID      string `json:"child_turn_id,omitempty"`
-		AssignmentStatus string `json:"assignment_status,omitempty"`
-		ChildState       string `json:"child_state,omitempty"`
-		ResultEntry      int64  `json:"result_entry_id,omitempty"`
-		RecoveredFrom    int64  `json:"recovered_from_event_seq,omitempty"`
-		OutputOmitted    bool   `json:"output_omitted"`
-		Details          string `json:"details"`
-	}
-	if err := json.Unmarshal([]byte(message.Content), &ref); err != nil {
-		return llm.Message{}, err
-	}
-	ref.Details, ref.OutputOmitted = prompts.RuntimeEventHistoryDetails, true
-	body, err := json.Marshal(ref)
-	if err != nil {
-		return llm.Message{}, err
-	}
-	message.Content = eventContent(string(body), seq, ref.RecoveredFrom)
-	return message, nil
+	return boundRuntimeNotice(message, delivery.TruncatedFields, byteLimit)
 }
 
 // notificationDeliveryMessage is the history-to-model boundary. History owns

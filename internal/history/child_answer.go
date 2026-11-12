@@ -86,7 +86,9 @@ func readChildCompletionSource(q historyReader, id int64) (entry Entry, metadata
 		return
 	}
 	err = json.Unmarshal([]byte(raw), &metadata)
-	if err == nil && (len(metadata.Answer) > MaxChildAnswerBytes || !utf8.ValidString(metadata.Answer) || len(metadata.Label) > 1024 || !utf8.ValidString(metadata.Label)) {
+	// Saved completions from before the 6-KiB write limit remain readable;
+	// historical source validation must not apply a new admission limit.
+	if err == nil && (len(metadata.Answer) > maxSavedChildAnswerBytes || !utf8.ValidString(metadata.Answer) || len(metadata.Label) > 1024 || !utf8.ValidString(metadata.Label)) {
 		err = fmt.Errorf("child completion %d exceeds bounded answer/label metadata", id)
 	}
 	return

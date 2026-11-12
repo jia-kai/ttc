@@ -3,6 +3,8 @@ package tool
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,29 +79,35 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		return Required("path", a.Path)
 	}, func(ctx context.Context, x Execution, a readArgs) (any, error) {
 		path := w.Path(a.Path)
-		page, err := readPage(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200), x.BinaryFiles)
-		if err != nil {
-			return nil, err
-		}
-		binary, ok := page.(*binaryinput.Result)
-		if !ok {
-			return page, nil
-		}
-		if intDefault(a.Offset, 1) != 1 || intDefault(a.Limit, 200) != 200 {
-			return nil, Fail("invalid_input", prompts.ToolBinaryPagination)
-		}
-		file, err := binary.Store(ctx, path)
-		if err != nil {
-			return nil, err
-		}
-		metadata := map[string]any{"kind": binary.Kind, "path": path, "sha256": file.SHA256, "mime_type": file.MIMEType, "bytes": file.Bytes, "truncated": false}
-		if binary.Kind == "image" {
-			metadata["width"], metadata["height"] = binary.Width, binary.Height
-		}
-		return Output{
-			Value: metadata,
-			Files: []llm.BinaryFile{file},
-		}, nil
+		var value any
+		err := w.ObserveRead(ctx, x.Actor, path, func() (string, error) {
+			page, checksum, err := readPageSnapshot(ctx, path, intDefault(a.Offset, 1), intDefault(a.Limit, 200), x.BinaryFiles)
+			if err != nil {
+				return "", err
+			}
+			binary, ok := page.(*binaryinput.Result)
+			if !ok {
+				value = page
+				return checksum, nil
+			}
+			if intDefault(a.Offset, 1) != 1 || intDefault(a.Limit, 200) != 200 {
+				return "", Fail("invalid_input", prompts.ToolBinaryPagination)
+			}
+			file, err := binary.Store(ctx, path)
+			if err != nil {
+				return "", err
+			}
+			metadata := map[string]any{"kind": binary.Kind, "path": path, "sha256": file.SHA256, "mime_type": file.MIMEType, "bytes": file.Bytes, "truncated": false}
+			if binary.Kind == "image" {
+				metadata["width"], metadata["height"] = binary.Width, binary.Height
+			}
+			value = Output{
+				Value: metadata,
+				Files: []llm.BinaryFile{file},
+			}
+			return file.SHA256, nil
+		})
+		return value, err
 	})
 	Register(r, "write", prompts.ToolDescription("write"), map[string]any{"path": Property("string"), "content": Property("string")}, []string{"path", "content"}, func(a writeArgs) error {
 		if e := Required("path", a.Path); e != nil {
@@ -110,7 +118,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 		}
 		return validText(*a.Content)
 	}, func(ctx context.Context, x Execution, a writeArgs) (any, error) {
-		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Path: a.Path, Data: []byte(*a.Content)}})
+		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Actor: x.Actor, FullWrite: true, Path: a.Path, Data: []byte(*a.Content)}})
 		value := map[string]any{"path": w.Path(a.Path), "bytes": len(*a.Content)}
 		if len(res.Changes) != 0 {
 			value["created"] = !res.Changes[0].Before.Exists
@@ -131,7 +139,7 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 	}, func(ctx context.Context, x Execution, a editArgs) (any, error) {
 		count := 0
 		unchanged := unchangedEdit{}
-		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Path: a.Path, MustExist: true, Transform: func(b []byte) ([]byte, error) {
+		res, e := w.Apply(ctx, x.SessionID, x.CallID, []workspace.Mutation{{Actor: x.Actor, Path: a.Path, MustExist: true, Transform: func(b []byte) ([]byte, error) {
 			if e := validText(string(b)); e != nil {
 				return nil, e
 			}
@@ -169,27 +177,43 @@ func AddFiles(r *Registry, w *workspace.Manager) {
 	addPatch(r, w)
 }
 func readPage(ctx context.Context, path string, offset, limit int, types []llm.BinaryFileType) (any, error) {
+	page, _, err := readPageSnapshot(ctx, path, offset, limit, types)
+	return page, err
+}
+
+func readPageSnapshot(ctx context.Context, path string, offset, limit int, types []llm.BinaryFileType) (any, string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Decide the file kind from the opened descriptor: a build or shell can
 	// replace the path between stat and open, including with a blocking FIFO.
 	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if e != nil {
-		return nil, e
+		return nil, "", e
 	}
 	defer f.Close()
 	stop := context.AfterFunc(ctx, func() { _ = f.Close() })
 	defer stop()
-	page, err := readOpenedPage(ctx, f, path, offset, limit, types)
+	h := sha256.New()
+	page, err := readOpenedPageStream(ctx, f, path, offset, limit, types, h)
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, "", ctx.Err()
 	}
-	return page, err
+	if err != nil {
+		return nil, "", err
+	}
+	if directory, ok := page.(map[string]any); ok && directory["kind"] == "directory" {
+		return page, "", nil
+	}
+	return page, hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // readOpenedPage consumes the caller-owned descriptor, never reopening path.
 func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit int, types []llm.BinaryFileType) (any, error) {
+	return readOpenedPageStream(ctx, f, path, offset, limit, types, nil)
+}
+
+func readOpenedPageStream(ctx context.Context, f *os.File, path string, offset, limit int, types []llm.BinaryFileType, fingerprint io.Writer) (result any, err error) {
 	st, e := f.Stat()
 	if e != nil {
 		return nil, e
@@ -228,7 +252,21 @@ func readOpenedPage(ctx context.Context, f *os.File, path string, offset, limit 
 	if !st.Mode().IsRegular() {
 		return nil, Fail("unsupported_content", prompts.ToolNotRegularFile)
 	}
-	reader := bufio.NewReader(f)
+	var stream io.Reader = f
+	if fingerprint != nil {
+		stream = io.TeeReader(f, fingerprint)
+	}
+	reader := bufio.NewReader(stream)
+	if fingerprint != nil {
+		// Hash the exact stream supplying the page, including the unread suffix.
+		// Streaming bounds memory for large paginated files. Managed mutations
+		// replace paths atomically, leaving this descriptor on its original bytes.
+		defer func() {
+			if err == nil {
+				_, err = io.Copy(io.Discard, reader)
+			}
+		}()
+	}
 	binary, err := binaryinput.Read(ctx, reader, path, st.Size(), types)
 	if err != nil {
 		var inputError *binaryinput.Error

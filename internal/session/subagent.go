@@ -98,6 +98,7 @@ func (r *Runtime) addSubagentTool() {
 				return nil, tool.Fail("capacity", fmt.Sprintf(prompts.ChildCapacity, maxChildSlots))
 			}
 			child = &codingChild{id: "main/" + history.NewID("child"), label: strings.Join(strings.Fields(a.Label), " "), easy: easy, tools: r.Tools.Filter(func(name string) bool { return name != "subagent" && name != "child_steer" && name != "question" })}
+			r.addNotifyParentTool(child.tools, child.id)
 			r.coordinator.children[child.id] = child
 		}
 		turn, err := r.Store.BeginChildTurn(r.Current(), child.id, selection)

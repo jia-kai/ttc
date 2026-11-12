@@ -5,9 +5,67 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"ttc/internal/llm"
 )
+
+func TestBoundedNotificationPreservesNULAndUTF8Prefixes(t *testing.T) {
+	s, v, _, _ := historyFixture(t)
+	for _, text := range []string{
+		"head\x00" + strings.Repeat("x", 7000),
+		"\x00" + strings.Repeat("界", 3000),
+		strings.Repeat("界", 3000),
+	} {
+		id, err := s.Append(v.ID, "", "main", "status", "", false, map[string]any{"type": "job_exit", "job_id": "job", "stdout": text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		const limit = 1024
+		delivery, err := s.ReadNotificationDelivery(id, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct{ Stdout string }
+		if err := json.Unmarshal(delivery.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		expected := text[:limit]
+		for !utf8.ValidString(expected) {
+			expected = expected[:len(expected)-1]
+		}
+		if body.Stdout != expected || len(delivery.TruncatedFields) != 1 || delivery.TruncatedFields[0] != "stdout" {
+			t.Fatalf("prefix changed: got %d bytes, want %d; clipped=%v", len(body.Stdout), len(expected), delivery.TruncatedFields)
+		}
+	}
+}
+
+func TestHistoricalChildAnswerRecoveryKeepsPriorReadLimit(t *testing.T) {
+	finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_old", TurnID: "turn", JobID: "job", Outcome: "completed", ContextState: "closed", Answer: strings.Repeat("x", 7<<10)}
+	if err := validateChildFinish(finish); err == nil {
+		t.Fatal("new completion accepted an answer over 6 KiB")
+	}
+	body, err := json.Marshal(finish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recoveryBody(body); err != nil {
+		t.Fatal("historical 7-KiB answer cannot recover", err)
+	}
+	s, v, _, _ := historyFixture(t)
+	id, err := s.Append(v.ID, "", finish.ChildID, "status", "", false, finish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, metadata, _, err := readChildCompletionSource(s.db, id); err != nil || metadata.Answer != finish.Answer {
+		t.Fatal("historical source cannot be inspected", err)
+	}
+	finish.Answer += strings.Repeat("x", 1025)
+	body, _ = json.Marshal(finish)
+	if _, err := recoveryBody(body); err == nil {
+		t.Fatal("historical answer over 8 KiB accepted")
+	}
+}
 
 func TestRuntimeNotificationSourceBoundsLargePayload(t *testing.T) {
 	s, v, _, _ := historyFixture(t)
@@ -17,8 +75,8 @@ func TestRuntimeNotificationSourceBoundsLargePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	bounded, err := s.ReadNotificationDelivery(id, 6144)
-	if err != nil || !bounded.OutputOmitted || bounded.Source.EventSeq != id || len(bounded.Body) > 1024 || strings.Contains(string(bounded.Body), "timer body") {
-		t.Fatal("large body escaped bounded source reader", len(bounded.Body), bounded.OutputOmitted, err)
+	if err != nil || len(bounded.TruncatedFields) == 0 || bounded.Source.EventSeq != id || len(bounded.Body) > 6500 || !strings.Contains(string(bounded.Body), "timer body") {
+		t.Fatal("large body escaped bounded source reader", len(bounded.Body), bounded.TruncatedFields, err)
 	}
 	var ref struct {
 		ID    string `json:"wakeup_id"`
@@ -28,7 +86,7 @@ func TestRuntimeNotificationSourceBoundsLargePayload(t *testing.T) {
 		t.Fatal(ref, err)
 	}
 	full, err := s.ReadNotificationDelivery(id, 0)
-	if err != nil || full.OutputOmitted || !strings.Contains(string(full.Body), text) {
+	if err != nil || len(full.TruncatedFields) != 0 || !strings.Contains(string(full.Body), text) {
 		t.Fatal("durable timer message changed", err)
 	}
 }
@@ -37,7 +95,7 @@ func TestOmittedChildNoticeViewRestoresOnlyPresentation(t *testing.T) {
 	for _, recovered := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live", true: "recovered"}[recovered], func(t *testing.T) {
 			s, v, turn, _ := historyFixture(t)
-			answer := strings.Repeat("Answer evidence. ", 400)
+			answer := strings.Repeat("Answer evidence. ", 350)
 			finish := ChildFinish{Type: "child_turn_finished", ChildID: "main/child_fixture", JobID: "job_fixture", Outcome: "completed", ContextState: "idle", Persistent: true, Answer: answer}
 			childTurn, err := s.BeginChildTurn(v.ID, finish.ChildID, v.Model)
 			if err != nil {
@@ -54,9 +112,9 @@ func TestOmittedChildNoticeViewRestoresOnlyPresentation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			bounded, err := s.ReadNotificationDelivery(seq, 6144)
+			bounded, err := s.ReadNotificationDelivery(seq, 1024)
 			var source ChildFinish
-			if err != nil || !bounded.OutputOmitted || json.Unmarshal(bounded.Body, &source) != nil || !source.Persistent || source.Answer != "" || source.ChildID != finish.ChildID {
+			if err != nil || len(bounded.TruncatedFields) == 0 || json.Unmarshal(bounded.Body, &source) != nil || !source.Persistent || len(source.Answer) != 1024 || !strings.HasPrefix(answer, source.Answer) || source.ChildID != finish.ChildID {
 				t.Fatal("bounded canonical child metadata changed", string(bounded.Body), err)
 			}
 			body, _ := json.Marshal(map[string]any{"type": "child_turn_finished", "child_id": finish.ChildID, "output_omitted": true})
